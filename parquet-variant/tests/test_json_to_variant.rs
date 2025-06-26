@@ -1,5 +1,7 @@
 use arrow_schema::ArrowError;
-use parquet_variant::{json_to_variant, SampleVecBasedVariantBufferManager};
+use parquet_variant::{
+    json_to_variant, variant_to_json_string, SampleVecBasedVariantBufferManager,
+};
 
 #[test]
 fn test_json_to_variant() -> Result<(), ArrowError> {
@@ -8,8 +10,6 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         expected_value: &[u8],
         expected_metadata: &[u8],
     ) -> Result<(), ArrowError> {
-        let json = json;
-
         let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
             value_buffer: vec![0u8; 1],
             metadata_buffer: vec![0u8; 1],
@@ -293,8 +293,6 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         &[1, 2, 0, 1, 2, 98u8, 97u8],
     )?;
 
-    // TODO: verify different offset_size, id_size, is_large values, nesting and more object
-    // tests in general
     compare_results(
         "{\"numbers\": [4, -3e0, 1.001], \"null\": null, \"booleans\": [true, false]}",
         &[
@@ -308,6 +306,70 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
             0x73u8,
         ],
     )?;
+
+    {
+        // 256 elements (keys: 000-255) - each element is an object of 256 elements (240-495) - each
+        // element a list of numbers from 0-127
+        let keys: Vec<String> = (0..=255).map(|n| format!("\"{:03}\"", n)).collect();
+        let innermost_list: String = format!(
+            "[{}]",
+            (0..=127)
+                .map(|n| format!("{}", n))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let inner_keys: Vec<String> = (240..=495).map(|n| format!("\"{}\"", n)).collect();
+        let inner_object = format!(
+            "{{{}:{}}}",
+            inner_keys.join(format!(":{},", innermost_list).as_str()),
+            innermost_list
+        );
+        let json = format!(
+            "{{{}:{}}}",
+            keys.join(format!(":{},", inner_object).as_str()),
+            inner_object
+        );
+        let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
+            value_buffer: vec![0u8; 1],
+            metadata_buffer: vec![0u8; 1],
+        };
+        let (metadata_size, value_size) = json_to_variant(&json, &mut variant_buffer_manager)?;
+        let computed_metadata_slize: &[u8] =
+            &variant_buffer_manager.metadata_buffer[..metadata_size];
+        let computed_value_slize: &[u8] = &variant_buffer_manager.value_buffer[..value_size];
+        let v = parquet_variant::Variant::try_new(computed_metadata_slize, computed_value_slize)?;
+        let output_string = variant_to_json_string(&v)?;
+        assert_eq!(output_string, json);
+        // Verify metadata size = 1 + 2 + 2 * 497 + 3 * 496
+        assert_eq!(metadata_size, 2485);
+        // Verify value size.
+        // Size of innermost_list: 1 + 1 + 258 + 256 = 516
+        // Size of inner object: 1 + 4 + 256 + 257 * 3 + 256 * 516 = 133128
+        // Size of json: 1 + 4 + 512 + 1028 + 256 * 133128 = 34082313
+        assert_eq!(value_size, 34082313);
+    }
+    {
+        let json = "{\"爱\":\"अ\",\"a\":1}";
+        let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
+            value_buffer: vec![0u8; 1],
+            metadata_buffer: vec![0u8; 1],
+        };
+        let (metadata_size, value_size) = json_to_variant(&json, &mut variant_buffer_manager)?;
+        let computed_metadata_slize: &[u8] =
+            &variant_buffer_manager.metadata_buffer[..metadata_size];
+        let computed_value_slize: &[u8] = &variant_buffer_manager.value_buffer[..value_size];
+        let v = parquet_variant::Variant::try_new(computed_metadata_slize, computed_value_slize)?;
+        let output_string = variant_to_json_string(&v)?;
+        assert_eq!(output_string, "{\"a\":1,\"爱\":\"अ\"}");
+        assert_eq!(
+            computed_value_slize,
+            &[2u8, 2u8, 1u8, 0u8, 4u8, 0u8, 6u8, 13u8, 0xe0u8, 0xa4u8, 0x85u8, 12u8, 1u8]
+        );
+        assert_eq!(
+            computed_metadata_slize,
+            &[1u8, 2u8, 0u8, 3u8, 4u8, 0xe7u8, 0x88u8, 0xb1u8, 97u8]
+        );
+    }
 
     Ok(())
 }

@@ -106,9 +106,7 @@ fn append_json(json: &Value, builder: &mut impl AppendVariantHelper) -> Result<(
 }
 
 fn build_list(arr: &[Value], builder: &mut ListBuilder) -> Result<(), ArrowError> {
-    arr.iter().try_fold((), |_, val| {
-        append_json(val, builder)
-    })
+    arr.iter().try_fold((), |_, val| append_json(val, builder))
 }
 
 fn build_object<'a, 'b>(
