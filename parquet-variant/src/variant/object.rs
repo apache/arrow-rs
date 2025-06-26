@@ -145,11 +145,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     /// Get a field's value by index in `0..self.len()`
+    ///
+    /// # Panics
+    /// If the variant itself is not valid. But in practice, this should never happen
     pub fn field(&self, i: usize) -> Option<Variant<'m, 'v>> {
-        if i >= self.num_elements {
-            return None;
-        }
-
         Some(
             self.try_field(i)
                 .expect("validation error after construction"),
@@ -172,6 +171,9 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     /// Get a field's name by index in `0..self.len()`
+    ///
+    /// # Panics
+    /// If the variant itself is not valid. But in practice, this should never happen
     pub fn field_name(&self, i: usize) -> Option<&'m str> {
         Some(
             self.try_field_name(i)
