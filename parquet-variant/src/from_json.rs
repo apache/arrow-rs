@@ -6,9 +6,9 @@ use serde_json::{Map, Value};
 /// Eventually, internal writes should also be performed using VariantBufferManager instead of
 /// ValueBuffer and MetadataBuffer so the caller has control of the memory.
 /// Returns a pair <value_size, metadata_size>
-pub fn json_to_variant<T: VariantBufferManager>(
+pub fn json_to_variant(
     json: &str,
-    variant_buffer_manager: &mut T,
+    variant_buffer_manager: &mut impl VariantBufferManager,
 ) -> Result<(usize, usize), ArrowError> {
     let mut builder = VariantBuilder::new();
     let json: Value = serde_json::from_str(json)

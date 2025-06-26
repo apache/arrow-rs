@@ -23,61 +23,6 @@ pub trait VariantBufferManager {
     /// if `borrow_value_buffer` is to return a new buffer from the next call onwards, the new
     /// buffer must have the contents of the old value buffer.
     fn ensure_value_buffer_size(&mut self, size: usize) -> Result<(), ArrowError>;
-
-    fn get_immutable_metadata_buffer(&self) -> &[u8] {
-        unimplemented!("Optional method not implemented in VariantBufferManager")
-    }
-
-    fn get_immutable_value_buffer(&self) -> &[u8] {
-        unimplemented!("Optional method not implemented in VariantBufferManager")
-    }
-}
-
-pub struct SampleBoxBasedVariantBufferManager {
-    pub value_buffer: Box<[u8]>,
-    pub metadata_buffer: Box<[u8]>,
-}
-
-impl VariantBufferManager for SampleBoxBasedVariantBufferManager {
-    #[inline(always)]
-    fn borrow_value_buffer(&mut self) -> &mut [u8] {
-        &mut self.value_buffer
-    }
-
-    fn ensure_value_buffer_size(&mut self, size: usize) -> Result<(), ArrowError> {
-        let cur_len = self.value_buffer.len();
-        if size > cur_len {
-            // Reallocate larger buffer
-            let mut new_buffer = vec![0u8; size].into_boxed_slice();
-            new_buffer[..cur_len].copy_from_slice(&self.value_buffer);
-            self.value_buffer = new_buffer;
-        }
-        Ok(())
-    }
-
-    #[inline(always)]
-    fn borrow_metadata_buffer(&mut self) -> &mut [u8] {
-        &mut self.metadata_buffer
-    }
-
-    fn ensure_metadata_buffer_size(&mut self, size: usize) -> Result<(), ArrowError> {
-        let cur_len = self.metadata_buffer.len();
-        if size > cur_len {
-            // Reallocate larger buffer
-            let mut new_buffer = vec![0u8; size].into_boxed_slice();
-            new_buffer[..cur_len].copy_from_slice(&self.metadata_buffer);
-            self.metadata_buffer = new_buffer;
-        }
-        Ok(())
-    }
-
-    fn get_immutable_metadata_buffer(&self) -> &[u8] {
-        &self.metadata_buffer
-    }
-
-    fn get_immutable_value_buffer(&self) -> &[u8] {
-        &self.value_buffer
-    }
 }
 
 pub struct SampleVecBasedVariantBufferManager {
@@ -112,13 +57,5 @@ impl VariantBufferManager for SampleVecBasedVariantBufferManager {
             self.metadata_buffer.resize(size, 0);
         }
         Ok(())
-    }
-
-    fn get_immutable_metadata_buffer(&self) -> &[u8] {
-        self.metadata_buffer.as_slice()
-    }
-
-    fn get_immutable_value_buffer(&self) -> &[u8] {
-        self.value_buffer.as_slice()
     }
 }

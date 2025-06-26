@@ -19,20 +19,26 @@
 
 use parquet_variant::{
     json_to_variant, variant_to_json, variant_to_json_string, variant_to_json_value,
-    SampleBoxBasedVariantBufferManager, SampleVecBasedVariantBufferManager, VariantBufferManager,
+    SampleVecBasedVariantBufferManager,
 };
 
-fn from_json_example<T: VariantBufferManager>(
-    variant_buffer_manager: &mut T,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The caller must provide an object implementing the `VariantBufferManager` trait to the library.
+    // This allows the library to write the constructed variant to buffers provided by the caller.
+    // This way, the caller has direct control over the output buffers.
+    let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
+        value_buffer: vec![0u8; 1],
+        metadata_buffer: vec![0u8; 1],
+    };
+
     let person_string = "{\"name\":\"Alice\", \"age\":30, ".to_string()
         + "\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
         + "\"additional_info\": null}";
-    let (metadata_size, value_size) = json_to_variant(&person_string, variant_buffer_manager)?;
+    let (metadata_size, value_size) = json_to_variant(&person_string, &mut variant_buffer_manager)?;
 
     let variant = parquet_variant::Variant::try_new(
-        &variant_buffer_manager.get_immutable_metadata_buffer()[..metadata_size],
-        &variant_buffer_manager.get_immutable_value_buffer()[..value_size],
+        &variant_buffer_manager.metadata_buffer[..metadata_size],
+        &variant_buffer_manager.value_buffer[..value_size],
     )?;
 
     let json_string = variant_to_json_string(&variant)?;
@@ -48,24 +54,5 @@ fn from_json_example<T: VariantBufferManager>(
     assert_eq!(json_string, buffer_result);
     assert_eq!(json_string, serde_json::to_string(&json_value)?);
 
-    Ok(())
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // The caller must provide an object implementing the `VariantBufferManager` trait to the library.
-    // This allows the library to write the constructed variant to buffers provided by the caller.
-    // This way, the caller has direct control over the output buffers.
-    let mut box_based_buffer_manager = SampleBoxBasedVariantBufferManager {
-        value_buffer: vec![0u8; 1].into_boxed_slice(),
-        metadata_buffer: vec![0u8; 1].into_boxed_slice(),
-    };
-
-    let mut vec_based_buffer_manager = SampleVecBasedVariantBufferManager {
-        value_buffer: vec![0u8; 1],
-        metadata_buffer: vec![0u8; 1],
-    };
-
-    from_json_example(&mut box_based_buffer_manager)?;
-    from_json_example(&mut vec_based_buffer_manager)?;
     Ok(())
 }

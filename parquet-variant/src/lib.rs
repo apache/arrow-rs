@@ -43,6 +43,4 @@ pub use builder::*;
 pub use from_json::json_to_variant;
 pub use to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
 pub use variant::*;
-pub use variant_buffer_manager::{
-    SampleBoxBasedVariantBufferManager, SampleVecBasedVariantBufferManager, VariantBufferManager,
-};
+pub use variant_buffer_manager::{SampleVecBasedVariantBufferManager, VariantBufferManager};
