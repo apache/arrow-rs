@@ -467,7 +467,7 @@ impl fmt::Display for DataType {
                         .map(|f| format!("{} {}", f.name(), f.data_type()))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    write!(f, "{}", fields_str)?;
+                    write!(f, "{fields_str}")?;
                 }
                 write!(f, ")")?;
                 Ok(())
