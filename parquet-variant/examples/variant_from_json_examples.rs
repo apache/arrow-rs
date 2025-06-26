@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &variant_buffer_manager.value_buffer[..value_size],
     )?;
 
-    let json_string = variant_to_json_string(&variant)?;
+    let json_result = variant_to_json_string(&variant)?;
     let json_value = variant_to_json_value(&variant)?;
     let pretty_json = serde_json::to_string_pretty(&json_value)?;
     println!("{}", pretty_json);
@@ -49,10 +49,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut buffer = Vec::new();
     variant_to_json(&mut buffer, &variant)?;
     let buffer_result = String::from_utf8(buffer)?;
-
-    // Verify all methods produce the same result
-    assert_eq!(json_string, buffer_result);
-    assert_eq!(json_string, serde_json::to_string(&json_value)?);
+    assert_eq!(json_result, "{\"additional_info\":null,\"age\":30,".to_string() +
+    "\"email\":\"alice@example.com\",\"is_active\":true,\"name\":\"Alice\",\"score\":95.7}");
+    assert_eq!(json_result, buffer_result);
+    assert_eq!(json_result, serde_json::to_string(&json_value)?);
 
     Ok(())
 }

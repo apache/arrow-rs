@@ -1,13 +1,78 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Module for parsing JSON strings as Variant
+
 pub use crate::variant::{VariantDecimal4, VariantDecimal8};
 use crate::variant_buffer_manager::VariantBufferManager;
 use crate::{AppendVariantHelper, ListBuilder, ObjectBuilder, Variant, VariantBuilder};
 use arrow_schema::ArrowError;
 use rust_decimal::prelude::*;
-use serde_json::{Map, Number, Value};
+use serde_json::{Number, Value};
 
+/// Converts a JSON string to Variant and writes the corresponding `value` and `metadata` values
+///  to buffers provided by `variant_buffer_manager`.
+///
+/// # Arguments
+/// * `json` - The JSON string to parse as Variant.
+/// * `variant_buffer_manager` - Object implementing the `VariantBufferManager` trait for the caller
+///   to provide buffers to write the Variant output to.
+///
+/// # Returns
+///
+/// * `Ok(metadata_size, value_size)` denoting the sizes of the resulting value and metadata values
+///   if successful
+/// * `Err` with error details if the conversion fails
+///
+/// ```rust
+/// # use parquet_variant::{
+/// json_to_variant, variant_to_json, variant_to_json_string, variant_to_json_value,
+/// SampleVecBasedVariantBufferManager,
+/// };
+///
+/// let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
+/// value_buffer: vec![0u8; 1],
+/// metadata_buffer: vec![0u8; 1],
+/// };
+/// let person_string = "{\"name\":\"Alice\", \"age\":30, ".to_string()
+/// + "\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
+/// + "\"additional_info\": null}";
+/// let (metadata_size, value_size) = json_to_variant(&person_string, &mut variant_buffer_manager)?;
+///
+/// let variant = parquet_variant::Variant::try_new(
+/// &variant_buffer_manager.metadata_buffer[..metadata_size],
+/// &variant_buffer_manager.value_buffer[..value_size],
+/// )?;
+///
+/// let json_result = variant_to_json_string(&variant)?;
+/// let json_value = variant_to_json_value(&variant)?;
+///
+/// let mut buffer = Vec::new();
+/// variant_to_json(&mut buffer, &variant)?;
+/// let buffer_result = String::from_utf8(buffer)?;
+/// assert_eq!(json_result, "{\"additional_info\":null,\"age\":30,".to_string() +
+/// "\"email\":\"alice@example.com\",\"is_active\":true,\"name\":\"Alice\",\"score\":95.7}");
+/// assert_eq!(json_result, buffer_result);
+/// assert_eq!(json_result, serde_json::to_string(&json_value)?);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
 /// Eventually, internal writes should also be performed using VariantBufferManager instead of
 /// ValueBuffer and MetadataBuffer so the caller has control of the memory.
-/// Returns a pair <value_size, metadata_size>
 pub fn json_to_variant(
     json: &str,
     variant_buffer_manager: &mut impl VariantBufferManager,
@@ -93,30 +158,24 @@ fn append_json(json: &Value, builder: &mut impl AppendVariantHelper) -> Result<(
         Value::String(s) => builder.append_value(s.as_str()),
         Value::Array(arr) => {
             let mut list_builder = builder.new_list();
-            build_list(arr, &mut list_builder)?;
+            for val in arr {
+                append_json(val, &mut list_builder)?;
+            }
             list_builder.finish();
         }
         Value::Object(obj) => {
             let mut obj_builder = builder.new_object();
-            build_object(obj, &mut obj_builder)?;
+            for (key, value) in obj.iter() {
+                let mut field_builder = ObjectFieldBuilder {
+                    key,
+                    builder: &mut obj_builder,
+                };
+                append_json(value, &mut field_builder)?;
+            }
             obj_builder.finish();
         }
     };
     Ok(())
-}
-
-fn build_list(arr: &[Value], builder: &mut ListBuilder) -> Result<(), ArrowError> {
-    arr.iter().try_fold((), |_, val| append_json(val, builder))
-}
-
-fn build_object<'a, 'b>(
-    obj: &'b Map<String, Value>,
-    builder: &mut ObjectBuilder<'a, 'b>,
-) -> Result<(), ArrowError> {
-    obj.iter().try_fold((), |_, (key, value)| {
-        let mut field_builder = ObjectFieldBuilder { key, builder };
-        append_json(value, &mut field_builder)
-    })
 }
 
 struct ObjectFieldBuilder<'a, 'b, 'c> {
