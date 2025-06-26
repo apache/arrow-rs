@@ -26,11 +26,6 @@ use std::num::TryFromIntError;
 // Makes the code a bit more readable
 pub(crate) const VARIANT_VALUE_HEADER_BYTES: usize = 1;
 
-pub(crate) const MAX_UNSCALED_DECIMAL_4: i32 = 999999999;
-pub(crate) const MAX_PRECISION_DECIMAL_4: u8 = 9;
-pub(crate) const MAX_UNSCALED_DECIMAL_8: i64 = 999999999999999999i64;
-pub(crate) const MAX_PRECISION_DECIMAL_8: u8 = 18;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantBasicType {
     Primitive = 0,
