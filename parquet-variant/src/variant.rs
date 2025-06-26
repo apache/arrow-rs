@@ -966,12 +966,12 @@ impl TryFrom<&Number> for Variant<'_, '_> {
                 Ok(dec) => {
                     let unscaled: i128 = dec.mantissa();
                     let scale = dec.scale() as u8;
-                    if unscaled.abs() <= decoder::MAX_UNSCALED_DECIMAL_4 as i128
-                        && scale <= decoder::MAX_PRECISION_DECIMAL_4
+                    if unscaled.abs() <= VariantDecimal4::MAX_UNSCALED_VALUE as i128
+                        && scale <= VariantDecimal4::MAX_PRECISION as u8
                     {
                         (unscaled as i32, scale).try_into()
-                    } else if unscaled.abs() <= decoder::MAX_UNSCALED_DECIMAL_8 as i128
-                        && scale <= decoder::MAX_PRECISION_DECIMAL_8
+                    } else if unscaled.abs() <= VariantDecimal8::MAX_UNSCALED_VALUE as i128
+                        && scale <= VariantDecimal8::MAX_PRECISION as u8
                     {
                         (unscaled as i64, scale).try_into()
                     } else {
