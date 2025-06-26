@@ -295,8 +295,6 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
 
     // TODO: verify different offset_size, id_size, is_large values, nesting and more object
     // tests in general
-    // NOTE: objects and lists are treated as `pending` and are added to the dictionary after scalar
-    // values. Therefore "null" has ID 0, "numbers" as ID 1 and "booleans" has ID 2.
     compare_results(
         "{\"numbers\": [4, -3e0, 1.001], \"null\": null, \"booleans\": [true, false]}",
         &[
