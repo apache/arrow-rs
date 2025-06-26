@@ -21,12 +21,11 @@ pub fn json_to_variant(
 
     // Write to caller's buffers - Remove this when the library internally writes to the caller's
     // buffers anyway
-    variant_buffer_manager.ensure_metadata_buffer_size(metadata_size)?;
-    variant_buffer_manager.ensure_value_buffer_size(value_size)?;
-
-    let caller_metadata_buffer = variant_buffer_manager.borrow_metadata_buffer();
+    let caller_metadata_buffer =
+        variant_buffer_manager.ensure_size_and_borrow_metadata_buffer(metadata_size)?;
     caller_metadata_buffer[..metadata_size].copy_from_slice(metadata.as_slice());
-    let caller_value_buffer = variant_buffer_manager.borrow_value_buffer();
+    let caller_value_buffer =
+        variant_buffer_manager.ensure_size_and_borrow_value_buffer(value_size)?;
     caller_value_buffer[..value_size].copy_from_slice(value.as_slice());
     Ok((metadata_size, value_size))
 }
