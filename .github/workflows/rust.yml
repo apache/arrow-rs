@@ -52,7 +52,7 @@ jobs:
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           # PyArrow tests happen in integration.yml.
-          cargo test --workspace --exclude arrow-pyarrow
+          cargo test --workspace
 
 
   # Check workspace wide compile and test with default features for
@@ -84,8 +84,7 @@ jobs:
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           export PATH=$PATH:/d/protoc/bin
-          # PyArrow tests happen in integration.yml.
-          cargo test --workspace --exclude arrow-pyarrow
+          cargo test --workspace 
 
 
   # Run cargo fmt for all crates

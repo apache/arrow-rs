@@ -165,8 +165,9 @@ jobs:
       - name: Run Rust tests
         run: |
           source venv/bin/activate
-          cargo test -p arrow-pyarrow
-      - name: Run tests
+          cd arrow-pyarrow-testing
+          cargo test
+      - name: Run Python tests
         run: |
           source venv/bin/activate
           cd arrow-pyarrow-integration-testing

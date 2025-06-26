@@ -55,6 +55,9 @@ members = [
 resolver = "2"
 
 exclude = [
+    # arrow-pyarrow-testing is excluded because it requires a Python interpreter with the pyarrow package installed,
+    # which makes running `cargo test --all` fail if the appropriate Python environment is not set up.
+    "arrow-pyarrow-testing",
     # arrow-pyarrow-integration-testing is excluded because it requires different compilation flags, thereby
     # significantly changing how it is compiled within the workspace, causing the whole workspace to be compiled from
     # scratch this way, this is a stand-alone package that compiles independently of the others.
