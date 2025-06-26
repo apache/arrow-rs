@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! End-to-end check: (almost) every sample from apache/parquet-testing/variant
-//! can be parsed into our `Variant`.
+//! `VariantBufferManager` allows callers to have full control over the outputs that the Variant
+//! library writes to when constructing Variants.
 
 use arrow_schema::ArrowError;
 
