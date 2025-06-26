@@ -597,18 +597,6 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         }
     }
 
-    /// Add a field with key and value to the object
-    ///
-    /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
-    /// but the old value remains in the buffer, resulting in a larger variant
-    pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
-        let field_id = self.metadata_builder.add_field_name(key);
-        let field_start = self.buffer.offset();
-
-        self.fields.insert(field_id, field_start);
-        self.buffer.append_non_nested_value(value);
-    }
-
     fn check_pending_field(&mut self) {
         let Some((field_name, field_start)) = self.pending.as_ref() else {
             return;
@@ -618,6 +606,20 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         self.fields.insert(field_id, *field_start);
 
         self.pending = None;
+    }
+
+    /// Add a field with key and value to the object
+    ///
+    /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
+    /// but the old value remains in the buffer, resulting in a larger variant
+    pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
+        self.check_pending_field();
+
+        let field_id = self.metadata_builder.add_field_name(key);
+        let field_start = self.buffer.offset();
+
+        self.fields.insert(field_id, field_start);
+        self.buffer.append_non_nested_value(value);
     }
 
     /// Return a new [`ObjectBuilder`] to add a nested object with the specified
@@ -1363,5 +1365,68 @@ mod tests {
         assert_eq!(items_list.len(), 2);
         assert_eq!(items_list.get(0).unwrap(), Variant::from("apple"));
         assert_eq!(items_list.get(1).unwrap(), Variant::from(false));
+    }
+
+    #[test]
+    fn test_nested_object_with_heterogeneous_fields() {
+        /*
+        {
+            "a": false,
+            "c": {
+                "b": "a"
+            }
+            "b": true,
+        }
+        */
+
+        let mut builder = VariantBuilder::new();
+        {
+            let mut outer_object_builder = builder.new_object();
+
+            outer_object_builder.insert("a", false);
+
+            {
+                let mut inner_object_builder = outer_object_builder.new_object("c");
+                inner_object_builder.insert("b", "a");
+                inner_object_builder.finish();
+            }
+
+            outer_object_builder.insert("b", true);
+
+            outer_object_builder.finish();
+        }
+
+        let (metadata, value) = builder.finish();
+
+        // note, object fields are now sorted lexigraphically by field name
+        /*
+         {
+            "a": false,
+            "b": true,
+            "c": {
+                "b": "a"
+            }
+        }
+        */
+
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let outer_object = variant.as_object().unwrap();
+
+        assert_eq!(outer_object.len(), 3);
+
+        assert_eq!(outer_object.field_name(0).unwrap(), "a");
+        assert_eq!(outer_object.field(0).unwrap(), Variant::from(false));
+
+        assert_eq!(outer_object.field_name(2).unwrap(), "c");
+
+        let inner_object_variant = outer_object.field(2).unwrap();
+        let inner_object = inner_object_variant.as_object().unwrap();
+
+        assert_eq!(inner_object.len(), 1);
+        assert_eq!(inner_object.field_name(0).unwrap(), "b");
+        assert_eq!(inner_object.field(0).unwrap(), Variant::from("a"));
+
+        assert_eq!(outer_object.field_name(1).unwrap(), "b");
+        assert_eq!(outer_object.field(1).unwrap(), Variant::from(true));
     }
 }
