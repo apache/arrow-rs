@@ -24,7 +24,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -303,13 +303,44 @@ fn sort_bytes<T: ByteArrayType>(
     sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
 }
 
+/// Builds a 128-bit composite key for an inline value:
+/// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting)
+/// - Low  32 bits: the length in big-endian byte order (so shorter strings are always numerically smaller)
+///
+/// This function extracts the length and the 12-byte inline string data from the
+/// raw little-endian u128 representation, converts them to big-endian ordering,
+/// and packs them into a single u128 value suitable for fast comparisons.
+///
+/// # Note
+/// The input `raw` is assumed to be in little-endian format with the following layout:
+/// - bytes 0..4: length (u32)
+/// - bytes 4..16: inline string data (padded with zeros if less than 12 bytes)
+///
+/// The output u128 key places the inline string data in the upper 96 bits (big-endian)
+/// and the length in the lower 32 bits (big-endian).
 #[inline(always)]
-fn prefix_to_u32(bytes: &[u8]) -> u32 {
-    let mut acc = 0;
-    for (i, &b) in bytes.iter().take(4).enumerate() {
-        acc |= (b as u32) << (8 * (3 - i));
-    }
-    acc
+pub fn inline_key_fast(raw: u128) -> u128 {
+    // Convert the raw u128 (little-endian) into bytes for manipulation
+    let raw_bytes = raw.to_le_bytes();
+
+    // Extract the length (first 4 bytes), convert to big-endian u32, and promote to u128
+    let len_le = &raw_bytes[0..4];
+    let len_be = u32::from_le_bytes(len_le.try_into().unwrap()).to_be() as u128;
+
+    // Extract the inline string bytes (next 12 bytes), place them into the lower 12 bytes of a 16-byte array,
+    // padding the upper 4 bytes with zero to form a little-endian u128 value
+    let mut inline_bytes = [0u8; 16];
+    inline_bytes[4..16].copy_from_slice(&raw_bytes[4..16]);
+
+    // Convert to big-endian to ensure correct lexical ordering
+    let inline_u128 = u128::from_le_bytes(inline_bytes).to_be();
+
+    // Shift right by 32 bits to discard the zero padding (upper 4 bytes),
+    // so that the inline string occupies the high 96 bits
+    let inline_part = inline_u128 >> 32;
+
+    // Combine the inline string part (high 96 bits) and length (low 32 bits) into the final key
+    (inline_part << 32) | len_be
 }
 
 fn sort_byte_view<T: ByteViewType>(
@@ -319,40 +350,67 @@ fn sort_byte_view<T: ByteViewType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let mut valids = value_indices
+    // 1. Build a list of (index, raw_view, length)
+    let mut valids: Vec<_> = value_indices
         .into_iter()
-        .map(|index| (index, values.value(index as usize).as_ref()))
-        .collect::<Vec<(u32, &[u8])>>();
+        .map(|idx| {
+            // SAFETY: we know idx < values.len()
+            let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+            let len = raw as u32; // lower 32 bits encode length
+            (idx, raw, len)
+        })
+        .collect();
+
+    // 2. Compute the number of non-null entries to partially sort
     let vlimit = match (limit, options.nulls_first) {
         (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
         _ => valids.len(),
     };
 
-    let cmp_prefix = |a: &[u8], b: &[u8]| {
-        let pa = prefix_to_u32(a);
-        let pb = prefix_to_u32(b);
-        match pa.cmp(&pb) {
-            Ordering::Equal => a.cmp(b),
-            non_eq => non_eq,
+    // 3. Mixed comparator: first prefix, then inline vs full comparison
+    let cmp_mixed = |a: &(u32, u128, u32), b: &(u32, u128, u32)| {
+        let (_, raw_a, len_a) = *a;
+        let (_, raw_b, len_b) = *b;
+
+        // 3.1 Both inline (≤12 bytes): compare full 128-bit key including length
+        if len_a <= MAX_INLINE_VIEW_LEN && len_b <= MAX_INLINE_VIEW_LEN {
+            return inline_key_fast(raw_a).cmp(&inline_key_fast(raw_b));
         }
+
+        // 3.2 Compare 4-byte prefix in big-endian order
+        let pref_a = ByteView::from(raw_a).prefix.swap_bytes();
+        let pref_b = ByteView::from(raw_b).prefix.swap_bytes();
+        if pref_a != pref_b {
+            return pref_a.cmp(&pref_b);
+        }
+
+        // 3.3 Fallback to full byte-slice comparison
+        let full_a: &[u8] = unsafe { values.value_unchecked(a.0 as usize).as_ref() };
+        let full_b: &[u8] = unsafe { values.value_unchecked(b.0 as usize).as_ref() };
+        full_a.cmp(full_b)
     };
 
+    // 4. Partially sort according to ascending/descending
     if !options.descending {
-        sort_unstable_by(&mut valids, vlimit, |a, b| cmp_prefix(a.1, b.1));
+        sort_unstable_by(&mut valids, vlimit, cmp_mixed);
     } else {
-        sort_unstable_by(&mut valids, vlimit, |a, b| cmp_prefix(a.1, b.1).reverse());
+        sort_unstable_by(&mut valids, vlimit, |x, y| cmp_mixed(x, y).reverse());
     }
 
-    let total_len = valids.len() + nulls.len();
-    let limit = limit.unwrap_or(total_len).min(total_len);
-    let mut out = Vec::with_capacity(total_len);
+    // 5. Assemble nulls and sorted indices into final output
+    let total = valids.len() + nulls.len();
+    let out_limit = limit.unwrap_or(total).min(total);
+    let mut out = Vec::with_capacity(total);
+
     if options.nulls_first {
-        out.extend_from_slice(&nulls[..nulls.len().min(limit)]);
-        let rem = limit - out.len();
-        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
+        // Place null indices first
+        out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+        let rem = out_limit - out.len();
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(rem));
     } else {
-        out.extend(valids.iter().map(|&(i, _)| i).take(limit));
-        let rem = limit - out.len();
+        // Place non-null indices first
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(out_limit));
+        let rem = out_limit - out.len();
         out.extend_from_slice(&nulls[..rem]);
     }
 
