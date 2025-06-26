@@ -184,7 +184,7 @@ impl ValueBuffer {
         self.0.len()
     }
 
-    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+    fn append_non_nested_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         let variant = value.into();
         match variant {
             Variant::Null => self.append_null(),
@@ -212,7 +212,9 @@ impl ValueBuffer {
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(_) | Variant::List(_) => {
-                todo!("How does this work with the redesign?");
+                unreachable!(
+                    "Nested values are handled specially by ObjectBuilder and ListBuilder"
+                );
             }
         }
     }
@@ -277,8 +279,8 @@ impl MetadataBuilder {
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
 /// let mut object_builder = builder.new_object();
-/// object_builder.append_value("first_name", "Jiaying");
-/// object_builder.append_value("last_name", "Li");
+/// object_builder.insert("first_name", "Jiaying");
+/// object_builder.insert("last_name", "Li");
 /// object_builder.finish();
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
@@ -342,15 +344,15 @@ impl MetadataBuilder {
 ///
 /// {
 ///     let mut object_builder = list_builder.new_object();
-///     object_builder.append_value("id", 1);
-///     object_builder.append_value("type", "Cauliflower");
+///     object_builder.insert("id", 1);
+///     object_builder.insert("type", "Cauliflower");
 ///     object_builder.finish();
 /// }
 ///
 /// {
 ///     let mut object_builder = list_builder.new_object();
-///     object_builder.append_value("id", 2);
-///     object_builder.append_value("type", "Beets");
+///     object_builder.insert("id", 2);
+///     object_builder.insert("type", "Beets");
 ///     object_builder.finish();
 /// }
 ///
@@ -414,7 +416,7 @@ impl VariantBuilder {
     }
 
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        self.buffer.append_value(value);
+        self.buffer.append_non_nested_value(value);
     }
 
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
@@ -477,6 +479,7 @@ pub struct ListBuilder<'a> {
     metadata_builder: &'a mut MetadataBuilder,
     offsets: Vec<usize>,
     buffer: ValueBuffer,
+    /// Is there a pending nested object or list that needs to be finalized?
     pending: bool,
 }
 
@@ -523,7 +526,7 @@ impl<'a> ListBuilder<'a> {
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         self.check_new_offset();
 
-        self.buffer.append_value(value);
+        self.buffer.append_non_nested_value(value);
         let element_end = self.buffer.offset();
         self.offsets.push(element_end);
     }
@@ -574,34 +577,81 @@ impl<'a> ListBuilder<'a> {
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
-pub struct ObjectBuilder<'a> {
+pub struct ObjectBuilder<'a, 'b> {
     parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
     fields: BTreeMap<u32, usize>, // (field_id, offset)
     buffer: ValueBuffer,
+    /// Is there a pending list or object that needs to be finalized?
+    pending: Option<(&'b str, usize)>,
 }
 
-impl<'a> ObjectBuilder<'a> {
+impl<'a, 'b> ObjectBuilder<'a, 'b> {
     fn new(parent_buffer: &'a mut ValueBuffer, metadata_builder: &'a mut MetadataBuilder) -> Self {
         Self {
             parent_buffer,
             metadata_builder,
             fields: BTreeMap::new(),
             buffer: ValueBuffer::default(),
+            pending: None,
         }
     }
 
-    /// Add a field with key and value to the object
-    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
-        let field_id = self.metadata_builder.add_field_name(key);
-        let field_start = self.buffer.offset();
-        self.buffer.append_value(value);
-        let res = self.fields.insert(field_id, field_start);
-        debug_assert!(res.is_none());
+    fn check_pending_field(&mut self) {
+        let Some((field_name, field_start)) = self.pending.as_ref() else {
+            return;
+        };
+
+        let field_id = self.metadata_builder.add_field_name(field_name);
+        self.fields.insert(field_id, *field_start);
+
+        self.pending = None;
     }
 
-    /// Finalize object with sorted fields
-    pub fn finish(self) {
+    /// Add a field with key and value to the object
+    ///
+    /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
+    /// but the old value remains in the buffer, resulting in a larger variant
+    pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
+        self.check_pending_field();
+
+        let field_id = self.metadata_builder.add_field_name(key);
+        let field_start = self.buffer.offset();
+
+        self.fields.insert(field_id, field_start);
+        self.buffer.append_non_nested_value(value);
+    }
+
+    /// Return a new [`ObjectBuilder`] to add a nested object with the specified
+    /// key to the object.
+    pub fn new_object(&mut self, key: &'b str) -> ObjectBuilder {
+        self.check_pending_field();
+
+        let field_start = self.buffer.offset();
+        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
+        self.pending = Some((key, field_start));
+
+        obj_builder
+    }
+
+    /// Return a new [`ListBuilder`] to add a list with the specified key to the
+    /// object.
+    pub fn new_list(&mut self, key: &'b str) -> ListBuilder {
+        self.check_pending_field();
+
+        let field_start = self.buffer.offset();
+        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder);
+        self.pending = Some((key, field_start));
+
+        list_builder
+    }
+
+    /// Finalize object
+    ///
+    /// This consumes self and writes the object to the parent buffer.
+    pub fn finish(mut self) {
+        self.check_pending_field();
+
         let data_size = self.buffer.offset();
         let num_fields = self.fields.len();
         let is_large = num_fields > u8::MAX as usize;
@@ -815,8 +865,8 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("name", "John");
-            obj.append_value("age", 42i8);
+            obj.insert("name", "John");
+            obj.insert("age", 42i8);
             obj.finish();
         }
 
@@ -831,9 +881,9 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.append_value("zebra", "stripes"); // ID = 0
-            obj.append_value("apple", "red"); // ID = 1
-            obj.append_value("banana", "yellow"); // ID = 2
+            obj.insert("zebra", "stripes"); // ID = 0
+            obj.insert("apple", "red"); // ID = 1
+            obj.insert("banana", "yellow"); // ID = 2
             obj.finish();
         }
 
@@ -858,8 +908,8 @@ mod tests {
 
         let mut obj = builder.new_object();
 
-        obj.append_value("zebra", "stripes"); // ID = 0
-        obj.append_value("apple", "red"); // ID = 1
+        obj.insert("zebra", "stripes"); // ID = 0
+        obj.insert("apple", "red"); // ID = 1
 
         {
             // fields_map is ordered by insertion order (field id)
@@ -886,7 +936,7 @@ mod tests {
             assert_eq!(dict_keys, vec!["zebra", "apple"]);
         }
 
-        obj.append_value("banana", "yellow"); // ID = 2
+        obj.insert("banana", "yellow"); // ID = 2
 
         {
             // fields_map is ordered by insertion order (field id)
@@ -919,6 +969,27 @@ mod tests {
         obj.finish();
 
         builder.finish();
+    }
+
+    #[test]
+    fn test_duplicate_fields_in_object() {
+        let mut builder = VariantBuilder::new();
+        let mut object_builder = builder.new_object();
+        object_builder.insert("name", "Ron Artest");
+        object_builder.insert("name", "Metta World Peace");
+        object_builder.finish();
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.field(0).unwrap(), Variant::from("Metta World Peace"));
+
+        assert_eq!(
+            vec![("name", Variant::from("Metta World Peace"))],
+            obj.iter().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1025,15 +1096,15 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("id", 1);
-            object_builder.append_value("type", "Cauliflower");
+            object_builder.insert("id", 1);
+            object_builder.insert("type", "Cauliflower");
             object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("id", 2);
-            object_builder.append_value("type", "Beets");
+            object_builder.insert("id", 2);
+            object_builder.insert("type", "Beets");
             object_builder.finish();
         }
 
@@ -1074,13 +1145,13 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("a", 1);
+            object_builder.insert("a", 1);
             object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("b", 2);
+            object_builder.insert("b", 2);
             object_builder.finish();
         }
 
@@ -1127,7 +1198,7 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("a", 1);
+            object_builder.insert("a", 1);
             object_builder.finish();
         }
 
@@ -1135,7 +1206,7 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.append_value("b", 2);
+            object_builder.insert("b", 2);
             object_builder.finish();
         }
 
@@ -1167,5 +1238,195 @@ mod tests {
         );
 
         assert_eq!(list.get(4).unwrap(), Variant::from(3));
+    }
+
+    #[test]
+    fn test_nested_object() {
+        /*
+        {
+            "c": {
+                "b": "a"
+            }
+        }
+
+        */
+
+        let mut builder = VariantBuilder::new();
+        {
+            let mut outer_object_builder = builder.new_object();
+            {
+                let mut inner_object_builder = outer_object_builder.new_object("c");
+                inner_object_builder.insert("b", "a");
+                inner_object_builder.finish();
+            }
+
+            outer_object_builder.finish();
+        }
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let outer_object = variant.as_object().unwrap();
+
+        assert_eq!(outer_object.len(), 1);
+        assert_eq!(outer_object.field_name(0).unwrap(), "c");
+
+        let inner_object_variant = outer_object.field(0).unwrap();
+        let inner_object = inner_object_variant.as_object().unwrap();
+
+        assert_eq!(inner_object.len(), 1);
+        assert_eq!(inner_object.field_name(0).unwrap(), "b");
+        assert_eq!(inner_object.field(0).unwrap(), Variant::from("a"));
+    }
+
+    #[test]
+    fn test_nested_object_with_duplicate_field_names_per_object() {
+        /*
+        {
+            "c": {
+                "c": "a"
+            }
+        }
+
+        */
+
+        let mut builder = VariantBuilder::new();
+        {
+            let mut outer_object_builder = builder.new_object();
+            {
+                let mut inner_object_builder = outer_object_builder.new_object("c");
+                inner_object_builder.insert("c", "a");
+                inner_object_builder.finish();
+            }
+
+            outer_object_builder.finish();
+        }
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let outer_object = variant.as_object().unwrap();
+
+        assert_eq!(outer_object.len(), 1);
+        assert_eq!(outer_object.field_name(0).unwrap(), "c");
+
+        let inner_object_variant = outer_object.field(0).unwrap();
+        let inner_object = inner_object_variant.as_object().unwrap();
+
+        assert_eq!(inner_object.len(), 1);
+        assert_eq!(inner_object.field_name(0).unwrap(), "c");
+        assert_eq!(inner_object.field(0).unwrap(), Variant::from("a"));
+    }
+
+    #[test]
+    fn test_nested_object_with_lists() {
+        /*
+        {
+            "door 1": {
+                "items": ["apple", false ]
+            }
+        }
+
+        */
+
+        let mut builder = VariantBuilder::new();
+        {
+            let mut outer_object_builder = builder.new_object();
+            {
+                let mut inner_object_builder = outer_object_builder.new_object("door 1");
+
+                {
+                    let mut inner_object_list_builder = inner_object_builder.new_list("items");
+                    inner_object_list_builder.append_value("apple");
+                    inner_object_list_builder.append_value(false);
+                    inner_object_list_builder.finish();
+                }
+
+                inner_object_builder.finish();
+            }
+
+            outer_object_builder.finish();
+        }
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let outer_object = variant.as_object().unwrap();
+
+        assert_eq!(outer_object.len(), 1);
+        assert_eq!(outer_object.field_name(0).unwrap(), "door 1");
+
+        let inner_object_variant = outer_object.field(0).unwrap();
+        let inner_object = inner_object_variant.as_object().unwrap();
+
+        assert_eq!(inner_object.len(), 1);
+        assert_eq!(inner_object.field_name(0).unwrap(), "items");
+
+        let items_variant = inner_object.field(0).unwrap();
+        let items_list = items_variant.as_list().unwrap();
+
+        assert_eq!(items_list.len(), 2);
+        assert_eq!(items_list.get(0).unwrap(), Variant::from("apple"));
+        assert_eq!(items_list.get(1).unwrap(), Variant::from(false));
+    }
+
+    #[test]
+    fn test_nested_object_with_heterogeneous_fields() {
+        /*
+        {
+            "a": false,
+            "c": {
+                "b": "a"
+            }
+            "b": true,
+        }
+        */
+
+        let mut builder = VariantBuilder::new();
+        {
+            let mut outer_object_builder = builder.new_object();
+
+            outer_object_builder.insert("a", false);
+
+            {
+                let mut inner_object_builder = outer_object_builder.new_object("c");
+                inner_object_builder.insert("b", "a");
+                inner_object_builder.finish();
+            }
+
+            outer_object_builder.insert("b", true);
+
+            outer_object_builder.finish();
+        }
+
+        let (metadata, value) = builder.finish();
+
+        // note, object fields are now sorted lexigraphically by field name
+        /*
+         {
+            "a": false,
+            "b": true,
+            "c": {
+                "b": "a"
+            }
+        }
+        */
+
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let outer_object = variant.as_object().unwrap();
+
+        assert_eq!(outer_object.len(), 3);
+
+        assert_eq!(outer_object.field_name(0).unwrap(), "a");
+        assert_eq!(outer_object.field(0).unwrap(), Variant::from(false));
+
+        assert_eq!(outer_object.field_name(2).unwrap(), "c");
+
+        let inner_object_variant = outer_object.field(2).unwrap();
+        let inner_object = inner_object_variant.as_object().unwrap();
+
+        assert_eq!(inner_object.len(), 1);
+        assert_eq!(inner_object.field_name(0).unwrap(), "b");
+        assert_eq!(inner_object.field(0).unwrap(), Variant::from("a"));
+
+        assert_eq!(outer_object.field_name(1).unwrap(), "b");
+        assert_eq!(outer_object.field(1).unwrap(), Variant::from(true));
     }
 }
