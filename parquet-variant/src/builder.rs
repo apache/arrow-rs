@@ -16,7 +16,8 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
-use std::collections::BTreeMap;
+use arrow_schema::ArrowError;
+use std::collections::{BTreeMap, HashSet};
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -571,6 +572,8 @@ pub struct ObjectBuilder<'a, 'b> {
     buffer: ValueBuffer,
     /// Is there a pending list or object that needs to be finalized?
     pending: Option<(&'b str, usize)>,
+    validate_duplicates: bool,
+    duplicate_fields: HashSet<String>,
 }
 
 impl<'a, 'b> ObjectBuilder<'a, 'b> {
@@ -581,6 +584,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             fields: BTreeMap::new(),
             buffer: ValueBuffer::default(),
             pending: None,
+            validate_duplicates: false,
+            duplicate_fields: HashSet::new(),
         }
     }
 
@@ -605,12 +610,23 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let field_id = self.metadata_builder.upsert_field_name(key);
         let field_start = self.buffer.offset();
 
+        if self.fields.contains_key(&field_id) {
+            self.duplicate_fields.insert(key.to_string());
+        }
+
         self.fields.insert(field_id, field_start);
         self.buffer.append_non_nested_value(value);
     }
 
+    pub fn with_validate_unique_fields(mut self) -> Self {
+        self.validate_duplicates = true;
+        self
+    }
+
     /// Return a new [`ObjectBuilder`] to add a nested object with the specified
     /// key to the object.
+    ///
+    /// Note: user decides per nested builder whether to enable validation
     pub fn new_object(&mut self, key: &'b str) -> ObjectBuilder {
         self.check_pending_field();
 
@@ -636,8 +652,15 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     /// Finalize object
     ///
     /// This consumes self and writes the object to the parent buffer.
-    pub fn finish(mut self) {
+    pub fn finish(mut self) -> Result<(), ArrowError> {
         self.check_pending_field();
+
+        if self.validate_duplicates && !self.duplicate_fields.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Duplicate fields detected: {:?}",
+                self.duplicate_fields
+            )));
+        }
 
         let data_size = self.buffer.offset();
         let num_fields = self.fields.len();
@@ -677,6 +700,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         write_offset(self.parent_buffer.inner_mut(), data_size, offset_size);
 
         self.parent_buffer.append_slice(self.buffer.inner());
+
+        Ok(())
     }
 }
 
@@ -1387,5 +1412,29 @@ mod tests {
 
         assert_eq!(outer_object.field_name(1).unwrap(), "b");
         assert_eq!(outer_object.field(1).unwrap(), Variant::from(true));
+    }
+
+    #[test]
+    fn test_object_allows_duplicates() {
+        let mut builder = VariantBuilder::new();
+        let mut obj = builder.new_object();
+
+        obj.insert("a", 1);
+        obj.insert("a", 2);
+
+        let result = obj.finish();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_object_fails_on_duplicates() {
+        let mut builder = VariantBuilder::new();
+        let mut obj = builder.new_object().with_validate_unique_fields();
+
+        obj.insert("a", 1);
+        obj.insert("a", 2);
+
+        let result = obj.finish();
+        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
     }
 }
