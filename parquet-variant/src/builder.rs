@@ -60,22 +60,17 @@ fn write_offset(buf: &mut Vec<u8>, value: usize, nbytes: u8) {
     }
 }
 
-fn write_header(header_size: usize, header_byte: u8, is_large: bool, num_items: usize) -> Vec<u8> {
-    let mut buffer = Vec::with_capacity(header_size);
-
-    buffer.push(header_byte);
+fn write_header(buf: &mut Vec<u8>, header_byte: u8, is_large: bool, num_items: usize) {
+    buf.push(header_byte);
 
     if is_large {
         let num_items = num_items as u32;
-        buffer.extend_from_slice(&num_items.to_le_bytes());
+        buf.extend_from_slice(&num_items.to_le_bytes());
     } else {
         let num_items = num_items as u8;
-        buffer.push(num_items);
+        buf.push(num_items);
     };
-
-    buffer
 }
-
 #[derive(Default)]
 struct ValueBuffer(Vec<u8>);
 
@@ -541,19 +536,15 @@ impl<'a> ListBuilder<'a> {
         let data_size = self.buffer.offset();
         let num_elements = self.offsets.len() - 1;
         let is_large = num_elements > u8::MAX as usize;
-        let size_bytes = if is_large { 4 } else { 1 };
         let offset_size = int_size(data_size);
-        let header_size = 1 + size_bytes + (num_elements + 1) * offset_size as usize;
 
         // Write header
-        let header_buffer = write_header(
-            header_size,
+        write_header(
+            &mut self.parent_buffer.0,
             array_header(is_large, offset_size),
             is_large,
             num_elements,
         );
-
-        self.parent_buffer.append_from_slice(&header_buffer);
 
         // Write offsets
         for offset in &self.offsets {
@@ -646,7 +637,6 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let data_size = self.buffer.offset();
         let num_fields = self.fields.len();
         let is_large = num_fields > u8::MAX as usize;
-        let size_bytes = if is_large { 4 } else { 1 };
 
         let field_ids_by_sorted_field_name = self
             .metadata_builder
@@ -660,19 +650,13 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let id_size = int_size(max_id);
         let offset_size = int_size(data_size);
 
-        let header_size = 1
-            + size_bytes
-            + num_fields * id_size as usize
-            + (num_fields + 1) * offset_size as usize;
-
         // Write header
-        let header_buffer = write_header(
-            header_size,
+        write_header(
+            &mut self.parent_buffer.0,
             object_header(is_large, id_size, offset_size),
             is_large,
             num_fields,
         );
-        self.parent_buffer.append_from_slice(&header_buffer);
 
         // Write field IDs (sorted order)
         for id in &field_ids_by_sorted_field_name {
