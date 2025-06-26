@@ -225,7 +225,6 @@ pub fn encode_fixed_size_list(
                     data[*offset] = 0x01;
                     *offset += 1;
                     for child_idx in (idx * value_length)..(idx + 1) * value_length {
-                        //dbg!(child_idx);
                         let row = rows.row(child_idx);
                         let end_offset = *offset + row.as_ref().len();
                         data[*offset..end_offset].copy_from_slice(row.as_ref());
@@ -233,12 +232,8 @@ pub fn encode_fixed_size_list(
                     }
                 }
                 false => {
-                    let null_sentinels = 1;
-                    //+ value_length; // 1 for self + for values too
-                    for i in 0..null_sentinels {
-                        data[*offset + i] = null_sentinel;
-                    }
-                    *offset += null_sentinels;
+                    data[*offset] = null_sentinel;
+                    *offset += 1;
                 }
             };
         })
