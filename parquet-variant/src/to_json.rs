@@ -109,7 +109,7 @@ fn write_decimal_i64(
 /// ```rust
 /// # use parquet_variant::{Variant, variant_to_json};
 /// # use arrow_schema::ArrowError;
-/// let variant = Variant::String("Hello, World!");
+/// let variant = Variant::from("Hello, World!");
 /// let mut buffer = Vec::new();
 /// variant_to_json(&mut buffer, &variant)?;
 /// assert_eq!(String::from_utf8(buffer).unwrap(), "\"Hello, World!\"");
@@ -337,7 +337,7 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
 /// # use parquet_variant::{Variant, variant_to_json_value};
 /// # use serde_json::Value;
 /// # use arrow_schema::ArrowError;
-/// let variant = Variant::String("hello");
+/// let variant = Variant::from("hello");
 /// let json_value = variant_to_json_value(&variant)?;
 /// assert_eq!(json_value, Value::String("hello".to_string()));
 /// # Ok::<(), ArrowError>(())
@@ -540,7 +540,7 @@ mod tests {
 
     #[test]
     fn test_string_to_json() -> Result<(), ArrowError> {
-        let variant = Variant::String("hello world");
+        let variant = Variant::from("hello world");
         let json = variant_to_json_string(&variant)?;
         assert_eq!(json, "\"hello world\"");
 
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn test_string_escaping() -> Result<(), ArrowError> {
-        let variant = Variant::String("hello\nworld\t\"quoted\"");
+        let variant = Variant::from("hello\nworld\t\"quoted\"");
         let json = variant_to_json_string(&variant)?;
         assert_eq!(json, "\"hello\\nworld\\t\\\"quoted\\\"\"");
 
@@ -815,14 +815,14 @@ mod tests {
 
         // Strings
         JsonTest {
-            variant: Variant::String("hello world"),
+            variant: Variant::from("hello world"),
             expected_json: "\"hello world\"",
             expected_value: Value::String("hello world".to_string()),
         }
         .run();
 
         JsonTest {
-            variant: Variant::String(""),
+            variant: Variant::from(""),
             expected_json: "\"\"",
             expected_value: Value::String("".to_string()),
         }
@@ -870,14 +870,14 @@ mod tests {
     fn test_string_escaping_comprehensive() {
         // Test comprehensive string escaping scenarios
         JsonTest {
-            variant: Variant::String("line1\nline2\ttab\"quote\"\\backslash"),
+            variant: Variant::from("line1\nline2\ttab\"quote\"\\backslash"),
             expected_json: "\"line1\\nline2\\ttab\\\"quote\\\"\\\\backslash\"",
             expected_value: Value::String("line1\nline2\ttab\"quote\"\\backslash".to_string()),
         }
         .run();
 
         JsonTest {
-            variant: Variant::String("Hello 世界 🌍"),
+            variant: Variant::from("Hello 世界 🌍"),
             expected_json: "\"Hello 世界 🌍\"",
             expected_value: Value::String("Hello 世界 🌍".to_string()),
         }
@@ -888,7 +888,7 @@ mod tests {
     fn test_buffer_writing_variants() -> Result<(), ArrowError> {
         use crate::variant_to_json;
 
-        let variant = Variant::String("test buffer writing");
+        let variant = Variant::from("test buffer writing");
 
         // Test writing to a Vec<u8>
         let mut buffer = Vec::new();
