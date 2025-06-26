@@ -41,51 +41,6 @@ fn format_binary_base64(bytes: &[u8]) -> String {
     general_purpose::STANDARD.encode(bytes)
 }
 
-/// Write decimal using scovich's hybrid approach for i32
-fn write_decimal_i32(
-    json_buffer: &mut impl Write,
-    integer: i32,
-    scale: u8,
-) -> Result<(), ArrowError> {
-    let integer = if scale == 0 {
-        integer
-    } else {
-        let divisor = 10_i32.pow(scale as u32);
-        if integer % divisor != 0 {
-            // fall back to floating point
-            let result = integer as f64 / divisor as f64;
-            write!(json_buffer, "{result}")?;
-            return Ok(());
-        }
-        integer / divisor
-    };
-    write!(json_buffer, "{integer}")?;
-    Ok(())
-}
-
-/// Write decimal using scovich's hybrid approach for i64
-fn write_decimal_i64(
-    json_buffer: &mut impl Write,
-    integer: i64,
-    scale: u8,
-) -> Result<(), ArrowError> {
-    let integer = if scale == 0 {
-        integer
-    } else {
-        let divisor = 10_i64.pow(scale as u32);
-        if integer % divisor != 0 {
-            // fall back to floating point
-            let result = integer as f64 / divisor as f64;
-            write!(json_buffer, "{result}")?;
-            return Ok(());
-        }
-        integer / divisor
-    };
-    write!(json_buffer, "{integer}")?;
-    Ok(())
-}
-
-/// Converts a Variant to JSON and writes it to the provided [`Write`]
 ///
 /// This function writes JSON directly to any type that implements [`Write`],
 /// making it efficient for streaming or when you want to control the output destination.
@@ -146,34 +101,9 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
         Variant::Int64(i) => write!(json_buffer, "{i}")?,
         Variant::Float(f) => write!(json_buffer, "{f}")?,
         Variant::Double(f) => write!(json_buffer, "{f}")?,
-        Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
-            write_decimal_i32(json_buffer, *integer, *scale)?;
-        }
-        Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
-            write_decimal_i64(json_buffer, *integer, *scale)?;
-        }
-        Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
-            let integer = if *scale == 0 {
-                *integer
-            } else {
-                let divisor = 10_i128.pow(*scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    let result = *integer as f64 / divisor as f64;
-                    write!(json_buffer, "{result}")?;
-                    return Ok(());
-                }
-                integer / divisor
-            };
-            // Prefer to emit as i64, but fall back to u64 or even f64 (lossy) if necessary
-            if let Ok(i64_val) = i64::try_from(integer) {
-                write!(json_buffer, "{i64_val}")?;
-            } else if let Ok(u64_val) = u64::try_from(integer) {
-                write!(json_buffer, "{u64_val}")?;
-            } else {
-                write!(json_buffer, "{}", integer as f64)?;
-            }
-        }
+        Variant::Decimal4(decimal) => write!(json_buffer, "{decimal}")?,
+        Variant::Decimal8(decimal) => write!(json_buffer, "{decimal}")?,
+        Variant::Decimal16(decimal) => write!(json_buffer, "{decimal}")?,
         Variant::Date(date) => write!(json_buffer, "\"{}\"", format_date_string(date))?,
         Variant::TimestampMicros(ts) => write!(json_buffer, "\"{}\"", ts.to_rfc3339())?,
         Variant::TimestampNtzMicros(ts) => {
@@ -394,7 +324,8 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
                 }
                 integer / divisor
             };
-            // Prefer to emit as i64, but fall back to u64 or even f64 (lossy) if necessary
+            // i128 has higher precision than any 64-bit type. Try a lossless narrowing cast to
+            // i64 or u64 first, falling back to a lossy narrowing cast to f64 if necessary.
             let value = i64::try_from(integer)
                 .map(Value::from)
                 .or_else(|_| u64::try_from(integer).map(Value::from))
