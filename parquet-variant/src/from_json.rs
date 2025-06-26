@@ -35,10 +35,7 @@ fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowErr
     match json {
         Value::Null => builder.append_value(Variant::Null),
         Value::Bool(b) => builder.append_value(*b),
-        Value::Number(n) => {
-            let v: Variant = n.try_into()?;
-            builder.append_value(v)
-        }
+        Value::Number(n) => builder.append_value(Variant::try_from(n)?),
         Value::String(s) => builder.append_value(s.as_str()),
         Value::Array(arr) => {
             let mut list_builder = builder.new_list();
