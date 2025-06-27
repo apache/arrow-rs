@@ -948,9 +948,7 @@ mod tests {
         // (The actual buffer may be larger than expected due to rounding or internal allocation strategies.)
         assert!(
             data_buffer >= expected_capacity,
-            "Data buffer length ({}) should be at least {}",
-            data_buffer,
-            expected_capacity
+            "Data buffer length ({data_buffer}) should be at least {expected_capacity}",
         );
 
         // Additionally, verify that the decoded values are correct.
@@ -994,9 +992,7 @@ mod tests {
         let data_buffer = string_view_array.to_data().buffers()[0].len();
         assert!(
             data_buffer >= expected_capacity,
-            "Data buffer length ({}) should be at least {}",
-            data_buffer,
-            expected_capacity
+            "Data buffer length ({data_buffer}) should be at least {expected_capacity}",
         );
 
         // Verify that the converted string values are correct.

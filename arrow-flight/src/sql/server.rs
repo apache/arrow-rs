@@ -392,7 +392,7 @@ pub trait FlightSqlService: Sync + Send + Sized + 'static {
         _request: Request<PeekableFlightDataStream>,
         error: DoPutError,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
-        Err(Status::unimplemented(format!("Unhandled Error: {}", error)))
+        Err(Status::unimplemented(format!("Unhandled Error: {error}")))
     }
 
     /// Execute an update SQL statement.

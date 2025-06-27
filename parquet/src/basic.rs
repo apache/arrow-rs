@@ -410,7 +410,7 @@ impl Compression {
     /// Returns the codec type of this compression setting as a string, without the compression
     /// level.
     pub(crate) fn codec_to_string(self) -> String {
-        format!("{:?}", self).split('(').next().unwrap().to_owned()
+        format!("{self:?}").split('(').next().unwrap().to_owned()
     }
 }
 
@@ -422,7 +422,7 @@ fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), Pa
             let level = &level_str[..level_str.len() - 1]
                 .parse::<u32>()
                 .map_err(|_| {
-                    ParquetError::General(format!("invalid compression level: {}", level_str))
+                    ParquetError::General(format!("invalid compression level: {level_str}"))
                 })?;
             Ok((codec, Some(*level)))
         }
@@ -442,8 +442,7 @@ fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
 
 fn require_level(codec: &str, level: Option<u32>) -> Result<u32, ParquetError> {
     level.ok_or(ParquetError::General(format!(
-        "{} requires a compression level",
-        codec
+        "{codec} requires a compression level",
     )))
 }
 
@@ -2377,7 +2376,7 @@ mod tests {
         // test unknown string
         match "plain_xxx".parse::<Encoding>() {
             Ok(e) => {
-                panic!("Should not be able to parse {:?}", e);
+                panic!("Should not be able to parse {e:?}");
             }
             Err(e) => {
                 assert_eq!(e.to_string(), "Parquet error: unknown encoding: plain_xxx");

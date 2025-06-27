@@ -132,30 +132,30 @@ use arrow_cast::parse::{parse_decimal, string_to_datetime, Parser};
 use arrow_schema::*;
 use chrono::{TimeZone, Utc};
 use csv::StringRecord;
-use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 use std::fmt::{self, Debug};
 use std::fs::File;
 use std::io::{BufRead, BufReader as StdBufReader, Read};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::map_csv_error;
 use crate::reader::records::{RecordDecoder, StringRecords};
 use arrow_array::timezone::Tz;
 
-lazy_static! {
-    /// Order should match [`InferredDataType`]
-    static ref REGEX_SET: RegexSet = RegexSet::new([
+/// Order should match [`InferredDataType`]
+static REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
+    RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$", //INTEGER
+        r"^-?(\d+)$",                   //INTEGER
         r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
-        r"^\d{4}-\d\d-\d\d$", //DATE32
+        r"^\d{4}-\d\d-\d\d$",           //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,6}(?:[^\d].*)?$", //Timestamp(Microsecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}(?:[^\d].*)?$", //Timestamp(Nanosecond)
-    ]).unwrap();
-}
+    ])
+    .unwrap()
+});
 
 /// A wrapper over `Option<Regex>` to check if the value is `NULL`.
 #[derive(Debug, Clone, Default)]
