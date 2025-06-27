@@ -60,8 +60,7 @@ impl VariantMetadataHeader {
         let version = header_byte & 0x0F; // First four bits
         if version != CORRECT_VERSION_VALUE {
             let err_msg = format!(
-                "The version bytes in the header is not {CORRECT_VERSION_VALUE}, got {:b}",
-                version
+                "The version bytes in the header is not {CORRECT_VERSION_VALUE}, got {version:b}",
             );
             return Err(ArrowError::InvalidArgumentError(err_msg));
         }

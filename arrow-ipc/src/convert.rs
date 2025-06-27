@@ -471,6 +471,8 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             let precision: u8 = fsb.precision().try_into().unwrap();
             let scale: i8 = fsb.scale().try_into().unwrap();
             match bit_width {
+                32 => DataType::Decimal32(precision, scale),
+                64 => DataType::Decimal64(precision, scale),
                 128 => DataType::Decimal128(precision, scale),
                 256 => DataType::Decimal256(precision, scale),
                 _ => panic!("Unexpected decimal bit width {bit_width}"),
@@ -840,6 +842,28 @@ pub(crate) fn get_fb_field_type<'a>(
             // pass through to the value type, as we've already captured the index
             // type in the DictionaryEncoding metadata in the parent field
             get_fb_field_type(value_type, dictionary_tracker, fbb)
+        }
+        Decimal32(precision, scale) => {
+            let mut builder = crate::DecimalBuilder::new(fbb);
+            builder.add_precision(*precision as i32);
+            builder.add_scale(*scale as i32);
+            builder.add_bitWidth(32);
+            FBFieldType {
+                type_type: crate::Type::Decimal,
+                type_: builder.finish().as_union_value(),
+                children: Some(fbb.create_vector(&empty_fields[..])),
+            }
+        }
+        Decimal64(precision, scale) => {
+            let mut builder = crate::DecimalBuilder::new(fbb);
+            builder.add_precision(*precision as i32);
+            builder.add_scale(*scale as i32);
+            builder.add_bitWidth(64);
+            FBFieldType {
+                type_type: crate::Type::Decimal,
+                type_: builder.finish().as_union_value(),
+                children: Some(fbb.create_vector(&empty_fields[..])),
+            }
         }
         Decimal128(precision, scale) => {
             let mut builder = crate::DecimalBuilder::new(fbb);
