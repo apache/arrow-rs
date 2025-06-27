@@ -15,10 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::OffsetSizeBytes;
-use crate::utils::{first_byte_from_slice, slice_from_slice, validate_fallible_iterator};
+use crate::utils::{
+    first_byte_from_slice, overflow_error, slice_from_slice_at_offset, validate_fallible_iterator,
+};
 use crate::variant::{Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
+
+// The value header occupies one byte; use a named constant for readability
+const NUM_HEADER_BYTES: usize = 1;
 
 /// A parsed version of the variant array value header byte.
 #[derive(Clone, Debug, PartialEq)]
@@ -78,25 +83,16 @@ impl<'m, 'v> VariantList<'m, 'v> {
             false => OffsetSizeBytes::One,
         };
 
-        // Skip the header byte to read the num_elements
-        let num_elements = num_elements_size.unpack_usize(value, 1, 0)?;
-        let first_offset_byte = 1 + num_elements_size as usize;
+        // Skip the header byte to read the num_elements; the offset array immediately follows
+        let num_elements = num_elements_size.unpack_usize(value, NUM_HEADER_BYTES, 0)?;
+        let first_offset_byte = NUM_HEADER_BYTES + num_elements_size as usize;
 
-        let overflow =
-            || ArrowError::InvalidArgumentError("Variant value_byte_length overflow".into());
-
-        // 1.  num_elements + 1
-        let n_offsets = num_elements.checked_add(1).ok_or_else(overflow)?;
-
-        // 2.  (num_elements + 1) * offset_size
-        let value_bytes = n_offsets
-            .checked_mul(header.offset_size as usize)
-            .ok_or_else(overflow)?;
-
-        // 3.  first_offset_byte + ...
-        let first_value_byte = first_offset_byte
-            .checked_add(value_bytes)
-            .ok_or_else(overflow)?;
+        // (num_elements + 1) * offset_size + first_offset_byte
+        let first_value_byte = num_elements
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(header.offset_size as usize))
+            .and_then(|n| n.checked_add(first_offset_byte))
+            .ok_or_else(|| overflow_error("offset of variant list values"))?;
 
         let new_self = Self {
             metadata,
@@ -123,7 +119,20 @@ impl<'m, 'v> VariantList<'m, 'v> {
         self.len() == 0
     }
 
-    pub fn get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+    /// Returns element by index in `0..self.len()`, if any
+    pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
+        if index >= self.num_elements {
+            return None;
+        }
+
+        match self.try_get(index) {
+            Ok(variant) => Some(variant),
+            Err(err) => panic!("validation error: {err}"),
+        }
+    }
+
+    /// Fallible version of `get`. Returns element by index, capturing validation errors
+    fn try_get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         if index >= self.num_elements {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Index {} out of bounds for list of length {}",
@@ -139,9 +148,10 @@ impl<'m, 'v> VariantList<'m, 'v> {
         };
 
         // Read the value bytes from the offsets
-        let variant_value_bytes = slice_from_slice(
+        let variant_value_bytes = slice_from_slice_at_offset(
             self.value,
-            self.first_value_byte + unpack(index)?..self.first_value_byte + unpack(index + 1)?,
+            self.first_value_byte,
+            unpack(index)?..unpack(index + 1)?,
         )?;
         let variant = Variant::try_new_with_metadata(self.metadata, variant_value_bytes)?;
         Ok(variant)
@@ -156,7 +166,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     // Fallible iteration over the fields of this dictionary. The constructor traverses the iterator
     // to prove it has no errors, so that all other use sites can blindly `unwrap` the result.
     fn iter_checked(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        (0..self.len()).map(move |i| self.get(i))
+        (0..self.len()).map(move |i| self.try_get(i))
     }
 }
 
@@ -211,11 +221,7 @@ mod tests {
 
         // Test out of bounds access
         let out_of_bounds = variant_list.get(3);
-        assert!(out_of_bounds.is_err());
-        assert!(matches!(
-            out_of_bounds.unwrap_err(),
-            ArrowError::InvalidArgumentError(ref msg) if msg.contains("out of bounds")
-        ));
+        assert!(out_of_bounds.is_none());
 
         // Test values iterator
         let values: Vec<_> = variant_list.iter().collect();
@@ -251,7 +257,7 @@ mod tests {
 
         // Test out of bounds access on empty list
         let out_of_bounds = variant_list.get(0);
-        assert!(out_of_bounds.is_err());
+        assert!(out_of_bounds.is_none());
 
         // Test values iterator on empty list
         let values: Vec<_> = variant_list.iter().collect();

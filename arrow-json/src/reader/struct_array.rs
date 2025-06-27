@@ -106,8 +106,7 @@ impl ArrayDecoder for StructArrayDecoder {
                             None => {
                                 if self.strict_mode {
                                     return Err(ArrowError::JsonError(format!(
-                                        "column '{}' missing from schema",
-                                        field_name
+                                        "column '{field_name}' missing from schema",
                                     )));
                                 }
                             }

@@ -21,6 +21,11 @@ use arrow_schema::ArrowError;
 use std::fmt::Debug;
 use std::slice::SliceIndex;
 
+/// Helper for reporting integer overflow errors in a consistent way.
+pub(crate) fn overflow_error(msg: &str) -> ArrowError {
+    ArrowError::InvalidArgumentError(format!("Integer overflow computing {msg}"))
+}
+
 #[inline]
 pub(crate) fn slice_from_slice<I: SliceIndex<[u8]> + Clone + Debug>(
     bytes: &[u8],
@@ -33,17 +38,33 @@ pub(crate) fn slice_from_slice<I: SliceIndex<[u8]> + Clone + Debug>(
         ))
     })
 }
+
+/// Helper to safely slice bytes with offset calculations.
+///
+/// Equivalent to `slice_from_slice(bytes, (base_offset + range.start)..(base_offset + range.end))`
+/// but using checked addition to prevent integer overflow panics on 32-bit systems.
+#[inline]
+pub(crate) fn slice_from_slice_at_offset(
+    bytes: &[u8],
+    base_offset: usize,
+    range: Range<usize>,
+) -> Result<&[u8], ArrowError> {
+    let start_byte = base_offset
+        .checked_add(range.start)
+        .ok_or_else(|| overflow_error("slice start"))?;
+    let end_byte = base_offset
+        .checked_add(range.end)
+        .ok_or_else(|| overflow_error("slice end"))?;
+    slice_from_slice(bytes, start_byte..end_byte)
+}
+
 pub(crate) fn array_from_slice<const N: usize>(
     bytes: &[u8],
     offset: usize,
 ) -> Result<[u8; N], ArrowError> {
-    let bytes = slice_from_slice(bytes, offset..offset + N)?;
-    bytes.try_into().map_err(map_try_from_slice_error)
-}
-
-/// To be used in `map_err` when unpacking an integer from a slice of bytes.
-pub(crate) fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
-    ArrowError::InvalidArgumentError(e.to_string())
+    slice_from_slice_at_offset(bytes, offset, 0..N)?
+        .try_into()
+        .map_err(|e: TryFromSliceError| ArrowError::InvalidArgumentError(e.to_string()))
 }
 
 pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
@@ -53,9 +74,13 @@ pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
         .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 
-/// Helper to get a &str from a slice based on range, if it's valid or an error otherwise
-pub(crate) fn string_from_slice(slice: &[u8], range: Range<usize>) -> Result<&str, ArrowError> {
-    str::from_utf8(slice_from_slice(slice, range)?)
+/// Helper to get a &str from a slice at the given offset and range, or an error if invalid.
+pub(crate) fn string_from_slice(
+    slice: &[u8],
+    offset: usize,
+    range: Range<usize>,
+) -> Result<&str, ArrowError> {
+    str::from_utf8(slice_from_slice_at_offset(slice, offset, range)?)
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
 
@@ -69,33 +94,33 @@ pub(crate) fn string_from_slice(slice: &[u8], range: Range<usize>) -> Result<&st
 /// * `range` - The range to search in
 /// * `target` - The target value to search for
 /// * `key_extractor` - A function that extracts a comparable key from slice elements.
-///   This function can fail and return an error.
+///   This function can fail and return None.
 ///
 /// # Returns
-/// * `Ok(Ok(index))` - Element found at the given index
-/// * `Ok(Err(index))` - Element not found, but would be inserted at the given index
-/// * `Err(e)` - Key extraction failed with error `e`
-pub(crate) fn try_binary_search_range_by<K, E, F>(
+/// * `Some(Ok(index))` - Element found at the given index
+/// * `Some(Err(index))` - Element not found, but would be inserted at the given index
+/// * `None` - Key extraction failed
+pub(crate) fn try_binary_search_range_by<K, F>(
     range: Range<usize>,
     target: &K,
-    mut key_extractor: F,
-) -> Result<Result<usize, usize>, E>
+    key_extractor: F,
+) -> Option<Result<usize, usize>>
 where
     K: Ord,
-    F: FnMut(usize) -> Result<K, E>,
+    F: Fn(usize) -> Option<K>,
 {
     let Range { mut start, mut end } = range;
     while start < end {
         let mid = start + (end - start) / 2;
         let key = key_extractor(mid)?;
         match key.cmp(target) {
-            std::cmp::Ordering::Equal => return Ok(Ok(mid)),
+            std::cmp::Ordering::Equal => return Some(Ok(mid)),
             std::cmp::Ordering::Greater => end = mid,
             std::cmp::Ordering::Less => start = mid + 1,
         }
     }
 
-    Ok(Err(start))
+    Some(Err(start))
 }
 
 /// Attempts to prove a fallible iterator is actually infallible in practice, by consuming every
