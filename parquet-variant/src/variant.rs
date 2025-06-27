@@ -45,9 +45,9 @@ pub struct ShortString<'a>(pub(crate) &'a str);
 impl<'a> ShortString<'a> {
     /// Attempts to interpret `value` as a variant short string value.
     ///
-    /// # Validation
+    /// # Errors
     ///
-    /// This constructor verifies that `value` is shorter than or equal to `MAX_SHORT_STRING_BYTES`
+    /// Returns an error if  `value` is longer than [`MAX_SHORT_STRING_BYTES`]
     pub fn try_new(value: &'a str) -> Result<Self, ArrowError> {
         if value.len() > MAX_SHORT_STRING_BYTES {
             return Err(ArrowError::InvalidArgumentError(format!(
