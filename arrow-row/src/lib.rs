@@ -1610,7 +1610,7 @@ unsafe fn decode_column(
                 DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
                 DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
                 DataType::Utf8View => Arc::new(decode_string_view(rows, options, validate_utf8)),
-                _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {}", data_type)))
+                _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
             }
         }
         Codec::Dictionary(converter, _) => {
@@ -2848,8 +2848,7 @@ mod tests {
         for (i, (actual, expected)) in rows.iter().zip(rows_expected.iter()).enumerate() {
             assert_eq!(
                 actual, expected,
-                "For row {}: expected {:?}, actual: {:?}",
-                i, expected, actual
+                "For row {i}: expected {expected:?}, actual: {actual:?}",
             );
         }
     }

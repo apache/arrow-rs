@@ -39,6 +39,6 @@ chrono = { workspace = true }
 # sort object keys
 serde_json = { version = "1.0", features = ["arbitrary_precision", "preserve_order"] }
 rust_decimal = "1.37.2"
-base64 = "0.21"
+base64 = "0.22"
 
 [lib]

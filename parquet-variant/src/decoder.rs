@@ -95,8 +95,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
             15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
             _ => Err(ArrowError::InvalidArgumentError(format!(
-                "unknown primitive type: {}",
-                value
+                "unknown primitive type: {value}",
             ))),
         }
     }
