@@ -41,6 +41,7 @@ on:
       - arrow-avro/**
       - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
+      - arrow-pyarrow/**
       - arrow-schema/**
       - arrow-select/**
       - arrow-sort/**
@@ -164,7 +165,7 @@ jobs:
       - name: Run Rust tests
         run: |
           source venv/bin/activate
-          cargo test -p arrow --test pyarrow --features pyarrow
+          cargo test -p arrow-pyarrow
       - name: Run tests
         run: |
           source venv/bin/activate

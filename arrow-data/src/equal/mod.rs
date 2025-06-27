@@ -78,6 +78,8 @@ fn equal_values(
         DataType::Int64 => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float32 => primitive_equal::<f32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float64 => primitive_equal::<f64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal32(_, _) => primitive_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal64(_, _) => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Decimal128(_, _) => primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Decimal256(_, _) => primitive_equal::<i256>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Date32 | DataType::Time32(_) | DataType::Interval(IntervalUnit::YearMonth) => {

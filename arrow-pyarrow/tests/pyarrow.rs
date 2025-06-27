@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::pyarrow::{FromPyArrow, ToPyArrow};
-use arrow::record_batch::RecordBatch;
 use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
-use arrow_array::{Array, BinaryViewArray, StringViewArray};
+use arrow_array::{
+    Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
+};
+use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use pyo3::Python;
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ fn test_to_pyarrow() {
     // The "very long string" will not be inlined, and force the creation of a data buffer.
     let c: ArrayRef = Arc::new(StringViewArray::from(vec!["short", "a very long string"]));
     let input = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
-    println!("input: {:?}", input);
+    println!("input: {input:?}");
 
     let res = Python::with_gil(|py| {
         let py_input = input.to_pyarrow(py)?;
@@ -59,7 +59,7 @@ fn test_to_pyarrow_byte_view() {
         ])
         .unwrap();
 
-        println!("input: {:?}", input);
+        println!("input: {input:?}");
         let res = Python::with_gil(|py| {
             let py_input = input.to_pyarrow(py)?;
             let records = RecordBatch::from_pyarrow_bound(py_input.bind(py))?;

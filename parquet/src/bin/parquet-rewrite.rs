@@ -243,6 +243,25 @@ struct Args {
     #[clap(long)]
     data_page_size_limit: Option<usize>,
 
+    /// Sets the max length of min/max statistics in row group and data page
+    /// header statistics for all columns.
+    ///
+    /// Applicable only if statistics are enabled.
+    #[clap(long)]
+    statistics_truncate_length: Option<usize>,
+
+    /// Sets the max length of min/max statistics in the column index.
+    ///
+    /// Applicable only if statistics are enabled.
+    #[clap(long)]
+    column_index_truncate_length: Option<usize>,
+
+    /// Write statistics to the data page headers?
+    ///
+    /// Setting this true will also enable page level statistics.
+    #[clap(long)]
+    write_page_header_statistics: Option<bool>,
+
     /// Sets whether bloom filter is enabled for all columns.
     #[clap(long)]
     bloom_filter_enabled: Option<bool>,
@@ -318,6 +337,17 @@ fn main() {
     if let Some(value) = args.data_page_size_limit {
         writer_properties_builder = writer_properties_builder.set_data_page_size_limit(value);
     }
+    if let Some(value) = args.dictionary_page_size_limit {
+        writer_properties_builder = writer_properties_builder.set_dictionary_page_size_limit(value);
+    }
+    if let Some(value) = args.statistics_truncate_length {
+        writer_properties_builder =
+            writer_properties_builder.set_statistics_truncate_length(Some(value));
+    }
+    if let Some(value) = args.column_index_truncate_length {
+        writer_properties_builder =
+            writer_properties_builder.set_column_index_truncate_length(Some(value));
+    }
     if let Some(value) = args.bloom_filter_enabled {
         writer_properties_builder = writer_properties_builder.set_bloom_filter_enabled(value);
 
@@ -336,6 +366,15 @@ fn main() {
     }
     if let Some(value) = args.statistics_enabled {
         writer_properties_builder = writer_properties_builder.set_statistics_enabled(value.into());
+    }
+    // set this after statistics_enabled
+    if let Some(value) = args.write_page_header_statistics {
+        writer_properties_builder =
+            writer_properties_builder.set_write_page_header_statistics(value);
+        if value {
+            writer_properties_builder =
+                writer_properties_builder.set_statistics_enabled(EnabledStatistics::Page);
+        }
     }
     if let Some(value) = args.writer_version {
         writer_properties_builder = writer_properties_builder.set_writer_version(value.into());

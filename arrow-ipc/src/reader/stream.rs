@@ -408,7 +408,7 @@ mod tests {
         while let Some(batch) = decoder
             .decode(buf)
             .map_err(|e| {
-                ArrowError::ExternalError(format!("Failed to decode record batch: {}", e).into())
+                ArrowError::ExternalError(format!("Failed to decode record batch: {e}").into())
             })
             .expect("Failed to decode record batch")
         {

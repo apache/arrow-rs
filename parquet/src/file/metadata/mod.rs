@@ -1294,6 +1294,7 @@ impl ColumnChunkMetaData {
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
             size_statistics,
+            geospatial_statistics: None,
         }
     }
 
