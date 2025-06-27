@@ -2618,6 +2618,132 @@ mod tests {
         assert_eq!(&back[1], &second);
     }
 
+    #[test]
+    fn test_fixed_size_list_with_variable_width_content() {
+        let mut first = FixedSizeListBuilder::new(
+            StructBuilder::from_fields(
+                vec![
+                    Field::new(
+                        "timestamp",
+                        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+                        false,
+                    ),
+                    Field::new("offset_minutes", DataType::Int16, false),
+                    Field::new("time_zone", DataType::Utf8, false),
+                ],
+                1,
+            ),
+            1,
+        );
+        // 0: null
+        first
+            .values()
+            .field_builder::<TimestampMicrosecondBuilder>(0)
+            .unwrap()
+            .append_null();
+        first
+            .values()
+            .field_builder::<Int16Builder>(1)
+            .unwrap()
+            .append_null();
+        first
+            .values()
+            .field_builder::<StringBuilder>(2)
+            .unwrap()
+            .append_null();
+        first.values().append(false);
+        first.append(false);
+        // 1: [null]
+        first
+            .values()
+            .field_builder::<TimestampMicrosecondBuilder>(0)
+            .unwrap()
+            .append_null();
+        first
+            .values()
+            .field_builder::<Int16Builder>(1)
+            .unwrap()
+            .append_null();
+        first
+            .values()
+            .field_builder::<StringBuilder>(2)
+            .unwrap()
+            .append_null();
+        first.values().append(false);
+        first.append(true);
+        // 2: [1970-01-01 00:00:00.000000 UTC]
+        first
+            .values()
+            .field_builder::<TimestampMicrosecondBuilder>(0)
+            .unwrap()
+            .append_value(0);
+        first
+            .values()
+            .field_builder::<Int16Builder>(1)
+            .unwrap()
+            .append_value(0);
+        first
+            .values()
+            .field_builder::<StringBuilder>(2)
+            .unwrap()
+            .append_value("UTC");
+        first.values().append(true);
+        first.append(true);
+        // 3: [2005-09-10 13:30:00.123456 Europe/Warsaw]
+        first
+            .values()
+            .field_builder::<TimestampMicrosecondBuilder>(0)
+            .unwrap()
+            .append_value(1126351800123456);
+        first
+            .values()
+            .field_builder::<Int16Builder>(1)
+            .unwrap()
+            .append_value(120);
+        first
+            .values()
+            .field_builder::<StringBuilder>(2)
+            .unwrap()
+            .append_value("Europe/Warsaw");
+        first.values().append(true);
+        first.append(true);
+        let first = Arc::new(first.finish()) as ArrayRef;
+        let first_type = first.data_type().clone();
+
+        let mut second = FixedSizeListBuilder::new(UInt8Builder::new(), 1);
+        // 0: [200]
+        second.values().append_value(200);
+        second.append(true);
+        // 1: [201]
+        second.values().append_value(201);
+        second.append(true);
+        // 2: [null]
+        second.values().append_null();
+        second.append(true);
+        // 3: null
+        second.values().append_null(); // MASKED
+        second.append(false);
+        let second = Arc::new(second.finish()) as ArrayRef;
+        let second_type = second.data_type().clone();
+
+        let converter = RowConverter::new(vec![
+            SortField::new(first_type.clone()),
+            SortField::new(second_type.clone()),
+        ])
+        .unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::clone(&first), Arc::clone(&second)])
+            .unwrap();
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 2);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &first);
+        back[1].to_data().validate_full().unwrap();
+        assert_eq!(&back[1], &second);
+    }
+
     fn generate_primitive_array<K>(len: usize, valid_percent: f64) -> PrimitiveArray<K>
     where
         K: ArrowPrimitiveType,
