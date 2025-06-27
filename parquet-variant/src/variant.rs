@@ -271,7 +271,7 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::Int64 => Variant::Int64(decoder::decode_int64(value_data)?),
                 VariantPrimitiveType::Decimal4 => {
                     let (integer, scale) = decoder::decode_decimal4(value_data)?;
-                    Variant::Decimal4(VariantDecimal4 { integer, scale })
+                    Variant::Decimal4(VariantDecimal4::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Decimal8 => {
                     let (integer, scale) = decoder::decode_decimal8(value_data)?;
@@ -662,10 +662,10 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int32(&self) -> Option<(i32, u8)> {
         match *self {
-            Variant::Decimal4(decimal4) => Some((decimal4.integer, decimal4.scale)),
+            Variant::Decimal4(decimal4) => Some((decimal4.integer(), decimal4.scale())),
             Variant::Decimal8(decimal8) => {
-                if let Ok(converted_integer) = decimal8.integer.try_into() {
-                    Some((converted_integer, decimal8.scale))
+                if let Ok(converted_integer) = decimal8.integer().try_into() {
+                    Some((converted_integer, decimal8.scale()))
                 } else {
                     None
                 }
@@ -710,11 +710,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int64(&self) -> Option<(i64, u8)> {
         match *self {
-            Variant::Decimal4(decimal) => Some((decimal.integer.into(), decimal.scale)),
-            Variant::Decimal8(decimal) => Some((decimal.integer, decimal.scale)),
+            Variant::Decimal4(decimal) => Some((decimal.integer().into(), decimal.scale())),
+            Variant::Decimal8(decimal) => Some((decimal.integer(), decimal.scale())),
             Variant::Decimal16(decimal) => {
-                if let Ok(converted_integer) = decimal.integer.try_into() {
-                    Some((converted_integer, decimal.scale))
+                if let Ok(converted_integer) = decimal.integer().try_into() {
+                    Some((converted_integer, decimal.scale()))
                 } else {
                     None
                 }
@@ -744,9 +744,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int128(&self) -> Option<(i128, u8)> {
         match *self {
-            Variant::Decimal4(decimal) => Some((decimal.integer.into(), decimal.scale)),
-            Variant::Decimal8(decimal) => Some((decimal.integer.into(), decimal.scale)),
-            Variant::Decimal16(decimal) => Some((decimal.integer, decimal.scale)),
+            Variant::Decimal4(decimal) => Some((decimal.integer().into(), decimal.scale())),
+            Variant::Decimal8(decimal) => Some((decimal.integer().into(), decimal.scale())),
+            Variant::Decimal16(decimal) => Some((decimal.integer(), decimal.scale)),
             _ => None,
         }
     }

@@ -22,7 +22,7 @@ use serde_json::Value;
 use std::io::Write;
 
 use crate::variant::{Variant, VariantList, VariantObject};
-use crate::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use crate::{VariantDecimal16, VariantDecimal8};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -287,14 +287,16 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
         Variant::Double(f) => serde_json::Number::from_f64(*f)
             .map(Value::Number)
             .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string())),
-        Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
-            let integer = if *scale == 0 {
-                *integer
+        Variant::Decimal4(decimal4) => {
+            let scale = decimal4.scale();
+            let integer = decimal4.integer();
+            let integer = if scale == 0 {
+                integer
             } else {
-                let divisor = 10_i32.pow(*scale as u32);
+                let divisor = 10_i32.pow(scale as u32);
                 if integer % divisor != 0 {
                     // fall back to floating point
-                    return Ok(Value::from(*integer as f64 / divisor as f64));
+                    return Ok(Value::from(integer as f64 / divisor as f64));
                 }
                 integer / divisor
             };
@@ -358,7 +360,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Variant;
+    use crate::{Variant, VariantDecimal4};
     use chrono::{DateTime, NaiveDate, Utc};
 
     #[test]

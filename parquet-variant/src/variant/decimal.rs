@@ -56,8 +56,8 @@ macro_rules! format_decimal {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal4 {
-    pub(crate) integer: i32,
-    pub(crate) scale: u8,
+    integer: i32,
+    scale: u8,
 }
 
 impl VariantDecimal4 {
