@@ -122,8 +122,7 @@ fn validate_class(expected: &str, value: &Bound<PyAny>) -> PyResult<()> {
             .extract::<PyBackedStr>()?;
         let found_name = found_class.getattr("__name__")?.extract::<PyBackedStr>()?;
         return Err(PyTypeError::new_err(format!(
-            "Expected instance of {}.{}, got {}.{}",
-            expected_module, expected_name, found_module, found_name
+            "Expected instance of {expected_module}.{expected_name}, got {found_module}.{found_name}",
         )));
     }
     Ok(())
@@ -140,8 +139,7 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     let capsule_name = capsule_name.unwrap().to_str()?;
     if capsule_name != name {
         return Err(PyValueError::new_err(format!(
-            "Expected name '{}' in PyCapsule, instead got '{}'",
-            name, capsule_name
+            "Expected name '{name}' in PyCapsule, instead got '{capsule_name}'",
         )));
     }
 
