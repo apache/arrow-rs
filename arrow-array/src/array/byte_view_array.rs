@@ -605,22 +605,6 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// key("bar\0") = 0x0000000000000000000062617200000004
     /// ⇒ key("bar") < key("bar\0")
     /// ```
-    ///
-    /// Background (naive implementation, two-pass):
-    ///
-    ///     fn compare_strings(a: &RawInline, b: &RawInline) -> Ordering {
-    ///         // 1) Compare up to 12 bytes of content
-    ///         let ord = compare_u96(a.inline_bytes_be(), b.inline_bytes_be());
-    ///         if ord != Ordering::Equal {
-    ///             return ord;
-    ///         }
-    ///         // 2) Tiebreaker: compare lengths
-    ///         a.len().cmp(&b.len())
-    ///     }
-    ///
-    /// Folding content and length into one `u128` lets you do:
-    ///
-    ///     key(a).cmp(&key(b))
     #[inline(always)]
     pub fn inline_key_fast(raw: u128) -> u128 {
         // Convert the raw u128 (little-endian) into bytes for manipulation
