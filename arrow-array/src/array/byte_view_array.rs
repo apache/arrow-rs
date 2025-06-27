@@ -1208,10 +1208,7 @@ mod tests {
             if let Some(prev) = previous_key {
                 assert!(
                     prev < key,
-                    "Key for {:?} (0x{:032x}) was not less than next key (0x{:032x})",
-                    input,
-                    prev,
-                    key
+                    "Key for {input:?} (0x{prev:032x}) was not less than next key (0x{key:032x})",
                 );
             }
             previous_key = Some(key);
@@ -1225,7 +1222,7 @@ mod tests {
             let v1 = array.value(i);
             let v2 = array.value(i + 1);
             // Ensure lexical ordering matches
-            assert!(v1 < v2, "Array compare failed: {:?} !< {:?}", v1, v2);
+            assert!(v1 < v2, "Array compare failed: {v1:?} !< {v2:?}");
             // Ensure fast key compare matches
             let key1 = GenericByteViewArray::<BinaryViewType>::inline_key_fast(make_raw_inline(
                 v1.len() as u32,
@@ -1237,11 +1234,7 @@ mod tests {
             ));
             assert!(
                 key1 < key2,
-                "Key compare failed: key({:?})=0x{:032x} !< key({:?})=0x{:032x}",
-                v1,
-                key1,
-                v2,
-                key2
+                "Key compare failed: key({v1:?})=0x{key1:032x} !< key({v2:?})=0x{key2:032x}",
             );
         }
     }
