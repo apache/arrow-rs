@@ -742,7 +742,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn should_dict_fallback(&self) -> bool {
         match self.encoder.estimated_dict_page_size() {
-            Some(size) => size >= self.props.dictionary_page_size_limit(),
+            Some(size) => {
+                size >= self
+                    .props
+                    .column_dictionary_page_size_limit(self.descr.path())
+            }
             None => false,
         }
     }
@@ -3014,7 +3018,10 @@ mod tests {
         // write data
         // and check the offset index and column index
         let page_writer = get_test_page_writer();
-        let props = Default::default();
+        let props = WriterProperties::builder()
+            .set_statistics_truncate_length(None) // disable column index truncation
+            .build()
+            .into();
         let mut writer = get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
 
         let mut data = vec![FixedLenByteArray::default(); 3];
@@ -3207,6 +3214,49 @@ mod tests {
             assert_eq!(expected_value, stats_max_bytes);
         } else {
             panic!("expecting Statistics::FixedLenByteArray");
+        }
+    }
+
+    #[test]
+    fn test_statistics_truncating_byte_array_default() {
+        let page_writer = get_test_page_writer();
+
+        // The default truncate length is 64 bytes
+        let props = WriterProperties::builder().build().into();
+        let mut writer = get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        let mut data = vec![ByteArray::default(); 1];
+        data[0].set_data(Bytes::from(String::from(
+            "This string is longer than 64 bytes, so it will almost certainly be truncated.",
+        )));
+        writer.write_batch(&data, None, None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+
+        assert_eq!(1, r.rows_written);
+
+        let stats = r.metadata.statistics().expect("statistics");
+        if let Statistics::ByteArray(_stats) = stats {
+            let min_value = _stats.min_opt().unwrap();
+            let max_value = _stats.max_opt().unwrap();
+
+            assert!(!_stats.min_is_exact());
+            assert!(!_stats.max_is_exact());
+
+            let expected_len = 64;
+            assert_eq!(min_value.len(), expected_len);
+            assert_eq!(max_value.len(), expected_len);
+
+            let expected_min =
+                "This string is longer than 64 bytes, so it will almost certainly".as_bytes();
+            assert_eq!(expected_min, min_value.as_bytes());
+            // note the max value is different from the min value: the last byte is incremented
+            let expected_max =
+                "This string is longer than 64 bytes, so it will almost certainlz".as_bytes();
+            assert_eq!(expected_max, max_value.as_bytes());
+        } else {
+            panic!("expecting Statistics::ByteArray");
         }
     }
 
