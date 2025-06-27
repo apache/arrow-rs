@@ -617,9 +617,10 @@ impl<T: ByteViewType + ?Sized> Array for GenericByteViewArray<T> {
 
     fn shrink_to_fit(&mut self) {
         self.views.shrink_to_fit();
-        if let Some(buffers) = Arc::get_mut(&mut self.buffers.0) {
-            buffers.iter_mut().for_each(|b| b.shrink_to_fit());
-        }
+        self.buffers
+            .make_mut()
+            .iter_mut()
+            .for_each(|b| b.shrink_to_fit());
         if let Some(nulls) = &mut self.nulls {
             nulls.shrink_to_fit();
         }
@@ -747,16 +748,12 @@ where
 impl<T: ByteViewType + ?Sized> From<GenericByteViewArray<T>> for ArrayData {
     fn from(array: GenericByteViewArray<T>) -> Self {
         let len = array.len();
-        let new_buffers = {
-            let mut buffers = Vec::with_capacity(array.buffers.len() + 1);
-            buffers.push(array.views.into_inner());
-            buffers.extend_from_slice(&array.buffers);
-            buffers
-        };
+        let mut buffers = array.buffers.unwrap_or_clone();
+        buffers.insert(0, array.views.into_inner());
 
         let builder = ArrayDataBuilder::new(T::DATA_TYPE)
             .len(len)
-            .buffers(new_buffers)
+            .buffers(buffers)
             .nulls(array.nulls);
 
         unsafe { builder.build_unchecked() }

@@ -23,22 +23,31 @@ use arrow_buffer::Buffer;
 ///
 /// Similar to `Arc<Vec<Buffer>>` or `Arc<[Buffer]>`
 #[derive(Clone, Debug)]
-pub struct ViewBuffers(pub(crate) Arc<[Buffer]>);
+pub struct ViewBuffers(Arc<Vec<Buffer>>);
+
+impl ViewBuffers {
+    /// Return a mutable reference to the underlying buffers, copying the buffers if necessary.
+    pub fn make_mut(&mut self) -> &mut Vec<Buffer> {
+        // If the underlying Arc is unique, we can mutate it in place
+        Arc::make_mut(&mut self.0)
+    }
+
+    /// Convertes this ViewBuffers into a Vec<Buffer>, cloning the underlying buffers if
+    /// they are shared.
+    pub fn unwrap_or_clone(self) -> Vec<Buffer> {
+        Arc::unwrap_or_clone(self.0)
+    }
+}
 
 impl FromIterator<Buffer> for ViewBuffers {
     fn from_iter<T: IntoIterator<Item = Buffer>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+        let v: Vec<_> = iter.into_iter().collect();
+        Self(v.into())
     }
 }
 
 impl From<Vec<Buffer>> for ViewBuffers {
     fn from(value: Vec<Buffer>) -> Self {
-        Self(value.into())
-    }
-}
-
-impl From<&[Buffer]> for ViewBuffers {
-    fn from(value: &[Buffer]) -> Self {
         Self(value.into())
     }
 }
