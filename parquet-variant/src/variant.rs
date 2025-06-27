@@ -47,7 +47,8 @@ impl<'a> ShortString<'a> {
     ///
     /// # Errors
     ///
-    /// Returns an error if  `value` is longer than [`MAX_SHORT_STRING_BYTES`]
+    /// Returns an error if  `value` is longer than the maximum allowed length
+    /// of a Variant short string (63 bytes).
     pub fn try_new(value: &'a str) -> Result<Self, ArrowError> {
         if value.len() > MAX_SHORT_STRING_BYTES {
             return Err(ArrowError::InvalidArgumentError(format!(
