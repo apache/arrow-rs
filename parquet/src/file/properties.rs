@@ -42,6 +42,8 @@ pub const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
 pub const DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT: usize = 20_000;
 /// Default value for [`WriterProperties::statistics_enabled`]
 pub const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
+/// Default value for [`WriterProperties::write_page_header_statistics`]
+pub const DEFAULT_WRITE_PAGE_HEADER_STATISTICS: bool = false;
 /// Default value for [`WriterProperties::max_statistics_size`]
 #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
 pub const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
@@ -396,6 +398,22 @@ impl WriterProperties {
             .unwrap_or(DEFAULT_STATISTICS_ENABLED)
     }
 
+    /// Returns `true` if [`Statistics`] are to be written to the page header for a column.
+    ///
+    /// For more details see [`WriterPropertiesBuilder::set_write_page_header_statistics`]
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    pub fn write_page_header_statistics(&self, col: &ColumnPath) -> bool {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.write_page_header_statistics())
+            .or_else(|| {
+                self.default_column_properties
+                    .write_page_header_statistics()
+            })
+            .unwrap_or(DEFAULT_WRITE_PAGE_HEADER_STATISTICS)
+    }
+
     /// Returns max size for statistics.
     ///
     /// UNUSED
@@ -541,23 +559,6 @@ impl WriterPropertiesBuilder {
     /// [`set_write_batch_size`](Self::set_write_batch_size).
     pub fn set_data_page_row_count_limit(mut self, value: usize) -> Self {
         self.data_page_row_count_limit = value;
-        self
-    }
-
-    /// Sets best effort maximum dictionary page size, in bytes (defaults to `1024 * 1024`
-    /// via [`DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT`]).
-    ///
-    /// The parquet writer will attempt to limit the size of each
-    /// `DataPage` used to store dictionaries to this many
-    /// bytes. Reducing this value will result in larger parquet
-    /// files, but may improve the effectiveness of page index based
-    /// predicate pushdown during reading.
-    ///
-    /// Note: this is a best effort limit based on value of
-    /// [`set_write_batch_size`](Self::set_write_batch_size).
-    pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
-        self.default_column_properties
-            .set_dictionary_page_size_limit(value);
         self
     }
 
@@ -753,12 +754,56 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets default statistics level for all columns (defaults to [`Page`] via
+    /// Sets best effort maximum dictionary page size, in bytes (defaults to `1024 * 1024`
+    /// via [`DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT`]).
+    ///
+    /// The parquet writer will attempt to limit the size of each
+    /// `DataPage` used to store dictionaries to this many
+    /// bytes. Reducing this value will result in larger parquet
+    /// files, but may improve the effectiveness of page index based
+    /// predicate pushdown during reading.
+    ///
+    /// Note: this is a best effort limit based on value of
+    /// [`set_write_batch_size`](Self::set_write_batch_size).
+    pub fn set_dictionary_page_size_limit(mut self, value: usize) -> Self {
+        self.default_column_properties
+            .set_dictionary_page_size_limit(value);
+        self
+    }
+
+    /// Sets default [`EnabledStatistics`] level for all columns (defaults to [`Page`] via
     /// [`DEFAULT_STATISTICS_ENABLED`]).
     ///
     /// [`Page`]: EnabledStatistics::Page
     pub fn set_statistics_enabled(mut self, value: EnabledStatistics) -> Self {
         self.default_column_properties.set_statistics_enabled(value);
+        self
+    }
+
+    /// enable/disable writing [`Statistics`] in the page header
+    /// (defaults to `false` via [`DEFAULT_WRITE_PAGE_HEADER_STATISTICS`]).
+    ///
+    /// Only applicable if [`Page`] level statistics are gathered.
+    ///
+    /// Setting this value to `true` can greatly increase the size of the resulting Parquet
+    /// file while yielding very little added benefit. Most modern Parquet implementations
+    /// will use the min/max values stored in the [`ParquetColumnIndex`] rather than
+    /// those in the page header.
+    ///
+    /// # Note
+    ///
+    /// Prior to version 56.0.0, the `parquet` crate always wrote these
+    /// statistics (the equivalent of setting this option to `true`). This was
+    /// changed in 56.0.0 to follow the recommendation in the Parquet
+    /// specification. See [issue #7580] for more details.
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+    /// [`Page`]: EnabledStatistics::Page
+    /// [issue #7580]: https://github.com/apache/arrow-rs/issues/7580
+    pub fn set_write_page_header_statistics(mut self, value: bool) -> Self {
+        self.default_column_properties
+            .set_write_page_header_statistics(value);
         self
     }
 
@@ -867,7 +912,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets statistics level for a specific column
+    /// Sets [`EnabledStatistics`] level for a specific column.
     ///
     /// Takes precedence over [`Self::set_statistics_enabled`].
     pub fn set_column_statistics_enabled(
@@ -876,6 +921,17 @@ impl WriterPropertiesBuilder {
         value: EnabledStatistics,
     ) -> Self {
         self.get_mut_props(col).set_statistics_enabled(value);
+        self
+    }
+
+    /// Sets whether to write [`Statistics`] in the page header for a specific column.
+    ///
+    /// Takes precedence over [`Self::set_write_page_header_statistics`].
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    pub fn set_column_write_page_header_statistics(mut self, col: ColumnPath, value: bool) -> Self {
+        self.get_mut_props(col)
+            .set_write_page_header_statistics(value);
         self
     }
 
@@ -936,8 +992,12 @@ pub enum EnabledStatistics {
     /// Compute page-level and column chunk-level statistics.
     ///
     /// Setting this option will store one set of statistics for each relevant
-    /// column for each page and row group. The more row groups and the more
-    /// pages written, the more statistics will be stored.
+    /// column for each row group. In addition, this will enable the writing
+    /// of the column index (the offset index is always written regardless of
+    /// this setting). See [`ParquetColumnIndex`] for
+    /// more information.
+    ///
+    /// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
     Page,
 }
 
@@ -1008,6 +1068,7 @@ struct ColumnProperties {
     dictionary_page_size_limit: Option<usize>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
+    write_page_header_statistics: Option<bool>,
     #[deprecated(since = "54.0.0", note = "Unused; will be removed in 56.0.0")]
     max_statistics_size: Option<usize>,
     /// bloom filter related properties
@@ -1049,6 +1110,11 @@ impl ColumnProperties {
     /// Sets the statistics level for this column.
     fn set_statistics_enabled(&mut self, enabled: EnabledStatistics) {
         self.statistics_enabled = Some(enabled);
+    }
+
+    /// Sets whether to write statistics in the page header for this column.
+    fn set_write_page_header_statistics(&mut self, enabled: bool) {
+        self.write_page_header_statistics = Some(enabled);
     }
 
     /// Sets max size for statistics for this column.
@@ -1120,6 +1186,14 @@ impl ColumnProperties {
     /// then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
         self.statistics_enabled
+    }
+
+    /// Returns `Some(true)` if [`Statistics`] are to be written to the page header for this
+    /// column.
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    fn write_page_header_statistics(&self) -> Option<bool> {
+        self.write_page_header_statistics
     }
 
     /// Returns optional max size in bytes for statistics.
