@@ -14,9 +14,8 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::VariantDecimal16;
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
-use crate::{ShortString, Variant};
+use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 use std::collections::BTreeMap;
 
 const BASIC_TYPE_BITS: u8 = 2;
