@@ -22,7 +22,6 @@ use serde_json::Value;
 use std::io::Write;
 
 use crate::variant::{Variant, VariantList, VariantObject};
-use crate::{VariantDecimal16, VariantDecimal8};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -290,6 +289,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
         Variant::Decimal4(decimal4) => {
             let scale = decimal4.scale();
             let integer = decimal4.integer();
+
             let integer = if scale == 0 {
                 integer
             } else {
@@ -302,27 +302,33 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
             };
             Ok(Value::from(integer))
         }
-        Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
-            let integer = if *scale == 0 {
-                *integer
+        Variant::Decimal8(decimal8) => {
+            let scale = decimal8.scale();
+            let integer = decimal8.integer();
+
+            let integer = if scale == 0 {
+                integer
             } else {
-                let divisor = 10_i64.pow(*scale as u32);
+                let divisor = 10_i64.pow(scale as u32);
                 if integer % divisor != 0 {
                     // fall back to floating point
-                    return Ok(Value::from(*integer as f64 / divisor as f64));
+                    return Ok(Value::from(integer as f64 / divisor as f64));
                 }
                 integer / divisor
             };
             Ok(Value::from(integer))
         }
-        Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
-            let integer = if *scale == 0 {
-                *integer
+        Variant::Decimal16(decimal16) => {
+            let scale = decimal16.scale();
+            let integer = decimal16.integer();
+
+            let integer = if scale == 0 {
+                integer
             } else {
-                let divisor = 10_i128.pow(*scale as u32);
+                let divisor = 10_i128.pow(scale as u32);
                 if integer % divisor != 0 {
                     // fall back to floating point
-                    return Ok(Value::from(*integer as f64 / divisor as f64));
+                    return Ok(Value::from(integer as f64 / divisor as f64));
                 }
                 integer / divisor
             };
@@ -360,7 +366,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Variant, VariantDecimal4};
+    use crate::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
     use chrono::{DateTime, NaiveDate, Utc};
 
     #[test]

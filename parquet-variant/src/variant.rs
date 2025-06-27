@@ -275,11 +275,11 @@ impl<'m, 'v> Variant<'m, 'v> {
                 }
                 VariantPrimitiveType::Decimal8 => {
                     let (integer, scale) = decoder::decode_decimal8(value_data)?;
-                    Variant::Decimal8(VariantDecimal8 { integer, scale })
+                    Variant::Decimal8(VariantDecimal8::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Decimal16 => {
                     let (integer, scale) = decoder::decode_decimal16(value_data)?;
-                    Variant::Decimal16(VariantDecimal16 { integer, scale })
+                    Variant::Decimal16(VariantDecimal16::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Float => Variant::Float(decoder::decode_float(value_data)?),
                 VariantPrimitiveType::Double => {
@@ -671,8 +671,8 @@ impl<'m, 'v> Variant<'m, 'v> {
                 }
             }
             Variant::Decimal16(decimal16) => {
-                if let Ok(converted_integer) = decimal16.integer.try_into() {
-                    Some((converted_integer, decimal16.scale))
+                if let Ok(converted_integer) = decimal16.integer().try_into() {
+                    Some((converted_integer, decimal16.scale()))
                 } else {
                     None
                 }
@@ -746,7 +746,7 @@ impl<'m, 'v> Variant<'m, 'v> {
         match *self {
             Variant::Decimal4(decimal) => Some((decimal.integer().into(), decimal.scale())),
             Variant::Decimal8(decimal) => Some((decimal.integer().into(), decimal.scale())),
-            Variant::Decimal16(decimal) => Some((decimal.integer(), decimal.scale)),
+            Variant::Decimal16(decimal) => Some((decimal.integer(), decimal.scale())),
             _ => None,
         }
     }

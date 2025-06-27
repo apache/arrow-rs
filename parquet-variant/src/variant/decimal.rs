@@ -124,8 +124,8 @@ impl fmt::Display for VariantDecimal4 {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal8 {
-    pub(crate) integer: i64,
-    pub(crate) scale: u8,
+    integer: i64,
+    scale: u8,
 }
 
 impl VariantDecimal8 {
@@ -192,8 +192,8 @@ impl fmt::Display for VariantDecimal8 {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal16 {
-    pub(crate) integer: i128,
-    pub(crate) scale: u8,
+    integer: i128,
+    scale: u8,
 }
 
 impl VariantDecimal16 {

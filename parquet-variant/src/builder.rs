@@ -170,7 +170,7 @@ impl ValueBuffer {
     fn append_decimal8(&mut self, decimal8: VariantDecimal8) {
         self.append_primitive_header(VariantPrimitiveType::Decimal8);
         self.append_u8(decimal8.scale());
-        self.append_slice(&decimal8.integer.to_le_bytes());
+        self.append_slice(&decimal8.integer().to_le_bytes());
     }
 
     fn append_decimal16(&mut self, decimal16: VariantDecimal16) {
