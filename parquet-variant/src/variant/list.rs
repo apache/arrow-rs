@@ -127,7 +127,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
         match self.try_get(index) {
             Ok(variant) => Some(variant),
-            Err(err) => panic!("validation error: {}", err),
+            Err(err) => panic!("validation error: {err}"),
         }
     }
 
