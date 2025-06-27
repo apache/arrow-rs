@@ -48,10 +48,16 @@ macro_rules! format_decimal {
 /// For valid precision and scale values, see the Variant specification:
 /// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
 ///
+/// # Example: Create a VariantDecimal4
+/// ```
+/// # use parquet_variant::VariantDecimal4;
+/// // Create a value representing the decimal 123.4567
+/// let decimal = VariantDecimal4::try_new(1234567, 4).expect("Failed to create decimal");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal4 {
-    pub(crate) integer: i32,
-    pub(crate) scale: u8,
+    integer: i32,
+    scale: u8,
 }
 
 impl VariantDecimal4 {
@@ -79,6 +85,20 @@ impl VariantDecimal4 {
 
         Ok(VariantDecimal4 { integer, scale })
     }
+
+    /// Returns the underlying value of the decimal.
+    ///
+    /// For example, if the decimal is `123.4567`, this will return `1234567`.
+    pub fn integer(&self) -> i32 {
+        self.integer
+    }
+
+    /// Returns the scale of the decimal (how many digits after the decimal point).
+    ///
+    /// For example, if the decimal is `123.4567`, this will return `4`.
+    pub fn scale(&self) -> u8 {
+        self.scale
+    }
 }
 
 impl fmt::Display for VariantDecimal4 {
@@ -96,10 +116,16 @@ impl fmt::Display for VariantDecimal4 {
 ///
 /// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
 ///
+/// # Example: Create a VariantDecimal8
+/// ```
+/// # use parquet_variant::VariantDecimal8;
+/// // Create a value representing the decimal 123456.78
+/// let decimal = VariantDecimal8::try_new(12345678, 2).expect("Failed to create decimal");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal8 {
-    pub(crate) integer: i64,
-    pub(crate) scale: u8,
+    integer: i64,
+    scale: u8,
 }
 
 impl VariantDecimal8 {
@@ -127,6 +153,20 @@ impl VariantDecimal8 {
 
         Ok(VariantDecimal8 { integer, scale })
     }
+
+    /// Returns the underlying value of the decimal.
+    ///
+    /// For example, if the decimal is `123456.78`, this will return `12345678`.
+    pub fn integer(&self) -> i64 {
+        self.integer
+    }
+
+    /// Returns the scale of the decimal (how many digits after the decimal point).
+    ///
+    /// For example, if the decimal is `123456.78`, this will return `2`.
+    pub fn scale(&self) -> u8 {
+        self.scale
+    }
 }
 
 impl fmt::Display for VariantDecimal8 {
@@ -144,10 +184,16 @@ impl fmt::Display for VariantDecimal8 {
 ///
 /// <https://github.com/apache/parquet-format/blob/87f2c8bf77eefb4c43d0ebaeea1778bd28ac3609/VariantEncoding.md?plain=1#L418-L420>
 ///
+/// # Example: Create a VariantDecimal16
+/// ```
+/// # use parquet_variant::VariantDecimal16;
+/// // Create a value representing the decimal 12345678901234567.890
+/// let decimal = VariantDecimal16::try_new(12345678901234567890, 3).unwrap();
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantDecimal16 {
-    pub(crate) integer: i128,
-    pub(crate) scale: u8,
+    integer: i128,
+    scale: u8,
 }
 
 impl VariantDecimal16 {
@@ -174,6 +220,20 @@ impl VariantDecimal16 {
         }
 
         Ok(VariantDecimal16 { integer, scale })
+    }
+
+    /// Returns the underlying value of the decimal.
+    ///
+    /// For example, if the decimal is `12345678901234567.890`, this will return `12345678901234567890`.
+    pub fn integer(&self) -> i128 {
+        self.integer
+    }
+
+    /// Returns the scale of the decimal (how many digits after the decimal point).
+    ///
+    /// For example, if the decimal is `12345678901234567.890`, this will return `3`.
+    pub fn scale(&self) -> u8 {
+        self.scale
     }
 }
 
