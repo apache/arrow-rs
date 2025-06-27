@@ -521,9 +521,11 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                     )
                                 })?;
                                 match *bits {
+                                    "32" => DataType::Decimal32(parsed_precision, parsed_scale),
+                                    "64" => DataType::Decimal64(parsed_precision, parsed_scale),
                                     "128" => DataType::Decimal128(parsed_precision, parsed_scale),
                                     "256" => DataType::Decimal256(parsed_precision, parsed_scale),
-                                    _ => return Err(ArrowError::CDataInterface("Only 128- and 256- bit wide decimals are supported in the Rust implementation".to_string())),
+                                    _ => return Err(ArrowError::CDataInterface("Only 32/64/128/256 bit wide decimals are supported in the Rust implementation".to_string())),
                                 }
                             }
                             _ => {
@@ -706,6 +708,12 @@ fn get_format_string(dtype: &DataType) -> Result<Cow<'static, str>, ArrowError> 
         DataType::LargeUtf8 => Ok("U".into()),
         DataType::FixedSizeBinary(num_bytes) => Ok(Cow::Owned(format!("w:{num_bytes}"))),
         DataType::FixedSizeList(_, num_elems) => Ok(Cow::Owned(format!("+w:{num_elems}"))),
+        DataType::Decimal32(precision, scale) => {
+            Ok(Cow::Owned(format!("d:{precision},{scale},32")))
+        }
+        DataType::Decimal64(precision, scale) => {
+            Ok(Cow::Owned(format!("d:{precision},{scale},64")))
+        }
         DataType::Decimal128(precision, scale) => Ok(Cow::Owned(format!("d:{precision},{scale}"))),
         DataType::Decimal256(precision, scale) => {
             Ok(Cow::Owned(format!("d:{precision},{scale},256")))

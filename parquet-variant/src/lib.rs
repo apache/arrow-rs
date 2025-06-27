@@ -15,34 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::StringViewArray;
-use criterion::*;
+//! Implementation of [Variant Binary Encoding] from [Apache Parquet].
+//!
+//! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+//! [Apache Parquet]: https://parquet.apache.org/
+//!
+//! ## 🚧 Work In Progress
+//!
+//! This crate is under active development and is not yet ready for production use.
+//! If you are interested in helping, you can find more information on the GitHub [Variant issue]
+//!
+//! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
-fn gen_view_array(size: usize) -> StringViewArray {
-    StringViewArray::from_iter((0..size).map(|v| match v % 3 {
-        0 => Some("small"),
-        1 => Some("larger than 12 bytes array"),
-        2 => None,
-        _ => unreachable!("unreachable"),
-    }))
-}
+// TODO: dead code removal
+#[allow(dead_code)]
+mod decoder;
+mod variant;
+// TODO: dead code removal
+mod builder;
+mod to_json;
+#[allow(dead_code)]
+mod utils;
 
-fn criterion_benchmark(c: &mut Criterion) {
-    let array = gen_view_array(100_000);
-
-    c.bench_function("gc view types all", |b| {
-        b.iter(|| {
-            black_box(array.gc());
-        });
-    });
-
-    let sliced = array.slice(0, 100_000 / 2);
-    c.bench_function("gc view types slice half", |b| {
-        b.iter(|| {
-            black_box(sliced.gc());
-        });
-    });
-}
-
-criterion_group!(benches, criterion_benchmark);
-criterion_main!(benches);
+pub use builder::*;
+pub use to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
+pub use variant::*;

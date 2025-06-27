@@ -133,8 +133,7 @@ pub fn from_thrift(
 
             if null_count < 0 {
                 return Err(ParquetError::General(format!(
-                    "Statistics null count is negative {}",
-                    null_count
+                    "Statistics null count is negative {null_count}",
                 )));
             }
 

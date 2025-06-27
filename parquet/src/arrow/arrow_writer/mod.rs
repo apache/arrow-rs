@@ -297,6 +297,14 @@ impl<W: Write + Send> ArrowWriter<W> {
         Ok(())
     }
 
+    /// Writes the given buf bytes to the internal buffer.
+    ///
+    /// It's safe to use this method to write data to the underlying writer,
+    /// because it will ensure that the buffering and byte‐counting layers are used.
+    pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.writer.write_all(buf)
+    }
+
     /// Flushes all buffered rows into a new row group
     pub fn flush(&mut self) -> Result<()> {
         let in_progress = match self.in_progress.take() {
@@ -326,8 +334,12 @@ impl<W: Write + Send> ArrowWriter<W> {
 
     /// Returns a mutable reference to the underlying writer.
     ///
-    /// It is inadvisable to directly write to the underlying writer, doing so
-    /// will likely result in a corrupt parquet file
+    /// **Warning**: if you write directly to this writer, you will skip
+    /// the `TrackedWrite` buffering and byte‐counting layers. That’ll cause
+    /// the file footer’s recorded offsets and sizes to diverge from reality,
+    /// resulting in an unreadable or corrupted Parquet file.
+    ///
+    /// If you want to write safely to the underlying writer, use [`Self::write_all`].
     pub fn inner_mut(&mut self) -> &mut W {
         self.writer.inner_mut()
     }
@@ -989,6 +1001,9 @@ impl ArrowColumnWriterFactory {
                 ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
+                ArrowDataType::FixedSizeBinary(_) => {
+                    out.push(bytes(leaves.next().unwrap())?)
+                }
                 _ => {
                     out.push(col(leaves.next().unwrap())?)
                 }
@@ -1321,9 +1336,16 @@ mod tests {
     use super::*;
 
     use std::fs::File;
+    use std::io::Seek;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
+    use crate::column::page::{Page, PageReader};
+    use crate::file::page_encoding_stats::PageEncodingStats;
+    use crate::file::reader::SerializedPageReader;
+    use crate::format::PageHeader;
+    use crate::schema::types::ColumnPath;
+    use crate::thrift::TCompactSliceInputProtocol;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
@@ -1333,12 +1355,12 @@ mod tests {
     use arrow_buffer::{i256, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
     use half::f16;
+    use num::{FromPrimitive, ToPrimitive};
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
-    use crate::file::metadata::ParquetMetaData;
+    use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::page_index::index::Index;
-    use crate::file::page_index::index_reader::read_offset_indexes;
     use crate::file::properties::{
         BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
     };
@@ -1912,6 +1934,50 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_binary_in_dict() {
+        fn test_fixed_size_binary_in_dict_inner<K>()
+        where
+            K: ArrowDictionaryKeyType,
+            K::Native: FromPrimitive + ToPrimitive + TryFrom<u8>,
+            <<K as arrow_array::ArrowPrimitiveType>::Native as TryFrom<u8>>::Error: std::fmt::Debug,
+        {
+            let field = Field::new(
+                "a",
+                DataType::Dictionary(
+                    Box::new(K::DATA_TYPE),
+                    Box::new(DataType::FixedSizeBinary(4)),
+                ),
+                false,
+            );
+            let schema = Schema::new(vec![field]);
+
+            let keys: Vec<K::Native> = vec![
+                K::Native::try_from(0u8).unwrap(),
+                K::Native::try_from(0u8).unwrap(),
+                K::Native::try_from(1u8).unwrap(),
+            ];
+            let keys = PrimitiveArray::<K>::from_iter_values(keys);
+            let values = FixedSizeBinaryArray::try_from_iter(
+                vec![vec![0, 0, 0, 0], vec![1, 1, 1, 1]].into_iter(),
+            )
+            .unwrap();
+
+            let data = DictionaryArray::<K>::new(keys, Arc::new(values));
+            let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(data)]).unwrap();
+            roundtrip(batch, None);
+        }
+
+        test_fixed_size_binary_in_dict_inner::<UInt8Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt32Type>();
+        test_fixed_size_binary_in_dict_inner::<UInt16Type>();
+        test_fixed_size_binary_in_dict_inner::<Int8Type>();
+        test_fixed_size_binary_in_dict_inner::<Int16Type>();
+        test_fixed_size_binary_in_dict_inner::<Int32Type>();
+        test_fixed_size_binary_in_dict_inner::<Int64Type>();
+    }
+
+    #[test]
     fn test_empty_dict() {
         let struct_fields = Fields::from(vec![Field::new(
             "dict",
@@ -1975,7 +2041,9 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
-        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader =
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap();
 
         let column = reader.metadata().row_group(0).columns();
 
@@ -1988,7 +2056,8 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        let offset_indexes = read_offset_indexes(&file, column).unwrap().unwrap();
+        assert!(reader.metadata().offset_index().is_some());
+        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
 
         let page_locations = offset_indexes[0].page_locations.clone();
 
@@ -1997,7 +2066,7 @@ mod tests {
         assert_eq!(
             page_locations.len(),
             10,
-            "Expected 9 pages but got {page_locations:#?}"
+            "Expected 10 pages but got {page_locations:#?}"
         );
     }
 
@@ -2471,25 +2540,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_second_single_column() {
         required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_millisecond_single_column() {
         required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_microsecond_single_column() {
         required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
-    #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_nanosecond_single_column() {
         required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
     }
@@ -3721,5 +3786,224 @@ mod tests {
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
         assert_eq!(batches.len(), 0);
+    }
+
+    #[test]
+    fn test_page_stats_not_written_by_default() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let schema = Schema::new(vec![string_field]);
+        let raw_string_values = vec!["Blart Versenwald III"];
+        let string_values = StringArray::from(raw_string_values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(string_values)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+
+        assert!(stats.is_none());
+    }
+
+    #[test]
+    fn test_page_stats_when_enabled() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let schema = Schema::new(vec![string_field]);
+        let raw_string_values = vec!["Blart Versenwald III", "Andrew Lamb"];
+        let string_values = StringArray::from(raw_string_values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(string_values)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_write_page_header_statistics(true)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+
+        let stats = stats.unwrap();
+        // check that min/max were actually written to the page
+        assert!(stats.is_max_value_exact.unwrap());
+        assert!(stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Blart Versenwald III".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Andrew Lamb".as_bytes());
+    }
+
+    #[test]
+    fn test_page_stats_truncation() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let binary_field = Field::new("b", DataType::Binary, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
+        let raw_string_values = vec!["Blart Versenwald III"];
+        let raw_binary_values = [b"Blart Versenwald III".to_vec()];
+        let raw_binary_value_refs = raw_binary_values
+            .iter()
+            .map(|x| x.as_slice())
+            .collect::<Vec<_>>();
+
+        let string_values = StringArray::from(raw_string_values.clone());
+        let binary_values = BinaryArray::from(raw_binary_value_refs);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(string_values), Arc::new(binary_values)],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_truncate_length(Some(2))
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_write_page_header_statistics(true)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        // check that min/max were properly truncated
+        assert!(!stats.is_max_value_exact.unwrap());
+        assert!(!stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+
+        // check second page now
+        let second_page = &prot.as_slice()[hdr.compressed_page_size as usize..];
+        let mut prot = TCompactSliceInputProtocol::new(second_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        // check that min/max were properly truncated
+        assert!(!stats.is_max_value_exact.unwrap());
+        assert!(!stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+    }
+
+    #[test]
+    fn test_page_encoding_statistics_roundtrip() {
+        let batch_schema = Schema::new(vec![Field::new(
+            "int32",
+            arrow_schema::DataType::Int32,
+            false,
+        )]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+
+        let mut file: File = tempfile::tempfile().unwrap();
+        let mut writer = ArrowWriter::try_new(&mut file, Arc::new(batch_schema), None).unwrap();
+        writer.write(&batch).unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        let chunk_meta = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .expect("column metadata missing");
+        assert!(chunk_meta.encoding_stats.is_some());
+        let chunk_page_stats = chunk_meta.encoding_stats.as_ref().unwrap();
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rowgroup = reader.get_row_group(0).expect("row group missing");
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.page_encoding_stats().is_some());
+        let file_page_stats = column.page_encoding_stats().unwrap();
+        let chunk_stats: Vec<PageEncodingStats> = chunk_page_stats
+            .iter()
+            .map(|x| crate::file::page_encoding_stats::try_from_thrift(x).unwrap())
+            .collect();
+        assert_eq!(&chunk_stats, file_page_stats);
+    }
+
+    #[test]
+    fn test_different_dict_page_size_limit() {
+        let array = Arc::new(Int64Array::from_iter(0..1024 * 1024));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col0", arrow_schema::DataType::Int64, false),
+            Field::new("col1", arrow_schema::DataType::Int64, false),
+        ]));
+        let batch =
+            arrow_array::RecordBatch::try_new(schema.clone(), vec![array.clone(), array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(1024 * 1024)
+            .set_column_dictionary_page_size_limit(ColumnPath::from("col1"), 1024 * 1024 * 4)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let col0_meta = metadata.row_group(0).column(0);
+        let col1_meta = metadata.row_group(0).column(1);
+
+        let get_dict_page_size = move |meta: &ColumnChunkMetaData| {
+            let mut reader =
+                SerializedPageReader::new(Arc::new(data.clone()), meta, 0, None).unwrap();
+            let page = reader.get_next_page().unwrap().unwrap();
+            match page {
+                Page::DictionaryPage { buf, .. } => buf.len(),
+                _ => panic!("expected DictionaryPage"),
+            }
+        };
+
+        assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
+        assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
     }
 }

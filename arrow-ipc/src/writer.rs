@@ -1854,6 +1854,7 @@ fn pad_to_alignment(alignment: u8, len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::Hasher;
     use std::io::Cursor;
     use std::io::Seek;
 
@@ -2516,7 +2517,7 @@ mod tests {
         let strings: Vec<_> = (0..8000)
             .map(|i| {
                 if i % 2 == 0 {
-                    Some(format!("value{}", i))
+                    Some(format!("value{i}"))
                 } else {
                     None
                 }
@@ -2950,7 +2951,7 @@ mod tests {
             let mut fields = Vec::new();
             let mut arrays = Vec::new();
             for i in 0..num_cols {
-                let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+                let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
                 let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
                 fields.push(field);
                 arrays.push(Arc::new(array) as Arc<dyn Array>);
@@ -3005,7 +3006,7 @@ mod tests {
         let mut fields = Vec::new();
         let mut arrays = Vec::new();
         for i in 0..num_cols {
-            let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
             let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
             fields.push(field);
             arrays.push(Arc::new(array) as Arc<dyn Array>);
@@ -3060,7 +3061,7 @@ mod tests {
         let mut fields = Vec::new();
         let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
         for i in 0..num_cols {
-            let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
             fields.push(field);
         }
         let schema = Schema::new(fields);
@@ -3305,5 +3306,49 @@ mod tests {
         test_slices(&array, &schema, 2, 1)?;
 
         Ok(())
+    }
+
+    #[test]
+    fn test_metadata_encoding_ordering() {
+        fn create_hash() -> u64 {
+            let metadata: HashMap<String, String> = [
+                ("a", "1"), //
+                ("b", "2"), //
+                ("c", "3"), //
+                ("d", "4"), //
+                ("e", "5"), //
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+
+            // Set metadata on both the schema and a field within it.
+            let schema = Arc::new(
+                Schema::new(vec![
+                    Field::new("a", DataType::Int64, true).with_metadata(metadata.clone())
+                ])
+                .with_metadata(metadata)
+                .clone(),
+            );
+            let batch = RecordBatch::new_empty(schema.clone());
+
+            let mut bytes = Vec::new();
+            let mut w = StreamWriter::try_new(&mut bytes, batch.schema_ref()).unwrap();
+            w.write(&batch).unwrap();
+            w.finish().unwrap();
+
+            let mut h = std::hash::DefaultHasher::new();
+            h.write(&bytes);
+            h.finish()
+        }
+
+        let expected = create_hash();
+
+        // Since there is randomness in the HashMap and we cannot specify our
+        // own Hasher for the implementation used for metadata, run the above
+        // code 20x and verify it does not change. This is not perfect but it
+        // should be good enough.
+        let all_passed = (0..20).all(|_| create_hash() == expected);
+        assert!(all_passed);
     }
 }

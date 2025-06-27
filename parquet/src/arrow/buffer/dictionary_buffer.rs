@@ -154,6 +154,15 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                     }
                 }
 
+                let ArrowType::Dictionary(_, value_type) = data_type else {
+                    unreachable!()
+                };
+                let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
+                    arrow_cast::cast(&values, &ArrowType::FixedSizeBinary(size)).unwrap()
+                } else {
+                    values
+                };
+
                 let builder = ArrayDataBuilder::new(data_type.clone())
                     .len(keys.len())
                     .add_buffer(Buffer::from_vec(keys))
