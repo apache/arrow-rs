@@ -21,8 +21,8 @@ use arrow::util::bench_util::*;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow_array::types::{Float64Type, Int32Type};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_array::types::{Float64Type, Int32Type, TimestampNanosecondType};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::coalesce::BatchCoalescer;
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -31,6 +31,17 @@ use criterion::{criterion_group, criterion_main, Criterion};
 ///
 fn add_all_filter_benchmarks(c: &mut Criterion) {
     let batch_size = 8192; // 8K rows is a commonly used size for batches
+
+    // Multiple primitive types
+    let primitive_schema = SchemaRef::new(Schema::new(vec![
+        Field::new("int32_val", DataType::Int32, true),
+        Field::new("float_val", DataType::Float64, true),
+        Field::new(
+            "timestamp_val",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            true,
+        ),
+    ]));
 
     // Single StringViewArray
     let single_schema = SchemaRef::new(Schema::new(vec![Field::new(
@@ -70,6 +81,18 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
     for null_density in [0.0, 0.1] {
         // Selectivity: 0.1%, 1%, 10%, 80%
         for selectivity in [0.001, 0.01, 0.1, 0.8] {
+            FilterBenchmarkBuilder {
+                c,
+                name: "primitive",
+                batch_size,
+                num_output_batches: 50,
+                null_density,
+                selectivity,
+                max_string_len: 30,
+                schema: &primitive_schema,
+            }
+            .build();
+
             FilterBenchmarkBuilder {
                 c,
                 name: "single_utf8view",
@@ -413,6 +436,14 @@ impl DataStreamBuilder {
                 self.null_density,
                 seed,
             )),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Arc::new(
+                create_primitive_array_with_seed::<TimestampNanosecondType>(
+                    self.batch_size,
+                    self.null_density,
+                    seed,
+                )
+                .with_timezone(Arc::clone(tz)),
+            ),
             DataType::Utf8 => Arc::new(create_string_array::<i32>(
                 self.batch_size,
                 self.null_density,
