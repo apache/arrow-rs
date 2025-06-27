@@ -18,45 +18,38 @@
 //! Module for parsing JSON strings as Variant
 
 pub use crate::variant::{VariantDecimal4, VariantDecimal8};
-use crate::variant_buffer_manager::VariantBufferManager;
 use crate::{AppendVariantHelper, ListBuilder, ObjectBuilder, Variant, VariantBuilder};
 use arrow_schema::ArrowError;
 use rust_decimal::prelude::*;
 use serde_json::{Number, Value};
 
-/// Converts a JSON string to Variant and writes the corresponding `value` and `metadata` values
-///  to buffers provided by `variant_buffer_manager`.
+/// Converts a JSON string to Variant using `variant_builder`. The resulting `value` and `metadata`
+/// buffers can be extracted using `builder.finish()`
 ///
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
-/// * `variant_buffer_manager` - Object implementing the `VariantBufferManager` trait for the caller
-///   to provide buffers to write the Variant output to.
+/// * `variant_builder` - Object of type `VariantBuilder` used to build the vatiant from the JSON
+/// string
 ///
 /// # Returns
 ///
-/// * `Ok(metadata_size, value_size)` denoting the sizes of the resulting value and metadata values
-///   if successful
+/// * `Ok(())` if successful
 /// * `Err` with error details if the conversion fails
 ///
 /// ```rust
 /// # use parquet_variant::{
-/// json_to_variant, variant_to_json, variant_to_json_string, variant_to_json_value,
-/// SampleVecBasedVariantBufferManager,
+/// json_to_variant, variant_to_json, variant_to_json_string, variant_to_json_value, VariantBuilder
 /// };
 ///
-/// let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
-/// value_buffer: vec![0u8; 1],
-/// metadata_buffer: vec![0u8; 1],
-/// };
+/// let mut variant_builder = VariantBuilder::new();
 /// let person_string = "{\"name\":\"Alice\", \"age\":30, ".to_string()
 /// + "\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
 /// + "\"additional_info\": null}";
-/// let (metadata_size, value_size) = json_to_variant(&person_string, &mut variant_buffer_manager)?;
+/// json_to_variant(&person_string, &mut variant_builder)?;
 ///
-/// let variant = parquet_variant::Variant::try_new(
-/// &variant_buffer_manager.metadata_buffer[..metadata_size],
-/// &variant_buffer_manager.value_buffer[..value_size],
-/// )?;
+/// let (metadata, value) = variant_builder.finish();
+///
+/// let variant = parquet_variant::Variant::try_new(&metadata, &value)?;
 ///
 /// let json_result = variant_to_json_string(&variant)?;
 /// let json_value = variant_to_json_value(&variant)?;
@@ -70,31 +63,15 @@ use serde_json::{Number, Value};
 /// assert_eq!(json_result, serde_json::to_string(&json_value)?);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-///
-/// Eventually, internal writes should also be performed using VariantBufferManager instead of
-/// ValueBuffer and MetadataBuffer so the caller has control of the memory.
-pub fn json_to_variant(
+pub fn json_to_variant<'a>(
     json: &str,
-    variant_buffer_manager: &mut impl VariantBufferManager,
-) -> Result<(usize, usize), ArrowError> {
-    let mut builder = VariantBuilder::new();
+    builder: &'a mut VariantBuilder,
+) -> Result<(), ArrowError> {
     let json: Value = serde_json::from_str(json)
         .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {}", e)))?;
 
-    build_json(&json, &mut builder)?;
-    let (metadata, value) = builder.finish();
-    let value_size = value.len();
-    let metadata_size = metadata.len();
-
-    // Write to caller's buffers - Remove this when the library internally writes to the caller's
-    // buffers anyway
-    let caller_metadata_buffer =
-        variant_buffer_manager.ensure_size_and_borrow_metadata_buffer(metadata_size)?;
-    caller_metadata_buffer[..metadata_size].copy_from_slice(metadata.as_slice());
-    let caller_value_buffer =
-        variant_buffer_manager.ensure_size_and_borrow_value_buffer(value_size)?;
-    caller_value_buffer[..value_size].copy_from_slice(value.as_slice());
-    Ok((metadata_size, value_size))
+    build_json(&json, builder)?;
+    Ok(())
 }
 
 fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowError> {

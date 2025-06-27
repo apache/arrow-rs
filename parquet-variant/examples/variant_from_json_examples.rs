@@ -18,27 +18,22 @@
 //! Example showing how to convert Variant values to JSON
 
 use parquet_variant::{
-    json_to_variant, variant_to_json, variant_to_json_string, variant_to_json_value,
-    SampleVecBasedVariantBufferManager,
+    json_to_variant, variant_to_json, variant_to_json_string, variant_to_json_value, VariantBuilder,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // The caller must provide an object implementing the `VariantBufferManager` trait to the library.
-    // This allows the library to write the constructed variant to buffers provided by the caller.
-    // This way, the caller has direct control over the output buffers.
-    let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
-        value_buffer: vec![0u8; 1],
-        metadata_buffer: vec![0u8; 1],
-    };
-
     let person_string = "{\"name\":\"Alice\", \"age\":30, ".to_string()
         + "\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
         + "\"additional_info\": null}";
-    let (metadata_size, value_size) = json_to_variant(&person_string, &mut variant_buffer_manager)?;
+
+    let mut variant_builder = VariantBuilder::new();
+    json_to_variant(&person_string, &mut variant_builder)?;
+
+    let (metadata, value) = variant_builder.finish();
 
     let variant = parquet_variant::Variant::try_new(
-        &variant_buffer_manager.metadata_buffer[..metadata_size],
-        &variant_buffer_manager.value_buffer[..value_size],
+        &metadata,
+        &value,
     )?;
 
     let json_result = variant_to_json_string(&variant)?;

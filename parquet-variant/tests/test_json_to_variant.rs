@@ -19,7 +19,7 @@
 
 use arrow_schema::ArrowError;
 use parquet_variant::{
-    json_to_variant, variant_to_json_string, SampleVecBasedVariantBufferManager,
+    json_to_variant, variant_to_json_string, VariantBuilder,
 };
 
 #[test]
@@ -29,15 +29,11 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         expected_value: &[u8],
         expected_metadata: &[u8],
     ) -> Result<(), ArrowError> {
-        let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
-            value_buffer: vec![0u8; 1],
-            metadata_buffer: vec![0u8; 1],
-        };
-        let (metadata_size, value_size) = json_to_variant(json, &mut variant_buffer_manager)?;
-        let computed_metadata_slize: &[u8] = &*variant_buffer_manager.metadata_buffer;
-        let computed_value_slize: &[u8] = &*variant_buffer_manager.value_buffer;
-        assert_eq!(&computed_metadata_slize[..metadata_size], expected_metadata);
-        assert_eq!(&computed_value_slize[..value_size], expected_value);
+        let mut variant_builder = VariantBuilder::new();
+        json_to_variant(json, &mut variant_builder)?;
+        let (metadata, value) = variant_builder.finish();
+        assert_eq!(&metadata, expected_metadata);
+        assert_eq!(&value, expected_value);
         Ok(())
     }
 
@@ -348,44 +344,34 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
             keys.join(format!(":{},", inner_object).as_str()),
             inner_object
         );
-        let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
-            value_buffer: vec![0u8; 1],
-            metadata_buffer: vec![0u8; 1],
-        };
-        let (metadata_size, value_size) = json_to_variant(&json, &mut variant_buffer_manager)?;
-        let computed_metadata_slize: &[u8] =
-            &variant_buffer_manager.metadata_buffer[..metadata_size];
-        let computed_value_slize: &[u8] = &variant_buffer_manager.value_buffer[..value_size];
-        let v = parquet_variant::Variant::try_new(computed_metadata_slize, computed_value_slize)?;
+        let mut variant_builder = VariantBuilder::new();
+        json_to_variant(&json, &mut variant_builder)?;
+        let (metadata, value) = variant_builder.finish();
+        let v = parquet_variant::Variant::try_new(&metadata, &value)?;
         let output_string = variant_to_json_string(&v)?;
         assert_eq!(output_string, json);
         // Verify metadata size = 1 + 2 + 2 * 497 + 3 * 496
-        assert_eq!(metadata_size, 2485);
+        assert_eq!(metadata.len(), 2485);
         // Verify value size.
         // Size of innermost_list: 1 + 1 + 258 + 256 = 516
         // Size of inner object: 1 + 4 + 256 + 257 * 3 + 256 * 516 = 133128
         // Size of json: 1 + 4 + 512 + 1028 + 256 * 133128 = 34082313
-        assert_eq!(value_size, 34082313);
+        assert_eq!(value.len(), 34082313);
     }
     {
         let json = "{\"爱\":\"अ\",\"a\":1}";
-        let mut variant_buffer_manager = SampleVecBasedVariantBufferManager {
-            value_buffer: vec![0u8; 1],
-            metadata_buffer: vec![0u8; 1],
-        };
-        let (metadata_size, value_size) = json_to_variant(&json, &mut variant_buffer_manager)?;
-        let computed_metadata_slize: &[u8] =
-            &variant_buffer_manager.metadata_buffer[..metadata_size];
-        let computed_value_slize: &[u8] = &variant_buffer_manager.value_buffer[..value_size];
-        let v = parquet_variant::Variant::try_new(computed_metadata_slize, computed_value_slize)?;
+        let mut variant_builder = VariantBuilder::new();
+        json_to_variant(&json, &mut variant_builder)?;
+        let (metadata, value) = variant_builder.finish();
+        let v = parquet_variant::Variant::try_new(&metadata, &value)?;
         let output_string = variant_to_json_string(&v)?;
         assert_eq!(output_string, "{\"a\":1,\"爱\":\"अ\"}");
         assert_eq!(
-            computed_value_slize,
+            value,
             &[2u8, 2u8, 1u8, 0u8, 4u8, 0u8, 6u8, 13u8, 0xe0u8, 0xa4u8, 0x85u8, 12u8, 1u8]
         );
         assert_eq!(
-            computed_metadata_slize,
+            metadata,
             &[1u8, 2u8, 0u8, 3u8, 4u8, 0xe7u8, 0x88u8, 0xb1u8, 97u8]
         );
     }

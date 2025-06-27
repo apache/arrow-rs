@@ -37,10 +37,8 @@ mod from_json;
 mod to_json;
 #[allow(dead_code)]
 mod utils;
-mod variant_buffer_manager;
 
 pub use builder::*;
 pub use from_json::json_to_variant;
 pub use to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
 pub use variant::*;
-pub use variant_buffer_manager::{SampleVecBasedVariantBufferManager, VariantBufferManager};
