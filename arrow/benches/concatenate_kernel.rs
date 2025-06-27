@@ -145,6 +145,20 @@ fn add_benchmark(c: &mut Criterion) {
         });
     }
 
+    // String view arrays
+    for null_density in [0.0, 0.2] {
+        // Any strings less than 12 characters are stored as prefix only, so specially
+        // benchmark cases that have different mixes of lengths.
+        for (name, str_len) in [("all_inline", 12), ("", 20), ("", 128)] {
+            let array = create_string_view_array_with_len(8192, null_density, str_len, false);
+            let arrays = (0..10).map(|_| &array as &dyn Array).collect::<Vec<_>>();
+            let id = format!(
+                "concat utf8_view {name} max_str_len={str_len} null_density={null_density}"
+            );
+            c.bench_function(&id, |b| b.iter(|| bench_concat_arrays(&arrays)));
+        }
+    }
+
     let v1 = create_string_array_with_len::<i32>(10, 0.0, 20);
     let v1 = create_dict_from_values::<Int32Type>(1024, 0.0, &v1);
     let v2 = create_string_array_with_len::<i32>(10, 0.0, 20);

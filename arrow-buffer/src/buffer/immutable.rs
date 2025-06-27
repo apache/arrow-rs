@@ -125,6 +125,15 @@ impl Buffer {
         self.data.ptr()
     }
 
+    /// Returns the number of strong references to the buffer.
+    ///
+    /// This method is safe but if the buffer is shared across multiple threads
+    /// the underlying value could change between calling this method and using
+    /// the result.
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.data)
+    }
+
     /// Create a [`Buffer`] from the provided [`Vec`] without copying
     #[inline]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
@@ -1008,5 +1017,32 @@ mod tests {
                 assert_preserved(o, l);
             }
         }
+    }
+
+    #[test]
+    fn test_strong_count() {
+        let buffer = Buffer::from_iter(std::iter::repeat(0_u8).take(100));
+        assert_eq!(buffer.strong_count(), 1);
+
+        let buffer2 = buffer.clone();
+        assert_eq!(buffer.strong_count(), 2);
+
+        let buffer3 = buffer2.clone();
+        assert_eq!(buffer.strong_count(), 3);
+
+        drop(buffer);
+        assert_eq!(buffer2.strong_count(), 2);
+        assert_eq!(buffer3.strong_count(), 2);
+
+        // Strong count does not increase on move
+        let capture = move || {
+            assert_eq!(buffer3.strong_count(), 2);
+        };
+
+        capture();
+        assert_eq!(buffer2.strong_count(), 2);
+
+        drop(capture);
+        assert_eq!(buffer2.strong_count(), 1);
     }
 }
