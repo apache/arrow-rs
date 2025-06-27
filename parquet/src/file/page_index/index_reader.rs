@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for reading [`Index`] and [`PageLocation`] from parquet metadata.
+//! Support for reading [`Index`] and [`OffsetIndex`] from parquet metadata.
 
 use crate::basic::Type;
 use crate::data_type::Int96;

@@ -77,7 +77,7 @@ impl ParquetObjectReader {
     }
 
     /// Provide a hint as to the size of the parquet file's footer,
-    /// see [fetch_parquet_metadata](crate::arrow::async_reader::fetch_parquet_metadata)
+    /// see [`ParquetMetaDataReader::with_prefetch_hint`]
     pub fn with_footer_size_hint(self, hint: usize) -> Self {
         Self {
             metadata_size_hint: Some(hint),

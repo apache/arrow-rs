@@ -56,14 +56,16 @@ use std::ops::Range;
 ///     }
 /// }
 ///```
-/// 
+///
 /// [`ParquetMetaDataReader`]: crate::file::metadata::reader::ParquetMetaDataReader
 /// [`ParquetMetaData`]: crate::file::metadata::ParquetMetaData
 pub trait MetadataFetch {
     /// Return a future that fetches the specified range of bytes asynchronously
     ///
     /// Note the returned type is a boxed future, often created by
-    /// [FutureExt::boxed]. See the trait documentation for an example
+    /// [`FutureExt::boxed`]. See the trait documentation for an example
+    ///
+    /// [`FutureExt::boxed`]: futures::FutureExt::boxed
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
 }
 
@@ -73,12 +75,17 @@ impl<T: AsyncFileReader> MetadataFetch for &mut T {
     }
 }
 
-/// A data source that can be used with [`MetadataLoader`] to load [`ParquetMetaData`] via suffix
+/// A data source that can be used with [`ParquetMetaDataReader`] to load [`ParquetMetaData`] via suffix
 /// requests, without knowing the file size
+///
+/// [`ParquetMetaDataReader`]: crate::file::metadata::reader::ParquetMetaDataReader
+/// [`ParquetMetaData`]: crate::file::metadata::ParquetMetaData
 pub trait MetadataSuffixFetch: MetadataFetch {
     /// Return a future that fetches the last `n` bytes asynchronously
     ///
     /// Note the returned type is a boxed future, often created by
-    /// [FutureExt::boxed]. See the trait documentation for an example
+    /// [`FutureExt::boxed`]. See the trait documentation for an example
+    ///
+    /// [`FutureExt::boxed`]: futures::FutureExt::boxed
     fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
 }
