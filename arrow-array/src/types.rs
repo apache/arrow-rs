@@ -1077,10 +1077,7 @@ impl Date64Type {
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         Self::add_year_months_opt(date, delta).unwrap_or_else(|| {
-            panic!(
-                "Date64Type::add_year_months overflowed for date: {}, delta: {}",
-                date, delta
-            )
+            panic!("Date64Type::add_year_months overflowed for date: {date}, delta: {delta}",)
         })
     }
 
@@ -1117,10 +1114,7 @@ impl Date64Type {
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         Self::add_day_time_opt(date, delta).unwrap_or_else(|| {
-            panic!(
-                "Date64Type::add_day_time overflowed for date: {}, delta: {:?}",
-                date, delta
-            )
+            panic!("Date64Type::add_day_time overflowed for date: {date}, delta: {delta:?}",)
         })
     }
 
@@ -1158,10 +1152,7 @@ impl Date64Type {
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         Self::add_month_day_nano_opt(date, delta).unwrap_or_else(|| {
-            panic!(
-                "Date64Type::add_month_day_nano overflowed for date: {}, delta: {:?}",
-                date, delta
-            )
+            panic!("Date64Type::add_month_day_nano overflowed for date: {date}, delta: {delta:?}",)
         })
     }
 
@@ -1200,10 +1191,7 @@ impl Date64Type {
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         Self::subtract_year_months_opt(date, delta).unwrap_or_else(|| {
-            panic!(
-                "Date64Type::subtract_year_months overflowed for date: {}, delta: {}",
-                date, delta
-            )
+            panic!("Date64Type::subtract_year_months overflowed for date: {date}, delta: {delta}",)
         })
     }
 
@@ -1240,10 +1228,7 @@ impl Date64Type {
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         Self::subtract_day_time_opt(date, delta).unwrap_or_else(|| {
-            panic!(
-                "Date64Type::subtract_day_time overflowed for date: {}, delta: {:?}",
-                date, delta
-            )
+            panic!("Date64Type::subtract_day_time overflowed for date: {date}, delta: {delta:?}",)
         })
     }
 
@@ -1282,8 +1267,7 @@ impl Date64Type {
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         Self::subtract_month_day_nano_opt(date, delta).unwrap_or_else(|| {
             panic!(
-                "Date64Type::subtract_month_day_nano overflowed for date: {}, delta: {:?}",
-                date, delta
+                "Date64Type::subtract_month_day_nano overflowed for date: {date}, delta: {delta:?}",
             )
         })
     }

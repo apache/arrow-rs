@@ -776,12 +776,12 @@ impl Display for NanosecondsFormatter<'_> {
         let nanoseconds = self.nanoseconds % 1_000_000_000;
 
         if hours != 0 {
-            write!(f, "{prefix}{} hours", hours)?;
+            write!(f, "{prefix}{hours} hours")?;
             prefix = " ";
         }
 
         if mins != 0 {
-            write!(f, "{prefix}{} mins", mins)?;
+            write!(f, "{prefix}{mins} mins")?;
             prefix = " ";
         }
 
@@ -819,12 +819,12 @@ impl Display for MillisecondsFormatter<'_> {
         let milliseconds = self.milliseconds % 1_000;
 
         if hours != 0 {
-            write!(f, "{prefix}{} hours", hours,)?;
+            write!(f, "{prefix}{hours} hours")?;
             prefix = " ";
         }
 
         if mins != 0 {
-            write!(f, "{prefix}{} mins", mins,)?;
+            write!(f, "{prefix}{mins} mins")?;
             prefix = " ";
         }
 
