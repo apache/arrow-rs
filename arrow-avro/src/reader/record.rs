@@ -622,18 +622,22 @@ mod tests {
             "Fixed size of binary values should be 5 as per type"
         );
     }
-    
+
     #[test]
     fn test_uuid_decoding() {
         let avro_type = avro_from_codec(Codec::Uuid);
         let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
-        
+
         let data1 = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let mut cursor1 = AvroCursor::new(&data1);
         decoder
             .decode(&mut cursor1)
             .expect("Failed to decode data1");
-        assert_eq!(cursor1.position(), 16, "Cursor should advance by fixed size");
+        assert_eq!(
+            cursor1.position(),
+            16,
+            "Cursor should advance by fixed size"
+        );
     }
 
     #[test]
