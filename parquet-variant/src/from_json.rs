@@ -29,7 +29,7 @@ use serde_json::{Number, Value};
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
 /// * `variant_builder` - Object of type `VariantBuilder` used to build the vatiant from the JSON
-/// string
+///   string
 ///
 /// # Returns
 ///
@@ -63,9 +63,9 @@ use serde_json::{Number, Value};
 /// assert_eq!(json_result, serde_json::to_string(&json_value)?);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn json_to_variant<'a>(
+pub fn json_to_variant(
     json: &str,
-    builder: &'a mut VariantBuilder,
+    builder: &mut VariantBuilder,
 ) -> Result<(), ArrowError> {
     let json: Value = serde_json::from_str(json)
         .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {}", e)))?;
