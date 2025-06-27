@@ -574,20 +574,53 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     }
 
     /// Builds a 128-bit composite key for an inline value:
-    /// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting)
-    /// - Low  32 bits: the length in big-endian byte order (so shorter strings are always numerically smaller)
     ///
-    /// This function extracts the length and the 12-byte inline string data from the
-    /// raw little-endian u128 representation, converts them to big-endian ordering,
-    /// and packs them into a single u128 value suitable for fast comparisons.
+    /// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting).
+    /// - Low  32 bits: the length in big-endian byte order, acting as a tiebreaker so shorter strings
+    ///   (or those with fewer meaningful bytes) always numerically sort before longer ones.
     ///
-    /// # Note
-    /// The input `raw` is assumed to be in little-endian format with the following layout:
-    /// - bytes 0..4: length (u32)
-    /// - bytes 4..16: inline string data (padded with zeros if less than 12 bytes)
+    /// This function extracts the length and the 12-byte inline string data from the raw
+    /// little-endian `u128` representation, converts them to big-endian ordering, and packs them
+    /// into a single `u128` value suitable for fast, branchless comparisons.
     ///
-    /// The output u128 key places the inline string data in the upper 96 bits (big-endian)
-    /// and the length in the lower 32 bits (big-endian).
+    /// ### Why include length?
+    ///
+    /// A pure 96-bit content comparison can’t distinguish between two values whose inline bytes
+    /// compare equal—either because one is a true prefix of the other or because zero-padding
+    /// hides extra bytes. By tucking the 32-bit length into the lower bits, a single `u128` compare
+    /// handles both content and length in one go.
+    ///
+    /// Example: comparing "bar" (3 bytes) vs "bar\0" (4 bytes)
+    ///
+    /// | String     | Bytes 0–4 (length LE) | Bytes 4–16 (data + padding)    |
+    /// |------------|-----------------------|---------------------------------|
+    /// | `"bar"`   | `03 00 00 00`         | `62 61 72` + 9 × `00`           |
+    /// | `"bar\0"`| `04 00 00 00`         | `62 61 72 00` + 8 × `00`        |
+    ///
+    /// Both inline parts become `62 61 72 00…00`, so they tie on content. The length field
+    /// then differentiates:
+    ///
+    /// ```text
+    /// key("bar")   = 0x0000000000000000000062617200000003
+    /// key("bar\0") = 0x0000000000000000000062617200000004
+    /// ⇒ key("bar") < key("bar\0")
+    /// ```
+    ///
+    /// Background (naive implementation, two-pass):
+    ///
+    ///     fn compare_strings(a: &RawInline, b: &RawInline) -> Ordering {
+    ///         // 1) Compare up to 12 bytes of content
+    ///         let ord = compare_u96(a.inline_bytes_be(), b.inline_bytes_be());
+    ///         if ord != Ordering::Equal {
+    ///             return ord;
+    ///         }
+    ///         // 2) Tiebreaker: compare lengths
+    ///         a.len().cmp(&b.len())
+    ///     }
+    ///
+    /// Folding content and length into one `u128` lets you do:
+    ///
+    ///     key(a).cmp(&key(b))
     #[inline(always)]
     pub fn inline_key_fast(raw: u128) -> u128 {
         // Convert the raw u128 (little-endian) into bytes for manipulation
@@ -921,7 +954,9 @@ impl From<Vec<Option<String>>> for StringViewArray {
 mod tests {
     use crate::builder::{BinaryViewBuilder, StringViewBuilder};
     use crate::types::BinaryViewType;
-    use crate::{Array, BinaryViewArray, GenericByteViewArray, StringViewArray};
+    use crate::{
+        Array, BinaryViewArray, GenericBinaryArray, GenericByteViewArray, StringViewArray,
+    };
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ByteView;
 
@@ -1138,11 +1173,18 @@ mod tests {
         assert_eq!(array1, array2);
     }
 
+    /// Integration tests for `inline_key_fast` covering:
+    ///
+    /// 1. Monotonic ordering across increasing lengths and lexical variations.
+    /// 2. Cross-check against `GenericBinaryArray` comparison to ensure semantic equivalence.
+    ///
+    /// This also includes a specific test for the “bar” vs. “bar\0” case, demonstrating why
+    /// the length field is required even when all inline bytes fit in 12 bytes.
     #[test]
-    fn test_inline_key_fast_various_lengths() {
+    fn test_inline_key_fast_various_lengths_and_lexical() {
         /// Helper to create a raw u128 value representing an inline ByteView
-        /// - `length`: number of meaningful bytes (<= 12)
-        /// - `data`: the actual inline data (prefix + padding)
+        /// - `length`: number of meaningful bytes (≤ 12)
+        /// - `data`: the actual inline data
         fn make_raw_inline(length: u32, data: &[u8]) -> u128 {
             assert!(length as usize <= 12, "Inline length must be ≤ 12");
             assert!(data.len() == length as usize, "Data must match length");
@@ -1153,11 +1195,12 @@ mod tests {
             u128::from_le_bytes(raw_bytes)
         }
 
-        // Test multiple inline values of increasing length and content
+        // Test inputs: include the specific "bar" vs "bar\0" case, plus length and lexical variations
         let test_inputs: Vec<&[u8]> = vec![
             b"a",
-            b"ab",
-            b"abc",
+            b"aa",
+            b"aaa",
+            b"aab",
             b"abcd",
             b"abcde",
             b"abcdef",
@@ -1167,24 +1210,55 @@ mod tests {
             b"abcdefghij",
             b"abcdefghijk",
             b"abcdefghijkl", // 12 bytes, max inline
+            b"bar",
+            b"bar\0", // special case to test length tiebreaker
+            b"xyy",
+            b"xyz",
         ];
 
-        let mut previous_key = None;
-
-        for input in test_inputs {
+        // 1) Monotonic key order: content then length
+        let mut previous_key: Option<u128> = None;
+        for input in &test_inputs {
             let raw = make_raw_inline(input.len() as u32, input);
             let key = GenericByteViewArray::<BinaryViewType>::inline_key_fast(raw);
-
-            // Validate that keys are monotonically increasing in lexicographic+length order
             if let Some(prev) = previous_key {
                 assert!(
                     prev < key,
-                    "Key for {:?} was not greater than previous key",
-                    input
+                    "Key for {:?} (0x{:032x}) was not less than next key (0x{:032x})",
+                    input,
+                    prev,
+                    key
                 );
             }
-
             previous_key = Some(key);
+        }
+
+        // 2) Cross-check against GenericBinaryArray comparison
+        let array: GenericBinaryArray<i32> =
+            GenericBinaryArray::from(test_inputs.iter().map(|s| Some(*s)).collect::<Vec<_>>());
+
+        for i in 0..array.len() - 1 {
+            let v1 = array.value(i);
+            let v2 = array.value(i + 1);
+            // Ensure lexical ordering matches
+            assert!(v1 < v2, "Array compare failed: {:?} !< {:?}", v1, v2);
+            // Ensure fast key compare matches
+            let key1 = GenericByteViewArray::<BinaryViewType>::inline_key_fast(make_raw_inline(
+                v1.len() as u32,
+                v1,
+            ));
+            let key2 = GenericByteViewArray::<BinaryViewType>::inline_key_fast(make_raw_inline(
+                v2.len() as u32,
+                v2,
+            ));
+            assert!(
+                key1 < key2,
+                "Key compare failed: key({:?})=0x{:032x} !< key({:?})=0x{:032x}",
+                v1,
+                key1,
+                v2,
+                key2
+            );
         }
     }
 }
