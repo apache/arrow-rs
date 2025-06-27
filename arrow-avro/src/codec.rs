@@ -422,7 +422,7 @@ fn make_data_type<'a>(
                 "Enum of {e:?} not currently supported"
             ))),
             ComplexType::Map(m) => {
-                let val = make_data_type(&m.values, namespace, resolver)?;
+                let val = make_data_type(&m.values, namespace, resolver, use_utf8view)?;
                 Ok(AvroDataType {
                     nullability: None,
                     metadata: m.attributes.field_metadata(),

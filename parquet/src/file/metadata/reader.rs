@@ -336,15 +336,6 @@ impl ParquetMetaDataReader {
             ));
         }
 
-        // FIXME: there are differing implementations in the case where page indexes are missing
-        // from the file. `MetadataLoader` will leave them as `None`, while the parser in
-        // `index_reader::read_columns_indexes` returns a vector of empty vectors.
-        // It is best for this function to replicate the latter behavior for now, but in a future
-        // breaking release, the two paths to retrieve metadata should be made consistent. Note that this is only
-        // an issue if the user requested page indexes, so there is no need to provide empty
-        // vectors in `try_parse_sized()`.
-        // https://github.com/apache/arrow-rs/issues/6447
-
         // Get bounds needed for page indexes (if any are present in the file).
         let Some(range) = self.range_for_page_index() else {
             return Ok(());
@@ -858,7 +849,7 @@ impl ParquetMetaDataReader {
     }
 
     /// Decodes the Parquet footer, returning the metadata length in bytes
-    #[deprecated(note = "use decode_footer_tail instead")]
+    #[deprecated(since = "54.3.0", note = "Use decode_footer_tail instead")]
     pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
         Self::decode_footer_tail(slice).map(|f| f.metadata_length)
     }

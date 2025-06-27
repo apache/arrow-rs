@@ -64,6 +64,12 @@ use num::{One, Zero};
 ///
 /// When `options` is not set to check bounds, taking indexes after `len` will panic.
 ///
+/// # See also
+/// * [`BatchCoalescer`]: to filter multiple [`RecordBatch`] and coalesce
+///   the results into a single array.
+///
+/// [`BatchCoalescer`]: crate::coalesce::BatchCoalescer
+///
 /// # Examples
 /// ```
 /// # use arrow_array::{StringArray, UInt32Array, cast::AsArray};

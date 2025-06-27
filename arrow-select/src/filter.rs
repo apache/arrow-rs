@@ -156,10 +156,16 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     BooleanArray::new(mask, None)
 }
 
-/// Returns a filtered `values` [Array] where the corresponding elements of
+/// Returns a filtered `values` [`Array`] where the corresponding elements of
 /// `predicate` are `true`.
 ///
-/// See also [`FilterBuilder`] for more control over the filtering process.
+/// # See also
+/// * [`FilterBuilder`] for more control over the filtering process.
+/// * [`filter_record_batch`] to filter a [`RecordBatch`]
+/// * [`BatchCoalescer`]: to filter multiple [`RecordBatch`] and coalesce
+///   the results into a single array.
+///
+/// [`BatchCoalescer`]: crate::coalesce::BatchCoalescer
 ///
 /// # Example
 /// ```rust

@@ -580,14 +580,13 @@ fn hits_1() -> &'static Path {
 
     let current_dir = std::env::current_dir().expect("Failed to get current directory");
     println!(
-        "Looking for ClickBench files starting in current_dir and all parent directories: {:?}",
-        current_dir
+        "Looking for ClickBench files starting in current_dir and all parent directories: {current_dir:?}"
+
     );
 
     let Some(hits_1_path) = find_file_if_exists(current_dir.clone(), "hits_1.parquet") else {
         eprintln!(
-            "Could not find hits_1.parquet in directory or parents: {:?}. Download it via",
-            current_dir
+            "Could not find hits_1.parquet in directory or parents: {current_dir:?}. Download it via",
         );
         eprintln!();
         eprintln!("wget --continue https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet");
@@ -863,7 +862,10 @@ fn load_metadata(path: &Path) -> ArrowReaderMetadata {
             //
             // The clickbench_partitioned dataset has textual fields listed as
             // binary for some historical reason so translate Binary to Utf8View
-            if matches!(f.data_type(), DataType::Utf8 | DataType::Binary) {
+            if matches!(
+                f.data_type(),
+                DataType::Utf8 | DataType::Binary | DataType::BinaryView
+            ) {
                 let new_field = f.as_ref().clone().with_data_type(DataType::Utf8View);
                 Arc::new(new_field)
             } else {

@@ -64,7 +64,7 @@ name = "occupancy"
 harness = false
 
 [[bench]]
-name = "gc_view_types"
+name = "view_types"
 harness = false
 
 [[bench]]

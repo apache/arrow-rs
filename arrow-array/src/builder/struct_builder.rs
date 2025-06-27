@@ -214,6 +214,12 @@ impl StructBuilder {
         self.append(false)
     }
 
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_slice(&vec![false; n]);
+    }
+
     /// Builds the `StructArray` and reset this builder.
     pub fn finish(&mut self) -> StructArray {
         self.validate_content();
@@ -313,6 +319,8 @@ mod tests {
         string_builder.append_null();
         string_builder.append_null();
         string_builder.append_value("mark");
+        string_builder.append_nulls(2);
+        string_builder.append_value("terry");
 
         let int_builder = builder
             .field_builder::<Int32Builder>(1)
@@ -321,35 +329,43 @@ mod tests {
         int_builder.append_value(2);
         int_builder.append_null();
         int_builder.append_value(4);
+        int_builder.append_nulls(2);
+        int_builder.append_value(3);
 
         builder.append(true);
         builder.append(true);
         builder.append_null();
         builder.append(true);
 
+        builder.append_nulls(2);
+        builder.append(true);
+
         let struct_data = builder.finish().into_data();
 
-        assert_eq!(4, struct_data.len());
-        assert_eq!(1, struct_data.null_count());
-        assert_eq!(&[11_u8], struct_data.nulls().unwrap().validity());
+        assert_eq!(7, struct_data.len());
+        assert_eq!(3, struct_data.null_count());
+        assert_eq!(&[75_u8], struct_data.nulls().unwrap().validity());
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
-            .add_buffer(Buffer::from_slice_ref(b"joemark"))
+            .len(7)
+            .null_bit_buffer(Some(Buffer::from(&[73_u8])))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7, 7, 7, 12]))
+            .add_buffer(Buffer::from_slice_ref(b"joemarkterry"))
             .build()
             .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
-            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
+            .len(7)
+            .null_bit_buffer(Some(Buffer::from_slice_ref([75_u8])))
+            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4, 4, 4, 3]))
             .build()
             .unwrap();
 
         assert_eq!(expected_string_data, struct_data.child_data()[0]);
         assert_eq!(expected_int_data, struct_data.child_data()[1]);
+
+        assert!(struct_data.is_null(4));
+        assert!(struct_data.is_null(5));
     }
 
     #[test]
