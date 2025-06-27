@@ -16,7 +16,7 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -233,14 +233,14 @@ impl ValueBuffer {
 
 #[derive(Default)]
 struct MetadataBuilder {
-    field_name_to_id: BTreeMap<String, u32>,
+    field_name_to_id: HashMap<String, u32>,
     field_names: Vec<String>,
 }
 
 impl MetadataBuilder {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
-        use std::collections::btree_map::Entry;
+        use std::collections::hash_map::Entry;
         match self.field_name_to_id.entry(field_name.to_string()) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
@@ -254,6 +254,10 @@ impl MetadataBuilder {
 
     fn num_field_names(&self) -> usize {
         self.field_names.len()
+    }
+
+    fn field_name(&self, i: usize) -> &str {
+        &self.field_names[i]
     }
 
     fn metadata_size(&self) -> usize {
@@ -567,7 +571,7 @@ impl<'a> ListBuilder<'a> {
 pub struct ObjectBuilder<'a, 'b> {
     parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
-    fields: BTreeMap<u32, usize>, // (field_id, offset)
+    fields: Vec<(u32, usize)>, // (field_id, offset)
     buffer: ValueBuffer,
     /// Is there a pending list or object that needs to be finalized?
     pending: Option<(&'b str, usize)>,
@@ -578,9 +582,16 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         Self {
             parent_buffer,
             metadata_builder,
-            fields: BTreeMap::new(),
+            fields: Vec::new(),
             buffer: ValueBuffer::default(),
             pending: None,
+        }
+    }
+
+    fn upsert_field(&mut self, field_id: u32, field_start: usize) {
+        match self.fields.iter().position(|&(id, _)| id == field_id) {
+            Some(i) => self.fields[i] = (field_id, field_start),
+            None => self.fields.push((field_id, field_start)),
         }
     }
 
@@ -590,7 +601,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         };
 
         let field_id = self.metadata_builder.upsert_field_name(field_name);
-        self.fields.insert(field_id, *field_start);
+        self.upsert_field(field_id, *field_start);
 
         self.pending = None;
     }
@@ -605,7 +616,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let field_id = self.metadata_builder.upsert_field_name(key);
         let field_start = self.buffer.offset();
 
-        self.fields.insert(field_id, field_start);
+        self.upsert_field(field_id, field_start);
         self.buffer.append_non_nested_value(value);
     }
 
@@ -643,16 +654,15 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let num_fields = self.fields.len();
         let is_large = num_fields > u8::MAX as usize;
 
-        let field_ids_by_sorted_field_name = self
-            .metadata_builder
-            .field_name_to_id
-            .iter()
-            .filter_map(|(_, id)| self.fields.contains_key(id).then_some(*id))
-            .collect::<Vec<_>>();
+        self.fields.sort_by(|a, b| {
+            let key_a = &self.metadata_builder.field_name(a.0 as usize);
+            let key_b = &self.metadata_builder.field_name(b.0 as usize);
+            key_a.cmp(key_b)
+        });
 
-        let max_id = self.fields.keys().last().copied().unwrap_or(0) as usize;
+        let max_id = self.fields.iter().map(|&(id, _)| id).max().unwrap_or(0);
 
-        let id_size = int_size(max_id);
+        let id_size = int_size(max_id as usize);
         let offset_size = int_size(data_size);
 
         // Write header
@@ -664,13 +674,12 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         );
 
         // Write field IDs (sorted order)
-        for id in &field_ids_by_sorted_field_name {
-            write_offset(self.parent_buffer.inner_mut(), *id as usize, id_size);
+        for &(id, _) in &self.fields {
+            write_offset(self.parent_buffer.inner_mut(), id as usize, id_size);
         }
 
         // Write field offsets
-        for id in &field_ids_by_sorted_field_name {
-            let &offset = self.fields.get(id).unwrap();
+        for &(_, offset) in &self.fields {
             write_offset(self.parent_buffer.inner_mut(), offset, offset_size);
         }
 
@@ -859,75 +868,6 @@ mod tests {
 
         // apple(1), banana(2), zebra(0)
         assert_eq!(field_ids, vec![1, 2, 0]);
-    }
-
-    #[test]
-    fn test_object_and_metadata_ordering() {
-        let mut builder = VariantBuilder::new();
-
-        let mut obj = builder.new_object();
-
-        obj.insert("zebra", "stripes"); // ID = 0
-        obj.insert("apple", "red"); // ID = 1
-
-        {
-            // fields_map is ordered by insertion order (field id)
-            let fields_map = obj.fields.keys().copied().collect::<Vec<_>>();
-            assert_eq!(fields_map, vec![0, 1]);
-
-            // dict is ordered by field names
-            let dict_metadata = obj
-                .metadata_builder
-                .field_name_to_id
-                .iter()
-                .map(|(f, i)| (f.as_str(), *i))
-                .collect::<Vec<_>>();
-
-            assert_eq!(dict_metadata, vec![("apple", 1), ("zebra", 0)]);
-
-            // dict_keys is ordered by insertion order (field id)
-            let dict_keys = obj
-                .metadata_builder
-                .field_names
-                .iter()
-                .map(|k| k.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(dict_keys, vec!["zebra", "apple"]);
-        }
-
-        obj.insert("banana", "yellow"); // ID = 2
-
-        {
-            // fields_map is ordered by insertion order (field id)
-            let fields_map = obj.fields.keys().copied().collect::<Vec<_>>();
-            assert_eq!(fields_map, vec![0, 1, 2]);
-
-            // dict is ordered by field names
-            let dict_metadata = obj
-                .metadata_builder
-                .field_name_to_id
-                .iter()
-                .map(|(f, i)| (f.as_str(), *i))
-                .collect::<Vec<_>>();
-
-            assert_eq!(
-                dict_metadata,
-                vec![("apple", 1), ("banana", 2), ("zebra", 0)]
-            );
-
-            // dict_keys is ordered by insertion order (field id)
-            let dict_keys = obj
-                .metadata_builder
-                .field_names
-                .iter()
-                .map(|k| k.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(dict_keys, vec!["zebra", "apple", "banana"]);
-        }
-
-        obj.finish();
-
-        builder.finish();
     }
 
     #[test]
@@ -1242,8 +1182,10 @@ mod tests {
         /*
         {
             "c": {
+                "b": false,
                 "c": "a"
-            }
+            },
+            "b": false,
         }
 
         */
@@ -1253,9 +1195,16 @@ mod tests {
             let mut outer_object_builder = builder.new_object();
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
+                inner_object_builder.insert("b", false);
                 inner_object_builder.insert("c", "a");
+
                 inner_object_builder.finish();
             }
+
+            outer_object_builder.insert("b", false);
+
+            // note, we can't guarantee an Objects field is sorted by field id.
+            assert_eq!(outer_object_builder.fields, vec![(1, 0), (0, 10)]);
 
             outer_object_builder.finish();
         }
@@ -1264,15 +1213,17 @@ mod tests {
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_object = variant.as_object().unwrap();
 
-        assert_eq!(outer_object.len(), 1);
-        assert_eq!(outer_object.field_name(0).unwrap(), "c");
+        assert_eq!(outer_object.len(), 2);
+        assert_eq!(outer_object.field_name(0).unwrap(), "b");
 
-        let inner_object_variant = outer_object.field(0).unwrap();
+        let inner_object_variant = outer_object.field(1).unwrap();
         let inner_object = inner_object_variant.as_object().unwrap();
 
-        assert_eq!(inner_object.len(), 1);
-        assert_eq!(inner_object.field_name(0).unwrap(), "c");
-        assert_eq!(inner_object.field(0).unwrap(), Variant::from("a"));
+        assert_eq!(inner_object.len(), 2);
+        assert_eq!(inner_object.field_name(0).unwrap(), "b");
+        assert_eq!(inner_object.field(0).unwrap(), Variant::from(false));
+        assert_eq!(inner_object.field_name(1).unwrap(), "c");
+        assert_eq!(inner_object.field(1).unwrap(), Variant::from("a"));
     }
 
     #[test]
