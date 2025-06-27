@@ -300,6 +300,7 @@ mod tests {
         let missing_field = variant_obj.get("missing");
         assert!(missing_field.is_none());
 
+        // https://github.com/apache/arrow-rs/issues/7784
         // Fixme: The following assertion will panic! That is not good
         // let missing_field_name = variant_obj.field_name(3);
         // assert!(missing_field_name.is_none());
