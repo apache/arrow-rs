@@ -2719,19 +2719,11 @@ mod tests {
         let first = Arc::new(first.finish()) as ArrayRef;
         let first_type = first.data_type().clone();
 
-        let mut second = FixedSizeListBuilder::new(UInt8Builder::new(), 1);
-        // 0: [200]
-        second.values().append_value(200);
-        second.append(true);
-        // 1: [201]
-        second.values().append_value(201);
-        second.append(true);
-        // 2: [null]
-        second.values().append_null();
-        second.append(true);
-        // 3: null
-        second.values().append_null(); // MASKED
-        second.append(false);
+        let mut second = StringBuilder::new();
+        second.append_value("somewhere near");
+        second.append_null();
+        second.append_value("Greenwich");
+        second.append_value("Warsaw");
         let second = Arc::new(second.finish()) as ArrayRef;
         let second_type = second.data_type().clone();
 
