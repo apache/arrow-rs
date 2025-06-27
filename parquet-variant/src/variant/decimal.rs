@@ -15,6 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow_schema::ArrowError;
+use std::fmt;
+
+// Macro to format decimal values, using only integer arithmetic to avoid floating point precision loss
+macro_rules! format_decimal {
+    ($f:expr, $integer:expr, $scale:expr, $int_type:ty) => {{
+        let integer = if $scale == 0 {
+            $integer
+        } else {
+            let divisor = (10 as $int_type).pow($scale as u32);
+            let remainder = $integer % divisor;
+            if remainder != 0 {
+                // Track the sign explicitly, in case the quotient is zero
+                let sign = if $integer < 0 { "-" } else { "" };
+                // Format an unsigned remainder with leading zeros and strip (unnecessary) trailing zeros.
+                let remainder = format!("{:0width$}", remainder.abs(), width = $scale as usize);
+                let remainder = remainder.trim_end_matches('0');
+                let quotient = $integer / divisor;
+                return write!($f, "{}{}.{}", sign, quotient.abs(), remainder);
+            }
+            $integer / divisor
+        };
+        write!($f, "{}", integer)
+    }};
+}
 
 /// Represents a 4-byte decimal value in the Variant format.
 ///
@@ -54,6 +78,12 @@ impl VariantDecimal4 {
         }
 
         Ok(VariantDecimal4 { integer, scale })
+    }
+}
+
+impl fmt::Display for VariantDecimal4 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        format_decimal!(f, self.integer, self.scale, i32)
     }
 }
 
@@ -99,6 +129,12 @@ impl VariantDecimal8 {
     }
 }
 
+impl fmt::Display for VariantDecimal8 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        format_decimal!(f, self.integer, self.scale, i64)
+    }
+}
+
 /// Represents an 16-byte decimal value in the Variant format.
 ///
 /// This struct stores a decimal number using a 128-bit signed integer for the coefficient
@@ -138,6 +174,12 @@ impl VariantDecimal16 {
         }
 
         Ok(VariantDecimal16 { integer, scale })
+    }
+}
+
+impl fmt::Display for VariantDecimal16 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        format_decimal!(f, self.integer, self.scale, i128)
     }
 }
 
@@ -327,5 +369,212 @@ mod tests {
             decimal16_valid_scale.is_ok(),
             "Decimal16 with scale = 38 should succeed"
         );
+    }
+
+    #[test]
+    fn test_variant_decimal4_display() {
+        // Test zero scale (integers)
+        let d = VariantDecimal4::try_new(42, 0).unwrap();
+        assert_eq!(d.to_string(), "42");
+
+        let d = VariantDecimal4::try_new(-42, 0).unwrap();
+        assert_eq!(d.to_string(), "-42");
+
+        // Test basic decimal formatting
+        let d = VariantDecimal4::try_new(12345, 2).unwrap();
+        assert_eq!(d.to_string(), "123.45");
+
+        let d = VariantDecimal4::try_new(-12345, 2).unwrap();
+        assert_eq!(d.to_string(), "-123.45");
+
+        // Test trailing zeros are trimmed
+        let d = VariantDecimal4::try_new(12300, 2).unwrap();
+        assert_eq!(d.to_string(), "123");
+
+        let d = VariantDecimal4::try_new(-12300, 2).unwrap();
+        assert_eq!(d.to_string(), "-123");
+
+        // Test leading zeros in decimal part
+        let d = VariantDecimal4::try_new(1005, 3).unwrap();
+        assert_eq!(d.to_string(), "1.005");
+
+        let d = VariantDecimal4::try_new(-1005, 3).unwrap();
+        assert_eq!(d.to_string(), "-1.005");
+
+        // Test number smaller than scale (leading zero before decimal)
+        let d = VariantDecimal4::try_new(123, 4).unwrap();
+        assert_eq!(d.to_string(), "0.0123");
+
+        let d = VariantDecimal4::try_new(-123, 4).unwrap();
+        assert_eq!(d.to_string(), "-0.0123");
+
+        // Test zero
+        let d = VariantDecimal4::try_new(0, 0).unwrap();
+        assert_eq!(d.to_string(), "0");
+
+        let d = VariantDecimal4::try_new(0, 3).unwrap();
+        assert_eq!(d.to_string(), "0");
+
+        // Test max scale
+        let d = VariantDecimal4::try_new(123456789, 9).unwrap();
+        assert_eq!(d.to_string(), "0.123456789");
+
+        let d = VariantDecimal4::try_new(-123456789, 9).unwrap();
+        assert_eq!(d.to_string(), "-0.123456789");
+
+        // Test max precision
+        let d = VariantDecimal4::try_new(999999999, 0).unwrap();
+        assert_eq!(d.to_string(), "999999999");
+
+        let d = VariantDecimal4::try_new(-999999999, 0).unwrap();
+        assert_eq!(d.to_string(), "-999999999");
+
+        // Test trailing zeros with mixed decimal places
+        let d = VariantDecimal4::try_new(120050, 4).unwrap();
+        assert_eq!(d.to_string(), "12.005");
+
+        let d = VariantDecimal4::try_new(-120050, 4).unwrap();
+        assert_eq!(d.to_string(), "-12.005");
+    }
+
+    #[test]
+    fn test_variant_decimal8_display() {
+        // Test zero scale (integers)
+        let d = VariantDecimal8::try_new(42, 0).unwrap();
+        assert_eq!(d.to_string(), "42");
+
+        let d = VariantDecimal8::try_new(-42, 0).unwrap();
+        assert_eq!(d.to_string(), "-42");
+
+        // Test basic decimal formatting
+        let d = VariantDecimal8::try_new(1234567890, 3).unwrap();
+        assert_eq!(d.to_string(), "1234567.89");
+
+        let d = VariantDecimal8::try_new(-1234567890, 3).unwrap();
+        assert_eq!(d.to_string(), "-1234567.89");
+
+        // Test trailing zeros are trimmed
+        let d = VariantDecimal8::try_new(123000000, 6).unwrap();
+        assert_eq!(d.to_string(), "123");
+
+        let d = VariantDecimal8::try_new(-123000000, 6).unwrap();
+        assert_eq!(d.to_string(), "-123");
+
+        // Test leading zeros in decimal part
+        let d = VariantDecimal8::try_new(100005, 6).unwrap();
+        assert_eq!(d.to_string(), "0.100005");
+
+        let d = VariantDecimal8::try_new(-100005, 6).unwrap();
+        assert_eq!(d.to_string(), "-0.100005");
+
+        // Test number smaller than scale
+        let d = VariantDecimal8::try_new(123, 10).unwrap();
+        assert_eq!(d.to_string(), "0.0000000123");
+
+        let d = VariantDecimal8::try_new(-123, 10).unwrap();
+        assert_eq!(d.to_string(), "-0.0000000123");
+
+        // Test zero
+        let d = VariantDecimal8::try_new(0, 0).unwrap();
+        assert_eq!(d.to_string(), "0");
+
+        let d = VariantDecimal8::try_new(0, 10).unwrap();
+        assert_eq!(d.to_string(), "0");
+
+        // Test max scale
+        let d = VariantDecimal8::try_new(123456789012345678, 18).unwrap();
+        assert_eq!(d.to_string(), "0.123456789012345678");
+
+        let d = VariantDecimal8::try_new(-123456789012345678, 18).unwrap();
+        assert_eq!(d.to_string(), "-0.123456789012345678");
+
+        // Test max precision
+        let d = VariantDecimal8::try_new(999999999999999999, 0).unwrap();
+        assert_eq!(d.to_string(), "999999999999999999");
+
+        let d = VariantDecimal8::try_new(-999999999999999999, 0).unwrap();
+        assert_eq!(d.to_string(), "-999999999999999999");
+
+        // Test complex trailing zeros
+        let d = VariantDecimal8::try_new(1200000050000, 10).unwrap();
+        assert_eq!(d.to_string(), "120.000005");
+
+        let d = VariantDecimal8::try_new(-1200000050000, 10).unwrap();
+        assert_eq!(d.to_string(), "-120.000005");
+    }
+
+    #[test]
+    fn test_variant_decimal16_display() {
+        // Test zero scale (integers)
+        let d = VariantDecimal16::try_new(42, 0).unwrap();
+        assert_eq!(d.to_string(), "42");
+
+        let d = VariantDecimal16::try_new(-42, 0).unwrap();
+        assert_eq!(d.to_string(), "-42");
+
+        // Test basic decimal formatting
+        let d = VariantDecimal16::try_new(123456789012345, 4).unwrap();
+        assert_eq!(d.to_string(), "12345678901.2345");
+
+        let d = VariantDecimal16::try_new(-123456789012345, 4).unwrap();
+        assert_eq!(d.to_string(), "-12345678901.2345");
+
+        // Test trailing zeros are trimmed
+        let d = VariantDecimal16::try_new(12300000000, 8).unwrap();
+        assert_eq!(d.to_string(), "123");
+
+        let d = VariantDecimal16::try_new(-12300000000, 8).unwrap();
+        assert_eq!(d.to_string(), "-123");
+
+        // Test leading zeros in decimal part
+        let d = VariantDecimal16::try_new(10000005, 8).unwrap();
+        assert_eq!(d.to_string(), "0.10000005");
+
+        let d = VariantDecimal16::try_new(-10000005, 8).unwrap();
+        assert_eq!(d.to_string(), "-0.10000005");
+
+        // Test number smaller than scale
+        let d = VariantDecimal16::try_new(123, 20).unwrap();
+        assert_eq!(d.to_string(), "0.00000000000000000123");
+
+        let d = VariantDecimal16::try_new(-123, 20).unwrap();
+        assert_eq!(d.to_string(), "-0.00000000000000000123");
+
+        // Test zero
+        let d = VariantDecimal16::try_new(0, 0).unwrap();
+        assert_eq!(d.to_string(), "0");
+
+        let d = VariantDecimal16::try_new(0, 20).unwrap();
+        assert_eq!(d.to_string(), "0");
+
+        // Test max scale
+        let d = VariantDecimal16::try_new(12345678901234567890123456789012345678_i128, 38).unwrap();
+        assert_eq!(d.to_string(), "0.12345678901234567890123456789012345678");
+
+        let d =
+            VariantDecimal16::try_new(-12345678901234567890123456789012345678_i128, 38).unwrap();
+        assert_eq!(d.to_string(), "-0.12345678901234567890123456789012345678");
+
+        // Test max precision integer
+        let d = VariantDecimal16::try_new(99999999999999999999999999999999999999_i128, 0).unwrap();
+        assert_eq!(d.to_string(), "99999999999999999999999999999999999999");
+
+        let d = VariantDecimal16::try_new(-99999999999999999999999999999999999999_i128, 0).unwrap();
+        assert_eq!(d.to_string(), "-99999999999999999999999999999999999999");
+
+        // Test complex trailing zeros
+        let d = VariantDecimal16::try_new(12000000000000050000000000000_i128, 25).unwrap();
+        assert_eq!(d.to_string(), "1200.000000000005");
+
+        let d = VariantDecimal16::try_new(-12000000000000050000000000000_i128, 25).unwrap();
+        assert_eq!(d.to_string(), "-1200.000000000005");
+
+        // Test large integer that would overflow i64 but fits in i128
+        let large_int = 12345678901234567890123456789_i128;
+        let d = VariantDecimal16::try_new(large_int, 0).unwrap();
+        assert_eq!(d.to_string(), "12345678901234567890123456789");
+
+        let d = VariantDecimal16::try_new(-large_int, 0).unwrap();
+        assert_eq!(d.to_string(), "-12345678901234567890123456789");
     }
 }

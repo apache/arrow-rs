@@ -58,7 +58,7 @@ pub const DEFAULT_BLOOM_FILTER_FPP: f64 = 0.05;
 /// Default value for [`BloomFilterProperties::ndv`]
 pub const DEFAULT_BLOOM_FILTER_NDV: u64 = 1_000_000_u64;
 /// Default values for [`WriterProperties::statistics_truncate_length`]
-pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = None;
+pub const DEFAULT_STATISTICS_TRUNCATE_LENGTH: Option<usize> = Some(64);
 /// Default value for [`WriterProperties::offset_index_disabled`]
 pub const DEFAULT_OFFSET_INDEX_DISABLED: bool = false;
 /// Default values for [`WriterProperties::coerce_types`]
@@ -93,7 +93,7 @@ impl FromStr for WriterVersion {
         match s {
             "PARQUET_1_0" | "parquet_1_0" => Ok(WriterVersion::PARQUET_1_0),
             "PARQUET_2_0" | "parquet_2_0" => Ok(WriterVersion::PARQUET_2_0),
-            _ => Err(format!("Invalid writer version: {}", s)),
+            _ => Err(format!("Invalid writer version: {s}")),
         }
     }
 }
@@ -657,7 +657,7 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets the max length of min/max value fields in row group and data page header
-    /// [`Statistics`] (defaults to `None` (no limit) via [`DEFAULT_STATISTICS_TRUNCATE_LENGTH`]).
+    /// [`Statistics`] (defaults to `Some(64)` via [`DEFAULT_STATISTICS_TRUNCATE_LENGTH`]).
     ///
     /// # Notes
     /// Row group [`Statistics`] are written when [`Self::set_statistics_enabled`] is
@@ -949,7 +949,7 @@ impl FromStr for EnabledStatistics {
             "NONE" | "none" => Ok(EnabledStatistics::None),
             "CHUNK" | "chunk" => Ok(EnabledStatistics::Chunk),
             "PAGE" | "page" => Ok(EnabledStatistics::Page),
-            _ => Err(format!("Invalid statistics arg: {}", s)),
+            _ => Err(format!("Invalid statistics arg: {s}")),
         }
     }
 }

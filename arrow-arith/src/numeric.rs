@@ -574,10 +574,7 @@ impl DateOp for Date32Type {
 impl DateOp for Date64Type {
     fn add_year_month(left: Self::Native, right: i32) -> Result<Self::Native, ArrowError> {
         Self::add_year_months_opt(left, right).ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "Date arithmetic overflow: {} + {} months",
-                left, right
-            ))
+            ArrowError::ComputeError(format!("Date arithmetic overflow: {left} + {right} months",))
         })
     }
 
@@ -586,7 +583,7 @@ impl DateOp for Date64Type {
         right: IntervalDayTime,
     ) -> Result<Self::Native, ArrowError> {
         Self::add_day_time_opt(left, right).ok_or_else(|| {
-            ArrowError::ComputeError(format!("Date arithmetic overflow: {} + {:?}", left, right))
+            ArrowError::ComputeError(format!("Date arithmetic overflow: {left} + {right:?}"))
         })
     }
 
@@ -595,16 +592,13 @@ impl DateOp for Date64Type {
         right: IntervalMonthDayNano,
     ) -> Result<Self::Native, ArrowError> {
         Self::add_month_day_nano_opt(left, right).ok_or_else(|| {
-            ArrowError::ComputeError(format!("Date arithmetic overflow: {} + {:?}", left, right))
+            ArrowError::ComputeError(format!("Date arithmetic overflow: {left} + {right:?}"))
         })
     }
 
     fn sub_year_month(left: Self::Native, right: i32) -> Result<Self::Native, ArrowError> {
         Self::subtract_year_months_opt(left, right).ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "Date arithmetic overflow: {} - {} months",
-                left, right
-            ))
+            ArrowError::ComputeError(format!("Date arithmetic overflow: {left} - {right} months",))
         })
     }
 
@@ -613,7 +607,7 @@ impl DateOp for Date64Type {
         right: IntervalDayTime,
     ) -> Result<Self::Native, ArrowError> {
         Self::subtract_day_time_opt(left, right).ok_or_else(|| {
-            ArrowError::ComputeError(format!("Date arithmetic overflow: {} - {:?}", left, right))
+            ArrowError::ComputeError(format!("Date arithmetic overflow: {left} - {right:?}"))
         })
     }
 
@@ -622,7 +616,7 @@ impl DateOp for Date64Type {
         right: IntervalMonthDayNano,
     ) -> Result<Self::Native, ArrowError> {
         Self::subtract_month_day_nano_opt(left, right).ok_or_else(|| {
-            ArrowError::ComputeError(format!("Date arithmetic overflow: {} - {:?}", left, right))
+            ArrowError::ComputeError(format!("Date arithmetic overflow: {left} - {right:?}"))
         })
     }
 }

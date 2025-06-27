@@ -365,7 +365,7 @@ impl UnionFields {
             .inspect(|&idx| {
                 let mask = 1_u128 << idx;
                 if (set & mask) != 0 {
-                    panic!("duplicate type id: {}", idx);
+                    panic!("duplicate type id: {idx}");
                 } else {
                     set |= mask;
                 }

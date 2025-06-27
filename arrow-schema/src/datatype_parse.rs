@@ -79,10 +79,9 @@ impl<'a> Parser<'a> {
             Token::LargeList => self.parse_large_list(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
-            Token::FieldName(word) => Err(make_error(
-                self.val,
-                &format!("unrecognized word: {}", word),
-            )),
+            Token::FieldName(word) => {
+                Err(make_error(self.val, &format!("unrecognized word: {word}")))
+            }
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -155,10 +154,9 @@ impl<'a> Parser<'a> {
     fn parse_double_quoted_string(&mut self, context: &str) -> ArrowResult<String> {
         match self.next_token()? {
             Token::DoubleQuotedString(s) => Ok(s),
-            Token::FieldName(word) => Err(make_error(
-                self.val,
-                &format!("unrecognized word: {}", word),
-            )),
+            Token::FieldName(word) => {
+                Err(make_error(self.val, &format!("unrecognized word: {word}")))
+            }
             tok => Err(make_error(
                 self.val,
                 &format!("finding double quoted string for {context}, got '{tok}'"),
