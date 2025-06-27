@@ -135,7 +135,7 @@ fn test_arrow_rs_gh_45185_dict_levels() {
 /// Returns an error if the file is invalid
 fn read_file(name: &str) -> Result<usize, ParquetError> {
     let path = bad_data_dir().join(name);
-    println!("Reading file: {:?}", path);
+    println!("Reading file: {path:?}");
 
     let file = std::fs::File::open(&path).unwrap();
     let reader = ArrowReaderBuilder::try_new(file)?.build()?;

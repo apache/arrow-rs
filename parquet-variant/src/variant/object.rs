@@ -16,11 +16,15 @@
 // under the License.
 use crate::decoder::OffsetSizeBytes;
 use crate::utils::{
-    first_byte_from_slice, slice_from_slice, try_binary_search_range_by, validate_fallible_iterator,
+    first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
+    validate_fallible_iterator,
 };
 use crate::variant::{Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
+
+// The value header occupies one byte; use a named constant for readability
+const NUM_HEADER_BYTES: usize = 1;
 
 /// Header structure for [`VariantObject`]
 #[derive(Clone, Debug, PartialEq)]
@@ -72,36 +76,43 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let header_byte = first_byte_from_slice(value)?;
         let header = VariantObjectHeader::try_new(header_byte)?;
 
-        // Determine num_elements size based on is_large flag
+        // Determine num_elements size based on is_large flag and fetch the value
         let num_elements_size = if header.is_large {
             OffsetSizeBytes::Four
         } else {
             OffsetSizeBytes::One
         };
+        let num_elements = num_elements_size.unpack_usize(value, NUM_HEADER_BYTES, 0)?;
 
-        // Parse num_elements
-        let num_elements = num_elements_size.unpack_usize(value, 1, 0)?;
+        // Calculate byte offsets for different sections with overflow protection
+        let field_ids_start_byte = NUM_HEADER_BYTES
+            .checked_add(num_elements_size as usize)
+            .ok_or_else(|| overflow_error("offset of variant object field ids"))?;
 
-        // Calculate byte offsets for different sections
-        let field_ids_start_byte = 1 + num_elements_size as usize;
-        let field_offsets_start_byte =
-            field_ids_start_byte + num_elements * header.field_id_size as usize;
-        let values_start_byte =
-            field_offsets_start_byte + (num_elements + 1) * header.field_offset_size as usize;
+        let field_offsets_start_byte = num_elements
+            .checked_mul(header.field_id_size as usize)
+            .and_then(|n| n.checked_add(field_ids_start_byte))
+            .ok_or_else(|| overflow_error("offset of variant object field offsets"))?;
+
+        let values_start_byte = num_elements
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(header.field_offset_size as usize))
+            .and_then(|n| n.checked_add(field_offsets_start_byte))
+            .ok_or_else(|| overflow_error("offset of variant object field values"))?;
 
         // Spec says: "The last field_offset points to the byte after the end of the last value"
         //
         // Use the last offset as a bounds check. The iterator check below doesn't use it -- offsets
         // are not monotonic -- so we have to check separately here.
-        let last_field_offset =
-            header
-                .field_offset_size
-                .unpack_usize(value, field_offsets_start_byte, num_elements)?;
-        if values_start_byte + last_field_offset > value.len() {
+        let end_offset = header
+            .field_offset_size
+            .unpack_usize(value, field_offsets_start_byte, num_elements)?
+            .checked_add(values_start_byte)
+            .ok_or_else(|| overflow_error("end of variant object field values"))?;
+        if end_offset > value.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Last field offset value {} at offset {} is outside the value slice of length {}",
-                last_field_offset,
-                values_start_byte,
+                "Last field offset value {} is outside the value slice of length {}",
+                end_offset,
                 value.len()
             )));
         }
@@ -134,18 +145,46 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     }
 
     /// Get a field's value by index in `0..self.len()`
-    pub fn field(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+    ///
+    /// # Panics
+    /// If the variant object is corrupted (e.g., invalid offsets or field IDs).
+    /// This should never happen since the constructor validates all data upfront.
+    pub fn field(&self, i: usize) -> Option<Variant<'m, 'v>> {
+        Some(
+            self.try_field(i)
+                .expect("validation error after construction"),
+        )
+    }
+
+    /// Fallible version of `field`. Returns field value by index, capturing validation errors
+    fn try_field(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         let start_offset = self.header.field_offset_size.unpack_usize(
             self.value,
             self.field_offsets_start_byte,
             i,
         )?;
-        let value_bytes = slice_from_slice(self.value, self.values_start_byte + start_offset..)?;
+        let value_start = self
+            .values_start_byte
+            .checked_add(start_offset)
+            .ok_or_else(|| overflow_error("offset of variant object field"))?;
+        let value_bytes = slice_from_slice(self.value, value_start..)?;
         Variant::try_new_with_metadata(self.metadata, value_bytes)
     }
 
     /// Get a field's name by index in `0..self.len()`
-    pub fn field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
+    ///
+    /// # Panics
+    /// If the variant object is corrupted (e.g., invalid offsets or field IDs).
+    /// This should never happen since the constructor validates all data upfront.
+    pub fn field_name(&self, i: usize) -> Option<&'m str> {
+        Some(
+            self.try_field_name(i)
+                .expect("validation error after construction"),
+        )
+    }
+
+    /// Fallible version of `field_name`. Returns field name by index, capturing validation errors
+    fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
         let field_id =
             self.header
                 .field_id_size
@@ -164,22 +203,22 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn iter_checked(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        (0..self.num_elements).map(move |i| Ok((self.field_name(i)?, self.field(i)?)))
+        (0..self.num_elements).map(move |i| Ok((self.try_field_name(i)?, self.try_field(i)?)))
     }
 
     /// Returns the value of the field with the specified name, if any.
     ///
     /// `Ok(None)` means the field does not exist; `Err` means the search encountered an error.
-    pub fn field_by_name(&self, name: &str) -> Result<Option<Variant<'m, 'v>>, ArrowError> {
+    pub fn get(&self, name: &str) -> Option<Variant<'m, 'v>> {
         // Binary search through the field IDs of this object to find the requested field name.
         //
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let search_result =
-            try_binary_search_range_by(0..self.num_elements, &name, |i| self.field_name(i))?;
+        let i = try_binary_search_range_by(0..self.num_elements, &name, |i| self.field_name(i))?
+            .ok()?;
 
-        search_result.ok().map(|i| self.field(i)).transpose()
+        self.field(i)
     }
 }
 
@@ -245,21 +284,36 @@ mod tests {
         assert!(!variant_obj.is_empty());
 
         // Test field access
-        let active_field = variant_obj.field_by_name("active").unwrap();
+        let active_field = variant_obj.get("active");
         assert!(active_field.is_some());
         assert_eq!(active_field.unwrap().as_boolean(), Some(true));
 
-        let age_field = variant_obj.field_by_name("age").unwrap();
+        let age_field = variant_obj.get("age");
         assert!(age_field.is_some());
         assert_eq!(age_field.unwrap().as_int8(), Some(42));
 
-        let name_field = variant_obj.field_by_name("name").unwrap();
+        let name_field = variant_obj.get("name");
         assert!(name_field.is_some());
         assert_eq!(name_field.unwrap().as_string(), Some("hello"));
 
         // Test non-existent field
-        let missing_field = variant_obj.field_by_name("missing").unwrap();
+        let missing_field = variant_obj.get("missing");
         assert!(missing_field.is_none());
+
+        // https://github.com/apache/arrow-rs/issues/7784
+        // Fixme: The following assertion will panic! That is not good
+        // let missing_field_name = variant_obj.field_name(3);
+        // assert!(missing_field_name.is_none());
+        //
+        // Fixme: The `.field_name()` will panic! This is not good
+        // let missing_field_name = variant_obj.field_name(300);
+        // assert!(missing_field_name.is_none());
+
+        // let missing_field_value = variant_obj.field(3);
+        // assert!(missing_field_value.is_none());
+
+        // let missing_field_value = variant_obj.field(300);
+        // assert!(missing_field_value.is_none());
 
         // Test fields iterator
         let fields: Vec<_> = variant_obj.iter().collect();
@@ -274,6 +328,17 @@ mod tests {
 
         assert_eq!(fields[2].0, "name");
         assert_eq!(fields[2].1.as_string(), Some("hello"));
+
+        // Test field access by index
+        // Fields should be in sorted order: active, age, name
+        assert_eq!(variant_obj.field_name(0), Some("active"));
+        assert_eq!(variant_obj.field(0).unwrap().as_boolean(), Some(true));
+
+        assert_eq!(variant_obj.field_name(1), Some("age"));
+        assert_eq!(variant_obj.field(1).unwrap().as_int8(), Some(42));
+
+        assert_eq!(variant_obj.field_name(2), Some("name"));
+        assert_eq!(variant_obj.field(2).unwrap().as_string(), Some("hello"));
     }
 
     #[test]
@@ -301,7 +366,7 @@ mod tests {
         assert!(variant_obj.is_empty());
 
         // Test field access on empty object
-        let missing_field = variant_obj.field_by_name("anything").unwrap();
+        let missing_field = variant_obj.get("anything");
         assert!(missing_field.is_none());
 
         // Test fields iterator on empty object
