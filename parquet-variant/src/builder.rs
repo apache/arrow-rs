@@ -55,9 +55,8 @@ fn int_size(v: usize) -> u8 {
 
 /// Write little-endian integer to buffer
 fn write_offset(buf: &mut Vec<u8>, value: usize, nbytes: u8) {
-    for i in 0..nbytes {
-        buf.push((value >> (i * 8)) as u8);
-    }
+    let bytes = value.to_le_bytes();
+    buf.extend_from_slice(&bytes[..nbytes as usize]);
 }
 
 fn write_header(buf: &mut Vec<u8>, header_byte: u8, is_large: bool, num_items: usize) {
@@ -79,12 +78,24 @@ impl ValueBuffer {
         self.0.push(term);
     }
 
-    fn append_from_slice(&mut self, other: &[u8]) {
+    fn append_slice(&mut self, other: &[u8]) {
         self.0.extend_from_slice(other);
     }
 
     fn append_primitive_header(&mut self, primitive_type: VariantPrimitiveType) {
         self.0.push(primitive_header(primitive_type));
+    }
+
+    fn inner(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn into_inner(self) -> Vec<u8> {
+        self.0
+    }
+
+    fn inner_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.0
     }
 
     // Variant types below
@@ -109,81 +120,81 @@ impl ValueBuffer {
 
     fn append_int16(&mut self, value: i16) {
         self.append_primitive_header(VariantPrimitiveType::Int16);
-        self.append_from_slice(&value.to_le_bytes());
+        self.append_slice(&value.to_le_bytes());
     }
 
     fn append_int32(&mut self, value: i32) {
         self.append_primitive_header(VariantPrimitiveType::Int32);
-        self.append_from_slice(&value.to_le_bytes());
+        self.append_slice(&value.to_le_bytes());
     }
 
     fn append_int64(&mut self, value: i64) {
         self.append_primitive_header(VariantPrimitiveType::Int64);
-        self.append_from_slice(&value.to_le_bytes());
+        self.append_slice(&value.to_le_bytes());
     }
 
     fn append_float(&mut self, value: f32) {
         self.append_primitive_header(VariantPrimitiveType::Float);
-        self.append_from_slice(&value.to_le_bytes());
+        self.append_slice(&value.to_le_bytes());
     }
 
     fn append_double(&mut self, value: f64) {
         self.append_primitive_header(VariantPrimitiveType::Double);
-        self.append_from_slice(&value.to_le_bytes());
+        self.append_slice(&value.to_le_bytes());
     }
 
     fn append_date(&mut self, value: chrono::NaiveDate) {
         self.append_primitive_header(VariantPrimitiveType::Date);
         let days_since_epoch = value.signed_duration_since(UNIX_EPOCH_DATE).num_days() as i32;
-        self.append_from_slice(&days_since_epoch.to_le_bytes());
+        self.append_slice(&days_since_epoch.to_le_bytes());
     }
 
     fn append_timestamp_micros(&mut self, value: chrono::DateTime<chrono::Utc>) {
         self.append_primitive_header(VariantPrimitiveType::TimestampMicros);
         let micros = value.timestamp_micros();
-        self.append_from_slice(&micros.to_le_bytes());
+        self.append_slice(&micros.to_le_bytes());
     }
 
     fn append_timestamp_ntz_micros(&mut self, value: chrono::NaiveDateTime) {
         self.append_primitive_header(VariantPrimitiveType::TimestampNtzMicros);
         let micros = value.and_utc().timestamp_micros();
-        self.append_from_slice(&micros.to_le_bytes());
+        self.append_slice(&micros.to_le_bytes());
     }
 
     fn append_decimal4(&mut self, integer: i32, scale: u8) {
         self.append_primitive_header(VariantPrimitiveType::Decimal4);
         self.append_u8(scale);
-        self.append_from_slice(&integer.to_le_bytes());
+        self.append_slice(&integer.to_le_bytes());
     }
 
     fn append_decimal8(&mut self, integer: i64, scale: u8) {
         self.append_primitive_header(VariantPrimitiveType::Decimal8);
         self.append_u8(scale);
-        self.append_from_slice(&integer.to_le_bytes());
+        self.append_slice(&integer.to_le_bytes());
     }
 
     fn append_decimal16(&mut self, integer: i128, scale: u8) {
         self.append_primitive_header(VariantPrimitiveType::Decimal16);
         self.append_u8(scale);
-        self.append_from_slice(&integer.to_le_bytes());
+        self.append_slice(&integer.to_le_bytes());
     }
 
     fn append_binary(&mut self, value: &[u8]) {
         self.append_primitive_header(VariantPrimitiveType::Binary);
-        self.append_from_slice(&(value.len() as u32).to_le_bytes());
-        self.append_from_slice(value);
+        self.append_slice(&(value.len() as u32).to_le_bytes());
+        self.append_slice(value);
     }
 
     fn append_short_string(&mut self, value: ShortString) {
         let inner = value.0;
         self.append_u8(short_string_header(inner.len()));
-        self.append_from_slice(inner.as_bytes());
+        self.append_slice(inner.as_bytes());
     }
 
     fn append_string(&mut self, value: &str) {
         self.append_primitive_header(VariantPrimitiveType::String);
-        self.append_from_slice(&(value.len() as u32).to_le_bytes());
-        self.append_from_slice(value.as_bytes());
+        self.append_slice(&(value.len() as u32).to_le_bytes());
+        self.append_slice(value.as_bytes());
     }
 
     fn offset(&self) -> usize {
@@ -466,7 +477,7 @@ impl VariantBuilder {
     }
 
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
-        (self.metadata_builder.finish(), self.buffer.0)
+        (self.metadata_builder.finish(), self.buffer.into_inner())
     }
 }
 
@@ -540,7 +551,7 @@ impl<'a> ListBuilder<'a> {
 
         // Write header
         write_header(
-            &mut self.parent_buffer.0,
+            self.parent_buffer.inner_mut(),
             array_header(is_large, offset_size),
             is_large,
             num_elements,
@@ -548,11 +559,11 @@ impl<'a> ListBuilder<'a> {
 
         // Write offsets
         for offset in &self.offsets {
-            write_offset(&mut self.parent_buffer.0, *offset, offset_size);
+            write_offset(self.parent_buffer.inner_mut(), *offset, offset_size);
         }
 
         // Append values
-        self.parent_buffer.0.extend_from_slice(&self.buffer.0);
+        self.parent_buffer.append_slice(self.buffer.inner());
     }
 }
 
@@ -652,7 +663,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
 
         // Write header
         write_header(
-            &mut self.parent_buffer.0,
+            self.parent_buffer.inner_mut(),
             object_header(is_large, id_size, offset_size),
             is_large,
             num_fields,
@@ -660,18 +671,18 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
 
         // Write field IDs (sorted order)
         for id in &field_ids_by_sorted_field_name {
-            write_offset(&mut self.parent_buffer.0, *id as usize, id_size);
+            write_offset(self.parent_buffer.inner_mut(), *id as usize, id_size);
         }
 
         // Write field offsets
         for id in &field_ids_by_sorted_field_name {
             let &offset = self.fields.get(id).unwrap();
-            write_offset(&mut self.parent_buffer.0, offset, offset_size);
+            write_offset(self.parent_buffer.inner_mut(), offset, offset_size);
         }
 
-        write_offset(&mut self.parent_buffer.0, data_size, offset_size);
+        write_offset(self.parent_buffer.inner_mut(), data_size, offset_size);
 
-        self.parent_buffer.0.extend_from_slice(&self.buffer.0);
+        self.parent_buffer.append_slice(self.buffer.inner());
     }
 }
 
