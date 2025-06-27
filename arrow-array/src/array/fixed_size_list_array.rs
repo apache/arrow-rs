@@ -149,7 +149,7 @@ impl FixedSizeListArray {
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
         let s = size.to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {}", size))
+            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
         let len = match s {

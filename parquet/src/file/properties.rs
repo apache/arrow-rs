@@ -93,7 +93,7 @@ impl FromStr for WriterVersion {
         match s {
             "PARQUET_1_0" | "parquet_1_0" => Ok(WriterVersion::PARQUET_1_0),
             "PARQUET_2_0" | "parquet_2_0" => Ok(WriterVersion::PARQUET_2_0),
-            _ => Err(format!("Invalid writer version: {}", s)),
+            _ => Err(format!("Invalid writer version: {s}")),
         }
     }
 }
@@ -949,7 +949,7 @@ impl FromStr for EnabledStatistics {
             "NONE" | "none" => Ok(EnabledStatistics::None),
             "CHUNK" | "chunk" => Ok(EnabledStatistics::Chunk),
             "PAGE" | "page" => Ok(EnabledStatistics::Page),
-            _ => Err(format!("Invalid statistics arg: {}", s)),
+            _ => Err(format!("Invalid statistics arg: {s}")),
         }
     }
 }

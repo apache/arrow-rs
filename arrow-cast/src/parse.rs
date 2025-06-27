@@ -1235,8 +1235,7 @@ impl Interval {
         match (self.months, self.days, self.nanos) {
             (months, days, nanos) if days == 0 && nanos == 0 => Ok(months),
             _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Unable to represent interval with days and nanos as year-months: {:?}",
-                self
+                "Unable to represent interval with days and nanos as year-months: {self:?}"
             ))),
         }
     }

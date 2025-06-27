@@ -757,7 +757,7 @@ mod tests {
     fn test_try_new_from_builder_cast_fails() {
         let mut source_builder = StringDictionaryBuilder::<UInt16Type>::new();
         for i in 0..257 {
-            source_builder.append_value(format!("val{}", i));
+            source_builder.append_value(format!("val{i}"));
         }
 
         // there should be too many values that we can't downcast to the underlying type

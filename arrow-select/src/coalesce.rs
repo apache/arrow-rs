@@ -1000,7 +1000,7 @@ mod tests {
             if i % 3 == 0 {
                 None
             } else {
-                Some(format!("value{}", i))
+                Some(format!("value{i}"))
             }
         }));
 

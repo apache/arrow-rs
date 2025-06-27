@@ -830,7 +830,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let variant = Variant::try_new(&metadata, &value).unwrap();
     /// // use the `as_object` method to access the object
     /// let obj = variant.as_object().expect("variant should be an object");
-    /// assert_eq!(obj.field_by_name("name").unwrap(), Some(Variant::from("John")));
+    /// assert_eq!(obj.get("name"), Some(Variant::from("John")));
     /// ```
     pub fn as_object(&'m self) -> Option<&'m VariantObject<'m, 'v>> {
         if let Variant::Object(obj) = self {

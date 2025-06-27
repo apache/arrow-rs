@@ -2014,7 +2014,7 @@ mod tests {
                 .with_timezone("Asia/Taipei".to_string());
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -2067,7 +2067,7 @@ mod tests {
         .with_timezone("America/Denver".to_string());
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"America/Denver\"))>\n[\n  2022-03-13T01:59:59-07:00,\n  2022-03-13T03:00:00-06:00,\n  2022-11-06T00:59:59-06:00,\n  2022-11-06T01:00:00-06:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -2641,7 +2641,7 @@ mod tests {
             None,
         ]
         .into();
-        let debug_str = format!("{:?}", array);
+        let debug_str = format!("{array:?}");
         assert_eq!("PrimitiveArray<Time32(Second)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(Second),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400 to temporal for Time32(Second),\n  Cast error: Failed to convert 86401 to temporal for Time32(Second),\n  null,\n]",
     debug_str
     );
@@ -2658,7 +2658,7 @@ mod tests {
             None,
         ]
         .into();
-        let debug_str = format!("{:?}", array);
+        let debug_str = format!("{array:?}");
         assert_eq!("PrimitiveArray<Time32(Millisecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(Millisecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000 to temporal for Time32(Millisecond),\n  Cast error: Failed to convert 86401000 to temporal for Time32(Millisecond),\n  null,\n]",
             debug_str
         );
@@ -2675,7 +2675,7 @@ mod tests {
             None,
         ]
         .into();
-        let debug_str = format!("{:?}", array);
+        let debug_str = format!("{array:?}");
         assert_eq!(
         "PrimitiveArray<Time64(Nanosecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Nanosecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000000 to temporal for Time64(Nanosecond),\n  Cast error: Failed to convert 86401000000000 to temporal for Time64(Nanosecond),\n  null,\n]",
             debug_str
@@ -2693,7 +2693,7 @@ mod tests {
             None,
         ]
         .into();
-        let debug_str = format!("{:?}", array);
+        let debug_str = format!("{array:?}");
         assert_eq!("PrimitiveArray<Time64(Microsecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Microsecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000 to temporal for Time64(Microsecond),\n  Cast error: Failed to convert 86401000000 to temporal for Time64(Microsecond),\n  null,\n]", debug_str);
     }
 

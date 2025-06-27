@@ -41,7 +41,6 @@ fn format_binary_base64(bytes: &[u8]) -> String {
     general_purpose::STANDARD.encode(bytes)
 }
 
-/// Converts a Variant to JSON and writes it to the provided `Write`
 ///
 /// This function writes JSON directly to any type that implements [`Write`],
 /// making it efficient for streaming or when you want to control the output destination.
