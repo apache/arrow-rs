@@ -963,7 +963,7 @@ fn convert_time_millis_to_string(value: i32) -> String {
     let minutes = (total_ms % (60 * 60 * 1000)) / (60 * 1000);
     let seconds = (total_ms % (60 * 1000)) / 1000;
     let millis = total_ms % 1000;
-    format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
 }
 
 /// Helper method to convert Parquet time (microseconds since midnight) into a string.
@@ -976,7 +976,7 @@ fn convert_time_micros_to_string(value: i64) -> String {
     let minutes = (total_us % (60 * 60 * 1000 * 1000)) / (60 * 1000 * 1000);
     let seconds = (total_us % (60 * 1000 * 1000)) / (1000 * 1000);
     let micros = total_us % (1000 * 1000);
-    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, micros)
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{micros:06}")
 }
 
 /// Helper method to convert Parquet decimal into a string.
