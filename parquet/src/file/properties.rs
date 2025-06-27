@@ -632,7 +632,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets the max length of min/max value fields in row group and data page header
+    /// Sets the max length of min/max value fields when writing the column
     /// [`Index`] (defaults to `Some(64)` via [`DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH`]).
     ///
     /// This can be used to prevent columns with very long values (hundreds of
