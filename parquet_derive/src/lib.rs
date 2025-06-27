@@ -56,18 +56,18 @@ mod parquet_field;
 /// use parquet_derive::ParquetRecordWriter;
 /// use std::fs::File;
 /// use std::sync::Arc;
-/// 
+///
 /// // For reader
 /// use parquet::file::reader::{FileReader, SerializedFileReader};
 /// use parquet::record::RecordReader;
 /// use parquet_derive::ParquetRecordReader;
-/// 
+///
 /// #[derive(Debug, ParquetRecordWriter, ParquetRecordReader)]
 /// struct ACompleteRecord {
 ///     pub a_bool: bool,
 ///     pub a_string: String,
 /// }
-/// 
+///
 /// fn write_some_records() {
 ///     let samples = vec![
 ///         ACompleteRecord {
@@ -79,52 +79,52 @@ mod parquet_field;
 ///             a_string: "I'm false".into(),
 ///         },
 ///     ];
-/// 
+///
 ///     let schema = samples.as_slice().schema().unwrap();
-/// 
+///
 ///     let props = Arc::new(WriterProperties::builder().build());
-/// 
+///
 ///     let file = File::create("example.parquet").unwrap();
-/// 
+///
 ///     let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
-/// 
+///
 ///     let mut row_group = writer.next_row_group().unwrap();
-/// 
+///
 ///     samples
 ///         .as_slice()
 ///         .write_to_row_group(&mut row_group)
 ///         .unwrap();
-/// 
+///
 ///     row_group.close().unwrap();
-/// 
+///
 ///     writer.close().unwrap();
 /// }
-/// 
+///
 /// fn read_some_records() -> Vec<ACompleteRecord> {
 ///     let mut samples: Vec<ACompleteRecord> = Vec::new();
 ///     let file = File::open("example.parquet").unwrap();
-/// 
+///
 ///     let reader = SerializedFileReader::new(file).unwrap();
 ///     let mut row_group = reader.get_row_group(0).unwrap();
 ///     samples.read_from_row_group(&mut *row_group, 2).unwrap();
-/// 
+///
 ///     samples
 /// }
-/// 
+///
 /// pub fn main() {
 ///     write_some_records();
-/// 
+///
 ///     let records = read_some_records();
-/// 
+///
 ///     std::fs::remove_file("example.parquet").unwrap();
-/// 
+///
 ///     assert_eq!(
 ///         format!("{:?}", records),
 ///         "[ACompleteRecord { a_bool: true, a_string: \"I'm true\" }, ACompleteRecord { a_bool: false, a_string: \"I'm false\" }]"
 ///     );
 /// }
 /// ```
-/// 
+///
 #[proc_macro_derive(ParquetRecordWriter)]
 pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = parse_macro_input!(input as DeriveInput);
