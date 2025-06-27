@@ -74,12 +74,6 @@ impl Int96 {
         self.value = [elem0, elem1, elem2];
     }
 
-    /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
-    #[deprecated(since = "54.0.0", note = "Use `to_millis` instead")]
-    pub fn to_i64(&self) -> i64 {
-        self.to_millis()
-    }
-
     /// Converts this INT96 into an i64 representing the number of SECONDS since EPOCH
     ///
     /// Will wrap around on overflow
@@ -1212,26 +1206,6 @@ pub trait DataType: 'static + Send {
     ) -> Option<&'a mut ColumnWriterImpl<'b, Self>>
     where
         Self: Sized;
-}
-
-// Workaround bug in specialization
-#[deprecated(
-    since = "54.0.0",
-    note = "Seems like a stray and nobody knows what's it for. Will be removed in 55.0.0"
-)]
-#[allow(missing_docs)]
-pub trait SliceAsBytesDataType: DataType
-where
-    Self::T: SliceAsBytes,
-{
-}
-
-#[allow(deprecated)]
-impl<T> SliceAsBytesDataType for T
-where
-    T: DataType,
-    <T as DataType>::T: SliceAsBytes,
-{
 }
 
 macro_rules! make_type {
