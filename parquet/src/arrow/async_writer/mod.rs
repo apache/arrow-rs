@@ -61,62 +61,60 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::ArrowWriterOptions,
-    arrow::ArrowWriter,
+    arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
     errors::{ParquetError, Result},
     file::{metadata::RowGroupMetaData, properties::WriterProperties},
     format::{FileMetaData, KeyValue},
+    util::async_util::{MaybeLocalBoxFuture, MaybeLocalFutureExt, MaybeSend},
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use std::mem;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 /// The asynchronous interface used by [`AsyncArrowWriter`] to write parquet files.
-pub trait AsyncFileWriter: Send {
+pub trait AsyncFileWriter: MaybeSend {
     /// Write the provided bytes to the underlying writer
     ///
     /// The underlying writer CAN decide to buffer the data or write it immediately.
     /// This design allows the writer implementer to control the buffering and I/O scheduling.
     ///
     /// The underlying writer MAY implement retry logic to prevent breaking users write process.
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>>;
+    fn write(&mut self, bs: Bytes) -> MaybeLocalBoxFuture<'_, Result<()>>;
 
     /// Flush any buffered data to the underlying writer and finish writing process.
     ///
     /// After `complete` returns `Ok(())`, caller SHOULD not call write again.
-    fn complete(&mut self) -> BoxFuture<'_, Result<()>>;
+    fn complete(&mut self) -> MaybeLocalBoxFuture<'_, Result<()>>;
 }
 
 impl AsyncFileWriter for Box<dyn AsyncFileWriter + '_> {
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
+    fn write(&mut self, bs: Bytes) -> MaybeLocalBoxFuture<'_, Result<()>> {
         self.as_mut().write(bs)
     }
 
-    fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
+    fn complete(&mut self) -> MaybeLocalBoxFuture<'_, Result<()>> {
         self.as_mut().complete()
     }
 }
 
-impl<T: AsyncWrite + Unpin + Send> AsyncFileWriter for T {
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
+impl<T: AsyncWrite + Unpin + MaybeSend> AsyncFileWriter for T {
+    fn write(&mut self, bs: Bytes) -> MaybeLocalBoxFuture<'_, Result<()>> {
         async move {
             self.write_all(&bs).await?;
             Ok(())
         }
-        .boxed()
+        .boxed_maybe_local()
     }
 
-    fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
+    fn complete(&mut self) -> MaybeLocalBoxFuture<'_, Result<()>> {
         async move {
             self.flush().await?;
             self.shutdown().await?;
             Ok(())
         }
-        .boxed()
+        .boxed_maybe_local()
     }
 }
 

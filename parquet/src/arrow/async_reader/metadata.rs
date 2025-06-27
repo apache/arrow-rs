@@ -21,9 +21,8 @@ use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::FOOTER_SIZE;
+use crate::util::async_util::{MaybeLocalBoxFuture, MaybeLocalFutureExt, MaybeSend};
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use std::future::Future;
 use std::ops::Range;
 
@@ -39,9 +38,12 @@ use std::ops::Range;
 /// # use bytes::Bytes;
 /// # use std::ops::Range;
 /// # use std::io::SeekFrom;
-/// # use futures::future::BoxFuture;
 /// # use futures::FutureExt;
 /// # use tokio::io::{AsyncReadExt, AsyncSeekExt};
+/// # #[cfg(feature = "async-no-send")]
+/// # type BoxFuture<'a, T> = futures::future::LocalBoxFuture<'a, T>;
+/// # #[cfg(not(feature = "async-no-send"))]
+/// # type BoxFuture<'a, T> = futures::future::BoxFuture<'a, T>;
 /// // Adapter that implements the API for reading bytes from an async source (in
 /// // this case a tokio::fs::File)
 /// struct TokioFileMetadata {
@@ -58,7 +60,7 @@ use std::ops::Range;
 ///             self.file.read_exact(&mut buf).await?;
 ///             Ok(Bytes::from(buf)) // convert to Bytes
 ///         }
-///             .boxed() // turn into BoxedFuture, using FutureExt::boxed
+///         .boxed() // turn into BoxedFuture, using FutureExt::boxed
 ///     }
 /// }
 ///```
@@ -66,12 +68,12 @@ pub trait MetadataFetch {
     /// Return a future that fetches the specified range of bytes asynchronously
     ///
     /// Note the returned type is a boxed future, often created by
-    /// [FutureExt::boxed]. See the trait documentation for an example
-    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
+    /// [futures::future::FutureExt::boxed]. See the trait documentation for an example
+    fn fetch(&mut self, range: Range<u64>) -> MaybeLocalBoxFuture<'_, Result<Bytes>>;
 }
 
 impl<T: AsyncFileReader> MetadataFetch for &mut T {
-    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch(&mut self, range: Range<u64>) -> MaybeLocalBoxFuture<'_, Result<Bytes>> {
         self.get_bytes(range)
     }
 }
@@ -82,8 +84,8 @@ pub trait MetadataSuffixFetch: MetadataFetch {
     /// Return a future that fetches the last `n` bytes asynchronously
     ///
     /// Note the returned type is a boxed future, often created by
-    /// [FutureExt::boxed]. See the trait documentation for an example
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
+    /// [futures::future::FutureExt::boxed]. See the trait documentation for an example
+    fn fetch_suffix(&mut self, suffix: usize) -> MaybeLocalBoxFuture<'_, Result<Bytes>>;
 }
 
 /// An asynchronous interface to load [`ParquetMetaData`] from an async source
@@ -263,11 +265,12 @@ struct MetadataFetchFn<F>(F);
 
 impl<F, Fut> MetadataFetch for MetadataFetchFn<F>
 where
-    F: FnMut(Range<usize>) -> Fut + Send,
-    Fut: Future<Output = Result<Bytes>> + Send,
+    F: FnMut(Range<usize>) -> Fut + MaybeSend,
+    Fut: Future<Output = Result<Bytes>> + MaybeSend,
 {
-    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        async move { self.0(range.start.try_into()?..range.end.try_into()?).await }.boxed()
+    fn fetch(&mut self, range: Range<u64>) -> MaybeLocalBoxFuture<'_, Result<Bytes>> {
+        async move { self.0(range.start.try_into()?..range.end.try_into()?).await }
+            .boxed_maybe_local()
     }
 }
 
@@ -294,8 +297,8 @@ pub async fn fetch_parquet_metadata<F, Fut>(
     prefetch: Option<usize>,
 ) -> Result<ParquetMetaData>
 where
-    F: FnMut(Range<usize>) -> Fut + Send,
-    Fut: Future<Output = Result<Bytes>> + Send,
+    F: FnMut(Range<usize>) -> Fut + MaybeSend,
+    Fut: Future<Output = Result<Bytes>> + MaybeSend,
 {
     let file_size = u64::try_from(file_size)?;
     let fetch = MetadataFetchFn(fetch);
