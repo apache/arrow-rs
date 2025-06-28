@@ -73,6 +73,28 @@ fn struct_array_from_vec(
     hint::black_box(StructArray::try_from(vec![(field1, strings), (field2, ints)]).unwrap());
 }
 
+fn decimal32_array_from_vec(array: &[Option<i32>]) {
+    criterion::black_box(
+        array
+            .iter()
+            .copied()
+            .collect::<Decimal32Array>()
+            .with_precision_and_scale(9, 2)
+            .unwrap(),
+    );
+}
+
+fn decimal64_array_from_vec(array: &[Option<i64>]) {
+    criterion::black_box(
+        array
+            .iter()
+            .copied()
+            .collect::<Decimal64Array>()
+            .with_precision_and_scale(17, 2)
+            .unwrap(),
+    );
+}
+
 fn decimal128_array_from_vec(array: &[Option<i128>]) {
     hint::black_box(
         array
@@ -96,6 +118,30 @@ fn decimal256_array_from_vec(array: &[Option<i256>]) {
 }
 
 fn decimal_benchmark(c: &mut Criterion) {
+    // bench decimal32 array
+    // create option<i32> array
+    let size: usize = 1 << 15;
+    let mut rng = rand::thread_rng();
+    let mut array = vec![];
+    for _ in 0..size {
+        array.push(Some(rng.gen_range::<i32, _>(0..99999999)));
+    }
+    c.bench_function("decimal32_array_from_vec 32768", |b| {
+        b.iter(|| decimal32_array_from_vec(array.as_slice()))
+    });
+
+    // bench decimal64 array
+    // create option<i64> array
+    let size: usize = 1 << 15;
+    let mut rng = rand::thread_rng();
+    let mut array = vec![];
+    for _ in 0..size {
+        array.push(Some(rng.gen_range::<i64, _>(0..9999999999)));
+    }
+    c.bench_function("decimal64_array_from_vec 32768", |b| {
+        b.iter(|| decimal64_array_from_vec(array.as_slice()))
+    });
+
     // bench decimal128 array
     // create option<i128> array
     let size: usize = 1 << 15;

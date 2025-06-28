@@ -18,19 +18,21 @@
 use arrow_array::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder, UnionBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
 use arrow_array::{
     Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-    DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, NullArray, PrimitiveArray, StringArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
+    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, NullArray, PrimitiveArray,
+    StringArray, StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array, UnionArray,
 };
 use arrow_buffer::{i256, Buffer, IntervalDayTime, IntervalMonthDayNano};
 use arrow_cast::pretty::pretty_format_columns;
@@ -261,7 +263,37 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(DurationMillisecondArray::from(vec![1000, 2000])),
         Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
+        Arc::new(create_decimal32_array(vec![Some(1), Some(2), Some(3)], 9, 0).unwrap()),
+        Arc::new(create_decimal64_array(vec![Some(1), Some(2), Some(3)], 18, 0).unwrap()),
         Arc::new(create_decimal128_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
+        Arc::new(
+            create_decimal256_array(
+                vec![
+                    Some(i256::from_i128(1)),
+                    Some(i256::from_i128(2)),
+                    Some(i256::from_i128(3)),
+                ],
+                40,
+                0,
+            )
+            .unwrap(),
+        ),
+        make_dictionary_primitive::<Int8Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int16Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int32Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int64Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt8Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt16Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt32Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt64Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int8Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int16Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int32Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int64Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt8Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt16Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt32Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt64Type, Decimal64Type>(vec![1, 2]),
         make_dictionary_primitive::<Int8Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int16Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int32Type, Decimal128Type>(vec![1, 2]),
@@ -411,6 +443,28 @@ fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
     Arc::new(b.finish())
 }
 
+fn create_decimal32_array(
+    array: Vec<Option<i32>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal32Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal32Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
+fn create_decimal64_array(
+    array: Vec<Option<i64>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal64Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal64Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
 fn create_decimal128_array(
     array: Vec<Option<i128>>,
     precision: u8,
@@ -419,6 +473,17 @@ fn create_decimal128_array(
     array
         .into_iter()
         .collect::<Decimal128Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
+fn create_decimal256_array(
+    array: Vec<Option<i256>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal256Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal256Array>()
         .with_precision_and_scale(precision, scale)
 }
 
@@ -501,6 +566,8 @@ fn get_all_types() -> Vec<DataType> {
                 Dictionary(Box::new(key_type.clone()), Box::new(LargeUtf8)),
                 Dictionary(Box::new(key_type.clone()), Box::new(Binary)),
                 Dictionary(Box::new(key_type.clone()), Box::new(LargeBinary)),
+                Dictionary(Box::new(key_type.clone()), Box::new(Decimal32(9, 0))),
+                Dictionary(Box::new(key_type.clone()), Box::new(Decimal64(18, 0))),
                 Dictionary(Box::new(key_type.clone()), Box::new(Decimal128(38, 0))),
                 Dictionary(Box::new(key_type), Box::new(Decimal256(76, 0))),
             ]

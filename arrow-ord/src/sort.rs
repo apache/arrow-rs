@@ -2101,6 +2101,16 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_indices_decimal32() {
+        test_sort_indices_decimal::<Decimal32Type>(8, 3);
+    }
+
+    #[test]
+    fn test_sort_indices_decimal64() {
+        test_sort_indices_decimal::<Decimal64Type>(17, 5);
+    }
+
+    #[test]
     fn test_sort_indices_decimal128() {
         test_sort_indices_decimal::<Decimal128Type>(23, 6);
     }
@@ -2251,6 +2261,16 @@ mod tests {
             precision,
             scale,
         );
+    }
+
+    #[test]
+    fn test_sort_decimal32() {
+        test_sort_decimal::<Decimal32Type>(8, 3);
+    }
+
+    #[test]
+    fn test_sort_decimal64() {
+        test_sort_decimal::<Decimal64Type>(17, 5);
     }
 
     #[test]
