@@ -457,7 +457,7 @@ pub struct WriterPropertiesBuilder {
 
 impl WriterPropertiesBuilder {
     /// Returns default state of the builder.
-    fn with_defaults() -> Self {
+    pub fn with_defaults() -> Self {
         Self {
             data_page_size_limit: DEFAULT_PAGE_SIZE,
             data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
