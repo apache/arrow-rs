@@ -888,7 +888,7 @@ pub fn cast_with_options(
             )
         }
         // Decimal to decimal, different width
-        (Decimal32(_, s1), Decimal64(p2, s2)) => {
+        (Decimal32(p1, s1), Decimal64(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal32Type, Decimal64Type>(
                 array.as_primitive(),
                 *p1,
@@ -898,7 +898,7 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
-        (Decimal32(_, s1), Decimal128(p2, s2)) => {
+        (Decimal32(p1, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal32Type, Decimal128Type>(
                 array.as_primitive(),
                 *p1,
@@ -908,90 +908,100 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
-        (Decimal32(_, s1), Decimal256(p2, s2)) => {
+        (Decimal32(p1, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal32Type, Decimal256Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal64(_, s1), Decimal32(p2, s2)) => {
+        (Decimal64(p1, s1), Decimal32(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal64Type, Decimal32Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal64(_, s1), Decimal128(p2, s2)) => {
+        (Decimal64(p1, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal64Type, Decimal128Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal64(_, s1), Decimal256(p2, s2)) => {
+        (Decimal64(p1, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal64Type, Decimal256Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal128(_, s1), Decimal32(p2, s2)) => {
+        (Decimal128(p1, s1), Decimal32(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal128Type, Decimal32Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal128(_, s1), Decimal64(p2, s2)) => {
+        (Decimal128(p1, s1), Decimal64(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal128Type, Decimal64Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal128(_, s1), Decimal256(p2, s2)) => {
+        (Decimal128(p1, s1), Decimal256(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal128Type, Decimal256Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal256(_, s1), Decimal32(p2, s2)) => {
+        (Decimal256(p1, s1), Decimal32(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal256Type, Decimal32Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal256(_, s1), Decimal64(p2, s2)) => {
+        (Decimal256(p1, s1), Decimal64(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal256Type, Decimal64Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
                 cast_options,
             )
         }
-        (Decimal256(_, s1), Decimal128(p2, s2)) => {
+        (Decimal256(p1, s1), Decimal128(p2, s2)) => {
             cast_decimal_to_decimal::<Decimal256Type, Decimal128Type>(
                 array.as_primitive(),
+                *p1,
                 *s1,
                 *p2,
                 *s2,
@@ -2242,13 +2252,13 @@ where
             base,
             cast_options,
         ),
-        Float32 => cast_floating_point_to_decimal::<_, D, _>(
+        Float32 => cast_floating_point_to_decimal::<_, D>(
             array.as_primitive::<Float32Type>(),
             *precision,
             *scale,
             cast_options,
         ),
-        Float64 => cast_floating_point_to_decimal::<_, D, _>(
+        Float64 => cast_floating_point_to_decimal::<_, D>(
             array.as_primitive::<Float64Type>(),
             *precision,
             *scale,

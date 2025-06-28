@@ -54,7 +54,7 @@ impl DecimalCast for i32 {
         n.to_i32()
     }
 
-    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+    fn from_f64(n: f64) -> Option<Self> {
         n.to_i32()
     }
 }
@@ -80,7 +80,7 @@ impl DecimalCast for i64 {
         n.to_i64()
     }
 
-    fn from_f64<T: DecimalCast>(n: f64) -> Option<Self> {
+    fn from_f64(n: f64) -> Option<Self> {
         n.to_i64()
     }
 }
