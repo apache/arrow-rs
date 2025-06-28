@@ -102,16 +102,6 @@ impl ColumnWriter<'_> {
     }
 }
 
-#[deprecated(
-    since = "54.0.0",
-    note = "Seems like a stray and nobody knows what's it for. Will be removed in the next release."
-)]
-#[allow(missing_docs)]
-pub enum Level {
-    Page,
-    Column,
-}
-
 /// Gets a specific column writer corresponding to column descriptor `descr`.
 pub fn get_column_writer<'a>(
     descr: ColumnDescPtr,
@@ -1048,8 +1038,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.column_metrics
             .update_variable_length_bytes(values_data.variable_length_bytes);
 
-        let page_statistics = page_statistics.map(Statistics::from);
-        let page_statistics = page_statistics.map(|stats| self.truncate_statistics(stats));
+        // From here on, we only need page statistics if they will be written to the page header.
+        let page_statistics = page_statistics
+            .filter(|_| self.props.write_page_header_statistics(self.descr.path()))
+            .map(|stats| self.truncate_statistics(Statistics::from(stats)));
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {
@@ -2233,7 +2225,11 @@ mod tests {
         let mut buf = Vec::with_capacity(100);
         let mut write = TrackedWrite::new(&mut buf);
         let page_writer = Box::new(SerializedPageWriter::new(&mut write));
-        let props = Default::default();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_write_page_header_statistics(true)
+                .build(),
+        );
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
 
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();

@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -26,8 +28,6 @@ use crate::utils::{first_byte_from_slice, slice_from_slice};
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
-use std::ops::Deref;
-
 mod decimal;
 mod list;
 mod metadata;
@@ -35,7 +35,7 @@ mod object;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
-/// Represents a variant array.
+/// A Variant [`ShortString`]
 ///
 /// This implementation is a zero cost wrapper over `&str` that ensures
 /// the length of the underlying string is a valid Variant short string (63 bytes or less)
@@ -45,9 +45,10 @@ pub struct ShortString<'a>(pub(crate) &'a str);
 impl<'a> ShortString<'a> {
     /// Attempts to interpret `value` as a variant short string value.
     ///
-    /// # Validation
+    /// # Errors
     ///
-    /// This constructor verifies that `value` is shorter than or equal to `MAX_SHORT_STRING_BYTES`
+    /// Returns an error if  `value` is longer than the maximum allowed length
+    /// of a Variant short string (63 bytes).
     pub fn try_new(value: &'a str) -> Result<Self, ArrowError> {
         if value.len() > MAX_SHORT_STRING_BYTES {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -271,15 +272,15 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::Int64 => Variant::Int64(decoder::decode_int64(value_data)?),
                 VariantPrimitiveType::Decimal4 => {
                     let (integer, scale) = decoder::decode_decimal4(value_data)?;
-                    Variant::Decimal4(VariantDecimal4 { integer, scale })
+                    Variant::Decimal4(VariantDecimal4::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Decimal8 => {
                     let (integer, scale) = decoder::decode_decimal8(value_data)?;
-                    Variant::Decimal8(VariantDecimal8 { integer, scale })
+                    Variant::Decimal8(VariantDecimal8::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Decimal16 => {
                     let (integer, scale) = decoder::decode_decimal16(value_data)?;
-                    Variant::Decimal16(VariantDecimal16 { integer, scale })
+                    Variant::Decimal16(VariantDecimal16::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Float => Variant::Float(decoder::decode_float(value_data)?),
                 VariantPrimitiveType::Double => {
@@ -662,17 +663,17 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int32(&self) -> Option<(i32, u8)> {
         match *self {
-            Variant::Decimal4(decimal4) => Some((decimal4.integer, decimal4.scale)),
+            Variant::Decimal4(decimal4) => Some((decimal4.integer(), decimal4.scale())),
             Variant::Decimal8(decimal8) => {
-                if let Ok(converted_integer) = decimal8.integer.try_into() {
-                    Some((converted_integer, decimal8.scale))
+                if let Ok(converted_integer) = decimal8.integer().try_into() {
+                    Some((converted_integer, decimal8.scale()))
                 } else {
                     None
                 }
             }
             Variant::Decimal16(decimal16) => {
-                if let Ok(converted_integer) = decimal16.integer.try_into() {
-                    Some((converted_integer, decimal16.scale))
+                if let Ok(converted_integer) = decimal16.integer().try_into() {
+                    Some((converted_integer, decimal16.scale()))
                 } else {
                     None
                 }
@@ -710,11 +711,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int64(&self) -> Option<(i64, u8)> {
         match *self {
-            Variant::Decimal4(decimal) => Some((decimal.integer.into(), decimal.scale)),
-            Variant::Decimal8(decimal) => Some((decimal.integer, decimal.scale)),
+            Variant::Decimal4(decimal) => Some((decimal.integer().into(), decimal.scale())),
+            Variant::Decimal8(decimal) => Some((decimal.integer(), decimal.scale())),
             Variant::Decimal16(decimal) => {
-                if let Ok(converted_integer) = decimal.integer.try_into() {
-                    Some((converted_integer, decimal.scale))
+                if let Ok(converted_integer) = decimal.integer().try_into() {
+                    Some((converted_integer, decimal.scale()))
                 } else {
                     None
                 }
@@ -744,9 +745,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_decimal_int128(&self) -> Option<(i128, u8)> {
         match *self {
-            Variant::Decimal4(decimal) => Some((decimal.integer.into(), decimal.scale)),
-            Variant::Decimal8(decimal) => Some((decimal.integer.into(), decimal.scale)),
-            Variant::Decimal16(decimal) => Some((decimal.integer, decimal.scale)),
+            Variant::Decimal4(decimal) => Some((decimal.integer().into(), decimal.scale())),
+            Variant::Decimal8(decimal) => Some((decimal.integer().into(), decimal.scale())),
+            Variant::Decimal16(decimal) => Some((decimal.integer(), decimal.scale())),
             _ => None,
         }
     }

@@ -602,6 +602,12 @@ pub enum Field {
     /// Date without a time of day, stores the number of days from the
     /// Unix epoch, 1 January 1970.
     Date(i32),
+
+    /// The total number of milliseconds since midnight.
+    TimeMillis(i32),
+    /// The total number of microseconds since midnight.
+    TimeMicros(i64),
+
     /// Milliseconds from the Unix epoch, 1 January 1970.
     TimestampMillis(i64),
     /// Microseconds from the Unix epoch, 1 January 1970.
@@ -638,6 +644,8 @@ impl Field {
             Field::Date(_) => "Date",
             Field::Str(_) => "Str",
             Field::Bytes(_) => "Bytes",
+            Field::TimeMillis(_) => "TimeMillis",
+            Field::TimeMicros(_) => "TimeMicros",
             Field::TimestampMillis(_) => "TimestampMillis",
             Field::TimestampMicros(_) => "TimestampMicros",
             Field::Group(_) => "Group",
@@ -671,7 +679,7 @@ impl Field {
             ConvertedType::UINT_16 => Field::UShort(value as u16),
             ConvertedType::UINT_32 => Field::UInt(value as u32),
             ConvertedType::DATE => Field::Date(value),
-            ConvertedType::TIME_MILLIS => Field::TimestampMillis(value as i64),
+            ConvertedType::TIME_MILLIS => Field::TimeMillis(value),
             ConvertedType::DECIMAL => Field::Decimal(Decimal::from_i32(
                 value,
                 descr.type_precision(),
@@ -687,6 +695,7 @@ impl Field {
         match descr.converted_type() {
             ConvertedType::INT_64 | ConvertedType::NONE => Field::Long(value),
             ConvertedType::UINT_64 => Field::ULong(value as u64),
+            ConvertedType::TIME_MICROS => Field::TimeMicros(value),
             ConvertedType::TIMESTAMP_MILLIS => Field::TimestampMillis(value),
             ConvertedType::TIMESTAMP_MICROS => Field::TimestampMicros(value),
             ConvertedType::DECIMAL => Field::Decimal(Decimal::from_i64(
@@ -795,6 +804,8 @@ impl Field {
             Field::Str(s) => Value::String(s.to_owned()),
             Field::Bytes(b) => Value::String(BASE64_STANDARD.encode(b.data())),
             Field::Date(d) => Value::String(convert_date_to_string(*d)),
+            Field::TimeMillis(t) => Value::String(convert_time_millis_to_string(*t)),
+            Field::TimeMicros(t) => Value::String(convert_time_micros_to_string(*t)),
             Field::TimestampMillis(ts) => Value::String(convert_timestamp_millis_to_string(*ts)),
             Field::TimestampMicros(ts) => Value::String(convert_timestamp_micros_to_string(*ts)),
             Field::Group(row) => row.to_json_value(),
@@ -864,6 +875,12 @@ impl fmt::Display for Field {
             Field::Str(ref value) => write!(f, "\"{value}\""),
             Field::Bytes(ref value) => write!(f, "{:?}", value.data()),
             Field::Date(value) => write!(f, "{}", convert_date_to_string(value)),
+            Field::TimeMillis(value) => {
+                write!(f, "{}", convert_time_millis_to_string(value))
+            }
+            Field::TimeMicros(value) => {
+                write!(f, "{}", convert_time_micros_to_string(value))
+            }
             Field::TimestampMillis(value) => {
                 write!(f, "{}", convert_timestamp_millis_to_string(value))
             }
@@ -934,6 +951,32 @@ fn convert_timestamp_millis_to_string(value: i64) -> String {
 #[inline]
 fn convert_timestamp_micros_to_string(value: i64) -> String {
     convert_timestamp_secs_to_string(value / 1000000)
+}
+
+/// Helper method to convert Parquet time (milliseconds since midnight) into a string.
+/// Input `value` is a number of milliseconds since midnight.
+/// Time is displayed in HH:MM:SS.sss format.
+#[inline]
+fn convert_time_millis_to_string(value: i32) -> String {
+    let total_ms = value as u64;
+    let hours = total_ms / (60 * 60 * 1000);
+    let minutes = (total_ms % (60 * 60 * 1000)) / (60 * 1000);
+    let seconds = (total_ms % (60 * 1000)) / 1000;
+    let millis = total_ms % 1000;
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
+}
+
+/// Helper method to convert Parquet time (microseconds since midnight) into a string.
+/// Input `value` is a number of microseconds since midnight.
+/// Time is displayed in HH:MM:SS.ssssss format.
+#[inline]
+fn convert_time_micros_to_string(value: i64) -> String {
+    let total_us = value as u64;
+    let hours = total_us / (60 * 60 * 1000 * 1000);
+    let minutes = (total_us % (60 * 60 * 1000 * 1000)) / (60 * 1000 * 1000);
+    let seconds = (total_us % (60 * 1000 * 1000)) / (1000 * 1000);
+    let micros = total_us % (1000 * 1000);
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{micros:06}")
 }
 
 /// Helper method to convert Parquet decimal into a string.
@@ -1057,7 +1100,7 @@ mod tests {
 
         let descr = make_column_descr![PhysicalType::INT32, ConvertedType::TIME_MILLIS];
         let row = Field::convert_int32(&descr, 14611);
-        assert_eq!(row, Field::TimestampMillis(14611));
+        assert_eq!(row, Field::TimeMillis(14611));
 
         let descr = make_column_descr![PhysicalType::INT32, ConvertedType::DECIMAL, 0, 8, 2];
         let row = Field::convert_int32(&descr, 444);
@@ -1081,6 +1124,10 @@ mod tests {
         let descr = make_column_descr![PhysicalType::INT64, ConvertedType::TIMESTAMP_MICROS];
         let row = Field::convert_int64(&descr, 1541186529153123);
         assert_eq!(row, Field::TimestampMicros(1541186529153123));
+
+        let descr = make_column_descr![PhysicalType::INT64, ConvertedType::TIME_MICROS];
+        let row = Field::convert_int64(&descr, 47445123456);
+        assert_eq!(row, Field::TimeMicros(47445123456));
 
         let descr = make_column_descr![PhysicalType::INT64, ConvertedType::NONE];
         let row = Field::convert_int64(&descr, 2222);
@@ -1958,6 +2005,14 @@ mod tests {
         assert_eq!(
             Field::TimestampMicros(12345678901).to_json_value(),
             Value::String(convert_timestamp_micros_to_string(12345678901))
+        );
+        assert_eq!(
+            Field::TimeMillis(47445123).to_json_value(),
+            Value::String(String::from("13:10:45.123"))
+        );
+        assert_eq!(
+            Field::TimeMicros(47445123456).to_json_value(),
+            Value::String(String::from("13:10:45.123456"))
         );
 
         let fields = vec![
