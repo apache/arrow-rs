@@ -1972,6 +1972,9 @@ async fn test_decimal32() {
         ),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "decimal32_col",
         check: Check::Both,
     }
@@ -2002,6 +2005,9 @@ async fn test_decimal64() {
         ),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "decimal64_col",
         check: Check::Both,
     }
