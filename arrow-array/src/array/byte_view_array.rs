@@ -1200,21 +1200,7 @@ mod tests {
             b"xyz",
         ];
 
-        // 1) Monotonic key order: content then length
-        let mut previous_key: Option<u128> = None;
-        for input in &test_inputs {
-            let raw = make_raw_inline(input.len() as u32, input);
-            let key = GenericByteViewArray::<BinaryViewType>::inline_key_fast(raw);
-            if let Some(prev) = previous_key {
-                assert!(
-                    prev < key,
-                    "Key for {input:?} (0x{prev:032x}) was not less than next key (0x{key:032x})",
-                );
-            }
-            previous_key = Some(key);
-        }
-
-        // 2) Cross-check against GenericBinaryArray comparison
+        // Monotonic key order: content then length，and cross-check against GenericBinaryArray comparison
         let array: GenericBinaryArray<i32> =
             GenericBinaryArray::from(test_inputs.iter().map(|s| Some(*s)).collect::<Vec<_>>());
 
