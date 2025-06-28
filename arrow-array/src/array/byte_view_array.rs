@@ -677,7 +677,7 @@ impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
     fn from(value: ArrayData) -> Self {
         let views = value.buffers()[0].clone();
         let views = ScalarBuffer::new(views, value.offset(), value.len());
-        let buffers = value.buffers()[1..].to_vec();
+        let buffers = &value.buffers()[1..];
         Self {
             data_type: T::DATA_TYPE,
             views,
