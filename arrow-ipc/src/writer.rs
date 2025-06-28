@@ -1727,6 +1727,26 @@ fn write_array_data(
             write_options,
         )?;
         return Ok(offset);
+    } else if let DataType::FixedSizeList(_, fixed_size) = data_type {
+        assert_eq!(array_data.child_data().len(), 1);
+        let fixed_size = *fixed_size as usize;
+
+        let child_offset = array_data.offset() * fixed_size;
+        let child_length = array_data.len() * fixed_size;
+        let child_data = array_data.child_data()[0].slice(child_offset, child_length);
+
+        offset = write_array_data(
+            &child_data,
+            buffers,
+            arrow_data,
+            nodes,
+            offset,
+            child_data.len(),
+            child_data.null_count(),
+            compression_codec,
+            write_options,
+        )?;
+        return Ok(offset);
     } else {
         for buffer in array_data.buffers() {
             offset = write_buffer(
@@ -1834,9 +1854,13 @@ fn pad_to_alignment(alignment: u8, len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::Hasher;
     use std::io::Cursor;
     use std::io::Seek;
 
+    use arrow_array::builder::FixedSizeListBuilder;
+    use arrow_array::builder::Float32Builder;
+    use arrow_array::builder::Int64Builder;
     use arrow_array::builder::MapBuilder;
     use arrow_array::builder::UnionBuilder;
     use arrow_array::builder::{GenericListBuilder, ListBuilder, StringBuilder};
@@ -2493,7 +2517,7 @@ mod tests {
         let strings: Vec<_> = (0..8000)
             .map(|i| {
                 if i % 2 == 0 {
-                    Some(format!("value{}", i))
+                    Some(format!("value{i}"))
                 } else {
                     None
                 }
@@ -2927,7 +2951,7 @@ mod tests {
             let mut fields = Vec::new();
             let mut arrays = Vec::new();
             for i in 0..num_cols {
-                let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+                let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
                 let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
                 fields.push(field);
                 arrays.push(Arc::new(array) as Arc<dyn Array>);
@@ -2982,7 +3006,7 @@ mod tests {
         let mut fields = Vec::new();
         let mut arrays = Vec::new();
         for i in 0..num_cols {
-            let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
             let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
             fields.push(field);
             arrays.push(Arc::new(array) as Arc<dyn Array>);
@@ -3037,7 +3061,7 @@ mod tests {
         let mut fields = Vec::new();
         let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
         for i in 0..num_cols {
-            let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
             fields.push(field);
         }
         let schema = Schema::new(fields);
@@ -3074,5 +3098,257 @@ mod tests {
         );
         assert_eq!(stream_bytes_written_on_flush, expected_stream_flushed_bytes);
         assert_eq!(file_bytes_written_on_flush, expected_file_flushed_bytes);
+    }
+
+    #[test]
+    fn test_roundtrip_list_of_fixed_list() -> Result<(), ArrowError> {
+        let l1_type =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 3);
+        let l2_type = DataType::List(Arc::new(Field::new("item", l1_type.clone(), false)));
+
+        let l0_builder = Float32Builder::new();
+        let l1_builder = FixedSizeListBuilder::new(l0_builder, 3).with_field(Arc::new(Field::new(
+            "item",
+            DataType::Float32,
+            false,
+        )));
+        let mut l2_builder =
+            ListBuilder::new(l1_builder).with_field(Arc::new(Field::new("item", l1_type, false)));
+
+        for point in [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]] {
+            l2_builder.values().values().append_value(point[0]);
+            l2_builder.values().values().append_value(point[1]);
+            l2_builder.values().values().append_value(point[2]);
+
+            l2_builder.values().append(true);
+        }
+        l2_builder.append(true);
+
+        let point = [10., 11., 12.];
+        l2_builder.values().values().append_value(point[0]);
+        l2_builder.values().values().append_value(point[1]);
+        l2_builder.values().values().append_value(point[2]);
+
+        l2_builder.values().append(true);
+        l2_builder.append(true);
+
+        let array = Arc::new(l2_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new("points", l2_type, false)],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 1)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 1)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_list_of_fixed_list_w_nulls() -> Result<(), ArrowError> {
+        let l0_builder = Float32Builder::new();
+        let l1_builder = FixedSizeListBuilder::new(l0_builder, 3);
+        let mut l2_builder = ListBuilder::new(l1_builder);
+
+        for point in [
+            [Some(1.0), Some(2.0), None],
+            [Some(4.0), Some(5.0), Some(6.0)],
+            [None, Some(8.0), Some(9.0)],
+        ] {
+            for p in point {
+                match p {
+                    Some(p) => l2_builder.values().values().append_value(p),
+                    None => l2_builder.values().values().append_null(),
+                }
+            }
+
+            l2_builder.values().append(true);
+        }
+        l2_builder.append(true);
+
+        let point = [Some(10.), None, None];
+        for p in point {
+            match p {
+                Some(p) => l2_builder.values().values().append_value(p),
+                None => l2_builder.values().values().append_null(),
+            }
+        }
+
+        l2_builder.values().append(true);
+        l2_builder.append(true);
+
+        let array = Arc::new(l2_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::List(Arc::new(Field::new(
+                    "item",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Float32, true)),
+                        3,
+                    ),
+                    true,
+                ))),
+                true,
+            )],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 1)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 1)?;
+
+        Ok(())
+    }
+
+    fn test_slices(
+        parent_array: &ArrayRef,
+        schema: &SchemaRef,
+        offset: usize,
+        length: usize,
+    ) -> Result<(), ArrowError> {
+        let subarray = parent_array.slice(offset, length);
+        let original_batch = RecordBatch::try_new(schema.clone(), vec![subarray])?;
+
+        let mut bytes = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut bytes, schema)?;
+        writer.write(&original_batch)?;
+        writer.finish()?;
+
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut reader = StreamReader::try_new(&mut cursor, None)?;
+        let returned_batch = reader.next().unwrap()?;
+
+        assert_eq!(original_batch, returned_batch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_fixed_list() -> Result<(), ArrowError> {
+        let int_builder = Int64Builder::new();
+        let mut fixed_list_builder = FixedSizeListBuilder::new(int_builder, 3)
+            .with_field(Arc::new(Field::new("item", DataType::Int64, false)));
+
+        for point in [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]] {
+            fixed_list_builder.values().append_value(point[0]);
+            fixed_list_builder.values().append_value(point[1]);
+            fixed_list_builder.values().append_value(point[2]);
+
+            fixed_list_builder.append(true);
+        }
+
+        let array = Arc::new(fixed_list_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, false)), 3),
+                false,
+            )],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 4)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 3)?;
+        test_slices(&array, &schema, 2, 1)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_fixed_list_w_nulls() -> Result<(), ArrowError> {
+        let int_builder = Int64Builder::new();
+        let mut fixed_list_builder = FixedSizeListBuilder::new(int_builder, 3);
+
+        for point in [
+            [Some(1), Some(2), None],
+            [Some(4), Some(5), Some(6)],
+            [None, Some(8), Some(9)],
+            [Some(10), None, None],
+        ] {
+            for p in point {
+                match p {
+                    Some(p) => fixed_list_builder.values().append_value(p),
+                    None => fixed_list_builder.values().append_null(),
+                }
+            }
+
+            fixed_list_builder.append(true);
+        }
+
+        let array = Arc::new(fixed_list_builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "points",
+                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 3),
+                true,
+            )],
+            HashMap::default(),
+        ));
+
+        // Test a variety of combinations that include 0 and non-zero offsets
+        // and also portions or the rest of the array
+        test_slices(&array, &schema, 0, 4)?;
+        test_slices(&array, &schema, 0, 2)?;
+        test_slices(&array, &schema, 1, 3)?;
+        test_slices(&array, &schema, 2, 1)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_metadata_encoding_ordering() {
+        fn create_hash() -> u64 {
+            let metadata: HashMap<String, String> = [
+                ("a", "1"), //
+                ("b", "2"), //
+                ("c", "3"), //
+                ("d", "4"), //
+                ("e", "5"), //
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+
+            // Set metadata on both the schema and a field within it.
+            let schema = Arc::new(
+                Schema::new(vec![
+                    Field::new("a", DataType::Int64, true).with_metadata(metadata.clone())
+                ])
+                .with_metadata(metadata)
+                .clone(),
+            );
+            let batch = RecordBatch::new_empty(schema.clone());
+
+            let mut bytes = Vec::new();
+            let mut w = StreamWriter::try_new(&mut bytes, batch.schema_ref()).unwrap();
+            w.write(&batch).unwrap();
+            w.finish().unwrap();
+
+            let mut h = std::hash::DefaultHasher::new();
+            h.write(&bytes);
+            h.finish()
+        }
+
+        let expected = create_hash();
+
+        // Since there is randomness in the HashMap and we cannot specify our
+        // own Hasher for the implementation used for metadata, run the above
+        // code 20x and verify it does not change. This is not perfect but it
+        // should be good enough.
+        let all_passed = (0..20).all(|_| create_hash() == expected);
+        assert!(all_passed);
     }
 }

@@ -27,7 +27,7 @@ pub enum FlightError {
     /// Returned when functionality is not yet available.
     NotYetImplemented(String),
     /// Error from the underlying tonic library
-    Tonic(tonic::Status),
+    Tonic(Box<tonic::Status>),
     /// Some unexpected message was received
     ProtocolError(String),
     /// An error occurred during decoding
@@ -51,12 +51,12 @@ impl FlightError {
 impl std::fmt::Display for FlightError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FlightError::Arrow(source) => write!(f, "Arrow error: {}", source),
-            FlightError::NotYetImplemented(desc) => write!(f, "Not yet implemented: {}", desc),
-            FlightError::Tonic(source) => write!(f, "Tonic error: {}", source),
-            FlightError::ProtocolError(desc) => write!(f, "Protocol error: {}", desc),
-            FlightError::DecodeError(desc) => write!(f, "Decode error: {}", desc),
-            FlightError::ExternalError(source) => write!(f, "External error: {}", source),
+            FlightError::Arrow(source) => write!(f, "Arrow error: {source}"),
+            FlightError::NotYetImplemented(desc) => write!(f, "Not yet implemented: {desc}"),
+            FlightError::Tonic(source) => write!(f, "Tonic error: {source}"),
+            FlightError::ProtocolError(desc) => write!(f, "Protocol error: {desc}"),
+            FlightError::DecodeError(desc) => write!(f, "Decode error: {desc}"),
+            FlightError::ExternalError(source) => write!(f, "External error: {source}"),
         }
     }
 }
@@ -74,7 +74,7 @@ impl Error for FlightError {
 
 impl From<tonic::Status> for FlightError {
     fn from(status: tonic::Status) -> Self {
-        Self::Tonic(status)
+        Self::Tonic(Box::new(status))
     }
 }
 
@@ -91,7 +91,7 @@ impl From<FlightError> for tonic::Status {
         match value {
             FlightError::Arrow(e) => tonic::Status::internal(e.to_string()),
             FlightError::NotYetImplemented(e) => tonic::Status::internal(e),
-            FlightError::Tonic(status) => status,
+            FlightError::Tonic(status) => *status,
             FlightError::ProtocolError(e) => tonic::Status::internal(e),
             FlightError::DecodeError(e) => tonic::Status::internal(e),
             FlightError::ExternalError(e) => tonic::Status::internal(e.to_string()),
@@ -146,5 +146,11 @@ mod test {
 
         let source = root_error.downcast_ref::<FlightError>().unwrap();
         assert!(matches!(source, FlightError::DecodeError(_)));
+    }
+
+    #[test]
+    fn test_error_size() {
+        // use Box in variants to keep this size down
+        assert_eq!(std::mem::size_of::<FlightError>(), 32);
     }
 }

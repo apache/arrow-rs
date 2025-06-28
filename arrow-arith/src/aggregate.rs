@@ -513,6 +513,11 @@ pub fn max_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
     min_max_view_helper(array, Ordering::Greater)
 }
 
+/// Returns the maximum value in the fixed size binary array, according to the natural order.
+pub fn max_fixed_size_binary(array: &FixedSizeBinaryArray) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
+}
+
 /// Returns the minimum value in the binary array, according to the natural order.
 pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
     min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
@@ -521,6 +526,11 @@ pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
 /// Returns the minimum value in the binary view array, according to the natural order.
 pub fn min_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
     min_max_view_helper(array, Ordering::Less)
+}
+
+/// Returns the minimum value in the fixed size binary array, according to the natural order.
+pub fn min_fixed_size_binary(array: &FixedSizeBinaryArray) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
 }
 
 /// Returns the maximum value in the string array, according to the natural order.
@@ -1240,6 +1250,41 @@ mod tests {
         assert!(max(&a).unwrap().is_nan());
     }
 
+    fn pad_inputs_and_test_fixed_size_binary(
+        input: Vec<Option<&[u8]>>,
+        expected_min: Option<&[u8]>,
+        expected_max: Option<&[u8]>,
+    ) {
+        fn pad_slice(slice: &[u8], len: usize) -> Vec<u8> {
+            let mut padded = vec![0; len];
+            padded[..slice.len()].copy_from_slice(slice);
+            padded
+        }
+
+        let max_len = input
+            .iter()
+            .filter_map(|x| x.as_ref().map(|b| b.len()))
+            .max()
+            .unwrap_or(0);
+        let padded_input = input
+            .iter()
+            .map(|x| x.as_ref().map(|b| pad_slice(b, max_len)));
+        let input_arr =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(padded_input, max_len as i32)
+                .unwrap();
+        let padded_expected_min = expected_min.map(|b| pad_slice(b, max_len));
+        let padded_expected_max = expected_max.map(|b| pad_slice(b, max_len));
+
+        assert_eq!(
+            padded_expected_min.as_deref(),
+            min_fixed_size_binary(&input_arr)
+        );
+        assert_eq!(
+            padded_expected_max.as_deref(),
+            max_fixed_size_binary(&input_arr)
+        );
+    }
+
     macro_rules! test_binary {
         ($NAME:ident, $ARRAY:expr, $EXPECTED_MIN:expr, $EXPECTED_MAX: expr) => {
             #[test]
@@ -1255,6 +1300,8 @@ mod tests {
                 let binary_view = BinaryViewArray::from($ARRAY);
                 assert_eq!($EXPECTED_MIN, min_binary_view(&binary_view));
                 assert_eq!($EXPECTED_MAX, max_binary_view(&binary_view));
+
+                pad_inputs_and_test_fixed_size_binary($ARRAY, $EXPECTED_MIN, $EXPECTED_MAX);
             }
         };
     }

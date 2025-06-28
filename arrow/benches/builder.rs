@@ -22,12 +22,13 @@ extern crate rand;
 use std::mem::size_of;
 
 use criterion::*;
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 
 use arrow::array::*;
 use arrow::util::test_util::seedable_rng;
 use arrow_buffer::i256;
 use rand::Rng;
+use std::hint;
 
 // Build arrays with 512k elements.
 const BATCH_SIZE: usize = 8 << 10;
@@ -46,7 +47,7 @@ fn bench_primitive(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES {
                 builder.append_slice(&data[..]);
             }
-            black_box(builder.finish());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -60,7 +61,7 @@ fn bench_primitive_nulls(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES * BATCH_SIZE {
                 builder.append_null();
             }
-            black_box(builder.finish());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -68,7 +69,7 @@ fn bench_primitive_nulls(c: &mut Criterion) {
 
 fn bench_bool(c: &mut Criterion) {
     let data: Vec<bool> = seedable_rng()
-        .sample_iter(&Standard)
+        .sample_iter(&StandardUniform)
         .take(BATCH_SIZE)
         .collect();
     let data_len = data.len();
@@ -83,7 +84,7 @@ fn bench_bool(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES {
                 builder.append_slice(&data[..]);
             }
-            black_box(builder.finish());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -101,7 +102,7 @@ fn bench_string(c: &mut Criterion) {
             for _ in 0..NUM_BATCHES * BATCH_SIZE {
                 builder.append_value(SAMPLE_STRING);
             }
-            black_box(builder.finish());
+            hint::black_box(builder.finish());
         })
     });
     group.finish();
@@ -146,12 +147,12 @@ fn bench_decimal64(c: &mut Criterion) {
 fn bench_decimal128(c: &mut Criterion) {
     c.bench_function("bench_decimal128_builder", |b| {
         b.iter(|| {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             let mut decimal_builder = Decimal128Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
-                decimal_builder.append_value(rng.gen_range::<i128, _>(0..9999999999));
+                decimal_builder.append_value(rng.random_range::<i128, _>(0..9999999999));
             }
-            black_box(
+            hint::black_box(
                 decimal_builder
                     .finish()
                     .with_precision_and_scale(38, 0)
@@ -164,13 +165,13 @@ fn bench_decimal128(c: &mut Criterion) {
 fn bench_decimal256(c: &mut Criterion) {
     c.bench_function("bench_decimal256_builder", |b| {
         b.iter(|| {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             let mut decimal_builder = Decimal256Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
                 decimal_builder
-                    .append_value(i256::from_i128(rng.gen_range::<i128, _>(0..99999999999)));
+                    .append_value(i256::from_i128(rng.random_range::<i128, _>(0..99999999999)));
             }
-            black_box(
+            hint::black_box(
                 decimal_builder
                     .finish()
                     .with_precision_and_scale(76, 10)

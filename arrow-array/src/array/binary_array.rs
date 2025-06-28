@@ -20,7 +20,7 @@ use crate::{Array, GenericByteArray, GenericListArray, GenericStringArray, Offse
 use arrow_data::ArrayData;
 use arrow_schema::DataType;
 
-/// A [`GenericBinaryArray`] for storing `[u8]`
+/// A [`GenericByteArray`] for storing `[u8]`
 pub type GenericBinaryArray<OffsetSize> = GenericByteArray<GenericBinaryType<OffsetSize>>;
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {

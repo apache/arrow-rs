@@ -463,20 +463,11 @@ impl Parser for Float64Type {
     }
 }
 
-/// This API is only stable since 1.70 so can't use it when current MSRV is lower
-#[inline(always)]
-fn is_some_and<T>(opt: Option<T>, f: impl FnOnce(T) -> bool) -> bool {
-    match opt {
-        None => false,
-        Some(x) => f(x),
-    }
-}
-
 macro_rules! parser_primitive {
     ($t:ty) => {
         impl Parser for $t {
             fn parse(string: &str) -> Option<Self::Native> {
-                if !is_some_and(string.as_bytes().last(), |x| x.is_ascii_digit()) {
+                if !string.as_bytes().last().is_some_and(|x| x.is_ascii_digit()) {
                     return None;
                 }
                 match atoi::FromRadix10SignedChecked::from_radix_10_signed_checked(
@@ -1244,8 +1235,7 @@ impl Interval {
         match (self.months, self.days, self.nanos) {
             (months, days, nanos) if days == 0 && nanos == 0 => Ok(months),
             _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Unable to represent interval with days and nanos as year-months: {:?}",
-                self
+                "Unable to represent interval with days and nanos as year-months: {self:?}"
             ))),
         }
     }

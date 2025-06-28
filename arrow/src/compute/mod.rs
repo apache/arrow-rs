@@ -24,6 +24,7 @@ pub use self::kernels::arithmetic::*;
 pub use self::kernels::arity::*;
 pub use self::kernels::boolean::*;
 pub use self::kernels::cast::*;
+pub use self::kernels::coalesce::*;
 pub use self::kernels::comparison::*;
 pub use self::kernels::concat::*;
 pub use self::kernels::filter::*;

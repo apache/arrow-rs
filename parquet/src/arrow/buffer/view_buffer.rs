@@ -91,7 +91,7 @@ impl ViewBuffer {
                 let array = unsafe { builder.build_unchecked() };
                 make_array(array)
             }
-            _ => panic!("Unsupported data type: {:?}", data_type),
+            _ => panic!("Unsupported data type: {data_type:?}"),
         }
     }
 }

@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains async writer which writes arrow data into parquet data.
+//! `async` API for writing [`RecordBatch`]es to Parquet files
 //!
-//! Provides `async` API for writing [`RecordBatch`]es as parquet files. The API is
-//! similar to the [`sync` API](crate::arrow::arrow_writer::ArrowWriter), so please
+//! See the [crate-level documentation](crate) for more details.
+//!
+//! The `async` API for writing [`RecordBatch`]es is
+//! similar to the [`sync` API](ArrowWriter), so please
 //! read the documentation there before using this API.
 //!
 //! Here is an example for using [`AsyncArrowWriter`]:
@@ -260,6 +262,16 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
         self.finish().await
     }
 
+    /// Consumes the [`AsyncArrowWriter`] and returns the underlying [`AsyncFileWriter`]
+    ///
+    /// # Notes
+    ///
+    /// This method does **not** flush or finalize the writer, so buffered data
+    /// will be lost if you have not called [`Self::finish`].
+    pub fn into_inner(self) -> W {
+        self.async_writer
+    }
+
     /// Flush the data written by `sync_writer` into the `async_writer`
     ///
     /// # Notes
@@ -293,7 +305,7 @@ mod tests {
     fn get_test_reader() -> ParquetRecordBatchReader {
         let testdata = arrow::util::test_util::parquet_test_data();
         // This test file is large enough to generate multiple row groups.
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let original_data = Bytes::from(std::fs::read(path).unwrap());
         ParquetRecordBatchReaderBuilder::try_new(original_data)
             .unwrap()

@@ -45,7 +45,7 @@ mod struct_array;
 #[cfg(test)]
 mod test_util;
 
-pub use builder::build_array_reader;
+pub(crate) use builder::ArrayReaderBuilder;
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
@@ -111,7 +111,8 @@ pub trait RowGroups {
     /// Get the number of rows in this collection
     fn num_rows(&self) -> usize;
 
-    /// Returns a [`PageIterator`] for the column chunks with the given leaf column index
+    /// Returns a [`PageIterator`] for all pages in the specified column chunk
+    /// across all row groups in this collection.
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
 }
 

@@ -577,8 +577,7 @@ where
         )?,
         other => {
             return Err(ArrowError::ComputeError(format!(
-                "Cannot cast {:?} to decimal",
-                other
+                "Cannot cast {other:?} to decimal",
             )))
         }
     };

@@ -55,7 +55,7 @@ use std::ops::Deref;
 ///  (offsets[i],
 ///   offsets[i+1])
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OffsetBuffer<O: ArrowNativeType>(ScalarBuffer<O>);
 
 impl<O: ArrowNativeType> OffsetBuffer<O> {
@@ -216,6 +216,12 @@ impl<O: ArrowNativeType> From<OffsetBufferBuilder<O>> for OffsetBuffer<O> {
     }
 }
 
+impl<O: ArrowNativeType> Default for OffsetBuffer<O> {
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +301,26 @@ mod tests {
     fn get_lengths_from_empty_offset_buffer_should_be_empty_iterator() {
         let offsets = OffsetBuffer::<i32>::new_empty();
         assert_eq!(offsets.lengths().collect::<Vec<usize>>(), vec![]);
+    }
+
+    #[test]
+    fn impl_eq() {
+        fn are_equal<T: Eq>(a: &T, b: &T) -> bool {
+            a.eq(b)
+        }
+
+        assert!(
+            are_equal(
+                &OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9])),
+                &OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]))
+            ),
+            "OffsetBuffer should implement Eq."
+        );
+    }
+
+    #[test]
+    fn impl_default() {
+        let default = OffsetBuffer::<i32>::default();
+        assert_eq!(default.as_ref(), &[0]);
     }
 }

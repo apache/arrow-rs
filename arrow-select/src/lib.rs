@@ -24,6 +24,7 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
 
+pub mod coalesce;
 pub mod concat;
 mod dictionary;
 pub mod filter;

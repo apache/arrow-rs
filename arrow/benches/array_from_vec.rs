@@ -25,11 +25,11 @@ extern crate arrow;
 use arrow::array::*;
 use arrow_buffer::i256;
 use rand::Rng;
-use std::sync::Arc;
+use std::{hint, sync::Arc};
 
 fn array_from_vec(n: usize) {
     let v: Vec<i32> = (0..n as i32).collect();
-    criterion::black_box(Int32Array::from(v));
+    hint::black_box(Int32Array::from(v));
 }
 
 fn array_string_from_vec(n: usize) {
@@ -41,7 +41,7 @@ fn array_string_from_vec(n: usize) {
             v.push(None);
         }
     }
-    criterion::black_box(StringArray::from(v));
+    hint::black_box(StringArray::from(v));
 }
 
 fn struct_array_values(
@@ -70,7 +70,7 @@ fn struct_array_from_vec(
     let strings: ArrayRef = Arc::new(StringArray::from(strings.to_owned()));
     let ints: ArrayRef = Arc::new(Int32Array::from(ints.to_owned()));
 
-    criterion::black_box(StructArray::try_from(vec![(field1, strings), (field2, ints)]).unwrap());
+    hint::black_box(StructArray::try_from(vec![(field1, strings), (field2, ints)]).unwrap());
 }
 
 fn decimal32_array_from_vec(array: &[Option<i32>]) {
@@ -96,7 +96,7 @@ fn decimal64_array_from_vec(array: &[Option<i64>]) {
 }
 
 fn decimal128_array_from_vec(array: &[Option<i128>]) {
-    criterion::black_box(
+    hint::black_box(
         array
             .iter()
             .copied()
@@ -107,7 +107,7 @@ fn decimal128_array_from_vec(array: &[Option<i128>]) {
 }
 
 fn decimal256_array_from_vec(array: &[Option<i256>]) {
-    criterion::black_box(
+    hint::black_box(
         array
             .iter()
             .copied()
@@ -145,10 +145,10 @@ fn decimal_benchmark(c: &mut Criterion) {
     // bench decimal128 array
     // create option<i128> array
     let size: usize = 1 << 15;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut array = vec![];
     for _ in 0..size {
-        array.push(Some(rng.gen_range::<i128, _>(0..9999999999)));
+        array.push(Some(rng.random_range::<i128, _>(0..9999999999)));
     }
     c.bench_function("decimal128_array_from_vec 32768", |b| {
         b.iter(|| decimal128_array_from_vec(array.as_slice()))
@@ -158,9 +158,9 @@ fn decimal_benchmark(c: &mut Criterion) {
     // create option<into<decimal256>> array
     let size = 1 << 10;
     let mut array = vec![];
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..size {
-        let decimal = i256::from_i128(rng.gen_range::<i128, _>(0..9999999999999));
+        let decimal = i256::from_i128(rng.random_range::<i128, _>(0..9999999999999));
         array.push(Some(decimal));
     }
 

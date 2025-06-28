@@ -86,11 +86,11 @@ fn validate_decimal64_benchmark(c: &mut Criterion) {
 }
 
 fn validate_decimal128_benchmark(c: &mut Criterion) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let size: i128 = 20000;
     let mut decimal_builder = Decimal128Builder::with_capacity(size as usize);
     for _ in 0..size {
-        decimal_builder.append_value(rng.gen_range::<i128, _>(0..999999999999));
+        decimal_builder.append_value(rng.random_range::<i128, _>(0..999999999999));
     }
     let decimal_array = decimal_builder
         .finish()
@@ -106,11 +106,11 @@ fn validate_decimal128_benchmark(c: &mut Criterion) {
 }
 
 fn validate_decimal256_benchmark(c: &mut Criterion) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let size: i128 = 20000;
     let mut decimal_builder = Decimal256Builder::with_capacity(size as usize);
     for _ in 0..size {
-        let v = rng.gen_range::<i128, _>(0..999999999999999);
+        let v = rng.random_range::<i128, _>(0..999999999999999);
         let decimal = i256::from_i128(v);
         decimal_builder.append_value(decimal);
     }

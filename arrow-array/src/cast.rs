@@ -60,6 +60,8 @@ macro_rules! repeat_pat {
 ///             k.as_ref() => (dictionary_key_size_helper, u8),
 ///             _ => unreachable!(),
 ///         },
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => u8::MAX,
 ///         _ => u8::MAX,
 ///     }
 /// }
@@ -72,7 +74,7 @@ macro_rules! repeat_pat {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_integer {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!($crate::cast::__private::DataType::Int8, $($data_type),+) => {
                 $m!($crate::types::Int8Type $(, $args)*)
@@ -98,7 +100,7 @@ macro_rules! downcast_integer {
             $crate::repeat_pat!($crate::cast::__private::DataType::UInt64, $($data_type),+) => {
                 $m!($crate::types::UInt64Type $(, $args)*)
             }
-            $($p => $fallback,)*
+            $($p $(if $pred)* => $fallback,)*
         }
     };
 }
@@ -107,7 +109,7 @@ macro_rules! downcast_integer {
 /// with the corresponding array, along with match statements for any non integer array types
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_integer_array, cast::as_string_array};
+/// # use arrow_array::{Array, downcast_integer_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_integer(array: &dyn Array) {
@@ -122,6 +124,12 @@ macro_rules! downcast_integer {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_largestring_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
 ///         t => println!("Unsupported datatype {}", t)
 ///     )
 /// }
@@ -130,19 +138,19 @@ macro_rules! downcast_integer {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_integer_array {
-    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_integer_array!($values => {$e} $($p => $fallback)*)
+    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer_array!($values => {$e} $($p $(if $pred)* => $fallback)*)
     };
-    (($($values:ident),+) => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_integer_array!($($values),+ => {$e} $($p => $fallback)*)
+    (($($values:ident),+) => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer_array!($($values),+ => {$e} $($p $(if $pred)* => $fallback)*)
     };
-    ($($values:ident),+ => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_integer_array!(($($values),+) => $e $($p => $fallback)*)
+    ($($values:ident),+ => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_integer_array!(($($values),+) => $e $($p $(if $pred)* => $fallback)*)
     };
-    (($($values:ident),+) => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         $crate::downcast_integer!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
-            $($p => $fallback,)*
+            $($p $(if $pred)* => $fallback,)*
         }
     };
 }
@@ -167,6 +175,8 @@ macro_rules! downcast_integer_array {
 ///             k.data_type() => (run_end_size_helper, u8),
 ///             _ => unreachable!(),
 ///         },
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => u8::MAX,
 ///         _ => u8::MAX,
 ///     }
 /// }
@@ -179,7 +189,7 @@ macro_rules! downcast_integer_array {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_run_end_index {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!($crate::cast::__private::DataType::Int16, $($data_type),+) => {
                 $m!($crate::types::Int16Type $(, $args)*)
@@ -190,7 +200,7 @@ macro_rules! downcast_run_end_index {
             $crate::repeat_pat!($crate::cast::__private::DataType::Int64, $($data_type),+) => {
                 $m!($crate::types::Int64Type $(, $args)*)
             }
-            $($p => $fallback,)*
+            $($p $(if $pred)* => $fallback,)*
         }
     };
 }
@@ -211,6 +221,8 @@ macro_rules! downcast_run_end_index {
 /// fn temporal_size(t: &DataType) -> u8 {
 ///     downcast_temporal! {
 ///         t => (temporal_size_helper, u8),
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => u8::MAX,
 ///         _ => u8::MAX
 ///     }
 /// }
@@ -222,7 +234,7 @@ macro_rules! downcast_run_end_index {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_temporal {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         match ($($data_type),+) {
             $crate::repeat_pat!($crate::cast::__private::DataType::Time32($crate::cast::__private::TimeUnit::Second), $($data_type),+) => {
                 $m!($crate::types::Time32SecondType $(, $args)*)
@@ -254,7 +266,7 @@ macro_rules! downcast_temporal {
             $crate::repeat_pat!($crate::cast::__private::DataType::Timestamp($crate::cast::__private::TimeUnit::Nanosecond, _), $($data_type),+) => {
                 $m!($crate::types::TimestampNanosecondType $(, $args)*)
             }
-            $($p => $fallback,)*
+            $($p $(if $pred)* => $fallback,)*
         }
     };
 }
@@ -263,7 +275,7 @@ macro_rules! downcast_temporal {
 /// accepts a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_temporal_array, cast::as_string_array};
+/// # use arrow_array::{Array, downcast_temporal_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_temporal(array: &dyn Array) {
@@ -278,6 +290,12 @@ macro_rules! downcast_temporal {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_largestring_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
 ///         t => println!("Unsupported datatype {}", t)
 ///     )
 /// }
@@ -286,19 +304,19 @@ macro_rules! downcast_temporal {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_temporal_array {
-    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_temporal_array!($values => {$e} $($p => $fallback)*)
+    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal_array!($values => {$e} $($p $(if $pred)* => $fallback)*)
     };
-    (($($values:ident),+) => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_temporal_array!($($values),+ => {$e} $($p => $fallback)*)
+    (($($values:ident),+) => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal_array!($($values),+ => {$e} $($p $(if $pred)* => $fallback)*)
     };
-    ($($values:ident),+ => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_temporal_array!(($($values),+) => $e $($p => $fallback)*)
+    ($($values:ident),+ => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_temporal_array!(($($values),+) => $e $($p $(if $pred)* => $fallback)*)
     };
-    (($($values:ident),+) => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         $crate::downcast_temporal!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
-            $($p => $fallback,)*
+            $($p $(if $pred)* => $fallback,)*
         }
     };
 }
@@ -319,6 +337,8 @@ macro_rules! downcast_temporal_array {
 /// fn primitive_size(t: &DataType) -> u8 {
 ///     downcast_primitive! {
 ///         t => (primitive_size_helper, u8),
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => u8::MAX,
 ///         _ => u8::MAX
 ///     }
 /// }
@@ -333,7 +353,7 @@ macro_rules! downcast_temporal_array {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_primitive {
-    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat => $fallback:expr $(,)*)*) => {
+    ($($data_type:expr),+ => ($m:path $(, $args:tt)*), $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         $crate::downcast_integer! {
             $($data_type),+ => ($m $(, $args)*),
             $crate::repeat_pat!($crate::cast::__private::DataType::Float16, $($data_type),+) => {
@@ -381,7 +401,7 @@ macro_rules! downcast_primitive {
             _ => {
                 $crate::downcast_temporal! {
                     $($data_type),+ => ($m $(, $args)*),
-                    $($p => $fallback,)*
+                    $($p $(if $pred)* => $fallback,)*
                 }
             }
         }
@@ -401,7 +421,7 @@ macro_rules! downcast_primitive_array_helper {
 /// accepts a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, downcast_primitive_array, cast::as_string_array};
+/// # use arrow_array::{Array, downcast_primitive_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_primitive(array: &dyn Array) {
@@ -416,6 +436,12 @@ macro_rules! downcast_primitive_array_helper {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_largestring_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
 ///         t => println!("Unsupported datatype {}", t)
 ///     )
 /// }
@@ -424,19 +450,19 @@ macro_rules! downcast_primitive_array_helper {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_primitive_array {
-    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_primitive_array!($values => {$e} $($p => $fallback)*)
+    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_array!($values => {$e} $($p $(if $pred)* => $fallback)*)
     };
-    (($($values:ident),+) => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_primitive_array!($($values),+ => {$e} $($p => $fallback)*)
+    (($($values:ident),+) => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_array!($($values),+ => {$e} $($p $(if $pred)* => $fallback)*)
     };
-    ($($values:ident),+ => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
-        $crate::downcast_primitive_array!(($($values),+) => $e $($p => $fallback)*)
+    ($($values:ident),+ => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        $crate::downcast_primitive_array!(($($values),+) => $e $($p $(if $pred)* => $fallback)*)
     };
-    (($($values:ident),+) => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+    (($($values:ident),+) => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         $crate::downcast_primitive!{
             $($values.data_type()),+ => ($crate::downcast_primitive_array_helper, $($values),+, $e),
-            $($p => $fallback,)*
+            $($p $(if $pred)* => $fallback,)*
         }
     };
 }
@@ -488,7 +514,7 @@ macro_rules! downcast_dictionary_array_helper {
 /// a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, StringArray, downcast_dictionary_array, cast::as_string_array};
+/// # use arrow_array::{Array, StringArray, downcast_dictionary_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_strings(array: &dyn Array) {
@@ -506,6 +532,12 @@ macro_rules! downcast_dictionary_array_helper {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_largestring_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
 ///         t => println!("Unsupported datatype {}", t)
 ///     )
 /// }
@@ -514,11 +546,11 @@ macro_rules! downcast_dictionary_array_helper {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_dictionary_array {
-    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        downcast_dictionary_array!($values => {$e} $($p => $fallback)*)
+    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        downcast_dictionary_array!($values => {$e} $($p $(if $pred)* => $fallback)*)
     };
 
-    ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+    ($values:ident => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         match $values.data_type() {
             $crate::cast::__private::DataType::Dictionary(k, _) => {
                 $crate::downcast_integer! {
@@ -526,7 +558,7 @@ macro_rules! downcast_dictionary_array {
                     k => unreachable!("unsupported dictionary key type: {}", k)
                 }
             }
-            $($p => $fallback,)*
+            $($p $(if $pred)* => $fallback,)*
         }
     }
 }
@@ -590,7 +622,7 @@ macro_rules! downcast_run_array_helper {
 /// a number of subsequent patterns to match the data type
 ///
 /// ```
-/// # use arrow_array::{Array, StringArray, downcast_run_array, cast::as_string_array};
+/// # use arrow_array::{Array, StringArray, downcast_run_array, cast::as_string_array, cast::as_largestring_array};
 /// # use arrow_schema::DataType;
 ///
 /// fn print_strings(array: &dyn Array) {
@@ -608,6 +640,12 @@ macro_rules! downcast_run_array_helper {
 ///                 println!("{:?}", v);
 ///             }
 ///         }
+///         // You can also add a guard to the pattern
+///         DataType::LargeUtf8 if true => {
+///             for v in as_largestring_array(array) {
+///                 println!("{:?}", v);
+///             }
+///         }
 ///         t => println!("Unsupported datatype {}", t)
 ///     )
 /// }
@@ -616,11 +654,11 @@ macro_rules! downcast_run_array_helper {
 /// [`DataType`]: arrow_schema::DataType
 #[macro_export]
 macro_rules! downcast_run_array {
-    ($values:ident => $e:expr, $($p:pat => $fallback:expr $(,)*)*) => {
-        downcast_run_array!($values => {$e} $($p => $fallback)*)
+    ($values:ident => $e:expr, $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
+        downcast_run_array!($values => {$e} $($p $(if $pred)* => $fallback)*)
     };
 
-    ($values:ident => $e:block $($p:pat => $fallback:expr $(,)*)*) => {
+    ($values:ident => $e:block $($p:pat $(if $pred:expr)* => $fallback:expr $(,)*)*) => {
         match $values.data_type() {
             $crate::cast::__private::DataType::RunEndEncoded(k, _) => {
                 $crate::downcast_run_end_index! {
@@ -628,7 +666,7 @@ macro_rules! downcast_run_array {
                     k => unreachable!("unsupported run end index type: {}", k)
                 }
             }
-            $($p => $fallback,)*
+            $($p $(if $pred)* => $fallback,)*
         }
     }
 }
@@ -924,6 +962,14 @@ pub trait AsArray: private::Sealed {
         self.as_dictionary_opt().expect("dictionary array")
     }
 
+    /// Downcast this to a [`RunArray`] returning `None` if not possible
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>>;
+
+    /// Downcast this to a [`RunArray`] panicking if not possible
+    fn as_run<K: RunEndIndexType>(&self) -> &RunArray<K> {
+        self.as_run_opt().expect("run array")
+    }
+
     /// Downcasts this to a [`AnyDictionaryArray`] returning `None` if not possible
     fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray>;
 
@@ -980,6 +1026,10 @@ impl AsArray for dyn Array + '_ {
     }
 
     fn as_dictionary_opt<K: ArrowDictionaryKeyType>(&self) -> Option<&DictionaryArray<K>> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>> {
         self.as_any().downcast_ref()
     }
 
@@ -1044,6 +1094,14 @@ impl AsArray for ArrayRef {
 
     fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray> {
         self.as_ref().as_any_dictionary_opt()
+    }
+
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>> {
+        self.as_ref().as_run_opt()
+    }
+
+    fn as_string_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericStringArray<O>> {
+        self.as_ref().as_string_opt()
     }
 }
 
