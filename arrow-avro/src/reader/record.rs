@@ -122,6 +122,7 @@ enum Decoder {
         Vec<u8>,
         Box<Decoder>,
     ),
+    Fixed(i32, Vec<u8>),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
 }
 
@@ -157,7 +158,7 @@ impl Decoder {
             Codec::TimestampMicros(is_utc) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            Codec::Fixed(_) => return nyi("decoding fixed"),
+            Codec::Fixed(sz) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
             Codec::Interval => return nyi("decoding interval"),
             Codec::List(item) => {
                 let decoder = Self::try_new(item)?;
@@ -196,6 +197,7 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
+            Codec::Uuid => Self::Fixed(16, Vec::with_capacity(DEFAULT_CAPACITY)),
         };
 
         Ok(match data_type.nullability() {
@@ -232,6 +234,9 @@ impl Decoder {
                 moff.push_length(0);
             }
             Self::Nullable(_, _, _) => unreachable!("Nulls cannot be nested"),
+            Self::Fixed(sz, accum) => {
+                accum.extend(std::iter::repeat(0u8).take(*sz as usize));
+            }
         }
     }
 
@@ -281,6 +286,10 @@ impl Decoder {
                     true => e.decode(buf)?,
                     false => e.append_null(),
                 }
+            }
+            Self::Fixed(sz, accum) => {
+                let fx = buf.get_fixed(*sz as usize)?;
+                accum.extend_from_slice(fx);
             }
         }
         Ok(())
@@ -382,6 +391,12 @@ impl Decoder {
                 );
                 let map_arr = MapArray::new(map_field.clone(), moff, entries_struct, nulls, false);
                 Arc::new(map_arr)
+            }
+            Self::Fixed(sz, accum) => {
+                let b: Buffer = flush_values(accum).into();
+                let arr = FixedSizeBinaryArray::try_new(*sz, b, nulls)
+                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                Arc::new(arr)
             }
         })
     }
@@ -540,6 +555,89 @@ mod tests {
         let map_arr = array.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map_arr.len(), 1);
         assert_eq!(map_arr.value_length(0), 0);
+    }
+
+    #[test]
+    fn test_fixed_decoding() {
+        let avro_type = avro_from_codec(Codec::Fixed(3));
+        let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
+
+        let data1 = [1u8, 2, 3];
+        let mut cursor1 = AvroCursor::new(&data1);
+        decoder
+            .decode(&mut cursor1)
+            .expect("Failed to decode data1");
+        assert_eq!(cursor1.position(), 3, "Cursor should advance by fixed size");
+
+        let data2 = [4u8, 5, 6];
+        let mut cursor2 = AvroCursor::new(&data2);
+        decoder
+            .decode(&mut cursor2)
+            .expect("Failed to decode data2");
+        assert_eq!(cursor2.position(), 3, "Cursor should advance by fixed size");
+
+        let array = decoder.flush(None).expect("Failed to flush decoder");
+
+        assert_eq!(array.len(), 2, "Array should contain two items");
+        let fixed_size_binary_array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .expect("Failed to downcast to FixedSizeBinaryArray");
+
+        assert_eq!(
+            fixed_size_binary_array.value_length(),
+            3,
+            "Fixed size of binary values should be 3"
+        );
+        assert_eq!(
+            fixed_size_binary_array.value(0),
+            &[1, 2, 3],
+            "First item mismatch"
+        );
+        assert_eq!(
+            fixed_size_binary_array.value(1),
+            &[4, 5, 6],
+            "Second item mismatch"
+        );
+    }
+
+    #[test]
+    fn test_fixed_decoding_empty() {
+        let avro_type = avro_from_codec(Codec::Fixed(5));
+        let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
+
+        let array = decoder
+            .flush(None)
+            .expect("Failed to flush decoder for empty input");
+
+        assert_eq!(array.len(), 0, "Array should be empty");
+        let fixed_size_binary_array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .expect("Failed to downcast to FixedSizeBinaryArray for empty array");
+
+        assert_eq!(
+            fixed_size_binary_array.value_length(),
+            5,
+            "Fixed size of binary values should be 5 as per type"
+        );
+    }
+
+    #[test]
+    fn test_uuid_decoding() {
+        let avro_type = avro_from_codec(Codec::Uuid);
+        let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
+
+        let data1 = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let mut cursor1 = AvroCursor::new(&data1);
+        decoder
+            .decode(&mut cursor1)
+            .expect("Failed to decode data1");
+        assert_eq!(
+            cursor1.position(),
+            16,
+            "Cursor should advance by fixed size"
+        );
     }
 
     #[test]

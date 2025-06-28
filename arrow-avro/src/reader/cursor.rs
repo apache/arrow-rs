@@ -118,4 +118,16 @@ impl<'a> AvroCursor<'a> {
         self.buf = &self.buf[8..];
         Ok(ret)
     }
+
+    /// Read exactly `n` bytes from the buffer (e.g. for Avro `fixed`).
+    pub(crate) fn get_fixed(&mut self, n: usize) -> Result<&'a [u8], ArrowError> {
+        if self.buf.len() < n {
+            return Err(ArrowError::ParseError(
+                "Unexpected EOF reading fixed".to_string(),
+            ));
+        }
+        let ret = &self.buf[..n];
+        self.buf = &self.buf[n..];
+        Ok(ret)
+    }
 }

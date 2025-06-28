@@ -192,6 +192,8 @@ pub enum Codec {
     /// Represents Avro fixed type, maps to Arrow's FixedSizeBinary data type
     /// The i32 parameter indicates the fixed binary size
     Fixed(i32),
+    /// Represents Avro Uuid type, a FixedSizeBinary with a length of 16
+    Uuid,
     /// Represents Avro array type, maps to Arrow's List data type
     List(Arc<AvroDataType>),
     /// Represents Avro record type, maps to Arrow's Struct data type
@@ -225,6 +227,7 @@ impl Codec {
             }
             Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => DataType::FixedSizeBinary(*size),
+            Self::Uuid => DataType::FixedSizeBinary(16),
             Self::List(f) => {
                 DataType::List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME)))
             }
@@ -457,6 +460,7 @@ fn make_data_type<'a>(
                     *c = Codec::TimestampMicros(false)
                 }
                 (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Interval,
+                (Some("uuid"), c @ Codec::Utf8) => *c = Codec::Uuid,
                 (Some(logical), _) => {
                     // Insert unrecognized logical type into metadata map
                     field.metadata.insert("logicalType".into(), logical.into());
@@ -581,6 +585,17 @@ mod tests {
         let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
 
         assert!(matches!(result.codec, Codec::TimestampMicros(false)));
+    }
+
+    #[test]
+    fn test_uuid_type() {
+        let mut codec = Codec::Fixed(16);
+
+        if let c @ Codec::Fixed(16) = &mut codec {
+            *c = Codec::Uuid;
+        }
+
+        assert!(matches!(codec, Codec::Uuid));
     }
 
     #[test]
