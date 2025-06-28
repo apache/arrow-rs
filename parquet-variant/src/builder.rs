@@ -571,7 +571,8 @@ impl<'a> ListBuilder<'a> {
 pub struct ObjectBuilder<'a, 'b> {
     parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
-    fields: Vec<(u32, usize)>, // (field_id, offset)
+    fields: Vec<(u32, usize)>,              // (field_id, offset)
+    field_id_to_index: HashMap<u32, usize>, // (field_id, index to `fields`)
     buffer: ValueBuffer,
     /// Is there a pending list or object that needs to be finalized?
     pending: Option<(&'b str, usize)>,
@@ -583,15 +584,24 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             parent_buffer,
             metadata_builder,
             fields: Vec::new(),
+            field_id_to_index: HashMap::new(),
             buffer: ValueBuffer::default(),
             pending: None,
         }
     }
 
     fn upsert_field(&mut self, field_id: u32, field_start: usize) {
-        match self.fields.iter().position(|&(id, _)| id == field_id) {
-            Some(i) => self.fields[i] = (field_id, field_start),
-            None => self.fields.push((field_id, field_start)),
+        use std::collections::hash_map::Entry;
+
+        match self.field_id_to_index.entry(field_id) {
+            Entry::Occupied(occupied_entry) => {
+                let i = *occupied_entry.get();
+                self.fields[i] = (field_id, field_start);
+            }
+            Entry::Vacant(vacant_entry) => {
+                vacant_entry.insert(self.fields.len());
+                self.fields.push((field_id, field_start));
+            }
         }
     }
 
