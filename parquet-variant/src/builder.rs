@@ -439,6 +439,22 @@ impl MetadataBuilder {
 /// );
 ///
 /// ```
+/// # Example: Duplicate Field Validation
+///
+/// This example shows how enabling validation will cause an error if the same field
+/// is inserted more than once.
+/// ```
+/// use parquet_variant::VariantBuilder;
+///
+/// let mut builder = VariantBuilder::new();
+/// let mut obj = builder.new_object().with_validate_unique_fields();
+///
+/// obj.insert("a", 1);
+/// obj.insert("a", 2); // duplicate field
+///
+/// let result = obj.finish(); // returns Err
+/// assert!(result.is_err());
+/// ```
 #[derive(Default)]
 pub struct VariantBuilder {
     buffer: ValueBuffer,
@@ -573,7 +589,8 @@ pub struct ObjectBuilder<'a, 'b> {
     /// Is there a pending list or object that needs to be finalized?
     pending: Option<(&'b str, usize)>,
     validate_duplicates: bool,
-    duplicate_fields: HashSet<String>,
+    /// Set of duplicate fields to report for errors
+    duplicate_fields: HashSet<u32>,
 }
 
 impl<'a, 'b> ObjectBuilder<'a, 'b> {
@@ -610,14 +627,17 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let field_id = self.metadata_builder.upsert_field_name(key);
         let field_start = self.buffer.offset();
 
-        if self.fields.contains_key(&field_id) {
-            self.duplicate_fields.insert(key.to_string());
+        if self.fields.insert(field_id, field_start).is_some() && self.validate_duplicates {
+            self.duplicate_fields.insert(field_id);
         }
 
-        self.fields.insert(field_id, field_start);
         self.buffer.append_non_nested_value(value);
     }
 
+    /// Enables validation for duplicate field keys when inserting into this object.
+    /// 
+    /// When this is enabled, calling [`ObjectBuilder::finish`] will return an error
+    /// if any duplicate field keys were added using [`ObjectBuilder::insert`].
     pub fn with_validate_unique_fields(mut self) -> Self {
         self.validate_duplicates = true;
         self
@@ -625,13 +645,12 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
 
     /// Return a new [`ObjectBuilder`] to add a nested object with the specified
     /// key to the object.
-    ///
-    /// Note: user decides per nested builder whether to enable validation
     pub fn new_object(&mut self, key: &'b str) -> ObjectBuilder {
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
-        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
+        let mut obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
+        obj_builder.validate_duplicates = self.validate_duplicates;
         self.pending = Some((key, field_start));
 
         obj_builder
@@ -656,9 +675,26 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         self.check_pending_field();
 
         if self.validate_duplicates && !self.duplicate_fields.is_empty() {
+            let id_to_name = self
+                .metadata_builder
+                .field_name_to_id
+                .iter()
+                .map(|(name, id)| (*id, name.as_str()))
+                .collect::<BTreeMap<u32, &str>>();
+
+            let mut names = self
+                .duplicate_fields
+                .iter()
+                .filter_map(|id| id_to_name.get(id))
+                .cloned()
+                .collect::<Vec<_>>();
+
+            names.sort_unstable();
+
+            let joined = names.join(", ");
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Duplicate fields detected: {:?}",
-                self.duplicate_fields
+                "Duplicate field keys detected: [{}]",
+                joined
             )));
         }
 
@@ -1433,8 +1469,13 @@ mod tests {
 
         obj.insert("a", 1);
         obj.insert("a", 2);
+        obj.insert("b", 1);
+        obj.insert("b", 2);
 
         let result = obj.finish();
-        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: Duplicate field keys detected: [a, b]"
+        );
     }
 }
