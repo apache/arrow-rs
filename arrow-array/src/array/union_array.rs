@@ -994,7 +994,7 @@ fn selection_mask(type_ids_chunk: &[i8], type_id: i8) -> u64 {
         .copied()
         .enumerate()
         .fold(0, |packed, (bit_idx, v)| {
-            packed | ((v == type_id) as u64) << bit_idx
+            packed | (((v == type_id) as u64) << bit_idx)
         })
 }
 

@@ -222,6 +222,7 @@ pub struct BufWriter {
     max_concurrency: usize,
     attributes: Option<Attributes>,
     tags: Option<TagSet>,
+    extensions: Option<::http::Extensions>,
     state: BufWriterState,
     store: Arc<dyn ObjectStore>,
 }
@@ -259,6 +260,7 @@ impl BufWriter {
             max_concurrency: 8,
             attributes: None,
             tags: None,
+            extensions: None,
             state: BufWriterState::Buffer(path, PutPayloadMut::new()),
         }
     }
@@ -285,6 +287,19 @@ impl BufWriter {
     pub fn with_tags(self, tags: TagSet) -> Self {
         Self {
             tags: Some(tags),
+            ..self
+        }
+    }
+
+    /// Set the extensions of the uploaded object
+    ///
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    pub fn with_extensions(self, extensions: ::http::Extensions) -> Self {
+        Self {
+            extensions: Some(extensions),
             ..self
         }
     }
@@ -325,6 +340,7 @@ impl BufWriter {
                         let opts = PutMultipartOpts {
                             attributes: self.attributes.take().unwrap_or_default(),
                             tags: self.tags.take().unwrap_or_default(),
+                            extensions: self.extensions.take().unwrap_or_default(),
                         };
                         let upload = self.store.put_multipart_opts(&path, opts).await?;
                         let mut chunked =
@@ -384,6 +400,7 @@ impl AsyncWrite for BufWriter {
                         let opts = PutMultipartOpts {
                             attributes: self.attributes.take().unwrap_or_default(),
                             tags: self.tags.take().unwrap_or_default(),
+                            extensions: self.extensions.take().unwrap_or_default(),
                         };
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {

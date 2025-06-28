@@ -341,7 +341,7 @@ fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue 
             .copied()
             .enumerate()
             .fold(0, |packed, (bit_idx, v)| {
-                packed | ((v == target) as u64) << bit_idx
+                packed | (((v == target) as u64) << bit_idx)
             })
     }));
 

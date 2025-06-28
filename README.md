@@ -65,9 +65,9 @@ Planned Release Schedule
 
 | Approximate Date | Version  | Notes                                   |
 | ---------------- | -------- | --------------------------------------- |
-| Jan 2025         | `54.1.0` | Minor, NO breaking API changes          |
-| Feb 2025         | `54.2.0` | Minor, NO breaking API changes          |
-| Mar 2025         | `55.0.0` | Major, potentially breaking API changes |
+| Mar 2025         | `54.2.0` | Minor, NO breaking API changes          |
+| Apr 2025         | `55.0.0` | Major, potentially breaking API changes |
+| May 2025         | `55.1.0` | Minor, NO breaking API changes          |
 
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
@@ -85,6 +85,7 @@ Planned Release Schedule
 | Approximate Date | Version  | Notes                                   |
 | ---------------- | -------- | --------------------------------------- |
 | Feb 2025         | `0.12.0` | Major, potentially breaking API changes |
+| Apr 2025         | `0.12.1` | Minor, NO breaking API changes          |
 
 ### Guidelines for `panic` vs `Result`
 

@@ -130,6 +130,16 @@ jobs:
         run: |
           cargo update -p tokio --precise 1.29.1
           cargo update -p url --precise 2.5.0
+          cargo update -p once_cell --precise 1.20.3
+      - name: Downgrade arrow-pyarrow-integration-testing dependencies
+        working-directory: arrow-pyarrow-integration-testing
+        # Necessary because half 2.5 requires rust 1.81 or newer
+        run: |
+          cargo update -p half --precise 2.4.0
+      - name: Downgrade workspace dependencies
+        # Necessary because half 2.5 requires rust 1.81 or newer
+        run: |
+          cargo update -p half --precise 2.4.0
       - name: Check all packages
         run: |
           # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies

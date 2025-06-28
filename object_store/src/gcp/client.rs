@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
 use crate::client::header::{get_put_result, get_version, HeaderConfig};
 use crate::client::list::ListClient;
@@ -23,7 +24,7 @@ use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
     ListResponse,
 };
-use crate::client::GetOptionsExt;
+use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
@@ -36,13 +37,12 @@ use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use bytes::Buf;
-use hyper::header::{
+use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
+use http::{HeaderName, Method, StatusCode};
 use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
-use reqwest::header::HeaderName;
-use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -55,28 +55,30 @@ static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error("Error performing list request: {}", source)]
-    ListRequest { source: crate::client::retry::Error },
+    ListRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting list response body: {}", source)]
-    ListResponseBody { source: reqwest::Error },
+    ListResponseBody { source: HttpError },
 
     #[error("Got invalid list response: {}", source)]
     InvalidListResponse { source: quick_xml::de::DeError },
 
     #[error("Error performing get request {}: {}", path, source)]
     GetRequest {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error performing request {}: {}", path, source)]
     Request {
-        source: crate::client::retry::Error,
+        source: crate::client::retry::RetryError,
         path: String,
     },
 
     #[error("Error getting put response body: {}", source)]
-    PutResponseBody { source: reqwest::Error },
+    PutResponseBody { source: HttpError },
 
     #[error("Got invalid put request: {}", source)]
     InvalidPutRequest { source: quick_xml::se::SeError },
@@ -93,19 +95,23 @@ enum Error {
     MissingVersion,
 
     #[error("Error performing complete multipart request: {}", source)]
-    CompleteMultipartRequest { source: crate::client::retry::Error },
+    CompleteMultipartRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Error getting complete multipart response body: {}", source)]
-    CompleteMultipartResponseBody { source: reqwest::Error },
+    CompleteMultipartResponseBody { source: HttpError },
 
     #[error("Got invalid multipart response: {}", source)]
     InvalidMultipartResponse { source: quick_xml::de::DeError },
 
     #[error("Error signing blob: {}", source)]
-    SignBlobRequest { source: crate::client::retry::Error },
+    SignBlobRequest {
+        source: crate::client::retry::RetryError,
+    },
 
     #[error("Got invalid signing blob response: {}", source)]
-    InvalidSignBlobResponse { source: reqwest::Error },
+    InvalidSignBlobResponse { source: HttpError },
 
     #[error("Got invalid signing blob signature: {}", source)]
     InvalidSignBlobSignature { source: base64::DecodeError },
@@ -169,7 +175,7 @@ pub(crate) struct Request<'a> {
     path: &'a Path,
     config: &'a GoogleCloudStorageConfig,
     payload: Option<PutPayload>,
-    builder: RequestBuilder,
+    builder: HttpRequestBuilder,
     idempotent: bool,
 }
 
@@ -225,7 +231,12 @@ impl Request<'_> {
         }
     }
 
-    async fn send(self) -> Result<Response> {
+    fn with_extensions(self, extensions: ::http::Extensions) -> Self {
+        let builder = self.builder.extensions(extensions);
+        Self { builder, ..self }
+    }
+
+    async fn send(self) -> Result<HttpResponse> {
         let credential = self.config.credentials.get_credential().await?;
         let resp = self
             .builder
@@ -268,7 +279,7 @@ struct SignBlobResponse {
 pub(crate) struct GoogleCloudStorageClient {
     config: GoogleCloudStorageConfig,
 
-    client: Client,
+    client: HttpClient,
 
     bucket_name_encoded: String,
 
@@ -277,8 +288,7 @@ pub(crate) struct GoogleCloudStorageClient {
 }
 
 impl GoogleCloudStorageClient {
-    pub(crate) fn new(config: GoogleCloudStorageConfig) -> Result<Self> {
-        let client = config.client_options.client()?;
+    pub(crate) fn new(config: GoogleCloudStorageConfig, client: HttpClient) -> Result<Self> {
         let bucket_name_encoded =
             percent_encode(config.bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
 
@@ -337,10 +347,8 @@ impl GoogleCloudStorageClient {
             .idempotent(true)
             .send()
             .await
-            .map_err(|source| Error::SignBlobRequest { source })?;
-
-        //If successful, the signature is returned in the signedBlob field in the response.
-        let response = response
+            .map_err(|source| Error::SignBlobRequest { source })?
+            .into_body()
             .json::<SignBlobResponse>()
             .await
             .map_err(|source| Error::InvalidSignBlobResponse { source })?;
@@ -381,12 +389,21 @@ impl GoogleCloudStorageClient {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        let PutOptions {
+            mode,
+            // not supported by GCP
+            tags: _,
+            attributes,
+            extensions,
+        } = opts;
+
         let builder = self
             .request(Method::PUT, path)
             .with_payload(payload)
-            .with_attributes(opts.attributes);
+            .with_attributes(attributes)
+            .with_extensions(extensions);
 
-        let builder = match &opts.mode {
+        let builder = match &mode {
             PutMode::Overwrite => builder.idempotent(true),
             PutMode::Create => builder.header(&VERSION_MATCH, "0"),
             PutMode::Update(v) => {
@@ -395,7 +412,7 @@ impl GoogleCloudStorageClient {
             }
         };
 
-        match (opts.mode, builder.do_put().await) {
+        match (mode, builder.do_put().await) {
             (PutMode::Create, Err(crate::Error::Precondition { path, source })) => {
                 Err(crate::Error::AlreadyExists { path, source })
             }
@@ -436,15 +453,24 @@ impl GoogleCloudStorageClient {
         path: &Path,
         opts: PutMultipartOpts,
     ) -> Result<MultipartId> {
+        let PutMultipartOpts {
+            // not supported by GCP
+            tags: _,
+            attributes,
+            extensions,
+        } = opts;
+
         let response = self
             .request(Method::POST, path)
-            .with_attributes(opts.attributes)
+            .with_attributes(attributes)
+            .with_extensions(extensions)
             .header(&CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
             .send()
             .await?;
 
         let data = response
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::PutResponseBody { source })?;
@@ -527,6 +553,7 @@ impl GoogleCloudStorageClient {
             .map_err(|source| Error::Metadata { source })?;
 
         let data = response
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::CompleteMultipartResponseBody { source })?;
@@ -600,7 +627,7 @@ impl GetClient for GoogleCloudStorageClient {
     };
 
     /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<Response> {
+    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
         let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
@@ -675,6 +702,7 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::ListRequest { source })?
+            .into_body()
             .bytes()
             .await
             .map_err(|source| Error::ListResponseBody { source })?;

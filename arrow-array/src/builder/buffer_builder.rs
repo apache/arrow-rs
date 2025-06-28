@@ -16,6 +16,8 @@
 // under the License.
 
 pub use arrow_buffer::BufferBuilder;
+pub use arrow_buffer::OffsetBufferBuilder;
+
 use half::f16;
 
 use crate::types::*;

@@ -920,11 +920,11 @@ impl DictionaryTracker {
 /// # Example
 /// ```
 /// # use arrow_array::record_batch;
-/// # use arrow_ipc::writer::StreamWriter;
+/// # use arrow_ipc::writer::FileWriter;
 /// # let mut file = vec![]; // mimic a file for the example
 /// let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
 /// // create a new writer, the schema must be known in advance
-/// let mut writer = StreamWriter::try_new(&mut file, &batch.schema()).unwrap();
+/// let mut writer = FileWriter::try_new(&mut file, &batch.schema()).unwrap();
 /// // write each batch to the underlying writer
 /// writer.write(&batch).unwrap();
 /// // When all batches are written, call finish to flush all buffers

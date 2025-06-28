@@ -40,7 +40,7 @@ use std::sync::Arc;
 /// special search modes, such as case insensitive and multi-line mode.
 /// See the documentation [here](https://docs.rs/regex/1.5.4/regex/#grouping-and-flags)
 /// for more information.
-#[deprecated(since = "54.0.0", note = "please use `regex_is_match` instead")]
+#[deprecated(since = "54.0.0", note = "please use `regexp_is_match` instead")]
 pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex_array: &GenericStringArray<OffsetSize>,
@@ -168,7 +168,7 @@ where
 /// [`LargeStringArray`] and a scalar.
 ///
 /// See the documentation on [`regexp_is_match_utf8`] for more details.
-#[deprecated(since = "54.0.0", note = "please use `regex_is_match_scalar` instead")]
+#[deprecated(since = "54.0.0", note = "please use `regexp_is_match_scalar` instead")]
 pub fn regexp_is_match_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex: &str,
