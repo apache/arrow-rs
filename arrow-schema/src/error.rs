@@ -60,6 +60,8 @@ pub enum ArrowError {
     DictionaryKeyOverflowError,
     /// Error when the run end index in a REE array is bigger than the array length
     RunEndIndexOverflowError,
+    /// Error when the offset overflows.
+    OffsetOverflowError(usize),
 }
 
 impl ArrowError {
@@ -125,6 +127,9 @@ impl Display for ArrowError {
             }
             ArrowError::RunEndIndexOverflowError => {
                 write!(f, "Run end encoded array index overflow error")
+            }
+            ArrowError::OffsetOverflowError(offset) => {
+                write!(f, "Offset overflow error: {offset}")
             }
         }
     }
