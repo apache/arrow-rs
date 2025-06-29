@@ -73,6 +73,43 @@ fn bench_object_field_names_reverse_order(c: &mut Criterion) {
     });
 }
 
+// Creates objects with a homogenous schema (same field names)
+/*
+    {
+        name: String,
+        age: i32,
+        likes_cilantro: bool,
+        comments: Long string
+        dishes: Vec<String>
+    }
+*/
+fn bench_object_same_schema(c: &mut Criterion) {
+    c.bench_function("bench_object_same_schema", |b| {
+        b.iter(|| {
+            let mut rng = rand::rng();
+
+            for _ in 0..25_000 {
+                let mut variant = VariantBuilder::new();
+                let mut object_builder = variant.new_object();
+                object_builder.insert("name", random_string(&mut rng).as_str());
+                object_builder.insert("age", random::<u32>(&mut rng, 18..100) as i32);
+                object_builder.insert("likes_cilantro", rng.random_bool(0.5));
+                object_builder.insert("comments", random_long_string(&mut rng).as_str());
+
+                let mut inner_list_builder = object_builder.new_list("dishes");
+                inner_list_builder.append_value(random_string(&mut rng).as_str());
+                inner_list_builder.append_value(random_string(&mut rng).as_str());
+                inner_list_builder.append_value(random_string(&mut rng).as_str());
+
+                inner_list_builder.finish();
+                object_builder.finish();
+
+                hint::black_box(variant.finish());
+            }
+        })
+    });
+}
+
 // Creates a list of objects with the same schema (same field names)
 /*
     {
@@ -83,7 +120,7 @@ fn bench_object_field_names_reverse_order(c: &mut Criterion) {
         dishes: Vec<String>
     }
 */
-fn bench_object_list_same_schemas(c: &mut Criterion) {
+fn bench_object_list_same_schema(c: &mut Criterion) {
     c.bench_function("bench_object_list_same_schema", |b| {
         b.iter(|| {
             let mut rng = rand::rng();
@@ -110,6 +147,55 @@ fn bench_object_list_same_schemas(c: &mut Criterion) {
 
             list_builder.finish();
             hint::black_box(variant.finish());
+        })
+    });
+}
+
+// Creates variant objects with an undefined schema (random field names)
+// values are randomly generated, with an equal distribution to whether it's a String, Object, or List
+fn bench_object_unknown_schema(c: &mut Criterion) {
+    c.bench_function("bench_object_unknown_schema", |b| {
+        b.iter(|| {
+            let mut rng = rand::rng();
+
+            for _ in 0..200 {
+                let mut variant = VariantBuilder::new();
+                let mut object_builder = variant.new_object();
+
+                for _num_fields in 0..random::<u8>(&mut rng, 0..100) {
+                    if rng.random_bool(0.33) {
+                        object_builder.insert(
+                            random_string(&mut rng).as_str(),
+                            random_string(&mut rng).as_str(),
+                        );
+                        continue;
+                    }
+
+                    if rng.random_bool(0.5) {
+                        let mut inner_object_builder = object_builder.new_object("rand_object");
+
+                        for _num_fields in 0..random::<u8>(&mut rng, 0..25) {
+                            inner_object_builder.insert(
+                                random_string(&mut rng).as_str(),
+                                random_string(&mut rng).as_str(),
+                            );
+                        }
+                        inner_object_builder.finish();
+
+                        continue;
+                    }
+
+                    let mut inner_list_builder = object_builder.new_list("rand_list");
+
+                    for _num_elements in 0..random::<u8>(&mut rng, 0..25) {
+                        inner_list_builder.append_value(random_string(&mut rng).as_str());
+                    }
+
+                    inner_list_builder.finish();
+                }
+                object_builder.finish();
+                hint::black_box(variant.finish());
+            }
         })
     });
 }
@@ -168,11 +254,136 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
     });
 }
 
+// Creates objects with a homogenous schema (same field names)
+/*
+    {
+        "id": &[u8],        // Following are common across all objects
+        "span_id: &[u8],
+        "created": u32,
+        "ended": u32,
+        "span_name": String,
+
+        "attributees": {
+            // following fields are randomized
+        }
+    }
+*/
+fn bench_object_partially_same_schema(c: &mut Criterion) {
+    c.bench_function("bench_object_partially_same_schema", |b| {
+        b.iter(|| {
+            let mut rng = rand::rng();
+
+            for _ in 0..200 {
+                let mut variant = VariantBuilder::new();
+                let mut object_builder = variant.new_object();
+
+                object_builder.insert(
+                    "id",
+                    random::<i128>(&mut rng, 0..i128::MAX)
+                        .to_le_bytes()
+                        .as_slice(),
+                );
+
+                object_builder.insert(
+                    "span_id",
+                    random::<i128>(&mut rng, 0..i128::MAX)
+                        .to_le_bytes()
+                        .as_slice(),
+                );
+
+                object_builder.insert("created", random::<u32>(&mut rng, 0..u32::MAX) as i32);
+                object_builder.insert("ended", random::<u32>(&mut rng, 0..u32::MAX) as i32);
+                object_builder.insert("span_name", random_string(&mut rng).as_str());
+
+                {
+                    let mut inner_object_builder = object_builder.new_object("attributes");
+
+                    for _num_fields in 0..random::<u8>(&mut rng, 0..100) {
+                        let random_key = random_string(&mut rng);
+                        inner_object_builder.insert(&random_key, random_string(&mut rng).as_str());
+                    }
+                    inner_object_builder.finish();
+                }
+
+                object_builder.finish();
+                hint::black_box(variant.finish());
+            }
+        })
+    });
+}
+
+// Creates a list of variant objects with a partially homogenous schema (similar field names)
+/*
+    {
+        "id": &[u8],        // Following are common across all objects
+        "span_id: &[u8],
+        "created": u32,
+        "ended": u32,
+        "span_name": String,
+
+        "attributees": {
+            // following fields are randomized
+        }
+    }
+*/
+fn bench_object_list_partially_same_schema(c: &mut Criterion) {
+    c.bench_function("bench_object_list_partially_same_schema", |b| {
+        b.iter(|| {
+            let mut rng = rand::rng();
+
+            let mut variant = VariantBuilder::new();
+
+            let mut list_builder = variant.new_list();
+
+            for _ in 0..100 {
+                let mut object_builder = list_builder.new_object();
+
+                object_builder.insert(
+                    "id",
+                    random::<i128>(&mut rng, 0..i128::MAX)
+                        .to_le_bytes()
+                        .as_slice(),
+                );
+
+                object_builder.insert(
+                    "span_id",
+                    random::<i128>(&mut rng, 0..i128::MAX)
+                        .to_le_bytes()
+                        .as_slice(),
+                );
+
+                object_builder.insert("created", random::<u32>(&mut rng, 0..u32::MAX) as i32);
+                object_builder.insert("ended", random::<u32>(&mut rng, 0..u32::MAX) as i32);
+                object_builder.insert("span_name", random_string(&mut rng).as_str());
+
+                {
+                    let mut inner_object_builder = object_builder.new_object("attributes");
+
+                    for _num_fields in 0..random::<u8>(&mut rng, 0..100) {
+                        let random_key = random_string(&mut rng);
+                        inner_object_builder.insert(&random_key, random_string(&mut rng).as_str());
+                    }
+                    inner_object_builder.finish();
+                }
+
+                object_builder.finish();
+            }
+
+            list_builder.finish();
+            hint::black_box(variant.finish());
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_object_field_names_reverse_order,
-    bench_object_list_same_schemas,
+    bench_object_same_schema,
+    bench_object_list_same_schema,
+    bench_object_unknown_schema,
     bench_object_list_unknown_schema,
+    bench_object_partially_same_schema,
+    bench_object_list_partially_same_schema
 );
 
 criterion_main!(benches);
