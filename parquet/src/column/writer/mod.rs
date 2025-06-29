@@ -653,15 +653,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 )
             })?;
 
-            let mut values_to_write = 0;
-            for &level in levels {
-                if level == self.descr.max_def_level() {
-                    values_to_write += 1;
-                } else {
-                    // We must always compute this as it is used to populate v2 pages
-                    self.page_metrics.num_page_nulls += 1
-                }
-            }
+            let values_to_write = levels
+                .iter()
+                .map(|level| (*level == self.descr.max_def_level()) as usize)
+                .sum();
+            self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
 
             // Update histogram
             self.page_metrics.update_definition_level_histogram(levels);
