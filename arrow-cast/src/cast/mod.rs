@@ -148,8 +148,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
         (List(_), _) => false,
-        (FixedSizeList(list_from,_), List(list_to)) |
-        (FixedSizeList(list_from,_), LargeList(list_to)) => {
+        (FixedSizeList(list_from, _), List(list_to))
+        | (FixedSizeList(list_from, _), LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
         (FixedSizeList(inner, size), FixedSizeList(inner_to, size_to)) if size == size_to => {
@@ -157,16 +157,28 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (_, List(list_to)) => can_cast_types(from_type, list_to.data_type()),
         (_, LargeList(list_to)) => can_cast_types(from_type, list_to.data_type()),
-        (_, FixedSizeList(list_to,size)) if *size == 1 => {
-            can_cast_types(from_type, list_to.data_type())},
-        (FixedSizeList(list_from,size), _) if *size == 1 => {
-            can_cast_types(list_from.data_type(), to_type)},
-        (Map(from_entries,ordered_from), Map(to_entries, ordered_to)) if ordered_from == ordered_to =>
-            match (key_field(from_entries), key_field(to_entries), value_field(from_entries), value_field(to_entries)) {
-                (Some(from_key), Some(to_key), Some(from_value), Some(to_value)) =>
-                    can_cast_types(from_key.data_type(), to_key.data_type()) && can_cast_types(from_value.data_type(), to_value.data_type()),
-                _ => false
-            },
+        (_, FixedSizeList(list_to, size)) if *size == 1 => {
+            can_cast_types(from_type, list_to.data_type())
+        }
+        (FixedSizeList(list_from, size), _) if *size == 1 => {
+            can_cast_types(list_from.data_type(), to_type)
+        }
+        (Map(from_entries, ordered_from), Map(to_entries, ordered_to))
+            if ordered_from == ordered_to =>
+        {
+            match (
+                key_field(from_entries),
+                key_field(to_entries),
+                value_field(from_entries),
+                value_field(to_entries),
+            ) {
+                (Some(from_key), Some(to_key), Some(from_value), Some(to_value)) => {
+                    can_cast_types(from_key.data_type(), to_key.data_type())
+                        && can_cast_types(from_value.data_type(), to_value.data_type())
+                }
+                _ => false,
+            }
+        }
         // cast one decimal type to another decimal type
         (
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
@@ -203,8 +215,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         (Struct(from_fields), Struct(to_fields)) => {
-            from_fields.len() == to_fields.len() &&
-                from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+            from_fields.len() == to_fields.len()
+                && from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
                     // Assume that nullability between two structs are compatible, if not,
                     // cast kernel will return error.
                     can_cast_types(f1.data_type(), f2.data_type())
@@ -227,8 +239,12 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                 || to_type == &LargeUtf8
         }
 
-        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
-        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View ) => true,
+        (Binary, LargeBinary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View) => {
+            true
+        }
+        (LargeBinary, Binary | Utf8 | LargeUtf8 | FixedSizeBinary(_) | BinaryView | Utf8View) => {
+            true
+        }
         (FixedSizeBinary(_), Binary | LargeBinary | BinaryView) => true,
         (
             Utf8 | LargeUtf8 | Utf8View,
@@ -259,8 +275,10 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 
         // start numeric casts
         (
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
-            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32
+            | Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float16 | Float32
+            | Float64,
         ) => true,
         // end numeric casts
 
