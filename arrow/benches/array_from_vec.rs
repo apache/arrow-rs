@@ -74,7 +74,7 @@ fn struct_array_from_vec(
 }
 
 fn decimal32_array_from_vec(array: &[Option<i32>]) {
-    criterion::black_box(
+    hint::black_box(
         array
             .iter()
             .copied()
@@ -85,7 +85,7 @@ fn decimal32_array_from_vec(array: &[Option<i32>]) {
 }
 
 fn decimal64_array_from_vec(array: &[Option<i64>]) {
-    criterion::black_box(
+    hint::black_box(
         array
             .iter()
             .copied()
