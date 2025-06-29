@@ -24,6 +24,9 @@ use std::marker::PhantomData;
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
 
+use itoa;
+use ryu;
+
 const TRUE: &str = "true";
 const FALSE: &str = "false";
 
@@ -85,6 +88,9 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
 
         let mut builder = GenericStringBuilder::<O>::with_capacity(pos.len(), data_capacity);
 
+        let mut float_formatter = ryu::Buffer::new();
+        let mut int_formatter = itoa::Buffer::new();
+
         for p in pos {
             match tape.get(*p) {
                 TapeElement::String(idx) => {
@@ -103,20 +109,20 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                 TapeElement::I64(high) if coerce_primitive => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
                         let val = ((high as i64) << 32) | (low as u32) as i64;
-                        builder.append_value(val.to_string());
+                        builder.append_value(int_formatter.format(val));
                     }
                     _ => unreachable!(),
                 },
                 TapeElement::I32(n) if coerce_primitive => {
-                    builder.append_value(n.to_string());
+                    builder.append_value(int_formatter.format(n));
                 }
                 TapeElement::F32(n) if coerce_primitive => {
-                    builder.append_value(n.to_string());
+                    builder.append_value(int_formatter.format(n));
                 }
                 TapeElement::F64(high) if coerce_primitive => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
                         let val = f64::from_bits(((high as u64) << 32) | low as u64);
-                        builder.append_value(val.to_string());
+                        builder.append_value(float_formatter.format(val));
                     }
                     _ => unreachable!(),
                 },

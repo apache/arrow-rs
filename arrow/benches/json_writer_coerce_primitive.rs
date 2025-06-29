@@ -120,13 +120,12 @@ fn bench_mixed(c: &mut Criterion) {
     }
 
     // Create schema for string output
-    let schema = Arc::new(Schema::new(
-        vec![
-            Field::new("val1", DataType::Utf8, false),
-            Field::new("val2", DataType::Utf8, false),
-            Field::new("val3", DataType::Utf8, false),
-            Field::new("val4", DataType::Utf8, false),
-        ]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("val1", DataType::Utf8, false),
+        Field::new("val2", DataType::Utf8, false),
+        Field::new("val3", DataType::Utf8, false),
+        Field::new("val4", DataType::Utf8, false),
+    ]));
 
     let f64_array = create_primitive_array::<Float64Type>(NUM_ROWS, 0.0);
     let f32_array = create_primitive_array::<Float32Type>(NUM_ROWS, 0.0);

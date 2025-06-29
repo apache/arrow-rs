@@ -50,6 +50,8 @@ chrono = { workspace = true }
 lexical-core = { version = "1.0", default-features = false}
 memchr = "2.7.4"
 simdutf8 = "0.1.5"
+ryu = "1.0"
+itoa = "1.0"
 
 [dev-dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
