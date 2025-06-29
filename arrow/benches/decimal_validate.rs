@@ -46,11 +46,11 @@ fn validate_decimal256_array(array: Decimal256Array) {
 }
 
 fn validate_decimal32_benchmark(c: &mut Criterion) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let size: i32 = 20000;
     let mut decimal_builder = Decimal32Builder::with_capacity(size as usize);
     for _ in 0..size {
-        decimal_builder.append_value(rng.gen_range::<i32, _>(0..99999999));
+        decimal_builder.append_value(rng.random_range::<i32, _>(0..99999999));
     }
     let decimal_array = decimal_builder
         .finish()
@@ -66,11 +66,11 @@ fn validate_decimal32_benchmark(c: &mut Criterion) {
 }
 
 fn validate_decimal64_benchmark(c: &mut Criterion) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let size: i64 = 20000;
     let mut decimal_builder = Decimal64Builder::with_capacity(size as usize);
     for _ in 0..size {
-        decimal_builder.append_value(rng.gen_range::<i64, _>(0..999999999999));
+        decimal_builder.append_value(rng.random_range::<i64, _>(0..999999999999));
     }
     let decimal_array = decimal_builder
         .finish()

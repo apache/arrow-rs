@@ -3036,8 +3036,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal32(9, 9). Overflowing on 2147483647",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal32(9, 9). Overflowing on 2147483647",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3056,8 +3058,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal64(18, 18). Overflowing on 9223372036854775807",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal64(18, 18). Overflowing on 9223372036854775807",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]

@@ -88,7 +88,7 @@ fn build_decimal32_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut builder = Decimal32Builder::with_capacity(size);
 
     for _ in 0..size {
-        builder.append_value(rng.gen_range::<i32, _>(0..10000000));
+        builder.append_value(rng.random_range::<i32, _>(0..1000000));
     }
     Arc::new(
         builder
@@ -103,7 +103,7 @@ fn build_decimal64_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut builder = Decimal64Builder::with_capacity(size);
 
     for _ in 0..size {
-        builder.append_value(rng.gen_range::<i64, _>(0..1000000000));
+        builder.append_value(rng.random_range::<i64, _>(0..1000000000));
     }
     Arc::new(
         builder
@@ -278,6 +278,22 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast utf8 to date64 512", |b| {
         b.iter(|| cast_array(&utf8_date_time_array, DataType::Date64))
+    });
+
+    c.bench_function("cast decimal32 to decimal32 512", |b| {
+        b.iter(|| cast_array(&decimal32_array, DataType::Decimal32(9, 4)))
+    });
+    c.bench_function("cast decimal32 to decimal32 512 lower precision", |b| {
+        b.iter(|| cast_array(&decimal32_array, DataType::Decimal32(6, 5)))
+    });
+    c.bench_function("cast decimal32 to decimal64 512", |b| {
+        b.iter(|| cast_array(&decimal32_array, DataType::Decimal64(11, 5)))
+    });
+    c.bench_function("cast decimal64 to decimal32 512", |b| {
+        b.iter(|| cast_array(&decimal64_array, DataType::Decimal32(9, 2)))
+    });
+    c.bench_function("cast decimal64 to decimal64 512", |b| {
+        b.iter(|| cast_array(&decimal64_array, DataType::Decimal64(12, 4)))
     });
 
     c.bench_function("cast decimal128 to decimal128 512", |b| {
