@@ -43,6 +43,7 @@
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
@@ -499,16 +500,17 @@ impl LevelInfoBuilder {
 
                 match info.array.logical_nulls() {
                     Some(nulls) => {
-                        // TODO: Faster bitmask iteration (#1757)
-                        for i in range {
-                            match nulls.is_valid(i) {
-                                true => {
-                                    def_levels.push(info.max_def_level);
-                                    info.non_null_indices.push(i)
-                                }
-                                false => def_levels.push(info.max_def_level - 1),
-                            }
-                        }
+                        assert!(range.end <= nulls.len());
+                        let nulls = nulls.into_inner();
+                        def_levels.extend(range.clone().map(|i| {
+                            // Safety: range.end was asserted to be in bounds earlier
+                            let valid = unsafe { nulls.value_unchecked(i) };
+                            info.max_def_level - (!valid as i16)
+                        }));
+                        info.non_null_indices.extend(
+                            BitIndexIterator::new(nulls.inner(), nulls.offset() + range.start, len)
+                                .map(|i| i + range.start),
+                        );
                     }
                     None => {
                         let iter = std::iter::repeat(info.max_def_level).take(len);
