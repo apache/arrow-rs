@@ -84,6 +84,7 @@ impl RleEncoder {
 
     /// Initialize the encoder from existing `buffer`
     pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
+        assert!(bit_width <= 64);
         let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
@@ -237,9 +238,8 @@ impl RleEncoder {
         }
 
         // Write all buffered values as bit-packed literals
-        for i in 0..self.num_buffered_values {
-            self.bit_writer
-                .put_value(self.buffered_values[i], self.bit_width as usize);
+        for v in &self.buffered_values[..self.num_buffered_values] {
+            self.bit_writer.put_value(*v, self.bit_width as usize);
         }
         self.num_buffered_values = 0;
         if update_indicator_byte {
