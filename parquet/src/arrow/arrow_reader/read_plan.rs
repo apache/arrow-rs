@@ -18,13 +18,15 @@
 //! [`ReadPlan`] and [`ReadPlanBuilder`] for determining which rows to read
 //! from a Parquet file
 
-use crate::arrow::array_reader::ArrayReader;
+use crate::arrow::array_reader::{
+    ArrayReader, CachedPredicateResult, CachedPredicateResultBuilder,
+};
 use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelector,
 };
+use crate::arrow::ProjectionMask;
 use crate::errors::{ParquetError, Result};
-use arrow_array::Array;
-use arrow_select::filter::prep_null_mask_filter;
+use arrow_array::RecordBatchReader;
 use std::collections::VecDeque;
 
 /// A builder for [`ReadPlan`]
@@ -33,6 +35,8 @@ pub(crate) struct ReadPlanBuilder {
     batch_size: usize,
     /// Current to apply, includes all filters
     selection: Option<RowSelection>,
+    /// Cached result of evaluating some columns with the RowSelection
+    cached_predicate_result: Option<CachedPredicateResult>,
 }
 
 impl ReadPlanBuilder {
@@ -41,6 +45,7 @@ impl ReadPlanBuilder {
         Self {
             batch_size,
             selection: None,
+            cached_predicate_result: None,
         }
     }
 
@@ -54,6 +59,11 @@ impl ReadPlanBuilder {
     #[cfg(feature = "async")]
     pub(crate) fn selection(&self) -> Option<&RowSelection> {
         self.selection.as_ref()
+    }
+
+    /// Returns the currently cached predicate result, if any
+    pub(crate) fn cached_predicate_result(&self) -> Option<&CachedPredicateResult> {
+        self.cached_predicate_result.as_ref()
     }
 
     /// Specifies the number of rows in the row group, before filtering is applied.
@@ -83,24 +93,48 @@ impl ReadPlanBuilder {
 
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
     ///
-    /// If the current `selection` is `Some`, the resulting [`RowSelection`]
-    /// will be the conjunction of the existing selection and the rows selected
-    /// by `predicate`.
+    /// # Arguments
     ///
-    /// Note: pre-existing selections may come from evaluating a previous predicate
-    /// or if the [`ParquetRecordBatchReader`] specified an explicit
+    /// * `num_original_columns`: The number of columns in the original parquet
+    ///   schema.
+    ///
+    /// * `array_reader`: The array reader to use for evaluating the predicate.
+    ///   must be configured with the projection mask specified by
+    ///   [`ArrowPredicate::projection`] for the `predicate`.
+    ///
+    /// * `predicate`: The predicate to evaluate
+    ///
+    /// * `projection`: The projection mask that will be selected. This code will
+    ///   potentially cache the results of filtering columns that also appear in the
+    ///   projection mask.
+    ///
+    /// If `this.selection` is `Some`, the resulting  [`RowSelection`] will be
+    /// the conjunction of it and the rows selected by `predicate` (they will be
+    /// `AND`ed).
+    ///
+    /// Note: A pre-existing selection may come from evaluating a previous
+    /// predicate or if the [`ParquetRecordBatchReader`] specifies an explicit
     /// [`RowSelection`] in addition to one or more predicates.
     pub(crate) fn with_predicate(
         mut self,
+        num_original_columns: usize,
         array_reader: Box<dyn ArrayReader>,
         predicate: &mut dyn ArrowPredicate,
+        projection_mask: &ProjectionMask,
     ) -> Result<Self> {
+        // Prepare to decode all rows in the selection to evaluate the predicate
         let reader = ParquetRecordBatchReader::new(array_reader, self.clone().build());
-        let mut filters = vec![];
+        let mut cached_results_builder = CachedPredicateResultBuilder::try_new(
+            num_original_columns,
+            &reader.schema(),
+            predicate.projection(),
+            projection_mask,
+            self.batch_size,
+        )?;
         for maybe_batch in reader {
-            let maybe_batch = maybe_batch?;
-            let input_rows = maybe_batch.num_rows();
-            let filter = predicate.evaluate(maybe_batch)?;
+            let batch = maybe_batch?;
+            let input_rows = batch.num_rows();
+            let filter = predicate.evaluate(batch.clone())?;
             // Since user supplied predicate, check error here to catch bugs quickly
             if filter.len() != input_rows {
                 return Err(arrow_err!(
@@ -108,17 +142,16 @@ impl ReadPlanBuilder {
                     filter.len()
                 ));
             }
-            match filter.null_count() {
-                0 => filters.push(filter),
-                _ => filters.push(prep_null_mask_filter(&filter)),
-            };
+            cached_results_builder.add(batch, filter)?;
         }
 
-        let raw = RowSelection::from_filters(&filters);
+        let (raw, cached_predicate_result) = cached_results_builder.build()?;
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),
             None => Some(raw),
         };
+
+        self.cached_predicate_result = cached_predicate_result;
         Ok(self)
     }
 
@@ -131,6 +164,7 @@ impl ReadPlanBuilder {
         let Self {
             batch_size,
             selection,
+            cached_predicate_result,
         } = self;
 
         let selection = selection.map(|s| s.trim().into());
@@ -138,6 +172,7 @@ impl ReadPlanBuilder {
         ReadPlan {
             batch_size,
             selection,
+            cached_predicate_result,
         }
     }
 }
@@ -234,13 +269,22 @@ pub(crate) struct ReadPlan {
     /// The number of rows to read in each batch
     batch_size: usize,
     /// Row ranges to be selected from the data source
+    /// TODO update this to use something more efficient
+    /// See <https://github.com/apache/arrow-rs/pull/7454/files#r2092962327>
     selection: Option<VecDeque<RowSelector>>,
+    /// Cached result of evaluating some column(s) with the current RowSelection
+    cached_predicate_result: Option<CachedPredicateResult>,
 }
 
 impl ReadPlan {
     /// Returns a mutable reference to the selection, if any
     pub(crate) fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
         self.selection.as_mut()
+    }
+
+    /// Returns the current cached predicate result, if any
+    pub(crate) fn cached_predicate_result(&self) -> Option<&CachedPredicateResult> {
+        self.cached_predicate_result.as_ref()
     }
 
     /// Return the number of rows to read in each output batch
