@@ -16,6 +16,7 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use indexmap::IndexSet;
 use std::collections::HashMap;
 
 const BASIC_TYPE_BITS: u8 = 2;
@@ -233,23 +234,15 @@ impl ValueBuffer {
 
 #[derive(Default)]
 struct MetadataBuilder {
-    field_name_to_id: HashMap<String, u32>,
-    field_names: Vec<String>,
+    field_names: IndexSet<String>,
 }
 
 impl MetadataBuilder {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
-        use std::collections::hash_map::Entry;
-        match self.field_name_to_id.entry(field_name.to_string()) {
-            Entry::Occupied(entry) => *entry.get(),
-            Entry::Vacant(entry) => {
-                let id = self.field_names.len() as u32;
-                entry.insert(id);
-                self.field_names.push(field_name.to_string());
-                id
-            }
-        }
+        let (id, _) = self.field_names.insert_full(field_name.to_string());
+
+        id as u32
     }
 
     fn num_field_names(&self) -> usize {
