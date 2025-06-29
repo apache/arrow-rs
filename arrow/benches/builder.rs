@@ -116,7 +116,7 @@ fn bench_decimal32(c: &mut Criterion) {
             for _ in 0..BATCH_SIZE {
                 decimal_builder.append_value(rng.random_range::<i32, _>(0..999999999));
             }
-            black_box(
+            hint::black_box(
                 decimal_builder
                     .finish()
                     .with_precision_and_scale(9, 0)
@@ -134,7 +134,7 @@ fn bench_decimal64(c: &mut Criterion) {
             for _ in 0..BATCH_SIZE {
                 decimal_builder.append_value(rng.random_range::<i64, _>(0..9999999999));
             }
-            black_box(
+            hint::black_box(
                 decimal_builder
                     .finish()
                     .with_precision_and_scale(18, 0)
