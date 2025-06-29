@@ -230,10 +230,6 @@ impl TreeBuilder {
                     path.push(String::from(key_value_type.name()));
 
                     let key_type = &key_value_type.get_fields()[0];
-                    assert!(
-                        key_type.is_primitive(),
-                        "Map key type is expected to be a primitive type, but found {key_type:?}"
-                    );
                     let key_reader = self.reader_tree(
                         key_type.clone(),
                         path,
@@ -840,7 +836,7 @@ impl Iterator for ReaderIter {
 mod tests {
     use super::*;
 
-    use crate::data_type::Int64Type;
+    use crate::data_type::{ByteArray, Decimal, Int64Type};
     use crate::file::reader::SerializedFileReader;
     use crate::file::writer::SerializedFileWriter;
     use crate::record::api::RowAccessor;
@@ -1256,6 +1252,99 @@ mod tests {
                 )
             ],
         ];
+        assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_file_reader_rows_nullable1() {
+        let rows = test_file_reader_rows("databricks.parquet", None).unwrap();
+        let expected_rows = vec![row![
+            ("bigint".to_string(), Field::Long(42)),
+            ("binary".to_string(), Field::Bytes(ByteArray::from("Spark"))),
+            ("boolean".to_string(), Field::Bool(true)),
+            ("boolean_null".to_string(), Field::Null),
+            ("date_zero".to_string(), Field::Date(-719530)),
+            ("date".to_string(), Field::Date(20236)),
+            (
+                "decimal".to_string(),
+                Field::Decimal(Decimal::Int64 {
+                    value: [0, 0, 0, 0, 0, 0, 0, 5],
+                    precision: 10,
+                    scale: 0,
+                })
+            ),
+            (
+                "decimal3".to_string(),
+                Field::Decimal(Decimal::Int32 {
+                    value: [0, 0, 0, 5],
+                    precision: 3,
+                    scale: 0,
+                })
+            ),
+            (
+                "decimal32".to_string(),
+                Field::Decimal(Decimal::Int32 {
+                    value: [0, 0, 2, 23],
+                    precision: 3,
+                    scale: 2,
+                })
+            ),
+            ("double".to_string(), Field::Double(4.2)),
+            ("float".to_string(), Field::Float(4.2)),
+            ("int".to_string(), Field::Int(42)),
+            ("smallint".to_string(), Field::Short(1)),
+            ("string".to_string(), Field::Str("Spark".to_string())),
+            (
+                "timestamp".to_string(),
+                Field::TimestampMillis(1748390400000)
+            ),
+            (
+                "timestamp_tz".to_string(),
+                Field::TimestampMillis(1625118208000)
+            ),
+            (
+                "timestamp_ntz".to_string(),
+                Field::TimestampMicros(1748434348000000)
+            ),
+            (
+                "timestamp_ntz_nanos".to_string(),
+                Field::TimestampMicros(1748434348123456)
+            ),
+            ("tinyint".to_string(), Field::Byte(1)),
+            (
+                "array".to_string(),
+                list![Field::Int(1), Field::Int(2), Field::Int(3)]
+            ),
+            (
+                "nested_array".to_string(),
+                list![
+                    list![Field::Long(1), Field::Long(2)],
+                    list![Field::Long(3), Field::Long(4)]
+                ]
+            ),
+            (
+                "struct".to_string(),
+                group![
+                    ("col1".to_string(), Field::Str("Spark".to_string())),
+                    ("col2".to_string(), Field::Int(5))
+                ]
+            ),
+            (
+                "map".to_string(),
+                map![
+                    (Field::Str("red".to_string()), Field::Int(1)),
+                    (Field::Str("green".to_string()), Field::Int(2))
+                ]
+            ),
+            (
+                "map_nested".to_string(),
+                map![(
+                    list![Field::Int(1), Field::Int(2)],
+                    map![(Field::Str("green".to_string()), Field::Int(5))]
+                )]
+            ),
+            ("interval".to_string(), Field::Long(720830300000))
+        ]];
         assert_eq!(rows, expected_rows);
     }
 
