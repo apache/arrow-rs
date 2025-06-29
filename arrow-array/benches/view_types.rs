@@ -48,6 +48,12 @@ fn criterion_benchmark(c: &mut Criterion) {
             black_box(array.slice(0, 100_000 / 2));
         });
     });
+
+    c.bench_function("view types slice", |b| {
+        b.iter(|| {
+            black_box(array.slice(0, 100_000 / 2));
+        });
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
