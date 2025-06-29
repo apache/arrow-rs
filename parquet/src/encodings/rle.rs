@@ -84,6 +84,7 @@ impl RleEncoder {
 
     /// Initialize the encoder from existing `buffer`
     pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
+        assert!(bit_width <= 64);
         let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
