@@ -238,9 +238,8 @@ impl RleEncoder {
         }
 
         // Write all buffered values as bit-packed literals
-        for i in 0..self.num_buffered_values {
-            self.bit_writer
-                .put_value(self.buffered_values[i], self.bit_width as usize);
+        for v in &self.buffered_values[..self.num_buffered_values] {
+            self.bit_writer.put_value(*v, self.bit_width as usize);
         }
         self.num_buffered_values = 0;
         if update_indicator_byte {
