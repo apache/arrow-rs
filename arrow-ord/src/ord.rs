@@ -549,7 +549,33 @@ mod tests {
     }
 
     #[test]
-    fn test_decimal() {
+    fn test_decimali32() {
+        let array = vec![Some(5_i32), Some(2_i32), Some(3_i32)]
+            .into_iter()
+            .collect::<Decimal32Array>()
+            .with_precision_and_scale(8, 6)
+            .unwrap();
+
+        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
+        assert_eq!(Ordering::Less, cmp(1, 0));
+        assert_eq!(Ordering::Greater, cmp(0, 2));
+    }
+
+    #[test]
+    fn test_decimali64() {
+        let array = vec![Some(5_i64), Some(2_i64), Some(3_i64)]
+            .into_iter()
+            .collect::<Decimal64Array>()
+            .with_precision_and_scale(16, 6)
+            .unwrap();
+
+        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
+        assert_eq!(Ordering::Less, cmp(1, 0));
+        assert_eq!(Ordering::Greater, cmp(0, 2));
+    }
+
+    #[test]
+    fn test_decimali128() {
         let array = vec![Some(5_i128), Some(2_i128), Some(3_i128)]
             .into_iter()
             .collect::<Decimal128Array>()

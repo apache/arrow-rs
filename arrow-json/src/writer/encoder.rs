@@ -339,7 +339,7 @@ pub fn make_encoder<'a>(
             let nulls = array.nulls().cloned();
             NullableEncoder::new(Box::new(encoder) as Box<dyn Encoder + 'a>, nulls)
         }
-        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+        DataType::Decimal32(_, _) | DataType::Decimal64(_, _) | DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
             let options = FormatOptions::new().with_display_error(true);
             let formatter = JsonArrayFormatter::new(ArrayFormatter::try_new(array, &options)?);
             NullableEncoder::new(Box::new(RawArrayFormatter(formatter)) as Box<dyn Encoder + 'a>, nulls)

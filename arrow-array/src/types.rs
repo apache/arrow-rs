@@ -1826,6 +1826,8 @@ mod tests {
         test_layout::<Float16Type>();
         test_layout::<Float32Type>();
         test_layout::<Float64Type>();
+        test_layout::<Decimal32Type>();
+        test_layout::<Decimal64Type>();
         test_layout::<Decimal128Type>();
         test_layout::<Decimal256Type>();
         test_layout::<TimestampNanosecondType>();
