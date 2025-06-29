@@ -1755,6 +1755,66 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal32() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Decimal32(
+            DECIMAL32_MAX_PRECISION,
+            7,
+        ))])
+        .unwrap();
+        let col = Arc::new(
+            Decimal32Array::from_iter([
+                None,
+                Some(i32::MIN),
+                Some(-13),
+                Some(46_i32),
+                Some(5456_i32),
+                Some(i32::MAX),
+            ])
+            .with_precision_and_scale(9, 7)
+            .unwrap(),
+        ) as ArrayRef;
+
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+        for i in 0..rows.num_rows() - 1 {
+            assert!(rows.row(i) < rows.row(i + 1));
+        }
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(col.as_ref(), back[0].as_ref())
+    }
+
+    #[test]
+    fn test_decimal64() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Decimal64(
+            DECIMAL64_MAX_PRECISION,
+            7,
+        ))])
+        .unwrap();
+        let col = Arc::new(
+            Decimal64Array::from_iter([
+                None,
+                Some(i64::MIN),
+                Some(-13),
+                Some(46_i64),
+                Some(5456_i64),
+                Some(i64::MAX),
+            ])
+            .with_precision_and_scale(18, 7)
+            .unwrap(),
+        ) as ArrayRef;
+
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+        for i in 0..rows.num_rows() - 1 {
+            assert!(rows.row(i) < rows.row(i + 1));
+        }
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(col.as_ref(), back[0].as_ref())
+    }
+
+    #[test]
     fn test_decimal128() {
         let converter = RowConverter::new(vec![SortField::new(DataType::Decimal128(
             DECIMAL128_MAX_PRECISION,

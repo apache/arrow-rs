@@ -20,6 +20,10 @@ use crate::cast::*;
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
 pub(crate) trait DecimalCast: Sized {
+    fn to_i32(self) -> Option<i32>;
+
+    fn to_i64(self) -> Option<i64>;
+
     fn to_i128(self) -> Option<i128>;
 
     fn to_i256(self) -> Option<i256>;
@@ -29,7 +33,67 @@ pub(crate) trait DecimalCast: Sized {
     fn from_f64(n: f64) -> Option<Self>;
 }
 
+impl DecimalCast for i32 {
+    fn to_i32(self) -> Option<i32> {
+        Some(self)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        Some(self as i64)
+    }
+
+    fn to_i128(self) -> Option<i128> {
+        Some(self as i128)
+    }
+
+    fn to_i256(self) -> Option<i256> {
+        Some(i256::from_i128(self as i128))
+    }
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i32()
+    }
+
+    fn from_f64(n: f64) -> Option<Self> {
+        n.to_i32()
+    }
+}
+
+impl DecimalCast for i64 {
+    fn to_i32(self) -> Option<i32> {
+        Some(self as i32)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        Some(self)
+    }
+
+    fn to_i128(self) -> Option<i128> {
+        Some(self as i128)
+    }
+
+    fn to_i256(self) -> Option<i256> {
+        Some(i256::from_i128(self as i128))
+    }
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i64()
+    }
+
+    fn from_f64(n: f64) -> Option<Self> {
+        n.to_i64()
+    }
+}
+
 impl DecimalCast for i128 {
+    fn to_i32(self) -> Option<i32> {
+        Some(self as i32)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        Some(self as i64)
+    }
+
     fn to_i128(self) -> Option<i128> {
         Some(self)
     }
@@ -48,6 +112,14 @@ impl DecimalCast for i128 {
 }
 
 impl DecimalCast for i256 {
+    fn to_i32(self) -> Option<i32> {
+        self.to_i128().map(|x| x as i32)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        self.to_i128().map(|x| x as i64)
+    }
+
     fn to_i128(self) -> Option<i128> {
         self.to_i128()
     }
