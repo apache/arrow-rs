@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ColumnChunkData","StreamState"],"mod":["metadata","store"],"struct":["ColumnChunkIterator","InMemoryRowGroup","ParquetObjectReader","ParquetRecordBatchStream","ReaderFactory"],"trait":["AsyncFileReader","MetadataFetch","MetadataSuffixFetch"],"type":["ParquetRecordBatchStreamBuilder","ReadResult"]};

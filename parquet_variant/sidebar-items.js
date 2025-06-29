@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Variant"],"fn":["variant_to_json","variant_to_json_string","variant_to_json_value"],"mod":["builder","decoder","to_json","utils","variant"],"struct":["ListBuilder","ObjectBuilder","ShortString","VariantBuilder","VariantDecimal16","VariantDecimal4","VariantDecimal8","VariantList","VariantMetadata","VariantObject"]};

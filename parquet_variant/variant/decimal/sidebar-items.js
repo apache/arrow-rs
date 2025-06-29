@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":["format_decimal"],"struct":["VariantDecimal16","VariantDecimal4","VariantDecimal8"]};
