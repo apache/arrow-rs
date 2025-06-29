@@ -288,14 +288,14 @@ impl EncryptionPropertiesBuilder {
 
 #[derive(Debug)]
 /// The encryption configuration for a single Parquet file
-pub(crate) struct FileEncryptor {
+pub struct FileEncryptor {
     properties: FileEncryptionProperties,
     aad_file_unique: Vec<u8>,
     file_aad: Vec<u8>,
 }
 
 impl FileEncryptor {
-    pub(crate) fn new(properties: FileEncryptionProperties) -> Result<Self> {
+    pub fn new(properties: FileEncryptionProperties) -> Result<Self> {
         // Generate unique AAD for file
         let rng = SystemRandom::new();
         let mut aad_file_unique = vec![0u8; 8];

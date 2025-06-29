@@ -20,6 +20,7 @@
 use crate::encryption_util::{
     verify_column_indexes, verify_encryption_test_data, TestKeyRetriever,
 };
+use arrow_array::RecordBatch;
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
@@ -436,14 +437,13 @@ async fn test_decrypt_page_index(
     Ok(())
 }
 
-async fn verify_encryption_test_file_read_async(
+async fn read_encrypted_file_async(
     file: &mut tokio::fs::File,
     decryption_properties: FileDecryptionProperties,
-) -> Result<(), ParquetError> {
+) -> Result<(Vec<RecordBatch>, ArrowReaderMetadata), ParquetError> {
     let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
     let arrow_metadata = ArrowReaderMetadata::load_async(file, options).await?;
-    let metadata = arrow_metadata.metadata();
 
     let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
         file.try_clone().await?,
@@ -451,8 +451,15 @@ async fn verify_encryption_test_file_read_async(
     )
     .build()?;
     let record_batches = record_reader.try_collect::<Vec<_>>().await?;
+    Ok((record_batches, arrow_metadata.clone()))
+}
 
-    verify_encryption_test_data(record_batches, metadata);
+async fn verify_encryption_test_file_read_async(
+    file: &mut tokio::fs::File,
+    decryption_properties: FileDecryptionProperties,
+) -> Result<(), ParquetError> {
+    let (record_batches, metadata) = read_encrypted_file_async(file, decryption_properties).await?;
+    verify_encryption_test_data(record_batches, metadata.metadata());
     Ok(())
 }
 
@@ -464,15 +471,8 @@ async fn read_and_roundtrip_to_encrypted_file_async(
     let temp_file = tempfile::tempfile().unwrap();
     let mut file = File::open(&path).await.unwrap();
 
-    let options =
-        ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties.clone());
-    let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
-    let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
-        file.try_clone().await?,
-        arrow_metadata.clone(),
-    )
-    .build()?;
-    let record_batches = record_reader.try_collect::<Vec<_>>().await?;
+    let (record_batches, arrow_metadata) =
+        read_encrypted_file_async(&mut file, decryption_properties.clone()).await?;
 
     let props = WriterProperties::builder()
         .with_file_encryption_properties(encryption_properties)

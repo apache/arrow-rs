@@ -141,7 +141,7 @@ pub struct ArrowWriter<W: Write> {
     arrow_schema: SchemaRef,
 
     /// Creates new [`ArrowRowGroupWriter`] instances as required
-    row_group_writer_factory: ArrowRowGroupWriterFactory,
+    pub row_group_writer_factory: ArrowRowGroupWriterFactory,
 
     /// The length of arrays to write to each row group
     max_row_group_size: usize,
@@ -755,8 +755,9 @@ impl ArrowColumnWriter {
 }
 
 /// Encodes [`RecordBatch`] to a parquet row group
-struct ArrowRowGroupWriter {
-    writers: Vec<ArrowColumnWriter>,
+pub struct ArrowRowGroupWriter {
+    /// [`ArrowColumnWriter`] for each column in a row group
+    pub writers: Vec<ArrowColumnWriter>,
     schema: SchemaRef,
     buffered_rows: usize,
 }
@@ -789,44 +790,54 @@ impl ArrowRowGroupWriter {
     }
 }
 
-struct ArrowRowGroupWriterFactory {
+/// Factory for creating [`ArrowRowGroupWriter`] instances.
+/// This is used by [`ArrowWriter`] to create row group writers, but can be used
+/// directly for lower level API.
+pub struct ArrowRowGroupWriterFactory {
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
 impl ArrowRowGroupWriterFactory {
+    /// Creates a new [`ArrowRowGroupWriterFactory`] using provided [`SerializedFileWriter`].
     #[cfg(feature = "encryption")]
-    fn new<W: Write + Send>(file_writer: &SerializedFileWriter<W>) -> Self {
+    pub fn new<W: Write + Send>(file_writer: &SerializedFileWriter<W>) -> Self {
         Self {
             file_encryptor: file_writer.file_encryptor(),
         }
     }
 
     #[cfg(not(feature = "encryption"))]
-    fn new<W: Write + Send>(_file_writer: &SerializedFileWriter<W>) -> Self {
+    pub fn new<W: Write + Send>(_file_writer: &SerializedFileWriter<W>) -> Self {
         Self {}
     }
 
+    /// Creates a new [`ArrowRowGroupWriter`] for the given parquet schema and writer properties.
     #[cfg(feature = "encryption")]
-    fn create_row_group_writer(
+    pub fn create_row_group_writer(
         &self,
         parquet: &SchemaDescriptor,
         props: &WriterPropertiesPtr,
         arrow: &SchemaRef,
         row_group_index: usize,
     ) -> Result<ArrowRowGroupWriter> {
-        let writers = get_column_writers_with_encryptor(
-            parquet,
-            props,
-            arrow,
-            self.file_encryptor.clone(),
-            row_group_index,
-        )?;
+        let mut writers = Vec::with_capacity(arrow.fields.len());
+        let mut leaves = parquet.columns().iter();
+        let column_factory = ArrowColumnWriterFactory::new()
+            .with_file_encryptor(row_group_index, self.file_encryptor.clone());
+        for field in &arrow.fields {
+            column_factory.get_arrow_column_writer(
+                field.data_type(),
+                props,
+                &mut leaves,
+                &mut writers,
+            )?;
+        }
         Ok(ArrowRowGroupWriter::new(writers, arrow))
     }
 
     #[cfg(not(feature = "encryption"))]
-    fn create_row_group_writer(
+    pub fn create_row_group_writer(
         &self,
         parquet: &SchemaDescriptor,
         props: &WriterPropertiesPtr,
@@ -860,7 +871,7 @@ pub fn get_column_writers(
 
 /// Returns the [`ArrowColumnWriter`] for a given schema and supports columnar encryption
 #[cfg(feature = "encryption")]
-fn get_column_writers_with_encryptor(
+pub fn get_column_writers_with_encryptor(
     parquet: &SchemaDescriptor,
     props: &WriterPropertiesPtr,
     arrow: &SchemaRef,
@@ -883,14 +894,21 @@ fn get_column_writers_with_encryptor(
 }
 
 /// Gets [`ArrowColumnWriter`] instances for different data types
-struct ArrowColumnWriterFactory {
+pub struct ArrowColumnWriterFactory {
     #[cfg(feature = "encryption")]
     row_group_index: usize,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
+impl Default for ArrowColumnWriterFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ArrowColumnWriterFactory {
+    /// Create a new [`ArrowColumnWriterFactory`]
     pub fn new() -> Self {
         Self {
             #[cfg(feature = "encryption")]
@@ -901,7 +919,7 @@ impl ArrowColumnWriterFactory {
     }
 
     #[cfg(feature = "encryption")]
-    pub fn with_file_encryptor(
+    fn with_file_encryptor(
         mut self,
         row_group_index: usize,
         file_encryptor: Option<Arc<FileEncryptor>>,
@@ -939,7 +957,7 @@ impl ArrowColumnWriterFactory {
     }
 
     /// Gets the [`ArrowColumnWriter`] for the given `data_type`
-    fn get_arrow_column_writer(
+    pub fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,
         props: &WriterPropertiesPtr,
