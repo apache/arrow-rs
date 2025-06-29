@@ -39,6 +39,11 @@ serde_json = "1.0"
 base64 = "0.22"
 indexmap = "2.10.0"
 
+
+[lib]
+name = "parquet_variant"
+bench = false
+
 [dev-dependencies]
 paste = { version = "1.0" }
 criterion = { version = "0.6", default-features = false }
@@ -48,9 +53,7 @@ rand = { version = "0.9", default-features = false, features = [
     "thread_rng",
 ] }
 
-[lib]
-
 
 [[bench]]
-name = "builder"
+name = "variant_builder"
 harness = false

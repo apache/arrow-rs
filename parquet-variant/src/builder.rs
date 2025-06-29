@@ -17,7 +17,6 @@
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 use indexmap::IndexSet;
-use std::collections::HashMap;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -234,6 +233,7 @@ impl ValueBuffer {
 
 #[derive(Default)]
 struct MetadataBuilder {
+    // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 }
 
@@ -564,8 +564,8 @@ impl<'a> ListBuilder<'a> {
 pub struct ObjectBuilder<'a, 'b> {
     parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
-    fields: Vec<(u32, usize)>,              // (field_id, offset)
-    field_id_to_index: HashMap<u32, usize>, // (field_id, index to `fields`)
+    fields: Vec<(u32, usize)>, // (field_id, offset)
+    fields_index_by_field_id: IndexSet<u32>,
     buffer: ValueBuffer,
     /// Is there a pending list or object that needs to be finalized?
     pending: Option<(&'b str, usize)>,
@@ -577,24 +577,19 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             parent_buffer,
             metadata_builder,
             fields: Vec::new(),
-            field_id_to_index: HashMap::new(),
+            fields_index_by_field_id: IndexSet::new(),
             buffer: ValueBuffer::default(),
             pending: None,
         }
     }
 
     fn upsert_field(&mut self, field_id: u32, field_start: usize) {
-        use std::collections::hash_map::Entry;
+        let (i, new_entry) = self.fields_index_by_field_id.insert_full(field_id);
 
-        match self.field_id_to_index.entry(field_id) {
-            Entry::Occupied(occupied_entry) => {
-                let i = *occupied_entry.get();
-                self.fields[i] = (field_id, field_start);
-            }
-            Entry::Vacant(vacant_entry) => {
-                vacant_entry.insert(self.fields.len());
-                self.fields.push((field_id, field_start));
-            }
+        if new_entry {
+            self.fields.push((field_id, field_start));
+        } else {
+            self.fields[i] = (field_id, field_start);
         }
     }
 
