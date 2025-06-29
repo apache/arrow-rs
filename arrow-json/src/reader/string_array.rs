@@ -122,7 +122,7 @@ impl<O: OffsetSizeTrait> ArrayDecoder for StringArrayDecoder<O> {
                 TapeElement::F64(high) if coerce_primitive => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
                         let val = f64::from_bits(((high as u64) << 32) | low as u64);
-                        builder.append_value(float_formatter.format(val));
+                        builder.append_value(float_formatter.format_finite(val));
                     }
                     _ => unreachable!(),
                 },
