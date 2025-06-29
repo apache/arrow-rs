@@ -63,6 +63,11 @@ pub struct VariantObject<'m, 'v> {
 }
 
 impl<'m, 'v> VariantObject<'m, 'v> {
+    pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
+        // TODO!
+        Self::try_new(metadata, value).unwrap()
+    }
+
     /// Attempts to interpret `value` as a variant object value.
     ///
     /// # Validation
@@ -147,8 +152,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// Get a field's value by index in `0..self.len()`
     ///
     /// # Panics
-    /// If the variant object is corrupted (e.g., invalid offsets or field IDs).
-    /// This should never happen since the constructor validates all data upfront.
+    ///
+    /// If the index is out of bounds. Also if variant object is corrupted (e.g., invalid offsets or
+    /// field IDs). The latter can only happen when working with an unvalidated object produced by
+    /// [`Self::new`].
     pub fn field(&self, i: usize) -> Option<Variant<'m, 'v>> {
         Some(
             self.try_field(i)
