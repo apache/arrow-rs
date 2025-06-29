@@ -680,6 +680,44 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     }
 }
 
+/// Trait that abstracts functionality from Variant fconstruction implementations, namely
+/// `VariantBuilder`, `ListBuilder` and `ObjectFieldBuilder` to minimize code duplication.
+pub(crate) trait AppendVariantHelper {
+    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T);
+
+    fn new_list(&mut self) -> ListBuilder;
+
+    fn new_object(&mut self) -> ObjectBuilder;
+}
+
+impl AppendVariantHelper for ListBuilder<'_> {
+    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.append_value(value);
+    }
+
+    fn new_list(&mut self) -> ListBuilder {
+        self.new_list()
+    }
+
+    fn new_object(&mut self) -> ObjectBuilder {
+        self.new_object()
+    }
+}
+
+impl AppendVariantHelper for VariantBuilder {
+    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.append_value(value);
+    }
+
+    fn new_list(&mut self) -> ListBuilder {
+        self.new_list()
+    }
+
+    fn new_object(&mut self) -> ObjectBuilder {
+        self.new_object()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
