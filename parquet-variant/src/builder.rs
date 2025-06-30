@@ -439,15 +439,15 @@ impl MetadataBuilder {
 /// );
 ///
 /// ```
-/// # Example: Duplicate Field Validation
+/// # Example: Unique Field Validation
 ///
-/// This example shows how enabling validation will cause an error if the same field
-/// is inserted more than once.
+/// This example shows how enabling unique field validation will cause an error
+/// if the same field is inserted more than once.
 /// ```
 /// use parquet_variant::VariantBuilder;
 ///
-/// let mut builder = VariantBuilder::new();
-/// let mut obj = builder.new_object().with_validate_unique_fields();
+/// let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+/// let mut obj = builder.new_object();
 ///
 /// obj.insert("a", 1);
 /// obj.insert("a", 2); // duplicate field
@@ -459,6 +459,7 @@ impl MetadataBuilder {
 pub struct VariantBuilder {
     buffer: ValueBuffer,
     metadata_builder: MetadataBuilder,
+    validate_unique_fields: bool,
 }
 
 impl VariantBuilder {
@@ -466,7 +467,18 @@ impl VariantBuilder {
         Self {
             buffer: ValueBuffer::default(),
             metadata_builder: MetadataBuilder::default(),
+            validate_unique_fields: false,
         }
+    }
+
+    /// Enables validation of unique field keys in nested objects.
+    ///
+    /// This setting is propagated to all [`ObjectBuilder`]s created through this [`VariantBuilder`]
+    /// (including via any [`ListBuilder`]), and causes [`ObjectBuilder::finish()`] to return
+    /// an error if duplicate keys were inserted.
+    pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
+        self.validate_unique_fields = validate_unique_fields;
+        self
     }
 
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
@@ -474,6 +486,7 @@ impl VariantBuilder {
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_list(&mut self) -> ListBuilder {
         ListBuilder::new(&mut self.buffer, &mut self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields)
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
@@ -481,6 +494,7 @@ impl VariantBuilder {
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_object(&mut self) -> ObjectBuilder {
         ObjectBuilder::new(&mut self.buffer, &mut self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields)
     }
 
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
@@ -502,6 +516,7 @@ pub struct ListBuilder<'a> {
     buffer: ValueBuffer,
     /// Is there a pending nested object or list that needs to be finalized?
     pending: bool,
+    validate_unique_fields: bool,
 }
 
 impl<'a> ListBuilder<'a> {
@@ -512,6 +527,7 @@ impl<'a> ListBuilder<'a> {
             offsets: vec![0],
             buffer: ValueBuffer::default(),
             pending: false,
+            validate_unique_fields: false,
         }
     }
 
@@ -526,10 +542,20 @@ impl<'a> ListBuilder<'a> {
         self.pending = false;
     }
 
+    /// Enables unique field key validation for objects created within this list.
+    ///
+    /// Propagates the validation flag to any [`ObjectBuilder`]s created using
+    /// [`ListBuilder::new_object`].
+    pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
+        self.validate_unique_fields = validate_unique_fields;
+        self
+    }
+
     pub fn new_object(&mut self) -> ObjectBuilder {
         self.check_new_offset();
 
-        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
+        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields);
         self.pending = true;
 
         obj_builder
@@ -538,7 +564,8 @@ impl<'a> ListBuilder<'a> {
     pub fn new_list(&mut self) -> ListBuilder {
         self.check_new_offset();
 
-        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder);
+        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields);
         self.pending = true;
 
         list_builder
@@ -588,7 +615,7 @@ pub struct ObjectBuilder<'a, 'b> {
     buffer: ValueBuffer,
     /// Is there a pending list or object that needs to be finalized?
     pending: Option<(&'b str, usize)>,
-    validate_duplicates: bool,
+    validate_unique_fields: bool,
     /// Set of duplicate fields to report for errors
     duplicate_fields: HashSet<u32>,
 }
@@ -601,7 +628,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             fields: BTreeMap::new(),
             buffer: ValueBuffer::default(),
             pending: None,
-            validate_duplicates: false,
+            validate_unique_fields: false,
             duplicate_fields: HashSet::new(),
         }
     }
@@ -627,19 +654,19 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let field_id = self.metadata_builder.upsert_field_name(key);
         let field_start = self.buffer.offset();
 
-        if self.fields.insert(field_id, field_start).is_some() && self.validate_duplicates {
+        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
             self.duplicate_fields.insert(field_id);
         }
 
         self.buffer.append_non_nested_value(value);
     }
 
-    /// Enables validation for duplicate field keys when inserting into this object.
-    /// 
+    /// Enables validation for unique field keys when inserting into this object.
+    ///
     /// When this is enabled, calling [`ObjectBuilder::finish`] will return an error
     /// if any duplicate field keys were added using [`ObjectBuilder::insert`].
-    pub fn with_validate_unique_fields(mut self) -> Self {
-        self.validate_duplicates = true;
+    pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
+        self.validate_unique_fields = validate_unique_fields;
         self
     }
 
@@ -649,8 +676,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
-        let mut obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
-        obj_builder.validate_duplicates = self.validate_duplicates;
+        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields);
         self.pending = Some((key, field_start));
 
         obj_builder
@@ -662,7 +689,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
-        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder);
+        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields);
         self.pending = Some((key, field_start));
 
         list_builder
@@ -674,7 +702,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     pub fn finish(mut self) -> Result<(), ArrowError> {
         self.check_pending_field();
 
-        if self.validate_duplicates && !self.duplicate_fields.is_empty() {
+        if self.validate_unique_fields && !self.duplicate_fields.is_empty() {
             let id_to_name = self
                 .metadata_builder
                 .field_name_to_id
@@ -1451,31 +1479,61 @@ mod tests {
     }
 
     #[test]
-    fn test_object_allows_duplicates() {
+    fn test_object_without_unique_field_validation() {
         let mut builder = VariantBuilder::new();
-        let mut obj = builder.new_object();
 
+        // Root object with duplicates
+        let mut obj = builder.new_object();
         obj.insert("a", 1);
         obj.insert("a", 2);
+        assert!(obj.finish().is_ok());
 
-        let result = obj.finish();
-        assert!(result.is_ok());
+        // Deeply nested list structure with duplicates
+        let mut outer_list = builder.new_list();
+        let mut inner_list = outer_list.new_list();
+        let mut nested_obj = inner_list.new_object();
+        nested_obj.insert("x", 1);
+        nested_obj.insert("x", 2);
+        assert!(nested_obj.finish().is_ok());
     }
 
     #[test]
-    fn test_object_fails_on_duplicates() {
-        let mut builder = VariantBuilder::new();
-        let mut obj = builder.new_object().with_validate_unique_fields();
+    fn test_object_with_unique_field_validation() {
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
 
-        obj.insert("a", 1);
-        obj.insert("a", 2);
-        obj.insert("b", 1);
-        obj.insert("b", 2);
+        // Root-level object with duplicates
+        let mut root_obj = builder.new_object();
+        root_obj.insert("a", 1);
+        root_obj.insert("b", 2);
+        root_obj.insert("a", 3);
+        root_obj.insert("b", 4);
 
-        let result = obj.finish();
+        let result = root_obj.finish();
         assert_eq!(
             result.unwrap_err().to_string(),
             "Invalid argument error: Duplicate field keys detected: [a, b]"
         );
+
+        // Deeply nested list -> list -> object with duplicate
+        let mut outer_list = builder.new_list();
+        let mut inner_list = outer_list.new_list();
+        let mut nested_obj = inner_list.new_object();
+        nested_obj.insert("x", 1);
+        nested_obj.insert("x", 2);
+
+        let nested_result = nested_obj.finish();
+        assert_eq!(
+            nested_result.unwrap_err().to_string(),
+            "Invalid argument error: Duplicate field keys detected: [x]"
+        );
+
+        // Valid object should succeed
+        let mut list = builder.new_list();
+        let mut valid_obj = list.new_object();
+        valid_obj.insert("m", 1);
+        valid_obj.insert("n", 2);
+
+        let valid_result = valid_obj.finish();
+        assert!(valid_result.is_ok());
     }
 }
