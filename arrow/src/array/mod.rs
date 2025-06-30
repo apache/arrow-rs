@@ -37,4 +37,4 @@ pub use arrow_array::ffi::export_array_into_raw;
 // --------------------- Array's values comparison ---------------------
 
 #[allow(deprecated)]
-pub use arrow_ord::ord::{build_compare, make_comparator, DynComparator};
+pub use arrow_ord::ord::{make_comparator, DynComparator};
