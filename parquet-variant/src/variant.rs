@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -26,8 +28,6 @@ use crate::utils::{first_byte_from_slice, slice_from_slice};
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
-use std::ops::Deref;
-
 mod decimal;
 mod list;
 mod metadata;
@@ -35,7 +35,7 @@ mod object;
 
 const MAX_SHORT_STRING_BYTES: usize = 0x3F;
 
-/// Represents a variant array.
+/// A Variant [`ShortString`]
 ///
 /// This implementation is a zero cost wrapper over `&str` that ensures
 /// the length of the underlying string is a valid Variant short string (63 bytes or less)
@@ -45,9 +45,10 @@ pub struct ShortString<'a>(pub(crate) &'a str);
 impl<'a> ShortString<'a> {
     /// Attempts to interpret `value` as a variant short string value.
     ///
-    /// # Validation
+    /// # Errors
     ///
-    /// This constructor verifies that `value` is shorter than or equal to `MAX_SHORT_STRING_BYTES`
+    /// Returns an error if  `value` is longer than the maximum allowed length
+    /// of a Variant short string (63 bytes).
     pub fn try_new(value: &'a str) -> Result<Self, ArrowError> {
         if value.len() > MAX_SHORT_STRING_BYTES {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -271,15 +272,15 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::Int64 => Variant::Int64(decoder::decode_int64(value_data)?),
                 VariantPrimitiveType::Decimal4 => {
                     let (integer, scale) = decoder::decode_decimal4(value_data)?;
-                    Variant::Decimal4(VariantDecimal4 { integer, scale })
+                    Variant::Decimal4(VariantDecimal4::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Decimal8 => {
                     let (integer, scale) = decoder::decode_decimal8(value_data)?;
-                    Variant::Decimal8(VariantDecimal8 { integer, scale })
+                    Variant::Decimal8(VariantDecimal8::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Decimal16 => {
                     let (integer, scale) = decoder::decode_decimal16(value_data)?;
-                    Variant::Decimal16(VariantDecimal16 { integer, scale })
+                    Variant::Decimal16(VariantDecimal16::try_new(integer, scale)?)
                 }
                 VariantPrimitiveType::Float => Variant::Float(decoder::decode_float(value_data)?),
                 VariantPrimitiveType::Double => {
@@ -537,9 +538,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => i.try_into().ok(),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) if d.scale == 0 => d.integer.try_into().ok(),
-            Variant::Decimal8(d) if d.scale == 0 => d.integer.try_into().ok(),
-            Variant::Decimal16(d) if d.scale == 0 => d.integer.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
             _ => None,
         }
     }
@@ -572,9 +573,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) if d.scale == 0 => d.integer.try_into().ok(),
-            Variant::Decimal8(d) if d.scale == 0 => d.integer.try_into().ok(),
-            Variant::Decimal16(d) if d.scale == 0 => d.integer.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
             _ => None,
         }
     }
@@ -607,9 +608,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i.into()),
             Variant::Int32(i) => Some(i),
             Variant::Int64(i) => i.try_into().ok(),
-            Variant::Decimal4(d) if d.scale == 0 => Some(d.integer),
-            Variant::Decimal8(d) if d.scale == 0 => d.integer.try_into().ok(),
-            Variant::Decimal16(d) if d.scale == 0 => d.integer.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => Some(d.integer()),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
             _ => None,
         }
     }
@@ -638,9 +639,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i.into()),
             Variant::Int32(i) => Some(i.into()),
             Variant::Int64(i) => Some(i),
-            Variant::Decimal4(d) if d.scale == 0 => Some(d.integer.into()),
-            Variant::Decimal8(d) if d.scale == 0 => Some(d.integer),
-            Variant::Decimal16(d) if d.scale == 0 => d.integer.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => Some(d.integer().into()),
+            Variant::Decimal8(d) if d.scale() == 0 => Some(d.integer()),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
             _ => None,
         }
     }

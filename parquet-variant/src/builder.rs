@@ -161,22 +161,22 @@ impl ValueBuffer {
         self.append_slice(&micros.to_le_bytes());
     }
 
-    fn append_decimal4(&mut self, integer: i32, scale: u8) {
+    fn append_decimal4(&mut self, decimal4: VariantDecimal4) {
         self.append_primitive_header(VariantPrimitiveType::Decimal4);
-        self.append_u8(scale);
-        self.append_slice(&integer.to_le_bytes());
+        self.append_u8(decimal4.scale());
+        self.append_slice(&decimal4.integer().to_le_bytes());
     }
 
-    fn append_decimal8(&mut self, integer: i64, scale: u8) {
+    fn append_decimal8(&mut self, decimal8: VariantDecimal8) {
         self.append_primitive_header(VariantPrimitiveType::Decimal8);
-        self.append_u8(scale);
-        self.append_slice(&integer.to_le_bytes());
+        self.append_u8(decimal8.scale());
+        self.append_slice(&decimal8.integer().to_le_bytes());
     }
 
-    fn append_decimal16(&mut self, integer: i128, scale: u8) {
+    fn append_decimal16(&mut self, decimal16: VariantDecimal16) {
         self.append_primitive_header(VariantPrimitiveType::Decimal16);
-        self.append_u8(scale);
-        self.append_slice(&integer.to_le_bytes());
+        self.append_u8(decimal16.scale());
+        self.append_slice(&decimal16.integer().to_le_bytes());
     }
 
     fn append_binary(&mut self, value: &[u8]) {
@@ -214,15 +214,9 @@ impl ValueBuffer {
             Variant::Date(v) => self.append_date(v),
             Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
             Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::Decimal4(VariantDecimal4 { integer, scale }) => {
-                self.append_decimal4(integer, scale)
-            }
-            Variant::Decimal8(VariantDecimal8 { integer, scale }) => {
-                self.append_decimal8(integer, scale)
-            }
-            Variant::Decimal16(VariantDecimal16 { integer, scale }) => {
-                self.append_decimal16(integer, scale)
-            }
+            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
             Variant::Float(v) => self.append_float(v),
             Variant::Double(v) => self.append_double(v),
             Variant::Binary(v) => self.append_binary(v),
