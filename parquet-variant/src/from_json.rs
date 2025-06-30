@@ -63,10 +63,7 @@ use serde_json::{Number, Value};
 /// assert_eq!(json_result, serde_json::to_string(&json_value)?);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn json_to_variant(
-    json: &str,
-    builder: &mut VariantBuilder,
-) -> Result<(), ArrowError> {
+pub fn json_to_variant(json: &str, builder: &mut VariantBuilder) -> Result<(), ArrowError> {
     let json: Value = serde_json::from_str(json)
         .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
 

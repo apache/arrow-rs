@@ -31,10 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (metadata, value) = variant_builder.finish();
 
-    let variant = parquet_variant::Variant::try_new(
-        &metadata,
-        &value,
-    )?;
+    let variant = parquet_variant::Variant::try_new(&metadata, &value)?;
 
     let json_result = variant_to_json_string(&variant)?;
     let json_value = variant_to_json_value(&variant)?;
