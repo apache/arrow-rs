@@ -1155,7 +1155,7 @@ async fn test_multi_threaded_encrypted_writing() {
 
     let arrow_row_group_writer_factory = ArrowRowGroupWriterFactory::new(&file_writer);
     let arrow_row_group_writer = arrow_row_group_writer_factory
-        .create_row_group_writer(&parquet_schema, &props.clone(), &schema, 0)
+        .create_row_group_writer(&parquet_schema, &props, &schema, 0)
         .unwrap();
 
     // Get column writers with encryptor from ArrowRowGroupWriter
