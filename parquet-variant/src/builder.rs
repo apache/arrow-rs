@@ -16,7 +16,7 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -564,8 +564,7 @@ impl<'a> ListBuilder<'a> {
 pub struct ObjectBuilder<'a, 'b> {
     parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
-    fields: Vec<(u32, usize)>, // (field_id, offset)
-    fields_index_by_field_id: IndexSet<u32>,
+    fields: IndexMap<u32, usize>, // (field_id, offset)
     buffer: ValueBuffer,
     /// Is there a pending list or object that needs to be finalized?
     pending: Option<(&'b str, usize)>,
@@ -576,30 +575,19 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         Self {
             parent_buffer,
             metadata_builder,
-            fields: Vec::new(),
-            fields_index_by_field_id: IndexSet::new(),
+            fields: IndexMap::new(),
             buffer: ValueBuffer::default(),
             pending: None,
         }
     }
 
-    fn upsert_field(&mut self, field_id: u32, field_start: usize) {
-        let (i, new_entry) = self.fields_index_by_field_id.insert_full(field_id);
-
-        if new_entry {
-            self.fields.push((field_id, field_start));
-        } else {
-            self.fields[i] = (field_id, field_start);
-        }
-    }
-
     fn check_pending_field(&mut self) {
-        let Some((field_name, field_start)) = self.pending.as_ref() else {
+        let Some(&(field_name, field_start)) = self.pending.as_ref() else {
             return;
         };
 
         let field_id = self.metadata_builder.upsert_field_name(field_name);
-        self.upsert_field(field_id, *field_start);
+        self.fields.insert(field_id, field_start);
 
         self.pending = None;
     }
@@ -614,7 +602,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let field_id = self.metadata_builder.upsert_field_name(key);
         let field_start = self.buffer.offset();
 
-        self.upsert_field(field_id, field_start);
+        self.fields.insert(field_id, field_start);
         self.buffer.append_non_nested_value(value);
     }
 
@@ -652,13 +640,13 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let num_fields = self.fields.len();
         let is_large = num_fields > u8::MAX as usize;
 
-        self.fields.sort_by(|a, b| {
-            let key_a = &self.metadata_builder.field_name(a.0 as usize);
-            let key_b = &self.metadata_builder.field_name(b.0 as usize);
+        self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
+            let key_a = &self.metadata_builder.field_name(field_a_id as usize);
+            let key_b = &self.metadata_builder.field_name(field_b_id as usize);
             key_a.cmp(key_b)
         });
 
-        let max_id = self.fields.iter().map(|&(id, _)| id).max().unwrap_or(0);
+        let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
 
         let id_size = int_size(max_id as usize);
         let offset_size = int_size(data_size);
@@ -672,12 +660,12 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         );
 
         // Write field IDs (sorted order)
-        for &(id, _) in &self.fields {
+        for (&id, _) in &self.fields {
             write_offset(self.parent_buffer.inner_mut(), id as usize, id_size);
         }
 
         // Write field offsets
-        for &(_, offset) in &self.fields {
+        for (_, &offset) in &self.fields {
             write_offset(self.parent_buffer.inner_mut(), offset, offset_size);
         }
 
@@ -1200,10 +1188,6 @@ mod tests {
             }
 
             outer_object_builder.insert("b", false);
-
-            // note, we can't guarantee an Objects field is sorted by field id.
-            assert_eq!(outer_object_builder.fields, vec![(1, 0), (0, 10)]);
-
             outer_object_builder.finish();
         }
 
