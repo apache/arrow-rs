@@ -30,8 +30,5 @@ pub use arrow_string::{concat_elements, length, regexp, substring};
 pub mod comparison {
     pub use arrow_ord::comparison::*;
     pub use arrow_string::like::*;
-    // continue to export deprecated methods until they are removed
     pub use arrow_string::regexp::{regexp_is_match, regexp_is_match_scalar};
-    #[allow(deprecated)]
-    pub use arrow_string::regexp::{regexp_is_match_utf8, regexp_is_match_utf8_scalar};
 }
