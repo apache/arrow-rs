@@ -17,8 +17,8 @@
 
 use crate::decoder::OffsetSizeBytes;
 use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-    string_from_slice, validate_fallible_iterator,
+    first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice,
+    validate_fallible_iterator,
 };
 
 use arrow_schema::ArrowError;
@@ -40,6 +40,16 @@ const CORRECT_VERSION_VALUE: u8 = 1;
 const NUM_HEADER_BYTES: usize = 1;
 
 impl VariantMetadataHeader {
+    // Hide the cast
+    const fn offset_size(&self) -> usize {
+        self.offset_size as usize
+    }
+
+    // Avoid materializing this offset, since it's cheaply and safely computable
+    const fn first_offset_byte(&self) -> usize {
+        NUM_HEADER_BYTES + self.offset_size()
+    }
+
     /// Tries to construct the variant metadata header, which has the form
     ///
     /// ```text
@@ -83,16 +93,21 @@ impl VariantMetadataHeader {
 /// Every instance of variant metadata is either _valid_ or _invalid_. depending on whether the
 /// underlying bytes are a valid encoding of variant metadata (see below).
 ///
-/// Instances produced by [`Self::try_new`] or [`Self::validate`] are fully _validated_, and always
-/// contain _valid_ data.
+/// Instances produced by [`Self::try_new`] or [`Self::validate`] are fully _validated_. They always
+/// contain _valid_ data, and infallible accesses such as iteration and indexing are panic-free. The
+/// validation cost is linear in the number of underlying bytes.
 ///
-/// Instances produced by [`Self::new`] are _unvalidated_ and may contain either _valid_ or
-/// _invalid_ data. Infallible accesses such as iteration and indexing may panic if the underlying
+/// Instances produced by [`Self::new`] are _unvalidated_ and so they may contain either _valid_ or
+/// _invalid_ data. Infallible accesses such as iteration and indexing will panic if the underlying
 /// bytes are _invalid_, and fallible alternatives such as [`Self::iter_try`] and [`Self::get`] are
-/// strongly recommended. [`Self::validate`] can also be used to _validate_ an _unvalidated_
-/// instance, if desired.
+/// provided as panic-free alternatives. [`Self::validate`] can also be used to _validate_ an
+/// _unvalidated_ instance, if desired.
 ///
-/// A _validated_ instance guarantees that:
+/// _Unvalidated_ instances can be constructed in constant time. This can be useful if the caller
+/// knows the underlying bytes were already validated previously, or if the caller intends to
+/// perform a small number of (fallible) accesses to a large dictionary.
+///
+/// A _validated_ variant [metadata instance guarantees that:
 ///
 /// - header byte is valid
 /// - dictionary size is in bounds
@@ -103,8 +118,13 @@ impl VariantMetadataHeader {
 /// - all offsets are monotonically increasing (*)
 /// - all values are valid utf-8 (*)
 ///
-/// NOTE: [`Self::new`] only skips expensive validation checks (marked by `(*)` in the list above);
-/// it panics any of the other checks fails.
+/// NOTE: [`Self::new`] only skips expensive (non-constant cost) validation checks (marked by `(*)`
+/// in the list above); it panics any of the other checks fails.
+///
+/// # Safety
+///
+/// Even an _invalid_ variant metadata instance is still _safe_ to use in the Rust sense. Accessing
+/// it with infallible methods may cause panics but will never lead to undefined behavior.
 ///
 /// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
@@ -113,7 +133,7 @@ pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
     header: VariantMetadataHeader,
     dictionary_size: usize,
-    dictionary_key_start_byte: usize,
+    first_value_byte: usize,
     validated: bool,
 }
 
@@ -128,7 +148,7 @@ impl<'m> VariantMetadata<'m> {
 
     /// Interprets `bytes` as a variant metadata instance, without attempting to [validate] dictionary
     /// entries. Panics if basic sanity checking fails, and subsequent infallible accesses such as
-    /// indexing and iteration could also panic due to invalid bytes.
+    /// indexing and iteration could also panic if the underlying bytes are invalid.
     ///
     /// This constructor can be a useful lightweight alternative to [`Self::try_new`] if the bytes
     /// were already validated previously by other means, or if the caller expects a small number of
@@ -137,35 +157,35 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [validate]: Self#Validation
     pub fn new(bytes: &'m [u8]) -> Self {
-        Self::try_new_impl(bytes).unwrap()
+        Self::try_new_impl(bytes).expect("Invalid variant metadata")
     }
 
-    // The actual constructor, which performs only basic sanity checking.
-    fn try_new_impl(bytes: &'m [u8]) -> Result<Self, ArrowError> {
+    // The actual constructor, which performs only basic (constant-const) validation.
+    pub(crate) fn try_new_impl(bytes: &'m [u8]) -> Result<Self, ArrowError> {
         let header_byte = first_byte_from_slice(bytes)?;
         let header = VariantMetadataHeader::try_new(header_byte)?;
 
-        // First element after header is dictionary size
-        let dictionary_size = header
-            .offset_size
-            .unpack_usize(bytes, NUM_HEADER_BYTES, 0)?;
+        // First element after header is dictionary size; the offset array immediately follows.
+        let dictionary_size =
+            header
+                .offset_size
+                .unpack_usize_at_offset(bytes, NUM_HEADER_BYTES, 0)?;
 
         // Calculate the starting offset of the dictionary string bytes.
         //
-        // Value header, dict_size (offset_size bytes), and dict_size+1 offsets
-        // = NUM_HEADER_BYTES + offset_size + (dict_size + 1) * offset_size
-        // = (dict_size + 2) * offset_size + NUM_HEADER_BYTES
-        let dictionary_key_start_byte = dictionary_size
-            .checked_add(2)
-            .and_then(|n| n.checked_mul(header.offset_size as usize))
-            .and_then(|n| n.checked_add(NUM_HEADER_BYTES))
+        // There are dict_size + 1 offsets, and the value bytes immediately follow
+        // = (dict_size + 1) * offset_size + header.first_offset_byte()
+        let first_value_byte = dictionary_size
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(header.offset_size()))
+            .and_then(|n| n.checked_add(header.first_offset_byte()))
             .ok_or_else(|| overflow_error("offset of variant metadata dictionary"))?;
 
-        let new_self = Self {
+        let mut new_self = Self {
             bytes,
             header,
             dictionary_size,
-            dictionary_key_start_byte,
+            first_value_byte,
             validated: false,
         };
 
@@ -176,10 +196,13 @@ impl<'m> VariantMetadata<'m> {
                 "First offset is not zero: {first_offset}"
             )));
         }
-        // Bounds check the last offset by requesting the empty slice it points to.
-        let last_offset = new_self.get_offset(dictionary_size)?;
-        let _ =
-            slice_from_slice_at_offset(bytes, dictionary_key_start_byte, last_offset..last_offset)?;
+
+        // Use the last offset to upper-bound the byte slice
+        let last_offset = new_self
+            .get_offset(dictionary_size)?
+            .checked_add(first_value_byte)
+            .ok_or_else(|| overflow_error("variant metadata size"))?;
+        new_self.bytes = slice_from_slice(bytes, ..last_offset)?;
         Ok(new_self)
     }
 
@@ -190,7 +213,7 @@ impl<'m> VariantMetadata<'m> {
         self.validated
     }
 
-    /// Performs a full [validation] of this metadata dictionary.
+    /// Performs a full [validation] of this metadata dictionary and returns the result.
     ///
     /// [validation]: Self#Validation
     pub fn validate(mut self) -> Result<Self, ArrowError> {
@@ -209,12 +232,12 @@ impl<'m> VariantMetadata<'m> {
     }
 
     /// Get the dictionary size
-    pub fn dictionary_size(&self) -> usize {
+    pub const fn dictionary_size(&self) -> usize {
         self.dictionary_size
     }
 
     /// The variant protocol version
-    pub fn version(&self) -> u8 {
+    pub const fn version(&self) -> u8 {
         self.header.version
     }
 
@@ -223,11 +246,9 @@ impl<'m> VariantMetadata<'m> {
     /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
     /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
     fn get_offset(&self, i: usize) -> Result<usize, ArrowError> {
-        // Skip the header byte and the dictionary_size entry (by offset_index + 1)
-        let bytes = slice_from_slice(self.bytes, ..self.dictionary_key_start_byte)?;
-        self.header
-            .offset_size
-            .unpack_usize(bytes, NUM_HEADER_BYTES, i + 1)
+        let offset_byte_range = self.header.first_offset_byte()..self.first_value_byte;
+        let bytes = slice_from_slice(self.bytes, offset_byte_range)?;
+        self.header.offset_size.unpack_usize(bytes, i)
     }
 
     /// Attempts to retrieve a dictionary entry by index, failing if out of bounds or if the
@@ -236,7 +257,7 @@ impl<'m> VariantMetadata<'m> {
     /// [invalid]: Self#Validation
     pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
         let byte_range = self.get_offset(i)?..self.get_offset(i + 1)?;
-        string_from_slice(self.bytes, self.dictionary_key_start_byte, byte_range)
+        string_from_slice(self.bytes, self.first_value_byte, byte_range)
     }
 
     /// Returns an iterator that attempts to visit all dictionary entries, producing `Err` if the
@@ -247,12 +268,13 @@ impl<'m> VariantMetadata<'m> {
         (0..self.dictionary_size).map(move |i| self.get(i))
     }
 
-    /// Iterates oer all dictionary entries. When working with [unvalidated] input, prefer
+    /// Iterates over all dictionary entries. When working with [unvalidated] input, consider
     /// [`Self::iter_try`] to avoid panics due to invalid data.
     ///
     /// [unvalidated]: Self#Validation
     pub fn iter(&self) -> impl Iterator<Item = &'m str> + '_ {
-        self.iter_try().map(Result::unwrap)
+        self.iter_try()
+            .map(|result| result.expect("Invalid metadata dictionary entry"))
     }
 }
 
@@ -264,7 +286,7 @@ impl std::ops::Index<usize> for VariantMetadata<'_> {
     type Output = str;
 
     fn index(&self, i: usize) -> &str {
-        self.get(i).unwrap()
+        self.get(i).expect("Invalid metadata dictionary entry")
     }
 }
 
