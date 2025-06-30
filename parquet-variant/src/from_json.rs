@@ -68,7 +68,7 @@ pub fn json_to_variant(
     builder: &mut VariantBuilder,
 ) -> Result<(), ArrowError> {
     let json: Value = serde_json::from_str(json)
-        .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {}", e)))?;
+        .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
 
     build_json(&json, builder)?;
     Ok(())
