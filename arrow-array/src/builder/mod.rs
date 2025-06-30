@@ -450,6 +450,12 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
+        DataType::Decimal32(p, s) => Box::new(
+            Decimal32Builder::with_capacity(capacity).with_data_type(DataType::Decimal32(*p, *s)),
+        ),
+        DataType::Decimal64(p, s) => Box::new(
+            Decimal64Builder::with_capacity(capacity).with_data_type(DataType::Decimal64(*p, *s)),
+        ),
         DataType::Decimal128(p, s) => Box::new(
             Decimal128Builder::with_capacity(capacity).with_data_type(DataType::Decimal128(*p, *s)),
         ),
