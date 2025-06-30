@@ -24,7 +24,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -310,11 +310,72 @@ fn sort_byte_view<T: ByteViewType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let mut valids = value_indices
+    // 1. Build a list of (index, raw_view, length)
+    let mut valids: Vec<_> = value_indices
         .into_iter()
-        .map(|index| (index, values.value(index as usize).as_ref()))
-        .collect::<Vec<(u32, &[u8])>>();
-    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+        .map(|idx| {
+            // SAFETY: we know idx < values.len()
+            let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+            let len = raw as u32; // lower 32 bits encode length
+            (idx, raw, len)
+        })
+        .collect();
+
+    // 2. Compute the number of non-null entries to partially sort
+    let vlimit = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
+        _ => valids.len(),
+    };
+
+    // 3. Mixed comparator: first prefix, then inline vs full comparison
+    let cmp_mixed = |a: &(u32, u128, u32), b: &(u32, u128, u32)| {
+        let (_, raw_a, len_a) = *a;
+        let (_, raw_b, len_b) = *b;
+
+        // 3.1 Both inline (≤12 bytes): compare full 128-bit key including length
+        if len_a <= MAX_INLINE_VIEW_LEN && len_b <= MAX_INLINE_VIEW_LEN {
+            return GenericByteViewArray::<T>::inline_key_fast(raw_a)
+                .cmp(&GenericByteViewArray::<T>::inline_key_fast(raw_b));
+        }
+
+        // 3.2 Compare 4-byte prefix in big-endian order
+        let pref_a = ByteView::from(raw_a).prefix.swap_bytes();
+        let pref_b = ByteView::from(raw_b).prefix.swap_bytes();
+        if pref_a != pref_b {
+            return pref_a.cmp(&pref_b);
+        }
+
+        // 3.3 Fallback to full byte-slice comparison
+        let full_a: &[u8] = unsafe { values.value_unchecked(a.0 as usize).as_ref() };
+        let full_b: &[u8] = unsafe { values.value_unchecked(b.0 as usize).as_ref() };
+        full_a.cmp(full_b)
+    };
+
+    // 4. Partially sort according to ascending/descending
+    if !options.descending {
+        sort_unstable_by(&mut valids, vlimit, cmp_mixed);
+    } else {
+        sort_unstable_by(&mut valids, vlimit, |x, y| cmp_mixed(x, y).reverse());
+    }
+
+    // 5. Assemble nulls and sorted indices into final output
+    let total = valids.len() + nulls.len();
+    let out_limit = limit.unwrap_or(total).min(total);
+    let mut out = Vec::with_capacity(total);
+
+    if options.nulls_first {
+        // Place null indices first
+        out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+        let rem = out_limit - out.len();
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(rem));
+    } else {
+        // Place non-null indices first
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(out_limit));
+        let rem = out_limit - out.len();
+        out.extend_from_slice(&nulls[..rem]);
+    }
+
+    out.into()
 }
 
 fn sort_fixed_size_binary(
