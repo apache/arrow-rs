@@ -1030,8 +1030,8 @@ impl Date64Type {
     /// * `i` - The Date64Type to convert
     #[deprecated(since = "56.0.0", note = "Use to_naive_date_opt instead.")]
     pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        epoch.add(Duration::try_milliseconds(i).unwrap())
+        Self::to_naive_date_opt(i)
+            .unwrap_or_else(|| panic!("Date64Type::add_year_months overflowed for date: {i}",))
     }
 
     /// Converts an arrow Date64Type into a chrono::NaiveDateTime if it fits in the range that chrono::NaiveDateTime can represent.
