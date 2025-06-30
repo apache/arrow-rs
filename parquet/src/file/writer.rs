@@ -433,7 +433,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
     /// Get the file encryptor used by this instance to encrypt data
     #[cfg(feature = "encryption")]
-    pub fn file_encryptor(&self) -> Option<Arc<FileEncryptor>> {
+    pub(crate) fn file_encryptor(&self) -> Option<Arc<FileEncryptor>> {
         self.file_encryptor.clone()
     }
 }
