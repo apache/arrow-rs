@@ -28,9 +28,7 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
     RowSelector,
 };
-use parquet::arrow::arrow_writer::{
-    compute_leaves, ArrowColumnChunk, ArrowLeafColumn, ArrowRowGroupWriterFactory,
-};
+use parquet::arrow::arrow_writer::{compute_leaves, ArrowLeafColumn, ArrowRowGroupWriterFactory};
 use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
 use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
@@ -1165,41 +1163,44 @@ async fn test_multi_threaded_encrypted_writing() {
 
     // Get column writers with encryptor from ArrowRowGroupWriter
     let col_writers = arrow_row_group_writer.writers;
+    let num_columns = col_writers.len();
 
-    let mut workers: Vec<_> = col_writers
-        .into_iter()
-        .map(|mut col_writer| {
-            let (send, recv) = std::sync::mpsc::channel::<ArrowLeafColumn>();
-            let handle = std::thread::spawn(move || {
-                // receive Arrays to encode via the channel
-                for col in recv {
-                    col_writer.write(&col)?;
-                }
-                // once the input is complete, close the writer
-                // to return the newly created ArrowColumnChunk
-                col_writer.close()
-            });
-            (handle, send)
-        })
-        .collect();
+    // Create a channel for each column writer to send ArrowLeafColumn data to
+    let mut col_writer_tasks = Vec::with_capacity(num_columns);
+    let mut col_array_channels = Vec::with_capacity(num_columns);
+    for mut writer in col_writers.into_iter() {
+        let (send_array, mut receive_array) = tokio::sync::mpsc::channel::<ArrowLeafColumn>(100);
+        col_array_channels.push(send_array);
+        let handle = tokio::spawn(async move {
+            while let Some(col) = receive_array.recv().await {
+                let _ = writer.write(&col);
+            }
+            writer.close().unwrap()
+        });
+        col_writer_tasks.push(handle);
+    }
 
-    let mut worker_iter = workers.iter_mut();
-    for (arr, field) in to_write.iter().zip(&schema.fields) {
-        for leaves in compute_leaves(field, arr).unwrap() {
-            worker_iter.next().unwrap().1.send(leaves).unwrap();
+    // Send the ArrowLeafColumn data to the respective column writer channels
+    for (channel_idx, (array, field)) in to_write.iter().zip(schema.fields()).enumerate() {
+        for c in compute_leaves(field, array).into_iter().flatten() {
+            let _ = col_array_channels[channel_idx].send(c).await;
         }
     }
+    drop(col_array_channels);
 
-    // Wait for the workers to complete encoding, and append
+    // Wait for all column writers to finish writing
+    let mut finalized_rg = Vec::with_capacity(num_columns);
+    for task in col_writer_tasks.into_iter() {
+        finalized_rg.push(task.await.unwrap());
+    }
+
+    // Wait for the workers to complete writing then append
     // the resulting column chunks to the row group (and the file)
     let mut row_group_writer = file_writer.next_row_group().unwrap();
-
-    for (handle, send) in workers {
-        drop(send); // Drop send side to signal termination
-                    // wait for the worker to send the completed chunk
-        let chunk: ArrowColumnChunk = handle.join().unwrap().unwrap();
+    for chunk in finalized_rg {
         chunk.append_to_row_group(&mut row_group_writer).unwrap();
     }
+
     // Close the row group which writes to the underlying file
     row_group_writer.close().unwrap();
 
