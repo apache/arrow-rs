@@ -51,7 +51,7 @@ bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
+flate2 = { version = "1.1", default-features = false, optional = true }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
@@ -119,6 +119,9 @@ crc = ["dep:crc32fast"]
 simdutf8 = ["dep:simdutf8"]
 # Enable Parquet modular encryption support
 encryption = ["dep:ring"]
+# Explicitely enabling rust_backend and zlib-rs features for flate2
+flate2-rust_backened = ["flate2/rust_backend"]
+flate2-zlib-rs = ["flate2/zlib-rs"]
 
 
 [[example]]
