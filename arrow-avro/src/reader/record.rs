@@ -171,32 +171,37 @@ impl Decoder {
                 let sz = *size;
                 let prec = p as u8;
                 let scl = s.unwrap_or(0) as i8;
-                if let Some(fixed_size) = sz {
-                    if fixed_size <= 16 {
+                match (sz, p) {
+                    (Some(fixed_size), _) if fixed_size <= 16 => {
                         let builder =
                             Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
                         return Ok(Self::Decimal128(p, s, sz, builder));
                     }
-                    if fixed_size <= 32 {
+                    (Some(fixed_size), _) if fixed_size <= 32 => {
                         let builder =
                             Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
                         return Ok(Self::Decimal256(p, s, sz, builder));
                     }
-                    return Err(ArrowError::ParseError(format!(
-                        "Unsupported decimal size: {fixed_size:?}"
-                    )));
-                }
-                if p <= DECIMAL128_MAX_PRECISION as usize {
-                    let builder = Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
-                    Self::Decimal128(p, s, sz, builder)
-                } else if p <= DECIMAL256_MAX_PRECISION as usize {
-                    let builder = Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
-                    Self::Decimal256(p, s, sz, builder)
-                } else {
-                    return Err(ArrowError::ParseError(format!(
-                        "Decimal precision {} exceeds maximum supported",
-                        p
-                    )));
+                    (Some(fixed_size), _) => {
+                        return Err(ArrowError::ParseError(format!(
+                            "Unsupported decimal size: {fixed_size:?}"
+                        )));
+                    }
+                    (None, p) if p <= DECIMAL128_MAX_PRECISION as usize => {
+                        let builder =
+                            Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
+                        Self::Decimal128(p, s, sz, builder)
+                    }
+                    (None, p) if p <= DECIMAL256_MAX_PRECISION as usize => {
+                        let builder =
+                            Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
+                        Self::Decimal256(p, s, sz, builder)
+                    }
+                    (None, _) => {
+                        return Err(ArrowError::ParseError(format!(
+                            "Decimal precision {p} exceeds maximum supported"
+                        )));
+                    }
                 }
             }
             Codec::Interval => return nyi("decoding interval"),

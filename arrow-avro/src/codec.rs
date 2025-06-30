@@ -510,8 +510,7 @@ fn make_data_type<'a>(
                     }
                     _ => {
                         return Err(ArrowError::SchemaError(format!(
-                            "Decimal logical type can only be backed by Fixed or Bytes, found {:?}",
-                            c,
+                            "Decimal logical type can only be backed by Fixed or Bytes, found {c:?}"
                         )))
                     }
                 },
