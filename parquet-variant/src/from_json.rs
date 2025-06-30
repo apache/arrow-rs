@@ -23,7 +23,7 @@ use arrow_schema::ArrowError;
 use rust_decimal::prelude::*;
 use serde_json::{Number, Value};
 
-/// Converts a JSON string to Variant using `variant_builder`. The resulting `value` and `metadata`
+/// Converts a JSON string to Variant using [`VariantBuilder`]. The resulting `value` and `metadata`
 /// buffers can be extracted using `builder.finish()`
 ///
 /// # Arguments
