@@ -71,12 +71,6 @@ pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
     /// the corresponding Arrow data type of this primitive type.
     const DATA_TYPE: DataType;
 
-    /// Returns the byte width of this primitive type.
-    #[deprecated(since = "52.0.0", note = "Use ArrowNativeType::get_byte_width")]
-    fn get_byte_width() -> usize {
-        std::mem::size_of::<Self::Native>()
-    }
-
     /// Returns a default value of this primitive type.
     ///
     /// This is useful for aggregate array ops like `sum()`, `mean()`.
@@ -1034,7 +1028,7 @@ impl Date64Type {
     /// # Arguments
     ///
     /// * `i` - The Date64Type to convert
-    #[deprecated]
+    #[deprecated(since = "56.0.0", note = "Use to_naive_date_opt instead.")]
     pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         epoch.add(Duration::try_milliseconds(i).unwrap())
