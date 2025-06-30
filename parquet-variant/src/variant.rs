@@ -185,14 +185,14 @@ impl Deref for ShortString<'_> {
 ///
 /// Instances produced by [`Self::try_new`], [`Self::try_new_with_metadata`], or [`Self::validate`]
 /// are fully _validated_. They always contain _valid_ data, and infallible accesses such as
-/// iteration and indexing are panic-free. The validation cost is linear in `O(m + v)` where `m` and
-/// `v` are the number of bytes in the metadata and value buffers.
+/// iteration and indexing are panic-free. The validation cost is `O(m + v)` where `m` and
+/// `v` are the number of bytes in the metadata and value buffers, respectively.
 ///
-/// Instances produced by [`Self::new_with_metadata`] are _unvalidated_ and so they may contain
-/// either _valid_ or _invalid_ data. Infallible accesses to variant objects and arrays, such as
-/// iteration and indexing will panic if the underlying bytes are _invalid_, and fallible
-/// alternatives are provided as panic-free alternatives. [`Self::validate`] can also be used to
-/// _validate_ an _unvalidated_ instance, if desired.
+/// Instances produced by [`Self::new`] and [`Self::new_with_metadata`] are _unvalidated_ and so
+/// they may contain either _valid_ or _invalid_ data. Infallible accesses to variant objects and
+/// arrays, such as iteration and indexing will panic if the underlying bytes are _invalid_, and
+/// fallible alternatives are provided as panic-free alternatives. [`Self::validate`] can also be
+/// used to _validate_ an _unvalidated_ instance, if desired.
 ///
 /// _Unvalidated_ instances can be constructed in constant time. This can be useful if the caller
 /// knows the underlying bytes were already validated previously, or if the caller intends to
@@ -410,7 +410,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// where `m` and `v` are the sizes of metadata and value buffers, respectively.
     ///
     /// [objects]: VariantObject#Validation
-    /// [arrays]: VariantArray#Validation
+    /// [arrays]: VariantList#Validation
     pub fn validate(self) -> Result<Self, ArrowError> {
         use Variant::*;
         match self {

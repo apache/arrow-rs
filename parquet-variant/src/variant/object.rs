@@ -139,9 +139,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// particular, that all field ids exist in `metadata`, and all offsets are in-bounds and point
     /// to valid objects.
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
-        let mut new_self = Self::try_new_impl(metadata, value)?.validate()?;
-        new_self.validated = true;
-        Ok(new_self)
+        Self::try_new_impl(metadata, value)?.validate()
     }
 
     /// Attempts to interpet `metadata` and `value` as a variant object, performing only basic
@@ -208,7 +206,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// [validation]: Self#Validation
     pub fn validate(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
-            // Validate the metadata dictionary, if not already validated.
+            // Validate the metadata dictionary first, if not already validated, because we pass it
+            // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.validate()?;
 
             // Iterate over all string keys in this dictionary in order to prove that the offset

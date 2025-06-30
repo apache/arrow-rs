@@ -205,7 +205,8 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// [validation]: Self#Validation
     pub fn validate(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
-            // Validate the metadata dictionary, if not already validated.
+            // Validate the metadata dictionary first, if not already validated, because we pass it
+            // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.validate()?;
 
             // Iterate over all string keys in this dictionary in order to prove that the offset
@@ -244,6 +245,11 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
     /// Fallible iteration over the elements of this list.
     pub fn iter_try(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
+        self.iter_try_impl().map(|result| result?.validate())
+    }
+
+    // Fallible iteration that only performs basic (constant-time) validation.
+    fn iter_try_impl(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
         (0..self.len()).map(move |i| self.try_get_impl(i))
     }
 
@@ -252,7 +258,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     ///
     /// [unvalidated]: Self#Validation
     pub fn iter(&self) -> impl Iterator<Item = Variant<'m, 'v>> + '_ {
-        self.iter_try()
+        self.iter_try_impl()
             .map(|result| result.expect("Invalid variant list entry"))
     }
 
