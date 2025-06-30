@@ -17,8 +17,8 @@
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 use arrow_schema::ArrowError;
-use std::collections::{HashSet};
 use indexmap::{IndexMap, IndexSet};
+use std::collections::HashSet;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -704,7 +704,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             let mut names = self
                 .duplicate_fields
                 .iter()
-                .map(|id| self. metadata_builder.field_name(*id as usize))
+                .map(|id| self.metadata_builder.field_name(*id as usize))
                 .collect::<Vec<_>>();
 
             names.sort_unstable();
