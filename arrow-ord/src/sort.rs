@@ -334,7 +334,8 @@ fn sort_byte_view<T: ByteViewType>(
 
         // 3.1 Both inline (≤12 bytes): compare full 128-bit key including length
         if len_a <= MAX_INLINE_VIEW_LEN && len_b <= MAX_INLINE_VIEW_LEN {
-            return inline_key_fast(raw_a).cmp(&inline_key_fast(raw_b));
+            return GenericByteViewArray::<T>::inline_key_fast(raw_a)
+                .cmp(&GenericByteViewArray::<T>::inline_key_fast(raw_b));
         }
 
         // 3.2 Compare 4-byte prefix in big-endian order
