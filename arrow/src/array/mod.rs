@@ -35,6 +35,4 @@ pub use arrow_data::transform::{Capacities, MutableArrayData};
 pub use arrow_array::ffi::export_array_into_raw;
 
 // --------------------- Array's values comparison ---------------------
-
-#[allow(deprecated)]
 pub use arrow_ord::ord::{make_comparator, DynComparator};
