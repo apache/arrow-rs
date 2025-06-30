@@ -240,6 +240,18 @@ struct MetadataBuilder {
 }
 
 impl MetadataBuilder {
+    /// Pre-populates the list of field names
+    fn from_field_names(field_name: &[&str]) -> Self {
+        Self {
+            field_names: IndexSet::from_iter(field_name.iter().map(|f| f.to_string())),
+        }
+    }
+
+    /// Checks whether field names by insertion order is lexicographically sorted
+    fn is_sorted(&self) -> bool {
+        !self.field_names.is_empty() && self.field_names.iter().is_sorted()
+    }
+
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, _) = self.field_names.insert_full(field_name.to_string());
@@ -275,8 +287,10 @@ impl MetadataBuilder {
 
         let mut metadata = Vec::with_capacity(metadata_size);
 
-        // Write header: version=1, not sorted, with calculated offset_size
-        metadata.push(0x01 | ((offset_size - 1) << 6));
+        let field_names_sorted = self.is_sorted();
+
+        // Write header: version=1, field names are sorted, with calculated offset_size
+        metadata.push(0x01 | (field_names_sorted as u8) << 4 | ((offset_size - 1) << 6));
 
         // Write dictionary size
         write_offset(&mut metadata, nkeys, offset_size);
@@ -478,6 +492,22 @@ impl VariantBuilder {
     pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
         self.validate_unique_fields = validate_unique_fields;
         self
+    }
+
+    /// Pre-populates the [`MetadataBuilder`] with field names in the given order.
+    ///
+    /// This method should be used when creating sorted dictionaries and field names are known ahead of time.
+    pub fn with_field_names(mut self, field_names: &[&str]) -> Self {
+        self.metadata_builder = MetadataBuilder::from_field_names(field_names);
+
+        self
+    }
+
+    /// Adds a single field name to the [`MetadataBuilder`].
+    ///
+    /// This method does the same thing as [`with_field_names`] but adds one field name at a time.
+    pub fn add_field_name(&mut self, field_name: &str) {
+        self.metadata_builder.upsert_field_name(field_name);
     }
 
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
@@ -822,6 +852,8 @@ impl<'m, 'v> VariantBuilderExt<'m, 'v> for VariantBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::VariantMetadata;
+
     use super::*;
 
     #[test]
@@ -1527,5 +1559,109 @@ mod tests {
 
         let valid_result = valid_obj.finish();
         assert!(valid_result.is_ok());
+    }
+
+    #[test]
+    fn test_sorted_dictionary() {
+        // check if variant metadatabuilders are equivalent from different ways of constructing them
+        let mut variant1 = VariantBuilder::new().with_field_names(&["b", "c", "d"]);
+
+        let mut variant2 = {
+            let mut builder = VariantBuilder::new();
+
+            builder.add_field_name("b");
+            builder.add_field_name("c");
+            builder.add_field_name("d");
+
+            builder
+        };
+
+        assert_eq!(
+            variant1.metadata_builder.field_names,
+            variant2.metadata_builder.field_names
+        );
+
+        // check metadata builders say it's sorted
+        assert!(variant1.metadata_builder.is_sorted());
+        assert!(variant2.metadata_builder.is_sorted());
+
+        {
+            // test the bad case and break the sort order
+            variant2.add_field_name("a");
+            assert!(!variant2.metadata_builder.is_sorted());
+
+            // per the spec, make sure the variant will fail to build if only metadata is provided
+            let (m, v) = variant2.finish();
+            let res = Variant::try_new(&m, &v);
+            assert!(res.is_err());
+
+            // since it is not sorted, make sure the metadata says so
+            let header = VariantMetadata::try_new(&m).unwrap();
+            assert!(!header.is_sorted());
+        }
+
+        // write out variant1 and make sure the sorted flag is properly encoded
+        variant1.append_value(false);
+
+        let (m, v) = variant1.finish();
+        let res = Variant::try_new(&m, &v);
+        assert!(res.is_ok());
+
+        let header = VariantMetadata::try_new(&m).unwrap();
+        assert!(header.is_sorted());
+    }
+
+    #[test]
+    fn test_object_sorted_dictionary() {
+        // predefine the list of field names
+        let mut variant1 = VariantBuilder::new().with_field_names(&["a", "b", "c"]);
+        let mut obj = variant1.new_object();
+
+        obj.insert("c", true);
+        obj.insert("a", false);
+        obj.insert("b", ());
+
+        // verify the field ids are correctly
+        let field_ids_by_insert_order = obj.fields.iter().map(|(&id, _)| id).collect::<Vec<_>>();
+        assert_eq!(field_ids_by_insert_order, vec![2, 0, 1]);
+
+        // add a field name that wasn't pre-defined but doesn't break the sort order
+        obj.insert("d", 2);
+        let field_ids_by_insert_order = obj.fields.iter().map(|(&id, _)| id).collect::<Vec<_>>();
+        assert_eq!(field_ids_by_insert_order, vec![2, 0, 1, 3]);
+
+        obj.finish();
+        let (metadata, value) = variant1.finish();
+        let _ = Variant::try_new(&metadata, &value).unwrap();
+
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert!(metadata.is_sorted());
+    }
+
+    #[test]
+    fn test_object_not_sorted_dictionary() {
+        // predefine the list of field names
+        let mut variant1 = VariantBuilder::new().with_field_names(&["b", "c", "d"]);
+        let mut obj = variant1.new_object();
+
+        obj.insert("c", true);
+        obj.insert("d", false);
+        obj.insert("b", ());
+
+        // verify the field ids are correctly
+        let field_ids_by_insert_order = obj.fields.iter().map(|(&id, _)| id).collect::<Vec<_>>();
+        assert_eq!(field_ids_by_insert_order, vec![1, 2, 0]);
+
+        // add a field name that wasn't pre-defined but breaks the sort order
+        obj.insert("a", 2);
+        let field_ids_by_insert_order = obj.fields.iter().map(|(&id, _)| id).collect::<Vec<_>>();
+        assert_eq!(field_ids_by_insert_order, vec![1, 2, 0, 3]);
+
+        obj.finish();
+        let (metadata, value) = variant1.finish();
+        let _ = Variant::try_new(&metadata, &value).unwrap();
+
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert!(!metadata.is_sorted());
     }
 }
