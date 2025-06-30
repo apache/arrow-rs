@@ -489,7 +489,7 @@ macro_rules! decimal_display {
     };
 }
 
-decimal_display!(Decimal128Type, Decimal256Type);
+decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
 fn write_timestamp(
     f: &mut dyn Write,
@@ -776,12 +776,12 @@ impl Display for NanosecondsFormatter<'_> {
         let nanoseconds = self.nanoseconds % 1_000_000_000;
 
         if hours != 0 {
-            write!(f, "{prefix}{} hours", hours)?;
+            write!(f, "{prefix}{hours} hours")?;
             prefix = " ";
         }
 
         if mins != 0 {
-            write!(f, "{prefix}{} mins", mins)?;
+            write!(f, "{prefix}{mins} mins")?;
             prefix = " ";
         }
 
@@ -819,12 +819,12 @@ impl Display for MillisecondsFormatter<'_> {
         let milliseconds = self.milliseconds % 1_000;
 
         if hours != 0 {
-            write!(f, "{prefix}{} hours", hours,)?;
+            write!(f, "{prefix}{hours} hours")?;
             prefix = " ";
         }
 
         if mins != 0 {
-            write!(f, "{prefix}{} mins", mins,)?;
+            write!(f, "{prefix}{mins} mins")?;
             prefix = " ";
         }
 

@@ -36,6 +36,10 @@ rust-version = "1.83"
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 serde_json = "1.0"
-base64 = "0.21"
+base64 = "0.22"
+
+[dev-dependencies]
+paste = { version = "1.0" }
+
 
 [lib]
