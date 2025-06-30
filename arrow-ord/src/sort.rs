@@ -303,46 +303,6 @@ fn sort_bytes<T: ByteArrayType>(
     sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
 }
 
-/// Builds a 128-bit composite key for an inline value:
-/// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting)
-/// - Low  32 bits: the length in big-endian byte order (so shorter strings are always numerically smaller)
-///
-/// This function extracts the length and the 12-byte inline string data from the
-/// raw little-endian u128 representation, converts them to big-endian ordering,
-/// and packs them into a single u128 value suitable for fast comparisons.
-///
-/// # Note
-/// The input `raw` is assumed to be in little-endian format with the following layout:
-/// - bytes 0..4: length (u32)
-/// - bytes 4..16: inline string data (padded with zeros if less than 12 bytes)
-///
-/// The output u128 key places the inline string data in the upper 96 bits (big-endian)
-/// and the length in the lower 32 bits (big-endian).
-#[inline(always)]
-pub fn inline_key_fast(raw: u128) -> u128 {
-    // Convert the raw u128 (little-endian) into bytes for manipulation
-    let raw_bytes = raw.to_le_bytes();
-
-    // Extract the length (first 4 bytes), convert to big-endian u32, and promote to u128
-    let len_le = &raw_bytes[0..4];
-    let len_be = u32::from_le_bytes(len_le.try_into().unwrap()).to_be() as u128;
-
-    // Extract the inline string bytes (next 12 bytes), place them into the lower 12 bytes of a 16-byte array,
-    // padding the upper 4 bytes with zero to form a little-endian u128 value
-    let mut inline_bytes = [0u8; 16];
-    inline_bytes[4..16].copy_from_slice(&raw_bytes[4..16]);
-
-    // Convert to big-endian to ensure correct lexical ordering
-    let inline_u128 = u128::from_le_bytes(inline_bytes).to_be();
-
-    // Shift right by 32 bits to discard the zero padding (upper 4 bytes),
-    // so that the inline string occupies the high 96 bits
-    let inline_part = inline_u128 >> 32;
-
-    // Combine the inline string part (high 96 bits) and length (low 32 bits) into the final key
-    (inline_part << 32) | len_be
-}
-
 fn sort_byte_view<T: ByteViewType>(
     values: &GenericByteViewArray<T>,
     value_indices: Vec<u32>,
