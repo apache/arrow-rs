@@ -22,17 +22,17 @@ use criterion::*;
 use parquet_variant::VariantBuilder;
 use rand::{
     distr::{uniform::SampleUniform, Alphanumeric},
-    rngs::ThreadRng,
-    Rng,
+    rngs::StdRng,
+    Rng, SeedableRng,
 };
 use std::{hint, ops::Range};
 
-fn random<T: SampleUniform + PartialEq + PartialOrd>(rng: &mut ThreadRng, range: Range<T>) -> T {
+fn random<T: SampleUniform + PartialEq + PartialOrd>(rng: &mut StdRng, range: Range<T>) -> T {
     rng.random_range::<T, _>(range)
 }
 
 // generates a string with a 50/50 chance whether it's a short or a long string
-fn random_string(rng: &mut ThreadRng) -> String {
+fn random_string(rng: &mut StdRng) -> String {
     let len = rng.random_range::<usize, _>(1..128);
 
     rng.sample_iter(&Alphanumeric)
@@ -47,7 +47,7 @@ struct RandomStringGenerator {
 }
 
 impl RandomStringGenerator {
-    pub fn new(rng: &mut ThreadRng, capacity: usize) -> Self {
+    pub fn new(rng: &mut StdRng, capacity: usize) -> Self {
         let table = (0..capacity)
             .map(|_| random_string(rng))
             .collect::<Vec<_>>();
@@ -67,7 +67,7 @@ impl RandomStringGenerator {
 // Creates an object with field names inserted in reverse lexicographical order
 fn bench_object_field_names_reverse_order(c: &mut Criterion) {
     c.bench_function("bench_object_field_names_reverse_order", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let mut string_table = RandomStringGenerator::new(&mut rng, 117);
         b.iter(|| {
             let mut variant = VariantBuilder::new();
@@ -94,7 +94,7 @@ fn bench_object_field_names_reverse_order(c: &mut Criterion) {
     }
 */
 fn bench_object_same_schema(c: &mut Criterion) {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(42);
     let mut string_table = RandomStringGenerator::new(&mut rng, 117);
 
     c.bench_function("bench_object_same_schema", |b| {
@@ -133,7 +133,7 @@ fn bench_object_same_schema(c: &mut Criterion) {
 */
 fn bench_object_list_same_schema(c: &mut Criterion) {
     c.bench_function("bench_object_list_same_schema", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let mut string_table = RandomStringGenerator::new(&mut rng, 101);
 
         b.iter(|| {
@@ -167,7 +167,7 @@ fn bench_object_list_same_schema(c: &mut Criterion) {
 // values are randomly generated, with an equal distribution to whether it's a String, Object, or List
 fn bench_object_unknown_schema(c: &mut Criterion) {
     c.bench_function("bench_object_unknown_schema", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let mut string_table = RandomStringGenerator::new(&mut rng, 1001);
 
         b.iter(|| {
@@ -213,11 +213,11 @@ fn bench_object_unknown_schema(c: &mut Criterion) {
 // values are randomly generated, with an equal distribution to whether it's a String, Object, or List
 fn bench_object_list_unknown_schema(c: &mut Criterion) {
     c.bench_function("bench_object_list_unknown_schema", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let mut string_table = RandomStringGenerator::new(&mut rng, 1001);
 
         b.iter(|| {
-            let mut rng = rand::rng();
+            let mut rng = StdRng::seed_from_u64(42);
 
             let mut variant = VariantBuilder::new();
 
@@ -279,11 +279,11 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
 */
 fn bench_object_partially_same_schema(c: &mut Criterion) {
     c.bench_function("bench_object_partially_same_schema", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let mut string_table = RandomStringGenerator::new(&mut rng, 117);
 
         b.iter(|| {
-            let mut rng = rand::rng();
+            let mut rng = StdRng::seed_from_u64(42);
 
             for _ in 0..200 {
                 let mut variant = VariantBuilder::new();
@@ -340,7 +340,7 @@ fn bench_object_partially_same_schema(c: &mut Criterion) {
 */
 fn bench_object_list_partially_same_schema(c: &mut Criterion) {
     c.bench_function("bench_object_list_partially_same_schema", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(42);
         let mut string_table = RandomStringGenerator::new(&mut rng, 117);
 
         b.iter(|| {
