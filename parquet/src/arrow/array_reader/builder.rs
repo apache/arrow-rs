@@ -35,12 +35,12 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
 /// Builds [`ArrayReader`]s from parquet schema, projection mask, and RowGroups reader
-pub(crate) struct ArrayReaderBuilder<'a> {
+pub struct ArrayReaderBuilder<'a> {
     row_groups: &'a dyn RowGroups,
 }
 
 impl<'a> ArrayReaderBuilder<'a> {
-    pub(crate) fn new(row_groups: &'a dyn RowGroups) -> Self {
+    pub fn new(row_groups: &'a dyn RowGroups) -> Self {
         Self { row_groups }
     }
 

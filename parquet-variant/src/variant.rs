@@ -538,6 +538,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => i.try_into().ok(),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
             _ => None,
         }
     }
@@ -570,6 +573,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i),
             Variant::Int32(i) => i.try_into().ok(),
             Variant::Int64(i) => i.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
             _ => None,
         }
     }
@@ -602,6 +608,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i.into()),
             Variant::Int32(i) => Some(i),
             Variant::Int64(i) => i.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => Some(d.integer()),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
             _ => None,
         }
     }
@@ -630,6 +639,9 @@ impl<'m, 'v> Variant<'m, 'v> {
             Variant::Int16(i) => Some(i.into()),
             Variant::Int32(i) => Some(i.into()),
             Variant::Int64(i) => Some(i),
+            Variant::Decimal4(d) if d.scale() == 0 => Some(d.integer().into()),
+            Variant::Decimal8(d) if d.scale() == 0 => Some(d.integer()),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
             _ => None,
         }
     }
@@ -647,37 +659,29 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
     /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i32, 2).unwrap());
-    /// assert_eq!(v1.as_decimal_int32(), Some((1234_i32, 2)));
+    /// assert_eq!(v1.as_decimal4(), VariantDecimal4::try_new(1234_i32, 2).ok());
     ///
     /// // and from larger decimal variants if they fit
     /// let v2 = Variant::from(VariantDecimal8::try_new(1234_i64, 2).unwrap());
-    /// assert_eq!(v2.as_decimal_int32(), Some((1234_i32, 2)));
+    /// assert_eq!(v2.as_decimal4(), VariantDecimal4::try_new(1234_i32, 2).ok());
     ///
     /// // but not if the value would overflow i32
     /// let v3 = Variant::from(VariantDecimal8::try_new(12345678901i64, 2).unwrap());
-    /// assert_eq!(v3.as_decimal_int32(), None);
+    /// assert_eq!(v3.as_decimal4(), None);
     ///
     /// // or if the variant is not a decimal
     /// let v4 = Variant::from("hello!");
-    /// assert_eq!(v4.as_decimal_int32(), None);
+    /// assert_eq!(v4.as_decimal4(), None);
     /// ```
-    pub fn as_decimal_int32(&self) -> Option<(i32, u8)> {
+    pub fn as_decimal4(&self) -> Option<VariantDecimal4> {
         match *self {
-            Variant::Decimal4(decimal4) => Some((decimal4.integer(), decimal4.scale())),
-            Variant::Decimal8(decimal8) => {
-                if let Ok(converted_integer) = decimal8.integer().try_into() {
-                    Some((converted_integer, decimal8.scale()))
-                } else {
-                    None
-                }
-            }
-            Variant::Decimal16(decimal16) => {
-                if let Ok(converted_integer) = decimal16.integer().try_into() {
-                    Some((converted_integer, decimal16.scale()))
-                } else {
-                    None
-                }
-            }
+            Variant::Int8(i) => i32::from(i).try_into().ok(),
+            Variant::Int16(i) => i32::from(i).try_into().ok(),
+            Variant::Int32(i) => i.try_into().ok(),
+            Variant::Int64(i) => i32::try_from(i).ok()?.try_into().ok(),
+            Variant::Decimal4(decimal4) => Some(decimal4),
+            Variant::Decimal8(decimal8) => decimal8.try_into().ok(),
+            Variant::Decimal16(decimal16) => decimal16.try_into().ok(),
             _ => None,
         }
     }
@@ -691,35 +695,33 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::{Variant, VariantDecimal8, VariantDecimal16};
+    /// use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
-    /// let v1 = Variant::from(VariantDecimal8::try_new(1234_i64, 2).unwrap());
-    /// assert_eq!(v1.as_decimal_int64(), Some((1234_i64, 2)));
+    /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i32, 2).unwrap());
+    /// assert_eq!(v1.as_decimal8(), VariantDecimal8::try_new(1234_i64, 2).ok());
     ///
     /// // and from larger decimal variants if they fit
     /// let v2 = Variant::from(VariantDecimal16::try_new(1234_i128, 2).unwrap());
-    /// assert_eq!(v2.as_decimal_int64(), Some((1234_i64, 2)));
+    /// assert_eq!(v2.as_decimal8(), VariantDecimal8::try_new(1234_i64, 2).ok());
     ///
     /// // but not if the value would overflow i64
     /// let v3 = Variant::from(VariantDecimal16::try_new(2e19 as i128, 2).unwrap());
-    /// assert_eq!(v3.as_decimal_int64(), None);
+    /// assert_eq!(v3.as_decimal8(), None);
     ///
     /// // or if the variant is not a decimal
     /// let v4 = Variant::from("hello!");
-    /// assert_eq!(v4.as_decimal_int64(), None);
+    /// assert_eq!(v4.as_decimal8(), None);
     /// ```
-    pub fn as_decimal_int64(&self) -> Option<(i64, u8)> {
+    pub fn as_decimal8(&self) -> Option<VariantDecimal8> {
         match *self {
-            Variant::Decimal4(decimal) => Some((decimal.integer().into(), decimal.scale())),
-            Variant::Decimal8(decimal) => Some((decimal.integer(), decimal.scale())),
-            Variant::Decimal16(decimal) => {
-                if let Ok(converted_integer) = decimal.integer().try_into() {
-                    Some((converted_integer, decimal.scale()))
-                } else {
-                    None
-                }
-            }
+            Variant::Int8(i) => i64::from(i).try_into().ok(),
+            Variant::Int16(i) => i64::from(i).try_into().ok(),
+            Variant::Int32(i) => i64::from(i).try_into().ok(),
+            Variant::Int64(i) => i.try_into().ok(),
+            Variant::Decimal4(decimal4) => Some(decimal4.into()),
+            Variant::Decimal8(decimal8) => Some(decimal8),
+            Variant::Decimal16(decimal16) => decimal16.try_into().ok(),
             _ => None,
         }
     }
@@ -733,21 +735,25 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    /// use parquet_variant::{Variant, VariantDecimal16};
+    /// use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4};
     ///
     /// // you can extract decimal parts from smaller or equally-sized decimal variants
-    /// let v1 = Variant::from(VariantDecimal16::try_new(1234_i128, 2).unwrap());
-    /// assert_eq!(v1.as_decimal_int128(), Some((1234_i128, 2)));
+    /// let v1 = Variant::from(VariantDecimal4::try_new(1234_i32, 2).unwrap());
+    /// assert_eq!(v1.as_decimal16(), VariantDecimal16::try_new(1234_i128, 2).ok());
     ///
     /// // but not if the variant is not a decimal
     /// let v2 = Variant::from("hello!");
-    /// assert_eq!(v2.as_decimal_int128(), None);
+    /// assert_eq!(v2.as_decimal16(), None);
     /// ```
-    pub fn as_decimal_int128(&self) -> Option<(i128, u8)> {
+    pub fn as_decimal16(&self) -> Option<VariantDecimal16> {
         match *self {
-            Variant::Decimal4(decimal) => Some((decimal.integer().into(), decimal.scale())),
-            Variant::Decimal8(decimal) => Some((decimal.integer().into(), decimal.scale())),
-            Variant::Decimal16(decimal) => Some((decimal.integer(), decimal.scale())),
+            Variant::Int8(i) => i128::from(i).try_into().ok(),
+            Variant::Int16(i) => i128::from(i).try_into().ok(),
+            Variant::Int32(i) => i128::from(i).try_into().ok(),
+            Variant::Int64(i) => i128::from(i).try_into().ok(),
+            Variant::Decimal4(decimal4) => Some(decimal4.into()),
+            Variant::Decimal8(decimal8) => Some(decimal8.into()),
+            Variant::Decimal16(decimal16) => Some(decimal16),
             _ => None,
         }
     }
@@ -1035,17 +1041,14 @@ mod tests {
     fn test_variant_decimal_conversion() {
         let decimal4 = VariantDecimal4::try_new(1234_i32, 2).unwrap();
         let variant = Variant::from(decimal4);
-        assert_eq!(variant.as_decimal_int32(), Some((1234_i32, 2)));
+        assert_eq!(variant.as_decimal4(), Some(decimal4));
 
         let decimal8 = VariantDecimal8::try_new(12345678901_i64, 2).unwrap();
         let variant = Variant::from(decimal8);
-        assert_eq!(variant.as_decimal_int64(), Some((12345678901_i64, 2)));
+        assert_eq!(variant.as_decimal8(), Some(decimal8));
 
         let decimal16 = VariantDecimal16::try_new(123456789012345678901234567890_i128, 2).unwrap();
         let variant = Variant::from(decimal16);
-        assert_eq!(
-            variant.as_decimal_int128(),
-            Some((123456789012345678901234567890_i128, 2))
-        );
+        assert_eq!(variant.as_decimal16(), Some(decimal16));
     }
 }
