@@ -264,7 +264,7 @@ fn variant_object_builder() {
     obj.insert("null_field", ());
     obj.insert("timestamp_field", "2025-04-16T12:34:56.78");
 
-    obj.finish();
+    obj.finish().unwrap();
 
     let (built_metadata, built_value) = builder.finish();
     let actual = Variant::try_new(&built_metadata, &built_value).unwrap();

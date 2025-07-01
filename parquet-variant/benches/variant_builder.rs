@@ -77,7 +77,7 @@ fn bench_object_field_names_reverse_order(c: &mut Criterion) {
                 object_builder.insert(format!("{}", 1000 - i).as_str(), string_table.next());
             }
 
-            object_builder.finish();
+            object_builder.finish().unwrap();
             hint::black_box(variant.finish());
         })
     });
@@ -113,7 +113,7 @@ fn bench_object_same_schema(c: &mut Criterion) {
                 inner_list_builder.append_value(string_table.next());
 
                 inner_list_builder.finish();
-                object_builder.finish();
+                object_builder.finish().unwrap();
 
                 hint::black_box(variant.finish());
             }
@@ -154,7 +154,7 @@ fn bench_object_list_same_schema(c: &mut Criterion) {
                 list_builder.append_value(string_table.next());
 
                 list_builder.finish();
-                object_builder.finish();
+                object_builder.finish().unwrap();
             }
 
             list_builder.finish();
@@ -189,7 +189,7 @@ fn bench_object_unknown_schema(c: &mut Criterion) {
                             let key = string_table.next();
                             inner_object_builder.insert(key, key);
                         }
-                        inner_object_builder.finish();
+                        inner_object_builder.finish().unwrap();
 
                         continue;
                     }
@@ -202,7 +202,7 @@ fn bench_object_unknown_schema(c: &mut Criterion) {
 
                     inner_list_builder.finish();
                 }
-                object_builder.finish();
+                object_builder.finish().unwrap();
                 hint::black_box(variant.finish());
             }
         })
@@ -241,7 +241,7 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
                             let key = string_table.next();
                             inner_object_builder.insert(key, key);
                         }
-                        inner_object_builder.finish();
+                        inner_object_builder.finish().unwrap();
 
                         continue;
                     }
@@ -254,7 +254,7 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
 
                     inner_list_builder.finish();
                 }
-                object_builder.finish();
+                object_builder.finish().unwrap();
             }
 
             list_builder.finish();
@@ -314,10 +314,10 @@ fn bench_object_partially_same_schema(c: &mut Criterion) {
                         let key = string_table.next();
                         inner_object_builder.insert(key, key);
                     }
-                    inner_object_builder.finish();
+                    inner_object_builder.finish().unwrap();
                 }
 
-                object_builder.finish();
+                object_builder.finish().unwrap();
                 hint::black_box(variant.finish());
             }
         })
@@ -376,10 +376,10 @@ fn bench_object_list_partially_same_schema(c: &mut Criterion) {
                         let key = string_table.next();
                         inner_object_builder.insert(key, key);
                     }
-                    inner_object_builder.finish();
+                    inner_object_builder.finish().unwrap();
                 }
 
-                object_builder.finish();
+                object_builder.finish().unwrap();
             }
 
             list_builder.finish();
