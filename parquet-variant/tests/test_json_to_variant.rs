@@ -170,7 +170,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
     // Double
     JsonToVariantTest {
         json: "0.79228162514264337593543950335",
-        expected: Variant::Double(0.79228162514264337593543950335f64),
+        expected: Variant::Double(0.792_281_625_142_643_3_f64),
     }
     .run()?;
     JsonToVariantTest {
@@ -192,37 +192,19 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
     .run()?;
     // longest short string
     JsonToVariantTest {
-        json: &format!(
-            "\"{}\"",
-            std::iter::repeat('a').take(63).collect::<String>()
-        ),
-        expected: Variant::ShortString(ShortString::try_new(&format!(
-            "{}",
-            std::iter::repeat('a').take(63).collect::<String>()
-        ))?),
+        json: &format!("\"{}\"", "a".repeat(63)),
+        expected: Variant::ShortString(ShortString::try_new(&"a".repeat(63))?),
     }
     .run()?;
     // long strings
     JsonToVariantTest {
-        json: &format!(
-            "\"{}\"",
-            std::iter::repeat('a').take(64).collect::<String>()
-        ),
-        expected: Variant::String(&format!(
-            "{}",
-            std::iter::repeat('a').take(64).collect::<String>()
-        )),
+        json: &format!("\"{}\"", "a".repeat(64)),
+        expected: Variant::String(&"a".repeat(64)),
     }
     .run()?;
     JsonToVariantTest {
-        json: &format!(
-            "\"{}\"",
-            std::iter::repeat('b').take(100000).collect::<String>()
-        ),
-        expected: Variant::String(&format!(
-            "{}",
-            std::iter::repeat('b').take(100000).collect::<String>()
-        )),
+        json: &format!("\"{}\"", "b".repeat(100000)),
+        expected: Variant::String(&"b".repeat(100000)),
     }
     .run()?;
 
@@ -249,7 +231,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         let mut list_builder = variant_builder.new_list();
         let mut object_builder_inner = list_builder.new_object();
         object_builder_inner.insert("age", Variant::Int8(32));
-        object_builder_inner.finish();
+        object_builder_inner.finish().unwrap();
         list_builder.append_value(Variant::Int16(128));
         list_builder.append_value(Variant::BooleanFalse);
         list_builder.finish();
@@ -275,10 +257,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         let variant = Variant::try_new(&metadata, &value)?;
 
         JsonToVariantTest {
-            json: &format!(
-                "[{} true]",
-                std::iter::repeat("1, ").take(128).collect::<String>()
-            ),
+            json: &format!("[{} true]", "1, ".repeat(128)),
             expected: variant,
         }
         .run()?;
@@ -312,7 +291,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         let mut object_builder = variant_builder.new_object();
         object_builder.insert("b", Variant::Int8(2));
         object_builder.insert("a", Variant::Int8(3));
-        object_builder.finish();
+        object_builder.finish().unwrap();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         JsonToVariantTest {
@@ -334,7 +313,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         inner_list_builder.append_value(Variant::BooleanTrue);
         inner_list_builder.append_value(Variant::BooleanFalse);
         inner_list_builder.finish();
-        object_builder.finish();
+        object_builder.finish().unwrap();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         JsonToVariantTest {
@@ -356,7 +335,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         inner_list_builder.append_value(Variant::BooleanTrue);
         inner_list_builder.append_value(Variant::BooleanFalse);
         inner_list_builder.finish();
-        object_builder.finish();
+        object_builder.finish().unwrap();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         JsonToVariantTest {
@@ -368,30 +347,30 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
     {
         // 256 elements (keys: 000-255) - each element is an object of 256 elements (240-495) - each
         // element a list of numbers from 0-127
-        let keys: Vec<String> = (0..=255).map(|n| format!("{:03}", n)).collect();
+        let keys: Vec<String> = (0..=255).map(|n| format!("{n:03}")).collect();
         let innermost_list: String = format!(
             "[{}]",
             (0..=127)
-                .map(|n| format!("{}", n))
+                .map(|n| format!("{n}"))
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        let inner_keys: Vec<String> = (240..=495).map(|n| format!("{}", n)).collect();
+        let inner_keys: Vec<String> = (240..=495).map(|n| format!("{n}")).collect();
         let inner_object = format!(
             "{{{}:{}}}",
             inner_keys
                 .iter()
-                .map(|k| format!("\"{}\"", k))
+                .map(|k| format!("\"{k}\""))
                 .collect::<Vec<String>>()
-                .join(format!(":{},", innermost_list).as_str()),
+                .join(format!(":{innermost_list},").as_str()),
             innermost_list
         );
         let json = format!(
             "{{{}:{}}}",
             keys.iter()
-                .map(|k| format!("\"{}\"", k))
+                .map(|k| format!("\"{k}\""))
                 .collect::<Vec<String>>()
-                .join(format!(":{},", inner_object).as_str()),
+                .join(format!(":{inner_object},").as_str()),
             inner_object
         );
         // Manually verify raw JSON value size
@@ -414,15 +393,15 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         keys.iter().for_each(|key| {
             let mut inner_object_builder = object_builder.new_object(key);
             inner_keys.iter().for_each(|inner_key| {
-                let mut list_builder = inner_object_builder.new_list(&inner_key);
+                let mut list_builder = inner_object_builder.new_list(inner_key);
                 for i in 0..=127 {
                     list_builder.append_value(Variant::Int8(i));
                 }
                 list_builder.finish();
             });
-            inner_object_builder.finish();
+            inner_object_builder.finish().unwrap();
         });
-        object_builder.finish();
+        object_builder.finish().unwrap();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
@@ -435,7 +414,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
     {
         let json = "{\"爱\":\"अ\",\"a\":1}";
         let mut variant_builder = VariantBuilder::new();
-        json_to_variant(&json, &mut variant_builder)?;
+        json_to_variant(json, &mut variant_builder)?;
         let (metadata, value) = variant_builder.finish();
         let v = parquet_variant::Variant::try_new(&metadata, &value)?;
         let output_string = variant_to_json_string(&v)?;
@@ -444,7 +423,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
         let mut object_builder = variant_builder.new_object();
         object_builder.insert("爱", Variant::ShortString(ShortString::try_new("अ")?));
         object_builder.insert("a", Variant::Int8(1));
-        object_builder.finish();
+        object_builder.finish().unwrap();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
@@ -457,7 +436,7 @@ fn test_json_to_variant() -> Result<(), ArrowError> {
             &[1u8, 2u8, 0u8, 3u8, 4u8, 0xe7u8, 0x88u8, 0xb1u8, 97u8]
         );
         JsonToVariantTest {
-            json: &json,
+            json,
             expected: variant,
         }
         .run()?;
