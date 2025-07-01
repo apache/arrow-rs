@@ -132,30 +132,30 @@ use arrow_cast::parse::{parse_decimal, string_to_datetime, Parser};
 use arrow_schema::*;
 use chrono::{TimeZone, Utc};
 use csv::StringRecord;
-use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 use std::fmt::{self, Debug};
 use std::fs::File;
 use std::io::{BufRead, BufReader as StdBufReader, Read};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::map_csv_error;
 use crate::reader::records::{RecordDecoder, StringRecords};
 use arrow_array::timezone::Tz;
 
-lazy_static! {
-    /// Order should match [`InferredDataType`]
-    static ref REGEX_SET: RegexSet = RegexSet::new([
+/// Order should match [`InferredDataType`]
+static REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
+    RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$", //INTEGER
+        r"^-?(\d+)$",                   //INTEGER
         r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
-        r"^\d{4}-\d\d-\d\d$", //DATE32
+        r"^\d{4}-\d\d-\d\d$",           //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,6}(?:[^\d].*)?$", //Timestamp(Microsecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}(?:[^\d].*)?$", //Timestamp(Nanosecond)
-    ]).unwrap();
-}
+    ])
+    .unwrap()
+});
 
 /// A wrapper over `Option<Regex>` to check if the value is `NULL`.
 #[derive(Debug, Clone, Default)]
@@ -221,6 +221,8 @@ impl InferredDataType {
             } else {
                 1 << m
             }
+        } else if string == "NaN" || string == "nan" || string == "inf" || string == "-inf" {
+            1 << 2 // Float64
         } else {
             1 << 8 // Utf8
         }
@@ -950,10 +952,12 @@ fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
                 Some(e) => Ok(Some(e)),
                 None => Err(ArrowError::ParseError(format!(
                     // TODO: we should surface the underlying error here.
-                    "Error while parsing value {} for column {} at line {}",
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
                     s,
+                    T::DATA_TYPE,
                     col_idx,
-                    line_number + row_index
+                    line_number + row_index,
+                    row
                 ))),
             }
         })
@@ -1036,10 +1040,12 @@ fn build_boolean_array(
                 Some(e) => Ok(Some(e)),
                 None => Err(ArrowError::ParseError(format!(
                     // TODO: we should surface the underlying error here.
-                    "Error while parsing value {} for column {} at line {}",
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
                     s,
+                    "Boolean",
                     col_idx,
-                    line_number + row_index
+                    line_number + row_index,
+                    row
                 ))),
             }
         })
@@ -1723,7 +1729,7 @@ mod tests {
         let mut csv = builder.build(file).unwrap();
         let batch = csv.next().unwrap().unwrap();
 
-        assert_eq!(7, batch.num_rows());
+        assert_eq!(10, batch.num_rows());
         assert_eq!(6, batch.num_columns());
 
         let schema = batch.schema();
@@ -1822,10 +1828,8 @@ mod tests {
         assert_eq!(&DataType::Float64, schema.field(0).data_type());
     }
 
-    #[test]
-    fn test_parse_invalid_csv() {
-        let file = File::open("test/data/various_types_invalid.csv").unwrap();
-
+    fn invalid_csv_helper(file_name: &str) -> String {
+        let file = File::open(file_name).unwrap();
         let schema = Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
             Field::new("c_float", DataType::Float32, false),
@@ -1840,16 +1844,32 @@ mod tests {
             .with_projection(vec![0, 1, 2, 3]);
 
         let mut csv = builder.build(file).unwrap();
-        match csv.next() {
-            Some(e) => match e {
-                Err(e) => assert_eq!(
-                    "ParseError(\"Error while parsing value 4.x4 for column 1 at line 4\")",
-                    format!("{e:?}")
-                ),
-                Ok(_) => panic!("should have failed"),
-            },
-            None => panic!("should have failed"),
-        }
+
+        csv.next().unwrap().unwrap_err().to_string()
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_float() {
+        let file_name = "test/data/various_invalid_types/invalid_float.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'", error);
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_int() {
+        let file_name = "test/data/various_invalid_types/invalid_int.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value '2.3' as type 'UInt64' for column 0 at line 2. Row data: '[2.3,2.2,2.22,false]'", error);
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_bool() {
+        let file_name = "test/data/various_invalid_types/invalid_bool.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!("Parser error: Error while parsing value 'none' as type 'Boolean' for column 3 at line 2. Row data: '[2,2.2,2.22,none]'", error);
     }
 
     /// Infer the data type of a record
@@ -1867,6 +1887,10 @@ mod tests {
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
         assert_eq!(infer_field_schema(".2"), DataType::Float64);
         assert_eq!(infer_field_schema("2."), DataType::Float64);
+        assert_eq!(infer_field_schema("NaN"), DataType::Float64);
+        assert_eq!(infer_field_schema("nan"), DataType::Float64);
+        assert_eq!(infer_field_schema("inf"), DataType::Float64);
+        assert_eq!(infer_field_schema("-inf"), DataType::Float64);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
         assert_eq!(infer_field_schema("trUe"), DataType::Boolean);
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
@@ -2436,7 +2460,7 @@ mod tests {
     fn test_buffered() {
         let tests = [
             ("test/data/uk_cities.csv", false, 37),
-            ("test/data/various_types.csv", true, 7),
+            ("test/data/various_types.csv", true, 10),
             ("test/data/decimal_test.csv", false, 10),
         ];
 

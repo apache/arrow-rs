@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
@@ -65,7 +65,7 @@ fn read_buffer(
         (false, Some(decompressor)) => decompressor.decompress_to_buffer(&buf_data),
     }
 }
-impl ArrayReader<'_> {
+impl RecordBatchDecoder<'_> {
     /// Coordinates reading arrays based on data types.
     ///
     /// `variadic_counts` encodes the number of buffers to read for variadic types (e.g., Utf8View, BinaryView)
@@ -83,19 +83,17 @@ impl ArrayReader<'_> {
         field: &Field,
         variadic_counts: &mut VecDeque<i64>,
     ) -> Result<ArrayRef, ArrowError> {
-        let reader = self;
         let data_type = field.data_type();
         match data_type {
-            Utf8 | Binary | LargeBinary | LargeUtf8 => create_primitive_array(
-                reader.next_node(field)?,
-                data_type,
-                &[
-                    reader.next_buffer()?,
-                    reader.next_buffer()?,
-                    reader.next_buffer()?,
-                ],
-                reader.require_alignment,
-            ),
+            Utf8 | Binary | LargeBinary | LargeUtf8 => {
+                let field_node = self.next_node(field)?;
+                let buffers = [
+                    self.next_buffer()?,
+                    self.next_buffer()?,
+                    self.next_buffer()?,
+                ];
+                self.create_primitive_array(field_node, data_type, &buffers)
+            }
             BinaryView | Utf8View => {
                 let count = variadic_counts
                     .pop_front()
@@ -104,133 +102,95 @@ impl ArrayReader<'_> {
                     )))?;
                 let count = count + 2; // view and null buffer.
                 let buffers = (0..count)
-                    .map(|_| reader.next_buffer())
+                    .map(|_| self.next_buffer())
                     .collect::<Result<Vec<_>, _>>()?;
-                create_primitive_array(
-                    reader.next_node(field)?,
-                    data_type,
-                    &buffers,
-                    reader.require_alignment,
-                )
+                let field_node = self.next_node(field)?;
+                self.create_primitive_array(field_node, data_type, &buffers)
             }
-            FixedSizeBinary(_) => create_primitive_array(
-                reader.next_node(field)?,
-                data_type,
-                &[reader.next_buffer()?, reader.next_buffer()?],
-                reader.require_alignment,
-            ),
+            FixedSizeBinary(_) => {
+                let field_node = self.next_node(field)?;
+                let buffers = [self.next_buffer()?, self.next_buffer()?];
+                self.create_primitive_array(field_node, data_type, &buffers)
+            }
             List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
-                let list_node = reader.next_node(field)?;
-                let list_buffers = [reader.next_buffer()?, reader.next_buffer()?];
-                let values = reader.create_array(list_field, variadic_counts)?;
-                create_list_array(
-                    list_node,
-                    data_type,
-                    &list_buffers,
-                    values,
-                    reader.require_alignment,
-                )
+                let list_node = self.next_node(field)?;
+                let list_buffers = [self.next_buffer()?, self.next_buffer()?];
+                let values = self.create_array(list_field, variadic_counts)?;
+                self.create_list_array(list_node, data_type, &list_buffers, values)
             }
             FixedSizeList(ref list_field, _) => {
-                let list_node = reader.next_node(field)?;
-                let list_buffers = [reader.next_buffer()?];
-                let values = reader.create_array(list_field, variadic_counts)?;
-                create_list_array(
-                    list_node,
-                    data_type,
-                    &list_buffers,
-                    values,
-                    reader.require_alignment,
-                )
+                let list_node = self.next_node(field)?;
+                let list_buffers = [self.next_buffer()?];
+                let values = self.create_array(list_field, variadic_counts)?;
+                self.create_list_array(list_node, data_type, &list_buffers, values)
             }
             Struct(struct_fields) => {
-                let struct_node = reader.next_node(field)?;
-                let null_buffer = reader.next_buffer()?;
+                let struct_node = self.next_node(field)?;
+                let null_buffer = self.next_buffer()?;
 
                 // read the arrays for each field
                 let mut struct_arrays = vec![];
                 // TODO investigate whether just knowing the number of buffers could
                 // still work
                 for struct_field in struct_fields {
-                    let child = reader.create_array(struct_field, variadic_counts)?;
+                    let child = self.create_array(struct_field, variadic_counts)?;
                     struct_arrays.push(child);
                 }
-                let null_count = struct_node.null_count() as usize;
-                let struct_array = if struct_arrays.is_empty() {
-                    // `StructArray::from` can't infer the correct row count
-                    // if we have zero fields
-                    let len = struct_node.length() as usize;
-                    StructArray::new_empty_fields(
-                        len,
-                        (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into()),
-                    )
-                } else if null_count > 0 {
-                    // create struct array from fields, arrays and null data
-                    let len = struct_node.length() as usize;
-                    let nulls = BooleanBuffer::new(null_buffer, 0, len).into();
-                    StructArray::try_new(struct_fields.clone(), struct_arrays, Some(nulls))?
-                } else {
-                    StructArray::try_new(struct_fields.clone(), struct_arrays, None)?
-                };
-                Ok(Arc::new(struct_array))
+                self.create_struct_array(struct_node, null_buffer, struct_fields, struct_arrays)
             }
             RunEndEncoded(run_ends_field, values_field) => {
-                let run_node = reader.next_node(field)?;
-                let run_ends = reader.create_array(run_ends_field, variadic_counts)?;
-                let values = reader.create_array(values_field, variadic_counts)?;
+                let run_node = self.next_node(field)?;
+                let run_ends = self.create_array(run_ends_field, variadic_counts)?;
+                let values = self.create_array(values_field, variadic_counts)?;
 
                 let run_array_length = run_node.length() as usize;
-                let array_data = ArrayData::builder(data_type.clone())
+                let builder = ArrayData::builder(data_type.clone())
                     .len(run_array_length)
                     .offset(0)
                     .add_child_data(run_ends.into_data())
-                    .add_child_data(values.into_data())
-                    .align_buffers(!reader.require_alignment)
-                    .build()?;
-
-                Ok(make_array(array_data))
+                    .add_child_data(values.into_data());
+                self.create_array_from_builder(builder)
             }
             // Create dictionary array from RecordBatch
             Dictionary(_, _) => {
-                let index_node = reader.next_node(field)?;
-                let index_buffers = [reader.next_buffer()?, reader.next_buffer()?];
+                let index_node = self.next_node(field)?;
+                let index_buffers = [self.next_buffer()?, self.next_buffer()?];
 
                 #[allow(deprecated)]
                 let dict_id = field.dict_id().ok_or_else(|| {
                     ArrowError::ParseError(format!("Field {field} does not have dict id"))
                 })?;
 
-                let value_array = reader.dictionaries_by_id.get(&dict_id).ok_or_else(|| {
+                let value_array = self.dictionaries_by_id.get(&dict_id).ok_or_else(|| {
                     ArrowError::ParseError(format!(
                         "Cannot find a dictionary batch with dict id: {dict_id}"
                     ))
                 })?;
 
-                create_dictionary_array(
+                self.create_dictionary_array(
                     index_node,
                     data_type,
                     &index_buffers,
                     value_array.clone(),
-                    reader.require_alignment,
                 )
             }
             Union(fields, mode) => {
-                let union_node = reader.next_node(field)?;
+                let union_node = self.next_node(field)?;
                 let len = union_node.length() as usize;
 
                 // In V4, union types has validity bitmap
                 // In V5 and later, union types have no validity bitmap
-                if reader.version < MetadataVersion::V5 {
-                    reader.next_buffer()?;
+                if self.version < MetadataVersion::V5 {
+                    self.next_buffer()?;
                 }
 
                 let type_ids: ScalarBuffer<i8> =
-                    reader.next_buffer()?.slice_with_length(0, len).into();
+                    self.next_buffer()?.slice_with_length(0, len).into();
 
                 let value_offsets = match mode {
                     UnionMode::Dense => {
                         let offsets: ScalarBuffer<i32> =
-                            reader.next_buffer()?.slice_with_length(0, len * 4).into();
+                            self.next_buffer()?.slice_with_length(0, len * 4).into();
                         Some(offsets)
                     }
                     UnionMode::Sparse => None,
@@ -239,15 +199,22 @@ impl ArrayReader<'_> {
                 let mut children = Vec::with_capacity(fields.len());
 
                 for (_id, field) in fields.iter() {
-                    let child = reader.create_array(field, variadic_counts)?;
+                    let child = self.create_array(field, variadic_counts)?;
                     children.push(child);
                 }
 
-                let array = UnionArray::try_new(fields.clone(), type_ids, value_offsets, children)?;
+                let array = if self.skip_validation.get() {
+                    // safety: flag can only be set via unsafe code
+                    unsafe {
+                        UnionArray::new_unchecked(fields.clone(), type_ids, value_offsets, children)
+                    }
+                } else {
+                    UnionArray::try_new(fields.clone(), type_ids, value_offsets, children)?
+                };
                 Ok(Arc::new(array))
             }
             Null => {
-                let node = reader.next_node(field)?;
+                let node = self.next_node(field)?;
                 let length = node.length();
                 let null_count = node.null_count();
 
@@ -257,121 +224,149 @@ impl ArrayReader<'_> {
                     )));
                 }
 
-                let array_data = ArrayData::builder(data_type.clone())
+                let builder = ArrayData::builder(data_type.clone())
                     .len(length as usize)
-                    .offset(0)
-                    .align_buffers(!reader.require_alignment)
-                    .build()?;
-
-                // no buffer increases
-                Ok(Arc::new(NullArray::from(array_data)))
+                    .offset(0);
+                self.create_array_from_builder(builder)
             }
-            _ => create_primitive_array(
-                reader.next_node(field)?,
-                data_type,
-                &[reader.next_buffer()?, reader.next_buffer()?],
-                reader.require_alignment,
-            ),
+            _ => {
+                let field_node = self.next_node(field)?;
+                let buffers = [self.next_buffer()?, self.next_buffer()?];
+                self.create_primitive_array(field_node, data_type, &buffers)
+            }
         }
     }
-}
 
-/// Reads the correct number of buffers based on data type and null_count, and creates a
-/// primitive array ref
-fn create_primitive_array(
-    field_node: &FieldNode,
-    data_type: &DataType,
-    buffers: &[Buffer],
-    require_alignment: bool,
-) -> Result<ArrayRef, ArrowError> {
-    let length = field_node.length() as usize;
-    let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-    let builder = match data_type {
-        Utf8 | Binary | LargeBinary | LargeUtf8 => {
-            // read 3 buffers: null buffer (optional), offsets buffer and data buffer
-            ArrayData::builder(data_type.clone())
+    /// Reads the correct number of buffers based on data type and null_count, and creates a
+    /// primitive array ref
+    fn create_primitive_array(
+        &self,
+        field_node: &FieldNode,
+        data_type: &DataType,
+        buffers: &[Buffer],
+    ) -> Result<ArrayRef, ArrowError> {
+        let length = field_node.length() as usize;
+        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+        let builder = match data_type {
+            Utf8 | Binary | LargeBinary | LargeUtf8 => {
+                // read 3 buffers: null buffer (optional), offsets buffer and data buffer
+                ArrayData::builder(data_type.clone())
+                    .len(length)
+                    .buffers(buffers[1..3].to_vec())
+                    .null_bit_buffer(null_buffer)
+            }
+            BinaryView | Utf8View => ArrayData::builder(data_type.clone())
                 .len(length)
-                .buffers(buffers[1..3].to_vec())
-                .null_bit_buffer(null_buffer)
-        }
-        BinaryView | Utf8View => ArrayData::builder(data_type.clone())
-            .len(length)
-            .buffers(buffers[1..].to_vec())
-            .null_bit_buffer(null_buffer),
-        _ if data_type.is_primitive() || matches!(data_type, Boolean | FixedSizeBinary(_)) => {
-            // read 2 buffers: null buffer (optional) and data buffer
-            ArrayData::builder(data_type.clone())
+                .buffers(buffers[1..].to_vec())
+                .null_bit_buffer(null_buffer),
+            _ if data_type.is_primitive() || matches!(data_type, Boolean | FixedSizeBinary(_)) => {
+                // read 2 buffers: null buffer (optional) and data buffer
+                ArrayData::builder(data_type.clone())
+                    .len(length)
+                    .add_buffer(buffers[1].clone())
+                    .null_bit_buffer(null_buffer)
+            }
+            t => unreachable!("Data type {:?} either unsupported or not primitive", t),
+        };
+
+        self.create_array_from_builder(builder)
+    }
+
+    /// Update the ArrayDataBuilder based on settings in this decoder
+    fn create_array_from_builder(&self, builder: ArrayDataBuilder) -> Result<ArrayRef, ArrowError> {
+        let mut builder = builder.align_buffers(!self.require_alignment);
+        if self.skip_validation.get() {
+            // SAFETY: flag can only be set via unsafe code
+            unsafe { builder = builder.skip_validation(true) }
+        };
+        Ok(make_array(builder.build()?))
+    }
+
+    /// Reads the correct number of buffers based on list type and null_count, and creates a
+    /// list array ref
+    fn create_list_array(
+        &self,
+        field_node: &FieldNode,
+        data_type: &DataType,
+        buffers: &[Buffer],
+        child_array: ArrayRef,
+    ) -> Result<ArrayRef, ArrowError> {
+        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+        let length = field_node.length() as usize;
+        let child_data = child_array.into_data();
+        let builder = match data_type {
+            List(_) | LargeList(_) | Map(_, _) => ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
-                .null_bit_buffer(null_buffer)
+                .add_child_data(child_data)
+                .null_bit_buffer(null_buffer),
+
+            FixedSizeList(_, _) => ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_child_data(child_data)
+                .null_bit_buffer(null_buffer),
+
+            _ => unreachable!("Cannot create list or map array from {:?}", data_type),
+        };
+
+        self.create_array_from_builder(builder)
+    }
+
+    fn create_struct_array(
+        &self,
+        struct_node: &FieldNode,
+        null_buffer: Buffer,
+        struct_fields: &Fields,
+        struct_arrays: Vec<ArrayRef>,
+    ) -> Result<ArrayRef, ArrowError> {
+        let null_count = struct_node.null_count() as usize;
+        let len = struct_node.length() as usize;
+
+        let nulls = (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into());
+        if struct_arrays.is_empty() {
+            // `StructArray::from` can't infer the correct row count
+            // if we have zero fields
+            return Ok(Arc::new(StructArray::new_empty_fields(len, nulls)));
         }
-        t => unreachable!("Data type {:?} either unsupported or not primitive", t),
-    };
 
-    let array_data = builder.align_buffers(!require_alignment).build()?;
+        let struct_array = if self.skip_validation.get() {
+            // safety: flag can only be set via unsafe code
+            unsafe { StructArray::new_unchecked(struct_fields.clone(), struct_arrays, nulls) }
+        } else {
+            StructArray::try_new(struct_fields.clone(), struct_arrays, nulls)?
+        };
 
-    Ok(make_array(array_data))
-}
+        Ok(Arc::new(struct_array))
+    }
 
-/// Reads the correct number of buffers based on list type and null_count, and creates a
-/// list array ref
-fn create_list_array(
-    field_node: &FieldNode,
-    data_type: &DataType,
-    buffers: &[Buffer],
-    child_array: ArrayRef,
-    require_alignment: bool,
-) -> Result<ArrayRef, ArrowError> {
-    let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-    let length = field_node.length() as usize;
-    let child_data = child_array.into_data();
-    let builder = match data_type {
-        List(_) | LargeList(_) | Map(_, _) => ArrayData::builder(data_type.clone())
-            .len(length)
-            .add_buffer(buffers[1].clone())
-            .add_child_data(child_data)
-            .null_bit_buffer(null_buffer),
-
-        FixedSizeList(_, _) => ArrayData::builder(data_type.clone())
-            .len(length)
-            .add_child_data(child_data)
-            .null_bit_buffer(null_buffer),
-
-        _ => unreachable!("Cannot create list or map array from {:?}", data_type),
-    };
-
-    let array_data = builder.align_buffers(!require_alignment).build()?;
-
-    Ok(make_array(array_data))
-}
-
-/// Reads the correct number of buffers based on list type and null_count, and creates a
-/// list array ref
-fn create_dictionary_array(
-    field_node: &FieldNode,
-    data_type: &DataType,
-    buffers: &[Buffer],
-    value_array: ArrayRef,
-    require_alignment: bool,
-) -> Result<ArrayRef, ArrowError> {
-    if let Dictionary(_, _) = *data_type {
-        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-        let array_data = ArrayData::builder(data_type.clone())
-            .len(field_node.length() as usize)
-            .add_buffer(buffers[1].clone())
-            .add_child_data(value_array.into_data())
-            .null_bit_buffer(null_buffer)
-            .align_buffers(!require_alignment)
-            .build()?;
-
-        Ok(make_array(array_data))
-    } else {
-        unreachable!("Cannot create dictionary array from {:?}", data_type)
+    /// Reads the correct number of buffers based on list type and null_count, and creates a
+    /// list array ref
+    fn create_dictionary_array(
+        &self,
+        field_node: &FieldNode,
+        data_type: &DataType,
+        buffers: &[Buffer],
+        value_array: ArrayRef,
+    ) -> Result<ArrayRef, ArrowError> {
+        if let Dictionary(_, _) = *data_type {
+            let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+            let builder = ArrayData::builder(data_type.clone())
+                .len(field_node.length() as usize)
+                .add_buffer(buffers[1].clone())
+                .add_child_data(value_array.into_data())
+                .null_bit_buffer(null_buffer);
+            self.create_array_from_builder(builder)
+        } else {
+            unreachable!("Cannot create dictionary array from {:?}", data_type)
+        }
     }
 }
 
-/// State for decoding arrays from an encoded [`RecordBatch`]
-struct ArrayReader<'a> {
+/// State for decoding Arrow arrays from an [IPC RecordBatch] structure to
+/// [`RecordBatch`]
+///
+/// [IPC RecordBatch]: crate::RecordBatch
+struct RecordBatchDecoder<'a> {
     /// The flatbuffers encoded record batch
     batch: crate::RecordBatch<'a>,
     /// The output schema
@@ -389,14 +384,18 @@ struct ArrayReader<'a> {
     /// The buffers comprising this array
     buffers: VectorIter<'a, crate::Buffer>,
     /// Projection (subset of columns) to read, if any
-    /// See [`ArrayReader::with_projection`] for details
+    /// See [`RecordBatchDecoder::with_projection`] for details
     projection: Option<&'a [usize]>,
     /// Are buffers required to already be aligned? See
-    /// [`ArrayReader::with_require_alignment`] for details
+    /// [`RecordBatchDecoder::with_require_alignment`] for details
     require_alignment: bool,
+    /// Should validation be skipped when reading data? Defaults to false.
+    ///
+    /// See [`FileDecoder::with_skip_validation`] for details.
+    skip_validation: UnsafeFlag,
 }
 
-impl<'a> ArrayReader<'a> {
+impl<'a> RecordBatchDecoder<'a> {
     /// Create a reader for decoding arrays from an encoded [`RecordBatch`]
     fn try_new(
         buf: &'a Buffer,
@@ -428,6 +427,7 @@ impl<'a> ArrayReader<'a> {
             buffers: buffers.iter(),
             projection: None,
             require_alignment: false,
+            skip_validation: UnsafeFlag::new(),
         })
     }
 
@@ -447,6 +447,22 @@ impl<'a> ArrayReader<'a> {
     /// if necessary.
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// Note this API is somewhat "funky" as it allows the caller to skip validation
+    /// without having to use `unsafe` code. If this is ever made public
+    /// it should be made clearer that this is a potentially unsafe by
+    /// using an `unsafe` function that takes a boolean flag.
+    ///
+    /// # Safety
+    ///
+    /// Relies on the caller only passing a flag with `true` value if they are
+    /// certain that the data is valid
+    pub(crate) fn with_skip_validation(mut self, skip_validation: UnsafeFlag) -> Self {
+        self.skip_validation = skip_validation;
         self
     }
 
@@ -474,13 +490,25 @@ impl<'a> ArrayReader<'a> {
                     self.skip_field(field, &mut variadic_counts)?;
                 }
             }
-            assert!(variadic_counts.is_empty());
+
             arrays.sort_by_key(|t| t.0);
-            RecordBatch::try_new_with_options(
-                Arc::new(schema.project(projection)?),
-                arrays.into_iter().map(|t| t.1).collect(),
-                &options,
-            )
+
+            let schema = Arc::new(schema.project(projection)?);
+            let columns = arrays.into_iter().map(|t| t.1).collect::<Vec<_>>();
+
+            if self.skip_validation.get() {
+                // Safety: setting `skip_validation` requires `unsafe`, user assures data is valid
+                unsafe {
+                    Ok(RecordBatch::new_unchecked(
+                        schema,
+                        columns,
+                        self.batch.length() as usize,
+                    ))
+                }
+            } else {
+                assert!(variadic_counts.is_empty());
+                RecordBatch::try_new_with_options(schema, columns, &options)
+            }
         } else {
             let mut children = vec![];
             // keep track of index as lists require more than one node
@@ -488,8 +516,20 @@ impl<'a> ArrayReader<'a> {
                 let child = self.create_array(field, &mut variadic_counts)?;
                 children.push(child);
             }
-            assert!(variadic_counts.is_empty());
-            RecordBatch::try_new_with_options(schema, children, &options)
+
+            if self.skip_validation.get() {
+                // Safety: setting `skip_validation` requires `unsafe`, user assures data is valid
+                unsafe {
+                    Ok(RecordBatch::new_unchecked(
+                        schema,
+                        children,
+                        self.batch.length() as usize,
+                    ))
+                }
+            } else {
+                assert!(variadic_counts.is_empty());
+                RecordBatch::try_new_with_options(schema, children, &options)
+            }
         }
     }
 
@@ -504,8 +544,7 @@ impl<'a> ArrayReader<'a> {
     fn next_node(&mut self, field: &Field) -> Result<&'a FieldNode, ArrowError> {
         self.nodes.next().ok_or_else(|| {
             ArrowError::SchemaError(format!(
-                "Invalid data for schema. {} refers to node not found in schema",
-                field
+                "Invalid data for schema. {field} refers to node not found in schema",
             ))
         })
     }
@@ -604,7 +643,7 @@ pub fn read_record_batch(
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
 ) -> Result<RecordBatch, ArrowError> {
-    ArrayReader::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
+    RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
         .with_projection(projection)
         .with_require_alignment(false)
         .read_record_batch()
@@ -619,7 +658,15 @@ pub fn read_dictionary(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
 ) -> Result<(), ArrowError> {
-    read_dictionary_impl(buf, batch, schema, dictionaries_by_id, metadata, false)
+    read_dictionary_impl(
+        buf,
+        batch,
+        schema,
+        dictionaries_by_id,
+        metadata,
+        false,
+        UnsafeFlag::new(),
+    )
 }
 
 fn read_dictionary_impl(
@@ -629,6 +676,7 @@ fn read_dictionary_impl(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
+    skip_validation: UnsafeFlag,
 ) -> Result<(), ArrowError> {
     if batch.isDelta() {
         return Err(ArrowError::InvalidArgumentError(
@@ -652,7 +700,7 @@ fn read_dictionary_impl(
             let value = value_type.as_ref().clone();
             let schema = Schema::new(vec![Field::new("", value, true)]);
             // Read a single column
-            let record_batch = ArrayReader::try_new(
+            let record_batch = RecordBatchDecoder::try_new(
                 buf,
                 batch.data().unwrap(),
                 Arc::new(schema),
@@ -660,6 +708,7 @@ fn read_dictionary_impl(
                 metadata,
             )?
             .with_require_alignment(require_alignment)
+            .with_skip_validation(skip_validation)
             .read_record_batch()?;
 
             Some(record_batch.column(0).clone())
@@ -790,6 +839,7 @@ pub struct FileDecoder {
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
     require_alignment: bool,
+    skip_validation: UnsafeFlag,
 }
 
 impl FileDecoder {
@@ -801,6 +851,7 @@ impl FileDecoder {
             dictionaries: Default::default(),
             projection: None,
             require_alignment: false,
+            skip_validation: UnsafeFlag::new(),
         }
     }
 
@@ -810,7 +861,7 @@ impl FileDecoder {
         self
     }
 
-    /// Specifies whether or not array data in input buffers is required to be properly aligned.
+    /// Specifies if the array data in input buffers is required to be properly aligned.
     ///
     /// If `require_alignment` is true, this decoder will return an error if any array data in the
     /// input `buf` is not properly aligned.
@@ -824,6 +875,21 @@ impl FileDecoder {
     /// [`arrow_data::ArrayData`].
     pub fn with_require_alignment(mut self, require_alignment: bool) -> Self {
         self.require_alignment = require_alignment;
+        self
+    }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// # Safety
+    ///
+    /// This flag must only be set to `true` when you trust the input data and are sure the data you are
+    /// reading is a valid Arrow IPC file, otherwise undefined behavior may
+    /// result.
+    ///
+    /// For example, some programs may wish to trust reading IPC files written
+    /// by the same process that created the files.
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation.set(skip_validation);
         self
     }
 
@@ -852,6 +918,7 @@ impl FileDecoder {
                     &mut self.dictionaries,
                     &message.version(),
                     self.require_alignment,
+                    self.skip_validation.clone(),
                 )
             }
             t => Err(ArrowError::ParseError(format!(
@@ -876,7 +943,7 @@ impl FileDecoder {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
                 // read the block that makes up the record batch into a buffer
-                ArrayReader::try_new(
+                RecordBatchDecoder::try_new(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
                     self.schema.clone(),
@@ -885,6 +952,7 @@ impl FileDecoder {
                 )?
                 .with_projection(self.projection.as_deref())
                 .with_require_alignment(self.require_alignment)
+                .with_skip_validation(self.skip_validation.clone())
                 .read_record_batch()
                 .map(Some)
             }
@@ -1080,7 +1148,7 @@ impl FileReaderBuilder {
 /// For an example creating Arrays without copying using  memory mapped (`mmap`)
 /// files see the [`zero_copy_ipc`] example.
 ///
-/// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+/// [IPC File Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format
 /// [`zero_copy_ipc`]: https://github.com/apache/arrow-rs/blob/main/arrow/examples/zero_copy_ipc.rs
 pub struct FileReader<R> {
     /// File reader that supports reading and seeking
@@ -1195,6 +1263,16 @@ impl<R: Read + Seek> FileReader<R> {
     pub fn get_mut(&mut self) -> &mut R {
         &mut self.reader
     }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// # Safety
+    ///
+    /// See [`FileDecoder::with_skip_validation`]
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.decoder = self.decoder.with_skip_validation(skip_validation);
+        self
+    }
 }
 
 impl<R: Read + Seek> Iterator for FileReader<R> {
@@ -1268,6 +1346,11 @@ pub struct StreamReader<R> {
 
     /// Optional projection
     projection: Option<(Vec<usize>, Schema)>,
+
+    /// Should validation be skipped when reading data? Defaults to false.
+    ///
+    /// See [`FileDecoder::with_skip_validation`] for details.
+    skip_validation: UnsafeFlag,
 }
 
 impl<R> fmt::Debug for StreamReader<R> {
@@ -1347,6 +1430,7 @@ impl<R: Read> StreamReader<R> {
             finished: false,
             dictionaries_by_id,
             projection,
+            skip_validation: UnsafeFlag::new(),
         })
     }
 
@@ -1426,7 +1510,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
-                ArrayReader::try_new(
+                RecordBatchDecoder::try_new(
                     &buf.into(),
                     batch,
                     self.schema(),
@@ -1435,6 +1519,7 @@ impl<R: Read> StreamReader<R> {
                 )?
                 .with_projection(self.projection.as_ref().map(|x| x.0.as_ref()))
                 .with_require_alignment(false)
+                .with_skip_validation(self.skip_validation.clone())
                 .read_record_batch()
                 .map(Some)
             }
@@ -1455,6 +1540,7 @@ impl<R: Read> StreamReader<R> {
                     &mut self.dictionaries_by_id,
                     &message.version(),
                     false,
+                    self.skip_validation.clone(),
                 )?;
 
                 // read the next message until we encounter a RecordBatch
@@ -1480,6 +1566,16 @@ impl<R: Read> StreamReader<R> {
     pub fn get_mut(&mut self) -> &mut R {
         &mut self.reader
     }
+
+    /// Specifies if validation should be skipped when reading data (defaults to `false`)
+    ///
+    /// # Safety
+    ///
+    /// See [`FileDecoder::with_skip_validation`]
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        self.skip_validation.set(skip_validation);
+        self
+    }
 }
 
 impl<R: Read> Iterator for StreamReader<R> {
@@ -1498,14 +1594,17 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use crate::writer::{unslice_run_array, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+    use crate::convert::fb_to_schema;
+    use crate::writer::{
+        unslice_run_array, write_message, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
+    };
 
     use super::*;
 
-    use crate::root_as_message;
+    use crate::{root_as_footer, root_as_message, size_prefixed_root_as_message};
     use arrow_array::builder::{PrimitiveRunBuilder, UnionBuilder};
     use arrow_array::types::*;
-    use arrow_buffer::NullBuffer;
+    use arrow_buffer::{NullBuffer, OffsetBuffer};
     use arrow_data::ArrayDataBuilder;
 
     fn create_test_projection_schema() -> Schema {
@@ -1742,27 +1841,107 @@ mod tests {
         });
     }
 
-    fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
+    /// Write the record batch to an in-memory buffer in IPC File format
+    fn write_ipc(rb: &RecordBatch) -> Vec<u8> {
         let mut buf = Vec::new();
         let mut writer = crate::writer::FileWriter::try_new(&mut buf, rb.schema_ref()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
-        drop(writer);
-
-        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
-        reader.next().unwrap().unwrap()
+        buf
     }
 
-    fn roundtrip_ipc_stream(rb: &RecordBatch) -> RecordBatch {
+    /// Return the first record batch read from the IPC File buffer
+    fn read_ipc(buf: &[u8]) -> Result<RecordBatch, ArrowError> {
+        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None)?;
+        reader.next().unwrap()
+    }
+
+    /// Return the first record batch read from the IPC File buffer, disabling
+    /// validation
+    fn read_ipc_skip_validation(buf: &[u8]) -> Result<RecordBatch, ArrowError> {
+        let mut reader = unsafe {
+            FileReader::try_new(std::io::Cursor::new(buf), None)?.with_skip_validation(true)
+        };
+        reader.next().unwrap()
+    }
+
+    fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
+        let buf = write_ipc(rb);
+        read_ipc(&buf).unwrap()
+    }
+
+    /// Return the first record batch read from the IPC File buffer
+    /// using the FileDecoder API
+    fn read_ipc_with_decoder(buf: Vec<u8>) -> Result<RecordBatch, ArrowError> {
+        read_ipc_with_decoder_inner(buf, false)
+    }
+
+    /// Return the first record batch read from the IPC File buffer
+    /// using the FileDecoder API, disabling validation
+    fn read_ipc_with_decoder_skip_validation(buf: Vec<u8>) -> Result<RecordBatch, ArrowError> {
+        read_ipc_with_decoder_inner(buf, true)
+    }
+
+    fn read_ipc_with_decoder_inner(
+        buf: Vec<u8>,
+        skip_validation: bool,
+    ) -> Result<RecordBatch, ArrowError> {
+        let buffer = Buffer::from_vec(buf);
+        let trailer_start = buffer.len() - 10;
+        let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap())?;
+        let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start])
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid footer: {e}")))?;
+
+        let schema = fb_to_schema(footer.schema().unwrap());
+
+        let mut decoder = unsafe {
+            FileDecoder::new(Arc::new(schema), footer.version())
+                .with_skip_validation(skip_validation)
+        };
+        // Read dictionaries
+        for block in footer.dictionaries().iter().flatten() {
+            let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+            let data = buffer.slice_with_length(block.offset() as _, block_len);
+            decoder.read_dictionary(block, &data)?
+        }
+
+        // Read record batch
+        let batches = footer.recordBatches().unwrap();
+        assert_eq!(batches.len(), 1); // Only wrote a single batch
+
+        let block = batches.get(0);
+        let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+        let data = buffer.slice_with_length(block.offset() as _, block_len);
+        Ok(decoder.read_record_batch(block, &data)?.unwrap())
+    }
+
+    /// Write the record batch to an in-memory buffer in IPC Stream format
+    fn write_stream(rb: &RecordBatch) -> Vec<u8> {
         let mut buf = Vec::new();
         let mut writer = crate::writer::StreamWriter::try_new(&mut buf, rb.schema_ref()).unwrap();
         writer.write(rb).unwrap();
         writer.finish().unwrap();
-        drop(writer);
+        buf
+    }
 
-        let mut reader =
-            crate::reader::StreamReader::try_new(std::io::Cursor::new(buf), None).unwrap();
-        reader.next().unwrap().unwrap()
+    /// Return the first record batch read from the IPC Stream buffer
+    fn read_stream(buf: &[u8]) -> Result<RecordBatch, ArrowError> {
+        let mut reader = StreamReader::try_new(std::io::Cursor::new(buf), None)?;
+        reader.next().unwrap()
+    }
+
+    /// Return the first record batch read from the IPC Stream buffer,
+    /// disabling validation
+    fn read_stream_skip_validation(buf: &[u8]) -> Result<RecordBatch, ArrowError> {
+        let mut reader = unsafe {
+            StreamReader::try_new(std::io::Cursor::new(buf), None)?.with_skip_validation(true)
+        };
+        reader.next().unwrap()
+    }
+
+    fn roundtrip_ipc_stream(rb: &RecordBatch) -> RecordBatch {
+        let buf = write_stream(rb);
+        read_stream(&buf).unwrap()
     }
 
     #[test]
@@ -2277,7 +2456,7 @@ mod tests {
         assert_ne!(b.as_ptr().align_offset(8), 0);
 
         let ipc_batch = message.header_as_record_batch().unwrap();
-        let roundtrip = ArrayReader::try_new(
+        let roundtrip = RecordBatchDecoder::try_new(
             &b,
             ipc_batch,
             batch.schema(),
@@ -2316,7 +2495,7 @@ mod tests {
         assert_ne!(b.as_ptr().align_offset(8), 0);
 
         let ipc_batch = message.header_as_record_batch().unwrap();
-        let result = ArrayReader::try_new(
+        let result = RecordBatchDecoder::try_new(
             &b,
             ipc_batch,
             batch.schema(),
@@ -2392,12 +2571,7 @@ mod tests {
     fn test_invalid_struct_array_ipc_read_errors() {
         let a_field = Field::new("a", DataType::Int32, false);
         let b_field = Field::new("b", DataType::Int32, false);
-
-        let schema = Arc::new(Schema::new(vec![Field::new_struct(
-            "s",
-            vec![a_field.clone(), b_field.clone()],
-            false,
-        )]));
+        let struct_fields = Fields::from(vec![a_field.clone(), b_field.clone()]);
 
         let a_array_data = ArrayData::builder(a_field.data_type().clone())
             .len(4)
@@ -2410,6 +2584,54 @@ mod tests {
             .build()
             .unwrap();
 
+        let invalid_struct_arr = unsafe {
+            StructArray::new_unchecked(
+                struct_fields,
+                vec![make_array(a_array_data), make_array(b_array_data)],
+                None,
+            )
+        };
+
+        expect_ipc_validation_error(
+            Arc::new(invalid_struct_arr),
+            "Invalid argument error: Incorrect array length for StructArray field \"b\", expected 4 got 3",
+        );
+    }
+
+    #[test]
+    fn test_invalid_nested_array_ipc_read_errors() {
+        // one of the nested arrays has invalid data
+        let a_field = Field::new("a", DataType::Int32, false);
+        let b_field = Field::new("b", DataType::Utf8, false);
+
+        let schema = Arc::new(Schema::new(vec![Field::new_struct(
+            "s",
+            vec![a_field.clone(), b_field.clone()],
+            false,
+        )]));
+
+        let a_array_data = ArrayData::builder(a_field.data_type().clone())
+            .len(4)
+            .add_buffer(Buffer::from_slice_ref([1, 2, 3, 4]))
+            .build()
+            .unwrap();
+        // invalid nested child array -- length is correct, but has invalid utf8 data
+        let b_array_data = {
+            let valid: &[u8] = b"   ";
+            let mut invalid = vec![];
+            invalid.extend_from_slice(b"ValidString");
+            invalid.extend_from_slice(INVALID_UTF8_FIRST_CHAR);
+            let binary_array =
+                BinaryArray::from_iter(vec![None, Some(valid), None, Some(&invalid)]);
+            let array = unsafe {
+                StringArray::new_unchecked(
+                    binary_array.offsets().clone(),
+                    binary_array.values().clone(),
+                    binary_array.nulls().cloned(),
+                )
+            };
+            array.into_data()
+        };
         let struct_data_type = schema.field(0).data_type();
 
         let invalid_struct_arr = unsafe {
@@ -2421,17 +2643,10 @@ mod tests {
                     .build_unchecked(),
             )
         };
-
-        let batch = RecordBatch::try_new(schema.clone(), vec![invalid_struct_arr]).unwrap();
-
-        let mut buf = Vec::new();
-        let mut writer = crate::writer::FileWriter::try_new(&mut buf, schema.as_ref()).unwrap();
-        writer.write(&batch).unwrap();
-        writer.finish().unwrap();
-
-        let mut reader = FileReader::try_new(std::io::Cursor::new(buf), None).unwrap();
-        let err = reader.next().unwrap().unwrap_err();
-        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+        expect_ipc_validation_error(
+            Arc::new(invalid_struct_arr),
+            "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..18): invalid utf-8 sequence of 1 bytes from index 11",
+        );
     }
 
     #[test]
@@ -2489,5 +2704,175 @@ mod tests {
             .for_each(|decoded_batch| {
                 assert_eq!(decoded_batch.expect("Failed to read RecordBatch"), batch);
             });
+    }
+
+    #[test]
+    fn test_validation_of_invalid_list_array() {
+        // ListArray with invalid offsets
+        let array = unsafe {
+            let values = Int32Array::from(vec![1, 2, 3]);
+            let bad_offsets = ScalarBuffer::<i32>::from(vec![0, 2, 4, 2]); // offsets can't go backwards
+            let offsets = OffsetBuffer::new_unchecked(bad_offsets); // INVALID array created
+            let field = Field::new_list_field(DataType::Int32, true);
+            let nulls = None;
+            ListArray::new(Arc::new(field), offsets, Arc::new(values), nulls)
+        };
+
+        expect_ipc_validation_error(
+            Arc::new(array),
+            "Invalid argument error: Offset invariant failure: offset at position 2 out of bounds: 4 > 2"
+        );
+    }
+
+    #[test]
+    fn test_validation_of_invalid_string_array() {
+        let valid: &[u8] = b"   ";
+        let mut invalid = vec![];
+        invalid.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        invalid.extend_from_slice(INVALID_UTF8_FIRST_CHAR);
+        let binary_array = BinaryArray::from_iter(vec![None, Some(valid), None, Some(&invalid)]);
+        // data is not valid utf8 we can not construct a correct StringArray
+        // safely, so purposely create an invalid StringArray
+        let array = unsafe {
+            StringArray::new_unchecked(
+                binary_array.offsets().clone(),
+                binary_array.values().clone(),
+                binary_array.nulls().cloned(),
+            )
+        };
+        expect_ipc_validation_error(
+            Arc::new(array),
+            "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..45): invalid utf-8 sequence of 1 bytes from index 38"
+        );
+    }
+
+    #[test]
+    fn test_validation_of_invalid_string_view_array() {
+        let valid: &[u8] = b"   ";
+        let mut invalid = vec![];
+        invalid.extend_from_slice(b"ThisStringIsCertainlyLongerThan12Bytes");
+        invalid.extend_from_slice(INVALID_UTF8_FIRST_CHAR);
+        let binary_view_array =
+            BinaryViewArray::from_iter(vec![None, Some(valid), None, Some(&invalid)]);
+        // data is not valid utf8 we can not construct a correct StringArray
+        // safely, so purposely create an invalid StringArray
+        let array = unsafe {
+            StringViewArray::new_unchecked(
+                binary_view_array.views().clone(),
+                binary_view_array.data_buffers().to_vec(),
+                binary_view_array.nulls().cloned(),
+            )
+        };
+        expect_ipc_validation_error(
+            Arc::new(array),
+            "Invalid argument error: Encountered non-UTF-8 data at index 3: invalid utf-8 sequence of 1 bytes from index 38"
+        );
+    }
+
+    /// return an invalid dictionary array (key is larger than values)
+    /// ListArray with invalid offsets
+    #[test]
+    fn test_validation_of_invalid_dictionary_array() {
+        let array = unsafe {
+            let values = StringArray::from_iter_values(["a", "b", "c"]);
+            let keys = Int32Array::from(vec![1, 200]); // keys are not valid for values
+            DictionaryArray::new_unchecked(keys, Arc::new(values))
+        };
+
+        expect_ipc_validation_error(
+            Arc::new(array),
+            "Invalid argument error: Value at position 1 out of bounds: 200 (should be in [0, 2])",
+        );
+    }
+
+    #[test]
+    fn test_validation_of_invalid_union_array() {
+        let array = unsafe {
+            let fields = UnionFields::new(
+                vec![1, 3], // typeids : type id 2 is not valid
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Utf8, false),
+                ],
+            );
+            let type_ids = ScalarBuffer::from(vec![1i8, 2, 3]); // 2 is invalid
+            let offsets = None;
+            let children: Vec<ArrayRef> = vec![
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            ];
+
+            UnionArray::new_unchecked(fields, type_ids, offsets, children)
+        };
+
+        expect_ipc_validation_error(
+            Arc::new(array),
+            "Invalid argument error: Type Ids values must match one of the field type ids",
+        );
+    }
+
+    /// Invalid Utf-8 sequence in the first character
+    /// <https://stackoverflow.com/questions/1301402/example-invalid-utf8-string>
+    const INVALID_UTF8_FIRST_CHAR: &[u8] = &[0xa0, 0xa1, 0x20, 0x20];
+
+    /// Expect an error when reading the record batch using IPC or IPC Streams
+    fn expect_ipc_validation_error(array: ArrayRef, expected_err: &str) {
+        let rb = RecordBatch::try_from_iter([("a", array)]).unwrap();
+
+        // IPC Stream format
+        let buf = write_stream(&rb); // write is ok
+        read_stream_skip_validation(&buf).unwrap();
+        let err = read_stream(&buf).unwrap_err();
+        assert_eq!(err.to_string(), expected_err);
+
+        // IPC File format
+        let buf = write_ipc(&rb); // write is ok
+        read_ipc_skip_validation(&buf).unwrap();
+        let err = read_ipc(&buf).unwrap_err();
+        assert_eq!(err.to_string(), expected_err);
+
+        // IPC Format with FileDecoder
+        read_ipc_with_decoder_skip_validation(buf.clone()).unwrap();
+        let err = read_ipc_with_decoder(buf).unwrap_err();
+        assert_eq!(err.to_string(), expected_err);
+    }
+
+    #[test]
+    fn test_roundtrip_schema() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]);
+
+        let options = IpcWriteOptions::default();
+        let data_gen = IpcDataGenerator::default();
+        let mut dict_tracker = DictionaryTracker::new(false);
+        let encoded_data =
+            data_gen.schema_to_bytes_with_dictionary_tracker(&schema, &mut dict_tracker, &options);
+        let mut schema_bytes = vec![];
+        write_message(&mut schema_bytes, encoded_data, &options).expect("write_message");
+
+        let begin_offset: usize = if schema_bytes[0..4].eq(&CONTINUATION_MARKER) {
+            4
+        } else {
+            0
+        };
+
+        size_prefixed_root_as_message(&schema_bytes[begin_offset..])
+            .expect_err("size_prefixed_root_as_message");
+
+        let msg = parse_message(&schema_bytes).expect("parse_message");
+        let ipc_schema = msg.header_as_schema().expect("header_as_schema");
+        let new_schema = fb_to_schema(ipc_schema);
+
+        assert_eq!(schema, new_schema);
     }
 }

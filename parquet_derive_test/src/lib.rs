@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![allow(clippy::approx_constant)]
 
 use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
@@ -340,6 +345,44 @@ mod tests {
         assert_eq!(drs[0].i32, out[0].i32);
         assert_eq!(drs[0].u64, out[0].u64);
         assert_eq!(drs[0].isize, out[0].isize);
+    }
+
+    #[test]
+    fn test_aliased_result() {
+        // Issue 7547, Where aliasing the `Result` led to
+        // a collision with the macro internals of derive ParquetRecordReader
+
+        mod aliased_result {
+            use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
+
+            // This is the normal pattern that raised this issue
+            // pub type Result = std::result::Result<(), Box<dyn std::error::Error>>;
+
+            // not an actual result type
+            // Used here only to make the harder.
+            pub type Result = ();
+
+            #[derive(ParquetRecordReader, ParquetRecordWriter, Debug)]
+            pub struct ARecord {
+                pub bool: bool,
+                pub string: String,
+            }
+
+            impl ARecord {
+                pub fn do_nothing(&self) -> Result {}
+                pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+                    Ok(())
+                }
+            }
+        }
+
+        use aliased_result::ARecord;
+        let foo = ARecord {
+            bool: true,
+            string: "test".to_string(),
+        };
+        foo.do_nothing();
+        assert!(foo.validate().is_ok());
     }
 
     /// Returns file handle for a temp file in 'target' directory with a provided content

@@ -15,13 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::builder::*;
 use crate::StructArray;
-use crate::{
-    builder::*,
-    types::{Int16Type, Int32Type, Int64Type, Int8Type},
-};
 use arrow_buffer::NullBufferBuilder;
-use arrow_schema::{DataType, Fields, IntervalUnit, SchemaBuilder, TimeUnit};
+use arrow_schema::{Fields, SchemaBuilder};
 use std::sync::Arc;
 
 /// Builder for [`StructArray`]
@@ -162,194 +159,6 @@ impl ArrayBuilder for StructBuilder {
     }
 }
 
-/// Returns a builder with capacity for `capacity` elements of datatype
-/// `DataType`.
-///
-/// This function is useful to construct arrays from an arbitrary vectors with
-/// known/expected schema.
-///
-/// See comments on [StructBuilder] for retrieving collection builders built by
-/// make_builder.
-pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilder> {
-    use crate::builder::*;
-    match datatype {
-        DataType::Null => Box::new(NullBuilder::new()),
-        DataType::Boolean => Box::new(BooleanBuilder::with_capacity(capacity)),
-        DataType::Int8 => Box::new(Int8Builder::with_capacity(capacity)),
-        DataType::Int16 => Box::new(Int16Builder::with_capacity(capacity)),
-        DataType::Int32 => Box::new(Int32Builder::with_capacity(capacity)),
-        DataType::Int64 => Box::new(Int64Builder::with_capacity(capacity)),
-        DataType::UInt8 => Box::new(UInt8Builder::with_capacity(capacity)),
-        DataType::UInt16 => Box::new(UInt16Builder::with_capacity(capacity)),
-        DataType::UInt32 => Box::new(UInt32Builder::with_capacity(capacity)),
-        DataType::UInt64 => Box::new(UInt64Builder::with_capacity(capacity)),
-        DataType::Float16 => Box::new(Float16Builder::with_capacity(capacity)),
-        DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
-        DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
-        DataType::Binary => Box::new(BinaryBuilder::with_capacity(capacity, 1024)),
-        DataType::LargeBinary => Box::new(LargeBinaryBuilder::with_capacity(capacity, 1024)),
-        DataType::FixedSizeBinary(len) => {
-            Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
-        }
-        DataType::Decimal32(p, s) => Box::new(
-            Decimal32Builder::with_capacity(capacity).with_data_type(DataType::Decimal32(*p, *s)),
-        ),
-        DataType::Decimal64(p, s) => Box::new(
-            Decimal64Builder::with_capacity(capacity).with_data_type(DataType::Decimal64(*p, *s)),
-        ),
-        DataType::Decimal128(p, s) => Box::new(
-            Decimal128Builder::with_capacity(capacity).with_data_type(DataType::Decimal128(*p, *s)),
-        ),
-        DataType::Decimal256(p, s) => Box::new(
-            Decimal256Builder::with_capacity(capacity).with_data_type(DataType::Decimal256(*p, *s)),
-        ),
-        DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
-        DataType::LargeUtf8 => Box::new(LargeStringBuilder::with_capacity(capacity, 1024)),
-        DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
-        DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
-        DataType::Time32(TimeUnit::Second) => {
-            Box::new(Time32SecondBuilder::with_capacity(capacity))
-        }
-        DataType::Time32(TimeUnit::Millisecond) => {
-            Box::new(Time32MillisecondBuilder::with_capacity(capacity))
-        }
-        DataType::Time64(TimeUnit::Microsecond) => {
-            Box::new(Time64MicrosecondBuilder::with_capacity(capacity))
-        }
-        DataType::Time64(TimeUnit::Nanosecond) => {
-            Box::new(Time64NanosecondBuilder::with_capacity(capacity))
-        }
-        DataType::Timestamp(TimeUnit::Second, tz) => Box::new(
-            TimestampSecondBuilder::with_capacity(capacity)
-                .with_data_type(DataType::Timestamp(TimeUnit::Second, tz.clone())),
-        ),
-        DataType::Timestamp(TimeUnit::Millisecond, tz) => Box::new(
-            TimestampMillisecondBuilder::with_capacity(capacity)
-                .with_data_type(DataType::Timestamp(TimeUnit::Millisecond, tz.clone())),
-        ),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => Box::new(
-            TimestampMicrosecondBuilder::with_capacity(capacity)
-                .with_data_type(DataType::Timestamp(TimeUnit::Microsecond, tz.clone())),
-        ),
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => Box::new(
-            TimestampNanosecondBuilder::with_capacity(capacity)
-                .with_data_type(DataType::Timestamp(TimeUnit::Nanosecond, tz.clone())),
-        ),
-        DataType::Interval(IntervalUnit::YearMonth) => {
-            Box::new(IntervalYearMonthBuilder::with_capacity(capacity))
-        }
-        DataType::Interval(IntervalUnit::DayTime) => {
-            Box::new(IntervalDayTimeBuilder::with_capacity(capacity))
-        }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            Box::new(IntervalMonthDayNanoBuilder::with_capacity(capacity))
-        }
-        DataType::Duration(TimeUnit::Second) => {
-            Box::new(DurationSecondBuilder::with_capacity(capacity))
-        }
-        DataType::Duration(TimeUnit::Millisecond) => {
-            Box::new(DurationMillisecondBuilder::with_capacity(capacity))
-        }
-        DataType::Duration(TimeUnit::Microsecond) => {
-            Box::new(DurationMicrosecondBuilder::with_capacity(capacity))
-        }
-        DataType::Duration(TimeUnit::Nanosecond) => {
-            Box::new(DurationNanosecondBuilder::with_capacity(capacity))
-        }
-        DataType::List(field) => {
-            let builder = make_builder(field.data_type(), capacity);
-            Box::new(ListBuilder::with_capacity(builder, capacity).with_field(field.clone()))
-        }
-        DataType::LargeList(field) => {
-            let builder = make_builder(field.data_type(), capacity);
-            Box::new(LargeListBuilder::with_capacity(builder, capacity).with_field(field.clone()))
-        }
-        DataType::FixedSizeList(field, size) => {
-            let size = *size;
-            let values_builder_capacity = {
-                let size: usize = size.try_into().unwrap();
-                capacity * size
-            };
-            let builder = make_builder(field.data_type(), values_builder_capacity);
-            Box::new(
-                FixedSizeListBuilder::with_capacity(builder, size, capacity)
-                    .with_field(field.clone()),
-            )
-        }
-        DataType::ListView(field) => {
-            let builder = make_builder(field.data_type(), capacity);
-            Box::new(ListViewBuilder::with_capacity(builder, capacity).with_field(field.clone()))
-        }
-        DataType::LargeListView(field) => {
-            let builder = make_builder(field.data_type(), capacity);
-            Box::new(
-                LargeListViewBuilder::with_capacity(builder, capacity).with_field(field.clone()),
-            )
-        }
-        DataType::Map(field, _) => match field.data_type() {
-            DataType::Struct(fields) => {
-                let map_field_names = MapFieldNames {
-                    key: fields[0].name().clone(),
-                    value: fields[1].name().clone(),
-                    entry: field.name().clone(),
-                };
-                let key_builder = make_builder(fields[0].data_type(), capacity);
-                let value_builder = make_builder(fields[1].data_type(), capacity);
-                Box::new(
-                    MapBuilder::with_capacity(
-                        Some(map_field_names),
-                        key_builder,
-                        value_builder,
-                        capacity,
-                    )
-                    .with_values_field(fields[1].clone()),
-                )
-            }
-            t => panic!("The field of Map data type {t:?} should has a child Struct field"),
-        },
-        DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
-        t @ DataType::Dictionary(key_type, value_type) => {
-            macro_rules! dict_builder {
-                ($key_type:ty) => {
-                    match &**value_type {
-                        DataType::Utf8 => {
-                            let dict_builder: StringDictionaryBuilder<$key_type> =
-                                StringDictionaryBuilder::with_capacity(capacity, 256, 1024);
-                            Box::new(dict_builder)
-                        }
-                        DataType::LargeUtf8 => {
-                            let dict_builder: LargeStringDictionaryBuilder<$key_type> =
-                                LargeStringDictionaryBuilder::with_capacity(capacity, 256, 1024);
-                            Box::new(dict_builder)
-                        }
-                        DataType::Binary => {
-                            let dict_builder: BinaryDictionaryBuilder<$key_type> =
-                                BinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
-                            Box::new(dict_builder)
-                        }
-                        DataType::LargeBinary => {
-                            let dict_builder: LargeBinaryDictionaryBuilder<$key_type> =
-                                LargeBinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
-                            Box::new(dict_builder)
-                        }
-                        t => panic!("Dictionary value type {t:?} is not currently supported"),
-                    }
-                };
-            }
-            match &**key_type {
-                DataType::Int8 => dict_builder!(Int8Type),
-                DataType::Int16 => dict_builder!(Int16Type),
-                DataType::Int32 => dict_builder!(Int32Type),
-                DataType::Int64 => dict_builder!(Int64Type),
-                _ => {
-                    panic!("Data type {t:?} with key type {key_type:?} is not currently supported")
-                }
-            }
-        }
-        t => panic!("Data type {t:?} is not currently supported"),
-    }
-}
-
 impl StructBuilder {
     /// Creates a new `StructBuilder`
     pub fn new(fields: impl Into<Fields>, field_builders: Vec<Box<dyn ArrayBuilder>>) -> Self {
@@ -377,6 +186,16 @@ impl StructBuilder {
         self.field_builders[i].as_any_mut().downcast_mut::<T>()
     }
 
+    /// Returns a reference to field builders
+    pub fn field_builders(&self) -> &[Box<dyn ArrayBuilder>] {
+        &self.field_builders
+    }
+
+    /// Returns a mutable reference to field builders
+    pub fn field_builders_mut(&mut self) -> &mut [Box<dyn ArrayBuilder>] {
+        &mut self.field_builders
+    }
+
     /// Returns the number of fields for the struct this builder is building.
     pub fn num_fields(&self) -> usize {
         self.field_builders.len()
@@ -393,6 +212,12 @@ impl StructBuilder {
     #[inline]
     pub fn append_null(&mut self) {
         self.append(false)
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_slice(&vec![false; n]);
     }
 
     /// Builds the `StructArray` and reset this builder.
@@ -494,6 +319,8 @@ mod tests {
         string_builder.append_null();
         string_builder.append_null();
         string_builder.append_value("mark");
+        string_builder.append_nulls(2);
+        string_builder.append_value("terry");
 
         let int_builder = builder
             .field_builder::<Int32Builder>(1)
@@ -502,35 +329,43 @@ mod tests {
         int_builder.append_value(2);
         int_builder.append_null();
         int_builder.append_value(4);
+        int_builder.append_nulls(2);
+        int_builder.append_value(3);
 
         builder.append(true);
         builder.append(true);
         builder.append_null();
         builder.append(true);
 
+        builder.append_nulls(2);
+        builder.append(true);
+
         let struct_data = builder.finish().into_data();
 
-        assert_eq!(4, struct_data.len());
-        assert_eq!(1, struct_data.null_count());
-        assert_eq!(&[11_u8], struct_data.nulls().unwrap().validity());
+        assert_eq!(7, struct_data.len());
+        assert_eq!(3, struct_data.null_count());
+        assert_eq!(&[75_u8], struct_data.nulls().unwrap().validity());
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
-            .add_buffer(Buffer::from_slice_ref(b"joemark"))
+            .len(7)
+            .null_bit_buffer(Some(Buffer::from(&[73_u8])))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7, 7, 7, 12]))
+            .add_buffer(Buffer::from_slice_ref(b"joemarkterry"))
             .build()
             .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
-            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
+            .len(7)
+            .null_bit_buffer(Some(Buffer::from_slice_ref([75_u8])))
+            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4, 4, 4, 3]))
             .build()
             .unwrap();
 
         assert_eq!(expected_string_data, struct_data.child_data()[0]);
         assert_eq!(expected_int_data, struct_data.child_data()[1]);
+
+        assert!(struct_data.is_null(4));
+        assert!(struct_data.is_null(5));
     }
 
     #[test]

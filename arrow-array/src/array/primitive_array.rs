@@ -769,10 +769,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Creates a PrimitiveArray based on a constant value with `count` elements
     pub fn from_value(value: T::Native, count: usize) -> Self {
-        unsafe {
-            let val_buf = Buffer::from_trusted_len_iter((0..count).map(|_| value));
-            Self::new(val_buf.into(), None)
-        }
+        let val_buf: Vec<_> = vec![value; count];
+        Self::new(val_buf.into(), None)
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
@@ -867,13 +865,8 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: Fn(T::Native) -> O::Native,
     {
         let nulls = self.nulls().cloned();
-        let values = self.values().iter().map(|v| op(*v));
-        // JUSTIFICATION
-        //  Benefit
-        //      ~60% speedup
-        //  Soundness
-        //      `values` is an iterator with a known size because arrays are sized.
-        let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+        let values = self.values().into_iter().map(|v| op(*v));
+        let buffer: Vec<_> = values.collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
 
@@ -1075,13 +1068,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         F: FnMut(U::Item) -> T::Native,
     {
         let nulls = left.logical_nulls();
-        let buffer = unsafe {
+        let buffer: Vec<_> = (0..left.len())
             // SAFETY: i in range 0..left.len()
-            let iter = (0..left.len()).map(|i| op(left.value_unchecked(i)));
-            // SAFETY: upper bound is trusted because `iter` is over a range
-            Buffer::from_trusted_len_iter(iter)
-        };
-
+            .map(|i| op(unsafe { left.value_unchecked(i) }))
+            .collect();
         PrimitiveArray::new(buffer.into(), nulls)
     }
 
@@ -2110,7 +2100,7 @@ mod tests {
                 .with_timezone("Asia/Taipei".to_string());
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -2163,7 +2153,7 @@ mod tests {
         .with_timezone("America/Denver".to_string());
         assert_eq!(
             "PrimitiveArray<Timestamp(Millisecond, Some(\"America/Denver\"))>\n[\n  2022-03-13T01:59:59-07:00,\n  2022-03-13T03:00:00-06:00,\n  2022-11-06T00:59:59-06:00,\n  2022-11-06T01:00:00-06:00,\n]",
-            format!("{:?}", arr)
+            format!("{arr:?}")
         );
     }
 
@@ -2841,7 +2831,7 @@ mod tests {
             None,
         ]
         .into();
-        let debug_str = format!("{:?}", array);
+        let debug_str = format!("{array:?}");
         assert_eq!("PrimitiveArray<Time32(Second)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(Second),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400 to temporal for Time32(Second),\n  Cast error: Failed to convert 86401 to temporal for Time32(Second),\n  null,\n]",
     debug_str
     );
@@ -2858,7 +2848,7 @@ mod tests {
             None,
         ]
         .into();
-        let debug_str = format!("{:?}", array);
+        let debug_str = format!("{array:?}");
         assert_eq!("PrimitiveArray<Time32(Millisecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(Millisecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000 to temporal for Time32(Millisecond),\n  Cast error: Failed to convert 86401000 to temporal for Time32(Millisecond),\n  null,\n]",
             debug_str
         );
@@ -2875,7 +2865,7 @@ mod tests {
             None,
         ]
         .into();
-        let debug_str = format!("{:?}", array);
+        let debug_str = format!("{array:?}");
         assert_eq!(
         "PrimitiveArray<Time64(Nanosecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Nanosecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000000 to temporal for Time64(Nanosecond),\n  Cast error: Failed to convert 86401000000000 to temporal for Time64(Nanosecond),\n  null,\n]",
             debug_str
@@ -2893,7 +2883,7 @@ mod tests {
             None,
         ]
         .into();
-        let debug_str = format!("{:?}", array);
+        let debug_str = format!("{array:?}");
         assert_eq!("PrimitiveArray<Time64(Microsecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Microsecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000 to temporal for Time64(Microsecond),\n  Cast error: Failed to convert 86401000000 to temporal for Time64(Microsecond),\n  null,\n]", debug_str);
     }
 

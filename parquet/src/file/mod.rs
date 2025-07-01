@@ -97,7 +97,8 @@
 //!     println!("{}", row.unwrap());
 //! }
 //! ```
-pub mod footer;
+#[cfg(feature = "encryption")]
+pub mod column_crypto_metadata;
 pub mod metadata;
 pub mod page_encoding_stats;
 pub mod page_index;
@@ -110,3 +111,4 @@ pub mod writer;
 /// The length of the parquet footer in bytes
 pub const FOOTER_SIZE: usize = 8;
 const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];
+const PARQUET_MAGIC_ENCR_FOOTER: [u8; 4] = [b'P', b'A', b'R', b'E'];

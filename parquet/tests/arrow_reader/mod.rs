@@ -32,7 +32,9 @@ use chrono::Datelike;
 use chrono::{Duration, TimeDelta};
 use half::f16;
 use parquet::arrow::ArrowWriter;
-use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use parquet::file::properties::{
+    EnabledStatistics, WriterProperties, DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH,
+};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
@@ -94,8 +96,18 @@ enum Scenario {
     PeriodsInColumnNames,
     StructArray,
     UTF8,
+    /// UTF8 with max and min values truncated
+    TruncatedUTF8,
     UTF8View,
     BinaryView,
+}
+
+impl Scenario {
+    // If the test scenario needs to set `set_statistics_truncate_length` to test
+    // statistics truncation.
+    fn truncate_stats(&self) -> bool {
+        matches!(self, Scenario::TruncatedUTF8)
+    }
 }
 
 fn make_boolean_batch(v: Vec<Option<bool>>) -> RecordBatch {
@@ -670,6 +682,8 @@ fn make_dict_batch() -> RecordBatch {
     .unwrap()
 }
 
+/// Create data batches for the given scenario.
+/// `make_test_file_rg` uses the first batch to inference the schema of the file.
 fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
     match scenario {
         Scenario::Boolean => {
@@ -1042,6 +1056,33 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_utf8_batch(vec![Some("e"), Some("f"), Some("g"), Some("h"), Some("i")]),
             ]
         }
+        Scenario::TruncatedUTF8 => {
+            // Make utf8 batch with strings longer than 64 bytes
+            // to check truncation of row group statistics
+            vec![
+                make_utf8_batch(vec![
+                    Some(&("a".repeat(64) + "1")),
+                    Some(&("b".repeat(64) + "2")),
+                    Some(&("c".repeat(64) + "3")),
+                    None,
+                    Some(&("d".repeat(64) + "4")),
+                ]),
+                make_utf8_batch(vec![
+                    Some(&("e".repeat(64) + "5")),
+                    Some(&("f".repeat(64) + "6")),
+                    Some(&("g".repeat(64) + "7")),
+                    Some(&("h".repeat(64) + "8")),
+                    Some(&("i".repeat(64) + "9")),
+                ]),
+                make_utf8_batch(vec![
+                    Some("j"),
+                    Some("k"),
+                    Some(&("l".repeat(64) + "12")),
+                    Some(&("m".repeat(64) + "13")),
+                    Some(&("n".repeat(64) + "14")),
+                ]),
+            ]
+        }
         Scenario::UTF8View => {
             // Make utf8_view batch including string length <12 and >12 bytes
             // as the internal representation of StringView is differed for strings
@@ -1082,11 +1123,15 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .tempfile()
         .expect("tempfile creation");
 
-    let props = WriterProperties::builder()
+    let mut builder = WriterProperties::builder()
         .set_max_row_group_size(row_per_group)
         .set_bloom_filter_enabled(true)
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .build();
+        .set_statistics_enabled(EnabledStatistics::Page);
+    if scenario.truncate_stats() {
+        // The same as default `column_index_truncate_length` to check both stats with one value
+        builder = builder.set_statistics_truncate_length(DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH);
+    }
+    let props = builder.build();
 
     let batches = create_data_batch(scenario);
     let schema = batches[0].schema();

@@ -75,5 +75,5 @@ echo "Success!"
 echo "The release is available here:"
 echo "  https://dist.apache.org/repos/dist/release/arrow/${release_version}"
 
-echo "Clean up old versions from svn"
-"${SOURCE_TOP_DIR}"/dev/release/remove-old-releases.sh
+echo "Clean up old artifacts from svn"
+"${SOURCE_TOP_DIR}"/dev/release/remove-old-artifacts.sh

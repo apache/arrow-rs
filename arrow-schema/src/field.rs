@@ -22,8 +22,13 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::datatype::DataType;
+#[cfg(feature = "canonical_extension_types")]
+use crate::extension::CanonicalExtensionType;
 use crate::schema::SchemaBuilder;
-use crate::{Fields, UnionFields, UnionMode};
+use crate::{
+    extension::{ExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
+    Fields, UnionFields, UnionMode,
+};
 
 /// A reference counted [`Field`]
 pub type FieldRef = Arc<Field>;
@@ -31,7 +36,14 @@ pub type FieldRef = Arc<Field>;
 /// Describes a single column in a [`Schema`](super::Schema).
 ///
 /// A [`Schema`](super::Schema) is an ordered collection of
-/// [`Field`] objects.
+/// [`Field`] objects. Fields contain:
+/// * `name`: the name of the field
+/// * `data_type`: the type of the field
+/// * `nullable`: if the field is nullable
+/// * `metadata`: a map of key-value pairs containing additional custom metadata
+///
+/// Arrow Extension types, are encoded in `Field`s metadata. See
+/// [`Self::try_extension_type`] to retrieve the [`ExtensionType`], if any.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
@@ -124,7 +136,13 @@ impl Field {
     /// Default list member field name
     pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
 
-    /// Creates a new field with the given name, type, and nullability
+    /// Creates a new field with the given name, data type, and nullability
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_schema::{Field, DataType};
+    /// Field::new("field_name", DataType::Int32, true);
+    /// ```
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
         #[allow(deprecated)]
         Field {
@@ -310,10 +328,22 @@ impl Field {
         &self.metadata
     }
 
+    /// Returns a mutable reference to the `Field`'s optional custom metadata.
+    #[inline]
+    pub fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+        &mut self.metadata
+    }
+
     /// Returns an immutable reference to the `Field`'s name.
     #[inline]
     pub const fn name(&self) -> &String {
         &self.name
+    }
+
+    /// Set the name of this [`Field`]
+    #[inline]
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.name = name.into();
     }
 
     /// Set the name of the [`Field`] and returns self.
@@ -326,7 +356,7 @@ impl Field {
     /// assert_eq!(field.name(), "c2");
     /// ```
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
+        self.set_name(name);
         self
     }
 
@@ -334,6 +364,20 @@ impl Field {
     #[inline]
     pub const fn data_type(&self) -> &DataType {
         &self.data_type
+    }
+
+    /// Set [`DataType`] of the [`Field`]
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let mut field = Field::new("c1", DataType::Int64, false);
+    /// field.set_data_type(DataType::Utf8);
+    ///
+    /// assert_eq!(field.data_type(), &DataType::Utf8);
+    /// ```
+    #[inline]
+    pub fn set_data_type(&mut self, data_type: DataType) {
+        self.data_type = data_type;
     }
 
     /// Set [`DataType`] of the [`Field`] and returns self.
@@ -346,14 +390,191 @@ impl Field {
     /// assert_eq!(field.data_type(), &DataType::Utf8);
     /// ```
     pub fn with_data_type(mut self, data_type: DataType) -> Self {
-        self.data_type = data_type;
+        self.set_data_type(data_type);
         self
     }
 
+    /// Returns the extension type name of this [`Field`], if set.
+    ///
+    /// This returns the value of [`EXTENSION_TYPE_NAME_KEY`], if set in
+    /// [`Field::metadata`]. If the key is missing, there is no extension type
+    /// name and this returns `None`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_schema::{DataType, extension::EXTENSION_TYPE_NAME_KEY, Field};
+    ///
+    /// let field = Field::new("", DataType::Null, false);
+    /// assert_eq!(field.extension_type_name(), None);
+    ///
+    /// let field = Field::new("", DataType::Null, false).with_metadata(
+    ///    [(EXTENSION_TYPE_NAME_KEY.to_owned(), "example".to_owned())]
+    ///        .into_iter()
+    ///        .collect(),
+    /// );
+    /// assert_eq!(field.extension_type_name(), Some("example"));
+    /// ```
+    pub fn extension_type_name(&self) -> Option<&str> {
+        self.metadata()
+            .get(EXTENSION_TYPE_NAME_KEY)
+            .map(String::as_ref)
+    }
+
+    /// Returns the extension type metadata of this [`Field`], if set.
+    ///
+    /// This returns the value of [`EXTENSION_TYPE_METADATA_KEY`], if set in
+    /// [`Field::metadata`]. If the key is missing, there is no extension type
+    /// metadata and this returns `None`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use arrow_schema::{DataType, extension::EXTENSION_TYPE_METADATA_KEY, Field};
+    ///
+    /// let field = Field::new("", DataType::Null, false);
+    /// assert_eq!(field.extension_type_metadata(), None);
+    ///
+    /// let field = Field::new("", DataType::Null, false).with_metadata(
+    ///    [(EXTENSION_TYPE_METADATA_KEY.to_owned(), "example".to_owned())]
+    ///        .into_iter()
+    ///        .collect(),
+    /// );
+    /// assert_eq!(field.extension_type_metadata(), Some("example"));
+    /// ```
+    pub fn extension_type_metadata(&self) -> Option<&str> {
+        self.metadata()
+            .get(EXTENSION_TYPE_METADATA_KEY)
+            .map(String::as_ref)
+    }
+
+    /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
+    /// if set in the [`Field::metadata`].
+    ///
+    /// # Error
+    ///
+    /// Returns an error if
+    /// - this field does not have the name of this extension type
+    ///   ([`ExtensionType::NAME`]) in the [`Field::metadata`] (mismatch or
+    ///   missing)
+    /// - the deserialization of the metadata
+    ///   ([`ExtensionType::deserialize_metadata`]) fails
+    /// - the construction of the extension type ([`ExtensionType::try_new`])
+    ///   fail (for example when the [`Field::data_type`] is not supported by
+    ///   the extension type ([`ExtensionType::supports_data_type`]))
+    pub fn try_extension_type<E: ExtensionType>(&self) -> Result<E, ArrowError> {
+        // Check the extension name in the metadata
+        match self.extension_type_name() {
+            // It should match the name of the given extension type
+            Some(name) if name == E::NAME => {
+                // Deserialize the metadata and try to construct the extension
+                // type
+                E::deserialize_metadata(self.extension_type_metadata())
+                    .and_then(|metadata| E::try_new(self.data_type(), metadata))
+            }
+            // Name mismatch
+            Some(name) => Err(ArrowError::InvalidArgumentError(format!(
+                "Field extension type name mismatch, expected {}, found {name}",
+                E::NAME
+            ))),
+            // Name missing
+            None => Err(ArrowError::InvalidArgumentError(
+                "Field extension type name missing".to_owned(),
+            )),
+        }
+    }
+
+    /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
+    /// panics if this [`Field`] does not have this extension type.
+    ///
+    /// # Panic
+    ///
+    /// This calls [`Field::try_extension_type`] and panics when it returns an
+    /// error.
+    pub fn extension_type<E: ExtensionType>(&self) -> E {
+        self.try_extension_type::<E>()
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Updates the metadata of this [`Field`] with the [`ExtensionType::NAME`]
+    /// and [`ExtensionType::metadata`] of the given [`ExtensionType`], if the
+    /// given extension type supports the [`Field::data_type`] of this field
+    /// ([`ExtensionType::supports_data_type`]).
+    ///
+    /// If the given extension type defines no metadata, a previously set
+    /// value of [`EXTENSION_TYPE_METADATA_KEY`] is cleared.
+    ///
+    /// # Error
+    ///
+    /// This functions returns an error if the data type of this field does not
+    /// match any of the supported storage types of the given extension type.
+    pub fn try_with_extension_type<E: ExtensionType>(
+        &mut self,
+        extension_type: E,
+    ) -> Result<(), ArrowError> {
+        // Make sure the data type of this field is supported
+        extension_type.supports_data_type(&self.data_type)?;
+
+        self.metadata
+            .insert(EXTENSION_TYPE_NAME_KEY.to_owned(), E::NAME.to_owned());
+        match extension_type.serialize_metadata() {
+            Some(metadata) => self
+                .metadata
+                .insert(EXTENSION_TYPE_METADATA_KEY.to_owned(), metadata),
+            // If this extension type has no metadata, we make sure to
+            // clear previously set metadata.
+            None => self.metadata.remove(EXTENSION_TYPE_METADATA_KEY),
+        };
+
+        Ok(())
+    }
+
+    /// Updates the metadata of this [`Field`] with the [`ExtensionType::NAME`]
+    /// and [`ExtensionType::metadata`] of the given [`ExtensionType`].
+    ///
+    /// # Panics
+    ///
+    /// This calls [`Field::try_with_extension_type`] and panics when it
+    /// returns an error.
+    pub fn with_extension_type<E: ExtensionType>(mut self, extension_type: E) -> Self {
+        self.try_with_extension_type(extension_type)
+            .unwrap_or_else(|e| panic!("{e}"));
+        self
+    }
+
+    /// Returns the [`CanonicalExtensionType`] of this [`Field`], if set.
+    ///
+    /// # Error
+    ///
+    /// Returns an error if
+    /// - this field does have a canonical extension type (mismatch or missing)
+    /// - the canonical extension is not supported
+    /// - the construction of the extension type fails
+    #[cfg(feature = "canonical_extension_types")]
+    pub fn try_canonical_extension_type(&self) -> Result<CanonicalExtensionType, ArrowError> {
+        CanonicalExtensionType::try_from(self)
+    }
+
     /// Indicates whether this [`Field`] supports null values.
+    ///
+    /// If true, the field *may* contain null values.
     #[inline]
     pub const fn is_nullable(&self) -> bool {
         self.nullable
+    }
+
+    /// Set the `nullable` of this [`Field`].
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let mut field = Field::new("c1", DataType::Int64, false);
+    /// field.set_nullable(true);
+    ///
+    /// assert_eq!(field.is_nullable(), true);
+    /// ```
+    #[inline]
+    pub fn set_nullable(&mut self, nullable: bool) {
+        self.nullable = nullable;
     }
 
     /// Set `nullable` of the [`Field`] and returns self.
@@ -366,7 +587,7 @@ impl Field {
     /// assert_eq!(field.is_nullable(), true);
     /// ```
     pub fn with_nullable(mut self, nullable: bool) -> Self {
-        self.nullable = nullable;
+        self.set_nullable(nullable);
         self
     }
 

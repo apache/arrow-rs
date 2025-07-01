@@ -18,17 +18,17 @@
 use arrow::array::StringDictionaryBuilder;
 use arrow::datatypes::Int32Type;
 use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 /// Note: this is best effort, not all keys are necessarily present or unique
 fn build_strings(dict_size: usize, total_size: usize, key_len: usize) -> Vec<String> {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let values: Vec<String> = (0..dict_size)
-        .map(|_| (0..key_len).map(|_| rng.gen::<char>()).collect())
+        .map(|_| (0..key_len).map(|_| rng.random::<char>()).collect())
         .collect();
 
     (0..total_size)
-        .map(|_| values[rng.gen_range(0..dict_size)].clone())
+        .map(|_| values[rng.random_range(0..dict_size)].clone())
         .collect()
 }
 

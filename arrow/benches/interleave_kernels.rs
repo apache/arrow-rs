@@ -29,6 +29,7 @@ use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 use arrow_select::interleave::interleave;
+use std::hint;
 
 fn do_bench(
     c: &mut Criterion,
@@ -54,14 +55,14 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
     let mut rng = seedable_rng();
     let indices: Vec<_> = (0..len)
         .map(|_| {
-            let array_idx = rng.gen_range(0..values.len());
-            let value_idx = rng.gen_range(0..values[array_idx].len());
+            let array_idx = rng.random_range(0..values.len());
+            let value_idx = rng.random_range(0..values[array_idx].len());
             (array_idx, value_idx)
         })
         .collect();
 
     c.bench_function(name, |b| {
-        b.iter(|| criterion::black_box(interleave(values, &indices).unwrap()))
+        b.iter(|| hint::black_box(interleave(values, &indices).unwrap()))
     });
 }
 
@@ -76,6 +77,8 @@ fn add_benchmark(c: &mut Criterion) {
     let values = create_string_array_with_len::<i32>(1024, 0.0, 20);
     let sparse_dict = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &values, 10..20);
 
+    let string_view = create_string_view_array(1024, 0.0);
+
     let cases: &[(&str, &dyn Array)] = &[
         ("i32(0.0)", &i32),
         ("i32(0.5)", &i32_opt),
@@ -83,6 +86,7 @@ fn add_benchmark(c: &mut Criterion) {
         ("str(20, 0.5)", &string_opt),
         ("dict(20, 0.0)", &dict),
         ("dict_sparse(20, 0.0)", &sparse_dict),
+        ("str_view(0.0)", &string_view),
     ];
 
     for (prefix, base) in cases {

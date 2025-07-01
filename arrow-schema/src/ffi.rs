@@ -520,12 +520,11 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                let parsed_bits = bits.parse::<u16>().unwrap_or(0);
-                                match parsed_bits {
-                                    32 => DataType::Decimal32(parsed_precision, parsed_scale),
-                                    64 => DataType::Decimal64(parsed_precision, parsed_scale),
-                                    128 => DataType::Decimal128(parsed_precision, parsed_scale),
-                                    256 => DataType::Decimal256(parsed_precision, parsed_scale),
+                                match *bits {
+                                    "32" => DataType::Decimal32(parsed_precision, parsed_scale),
+                                    "64" => DataType::Decimal64(parsed_precision, parsed_scale),
+                                    "128" => DataType::Decimal128(parsed_precision, parsed_scale),
+                                    "256" => DataType::Decimal256(parsed_precision, parsed_scale),
                                     _ => return Err(ArrowError::CDataInterface("Only 32/64/128/256 bit wide decimals are supported in the Rust implementation".to_string())),
                                 }
                             }

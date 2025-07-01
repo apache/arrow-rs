@@ -164,6 +164,9 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         values: Buffer,
         nulls: Option<NullBuffer>,
     ) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(offsets, values, nulls);
+        }
         Self {
             data_type: T::DATA_TYPE,
             value_offsets: offsets,
@@ -289,8 +292,10 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         // both of which should cleanly cast to isize on an architecture that supports
         // 32/64-bit offsets
         let b = std::slice::from_raw_parts(
-            self.value_data.as_ptr().offset(start.to_isize().unwrap()),
-            (end - start).to_usize().unwrap(),
+            self.value_data
+                .as_ptr()
+                .offset(start.to_isize().unwrap_unchecked()),
+            (end - start).to_usize().unwrap_unchecked(),
         );
 
         // SAFETY:

@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_select"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow-buffer = { workspace = true }
@@ -41,8 +43,5 @@ arrow-array = { workspace = true }
 num = { version = "0.4", default-features = false, features = ["std"] }
 ahash = { version = "0.8", default-features = false}
 
-[features]
-default = []
-
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }

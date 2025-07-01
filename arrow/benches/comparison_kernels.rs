@@ -29,15 +29,16 @@ use arrow_string::regexp::regexp_is_match_scalar;
 use criterion::Criterion;
 use rand::rngs::StdRng;
 use rand::Rng;
+use std::hint;
 
 const SIZE: usize = 65536;
 
-fn bench_like_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
-    like(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
-}
-
 fn bench_like_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     like(arr_a, &StringArray::new_scalar(value_b)).unwrap();
+}
+
+fn bench_like_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
+    like(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_nlike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
@@ -53,27 +54,28 @@ fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
 }
 
 fn bench_stringview_regexp_is_match_scalar(arr_a: &StringViewArray, value_b: &str) {
-    regexp_is_match_scalar(
-        criterion::black_box(arr_a),
-        criterion::black_box(value_b),
-        None,
-    )
-    .unwrap();
+    regexp_is_match_scalar(hint::black_box(arr_a), hint::black_box(value_b), None).unwrap();
 }
 
 fn bench_string_regexp_is_match_scalar(arr_a: &StringArray, value_b: &str) {
-    regexp_is_match_scalar(
-        criterion::black_box(arr_a),
-        criterion::black_box(value_b),
-        None,
-    )
-    .unwrap();
+    regexp_is_match_scalar(hint::black_box(arr_a), hint::black_box(value_b), None).unwrap();
 }
 
 fn make_string_array(size: usize, rng: &mut StdRng) -> impl Iterator<Item = Option<String>> + '_ {
     (0..size).map(|_| {
-        let len = rng.gen_range(0..64);
-        let bytes = (0..len).map(|_| rng.gen_range(0..128)).collect();
+        let len = rng.random_range(0..64);
+        let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
+        Some(String::from_utf8(bytes).unwrap())
+    })
+}
+
+fn make_inlined_string_array(
+    size: usize,
+    rng: &mut StdRng,
+) -> impl Iterator<Item = Option<String>> + '_ {
+    (0..size).map(|_| {
+        let len = rng.random_range(0..12);
+        let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
         Some(String::from_utf8(bytes).unwrap())
     })
 }
@@ -87,6 +89,16 @@ fn add_benchmark(c: &mut Criterion) {
 
     let arr_string = create_string_array::<i32>(SIZE, 0.0);
     let arr_string_view = create_string_view_array(SIZE, 0.0);
+
+    // create long string arrays with the same prefix
+    let arr_long_string = create_longer_string_array_with_same_prefix::<i32>(SIZE, 0.0);
+    let arr_long_string_view = create_longer_string_view_array_with_same_prefix(SIZE, 0.0);
+
+    let left_arr_long_string = create_longer_string_array_with_same_prefix::<i32>(SIZE, 0.0);
+    let right_arr_long_string = create_longer_string_array_with_same_prefix::<i32>(SIZE, 0.0);
+
+    let left_arr_long_string_view = create_longer_string_view_array_with_same_prefix(SIZE, 0.0);
+    let right_arr_long_string_view = create_longer_string_view_array_with_same_prefix(SIZE, 0.0);
 
     let scalar = Float32Array::from(vec![1.0]);
 
@@ -225,6 +237,48 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| eq(&string_view_left, &string_view_right).unwrap())
     });
 
+    let array_gen = make_inlined_string_array(1024 * 1024 * 8, &mut rng);
+    let string_left = StringArray::from_iter(array_gen);
+    let string_view_inlined_left = StringViewArray::from_iter(string_left.iter());
+
+    let array_gen = make_inlined_string_array(1024 * 1024 * 8, &mut rng);
+    let string_right = StringArray::from_iter(array_gen);
+    let string_view_inlined_right = StringViewArray::from_iter(string_right.iter());
+
+    // Add fast path benchmarks for StringViewArray, both side are inlined views < 12 bytes
+    c.bench_function("eq StringViewArray StringViewArray inlined bytes", |b| {
+        b.iter(|| eq(&string_view_inlined_left, &string_view_inlined_right).unwrap())
+    });
+
+    c.bench_function("lt StringViewArray StringViewArray inlined bytes", |b| {
+        b.iter(|| lt(&string_view_inlined_left, &string_view_inlined_right).unwrap())
+    });
+
+    // eq benchmarks for long strings with the same prefix
+    c.bench_function("eq long same prefix strings StringArray", |b| {
+        b.iter(|| eq(&left_arr_long_string, &right_arr_long_string).unwrap())
+    });
+
+    c.bench_function("neq long same prefix strings StringArray", |b| {
+        b.iter(|| neq(&left_arr_long_string, &right_arr_long_string).unwrap())
+    });
+
+    c.bench_function("lt long same prefix strings StringArray", |b| {
+        b.iter(|| lt(&left_arr_long_string, &right_arr_long_string).unwrap())
+    });
+
+    c.bench_function("eq long same prefix strings StringViewArray", |b| {
+        b.iter(|| eq(&left_arr_long_string_view, &right_arr_long_string_view).unwrap())
+    });
+
+    c.bench_function("neq long same prefix strings StringViewArray", |b| {
+        b.iter(|| neq(&left_arr_long_string_view, &right_arr_long_string_view).unwrap())
+    });
+
+    c.bench_function("lt long same prefix strings StringViewArray", |b| {
+        b.iter(|| lt(&left_arr_long_string_view, &right_arr_long_string_view).unwrap())
+    });
+
     // StringArray: LIKE benchmarks
 
     c.bench_function("like_utf8 scalar equals", |b| {
@@ -246,6 +300,60 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("like_utf8 scalar complex", |b| {
         b.iter(|| bench_like_utf8_scalar(&arr_string, "%xx_xx%xxx"))
     });
+
+    // StringArray: LIKE benchmarks with long strings 4 bytes prefix
+    // Note:
+    // long strings mean strings start with same 4 bytes prefix such as "test",
+    // followed by a tail, ensuring the total length is greater than 12 bytes.
+    c.bench_function("long same prefix strings like_utf8 scalar equals", |b| {
+        b.iter(|| bench_like_utf8_scalar(&arr_long_string, "prefix_1234"))
+    });
+
+    c.bench_function("long same prefix strings like_utf8 scalar contains", |b| {
+        b.iter(|| bench_like_utf8_scalar(&arr_long_string, "%prefix_1234%"))
+    });
+
+    c.bench_function("long same prefix strings like_utf8 scalar ends with", |b| {
+        b.iter(|| bench_like_utf8_scalar(&arr_long_string, "%prefix_1234"))
+    });
+
+    c.bench_function(
+        "long same prefix strings like_utf8 scalar starts with",
+        |b| b.iter(|| bench_like_utf8_scalar(&arr_long_string, "prefix_1234%")),
+    );
+
+    c.bench_function("long same prefix strings like_utf8 scalar complex", |b| {
+        b.iter(|| bench_like_utf8_scalar(&arr_long_string, "%prefix_1234%xxx"))
+    });
+
+    // StringViewArray: LIKE benchmarks with long strings 4 bytes prefix
+    // Note:
+    // long strings mean strings start with same 4 bytes prefix such as "test",
+    // followed by a tail, ensuring the total length is greater than 12 bytes.
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar equals",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "prefix_1234")),
+    );
+
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar contains",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "%prefix_1234%")),
+    );
+
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar ends with",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "%prefix_1234")),
+    );
+
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar starts with",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "prefix_1234%")),
+    );
+
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar complex",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "%prefix_1234%xxx")),
+    );
 
     // StringViewArray: LIKE benchmarks
     // Note: since like/nlike share the same implementation, we only benchmark one
