@@ -64,7 +64,7 @@ is described in the [contributing] guide.
 Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
-|------------------|------------| --------------------------------------- |
+| ---------------- | ---------- | --------------------------------------- |
 | July 2025        | [`56.0.0`] | Major, potentially breaking API changes |
 | August 2025      | [`56.1.0`] | Minor, NO breaking API changes          |
 | September 2025   | [`56.2.0`] | Minor, NO breaking API changes          |
