@@ -1,7 +1,8 @@
 use crate::arrow::array_reader::{row_group_cache::RowGroupCache, ArrayReader};
 use crate::arrow::arrow_reader::RowSelector;
 use crate::errors::Result;
-use arrow_array::{new_empty_array, ArrayRef};
+use arrow_array::{new_empty_array, ArrayRef, BooleanArray};
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::collections::VecDeque;
@@ -95,7 +96,7 @@ impl ArrayReader for CachedArrayReader {
     fn read_records(&mut self, num_records: usize) -> Result<usize> {
         let mut read = 0;
         while read < num_records {
-            let batch_id = self.get_batch_id_from_position(self.outer_position + read + 1); // +1 because we want to read the next batch
+            let batch_id = self.get_batch_id_from_position(self.outer_position + read);
             let cached = self.cache.lock().unwrap().get(self.column_idx, batch_id);
 
             match cached {
@@ -147,22 +148,45 @@ impl ArrayReader for CachedArrayReader {
             return Ok(new_empty_array(&self.inner.get_data_type()));
         }
 
-        let mut start_position = self.outer_position - row_count;
+        let start_position = self.outer_position - row_count;
+
+        let selection_buffer = row_selection_to_boolean_buffer(row_count, self.selections.iter());
+
+        let start_batch = start_position / self.batch_size;
+        let end_batch = (start_position + row_count - 1) / self.batch_size;
 
         let mut selected_arrays = Vec::new();
-        for selector in self.selections.iter() {
-            if !selector.skip {
-                let batch_id = self.get_batch_id_from_position(start_position);
-                let batch_start = batch_id * self.batch_size;
+        for batch_id in start_batch..=end_batch {
+            let batch_start = batch_id * self.batch_size;
+            let batch_end = batch_start + self.batch_size - 1;
+            let batch_id = self.get_batch_id_from_position(batch_start);
 
-                let cached = self.cache.lock().unwrap().get(self.column_idx, batch_id);
-                let cached = cached.expect("data must be already cached in the read_records call");
+            // Calculate the overlap between the start_position and the batch
+            let overlap_start = start_position.max(batch_start);
+            let overlap_end = (start_position + row_count - 1).min(batch_end);
 
-                let slice_start = start_position - batch_start;
-                let sliced = cached.slice(slice_start, selector.row_count);
-                selected_arrays.push(sliced);
+            if overlap_start > overlap_end {
+                continue;
             }
-            start_position += selector.row_count;
+
+            let selection_start = overlap_start - start_position;
+            let selection_length = overlap_end - overlap_start + 1;
+            let mask = selection_buffer.slice(selection_start, selection_length);
+
+            if mask.count_set_bits() == 0 {
+                continue;
+            }
+
+            let mask_array = BooleanArray::from(mask);
+            let cached = self
+                .cache
+                .lock()
+                .unwrap()
+                .get(self.column_idx, batch_id)
+                .expect("data must be already cached in the read_records call");
+            let cached = cached.slice(overlap_start - batch_start, selection_length);
+            let filtered = arrow_select::filter::filter(&cached, &mask_array)?;
+            selected_arrays.push(filtered);
         }
 
         self.selections.clear();
@@ -186,6 +210,17 @@ impl ArrayReader for CachedArrayReader {
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.inner.get_rep_levels()
     }
+}
+
+fn row_selection_to_boolean_buffer<'a>(
+    row_count: usize,
+    selection: impl Iterator<Item = &'a RowSelector>,
+) -> BooleanBuffer {
+    let mut buffer = BooleanBufferBuilder::new(row_count);
+    for selector in selection {
+        buffer.append_n(selector.row_count, !selector.skip);
+    }
+    buffer.finish()
 }
 
 #[cfg(test)]
