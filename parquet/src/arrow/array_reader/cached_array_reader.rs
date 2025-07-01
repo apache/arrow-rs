@@ -204,11 +204,11 @@ impl ArrayReader for CachedArrayReader {
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.inner.get_def_levels()
+        None // we don't allow nullable parent for now.
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.inner.get_rep_levels()
+        None
     }
 }
 

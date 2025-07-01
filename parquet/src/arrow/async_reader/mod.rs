@@ -621,12 +621,12 @@ where
 
                 let mut cache_projection = predicate.projection().clone();
                 cache_projection.intersect(&projection);
-                let array_reader = ArrayReaderBuilder::new(&row_group).build_array_reader(
-                    self.fields.as_deref(),
-                    predicate.projection(),
-                    &cache_projection,
-                    row_group_cache.clone(),
-                )?;
+                let array_reader = ArrayReaderBuilder::new(&row_group)
+                    .build_array_reader_with_cache(
+                        self.fields.as_deref(),
+                        predicate.projection(),
+                        (&cache_projection, row_group_cache.clone()),
+                    )?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
@@ -673,13 +673,11 @@ where
 
         let plan = plan_builder.build();
 
-        let array_reader = ArrayReaderBuilder::new(&row_group)
-            .build_array_reader(
-                self.fields.as_deref(),
-                &projection,
-                &cache_projection,
-                row_group_cache.clone(),
-            )?;
+        let array_reader = ArrayReaderBuilder::new(&row_group).build_array_reader_with_cache(
+            self.fields.as_deref(),
+            &projection,
+            (&cache_projection, row_group_cache.clone()),
+        )?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
