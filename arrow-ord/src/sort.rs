@@ -724,15 +724,48 @@ pub fn lexsort_to_indices(
         len = limit.min(len);
     }
 
-    let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
-    // uint32 can be sorted unstably
-    sort_unstable_by(&mut value_indices, len, |a, b| {
+    // Instantiate specialized versions of comparisons for small numbers
+    // of columns as it helps the compiler generate better code.
+    match columns.len() {
+        2 => {
+            sort_fixed_column::<2>(columns, &mut value_indices, len)?;
+        }
+        3 => {
+            sort_fixed_column::<3>(columns, &mut value_indices, len)?;
+        }
+        4 => {
+            sort_fixed_column::<4>(columns, &mut value_indices, len)?;
+        }
+        5 => {
+            sort_fixed_column::<5>(columns, &mut value_indices, len)?;
+        }
+        _ => {
+            let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
+            // uint32 can be sorted unstably
+            sort_unstable_by(&mut value_indices, len, |a, b| {
+                lexicographical_comparator.compare(*a, *b)
+            });
+        }
+    }
+    Ok(UInt32Array::from(
+        value_indices[..len]
+            .iter()
+            .map(|i| *i as u32)
+            .collect::<Vec<_>>(),
+    ))
+}
+
+// Sort a fixed number of columns using FixedLexicographicalComparator
+fn sort_fixed_column<const N: usize>(
+    columns: &[SortColumn],
+    value_indices: &mut [usize],
+    len: usize,
+) -> Result<(), ArrowError> {
+    let lexicographical_comparator = FixedLexicographicalComparator::<N>::try_new(columns)?;
+    sort_unstable_by(value_indices, len, |a, b| {
         lexicographical_comparator.compare(*a, *b)
     });
-
-    Ok(UInt32Array::from_iter_values(
-        value_indices.iter().take(len).map(|i| *i as u32),
-    ))
+    Ok(())
 }
 
 /// It's unstable_sort, may not preserve the order of equal elements
@@ -778,6 +811,50 @@ impl LexicographicalComparator {
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
         Ok(LexicographicalComparator { compare_items })
+    }
+}
+
+/// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
+/// at given two indices. This version of the comparator is for compile-time constant number of columns.
+/// The lifetime is the same at the data wrapped.
+pub struct FixedLexicographicalComparator<const N: usize> {
+    compare_items: [DynComparator; N],
+}
+
+impl<const N: usize> FixedLexicographicalComparator<N> {
+    /// lexicographically compare values at the wrapped columns with given indices.
+    pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
+        for comparator in &self.compare_items {
+            match comparator(a_idx, b_idx) {
+                Ordering::Equal => continue,
+                r => return r,
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// Create a new lex comparator that will wrap the given sort columns and give comparison
+    /// results with two indices.
+    /// The number of columns should be equal to the compile-time constant N.
+    pub fn try_new(
+        columns: &[SortColumn],
+    ) -> Result<FixedLexicographicalComparator<N>, ArrowError> {
+        let compare_items = columns
+            .iter()
+            .map(|c| {
+                make_comparator(
+                    c.values.as_ref(),
+                    c.values.as_ref(),
+                    c.options.unwrap_or_default(),
+                )
+            })
+            .collect::<Result<Vec<_>, ArrowError>>()?
+            .try_into();
+        let compare_items: [Box<dyn Fn(usize, usize) -> Ordering + Send + Sync + 'static>; N] =
+            compare_items.map_err(|_| {
+                ArrowError::ComputeError("Could not create fixed size array".to_string())
+            })?;
+        Ok(FixedLexicographicalComparator { compare_items })
     }
 }
 

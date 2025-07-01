@@ -61,7 +61,9 @@ all-features = true
 
 [features]
 default = []
-flight-sql-experimental = ["dep:arrow-arith", "dep:arrow-data", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell", "dep:paste"]
+flight-sql = ["dep:arrow-arith", "dep:arrow-data", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell", "dep:paste"]
+# TODO: Remove in the next release
+flight-sql-experimental = ["flight-sql"]
 tls = ["tonic/tls-ring"]
 # Enable CLI tools
 cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-roots", "dep:anyhow", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber"]
@@ -83,18 +85,18 @@ uuid = { version = "1.10.0", features = ["v4"] }
 
 [[example]]
 name = "flight_sql_server"
-required-features = ["flight-sql-experimental", "tls"]
+required-features = ["flight-sql", "tls"]
 
 [[bin]]
 name = "flight_sql_client"
-required-features = ["cli", "flight-sql-experimental", "tls"]
+required-features = ["cli", "flight-sql", "tls"]
 
 [[test]]
 name = "flight_sql_client"
 path = "tests/flight_sql_client.rs"
-required-features = ["flight-sql-experimental", "tls"]
+required-features = ["flight-sql", "tls"]
 
 [[test]]
 name = "flight_sql_client_cli"
 path = "tests/flight_sql_client_cli.rs"
-required-features = ["cli", "flight-sql-experimental", "tls"]
+required-features = ["cli", "flight-sql", "tls"]

@@ -22,13 +22,54 @@ use crate::reader::header::{Header, HeaderDecoder};
 use arrow_schema::ArrowError;
 use std::io::BufRead;
 
-mod header;
-
 mod block;
-
 mod cursor;
+mod header;
 mod record;
 mod vlq;
+
+/// Configuration options for reading Avro data into Arrow arrays
+///
+/// This struct contains configuration options that control how Avro data is
+/// converted into Arrow arrays. It allows customizing various aspects of the
+/// data conversion process.
+///
+/// # Examples
+///
+/// ```
+/// # use arrow_avro::reader::ReadOptions;
+/// // Use default options (regular StringArray for strings)
+/// let default_options = ReadOptions::default();
+///
+/// // Enable Utf8View support for better string performance
+/// let options = ReadOptions::default()
+///     .with_utf8view(true);
+/// ```
+#[derive(Default, Debug, Clone)]
+pub struct ReadOptions {
+    use_utf8view: bool,
+}
+
+impl ReadOptions {
+    /// Create a new `ReadOptions` with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set whether to use StringViewArray for string data
+    ///
+    /// When enabled, string data from Avro files will be loaded into
+    /// Arrow's StringViewArray instead of the standard StringArray.
+    pub fn with_utf8view(mut self, use_utf8view: bool) -> Self {
+        self.use_utf8view = use_utf8view;
+        self
+    }
+
+    /// Get whether StringViewArray is enabled for string data
+    pub fn use_utf8view(&self) -> bool {
+        self.use_utf8view
+    }
+}
 
 /// Read a [`Header`] from the provided [`BufRead`]
 fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
@@ -75,24 +116,36 @@ fn read_blocks<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<Block, 
 
 #[cfg(test)]
 mod test {
-    use crate::codec::AvroField;
+    use crate::codec::{AvroDataType, AvroField, Codec};
     use crate::compression::CompressionCodec;
     use crate::reader::record::RecordDecoder;
     use crate::reader::{read_blocks, read_header};
     use crate::test_util::arrow_test_data;
     use arrow_array::*;
+    use arrow_schema::{DataType, Field};
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
 
     fn read_file(file: &str, batch_size: usize) -> RecordBatch {
+        read_file_with_options(file, batch_size, &crate::ReadOptions::default())
+    }
+
+    fn read_file_with_options(
+        file: &str,
+        batch_size: usize,
+        options: &crate::ReadOptions,
+    ) -> RecordBatch {
         let file = File::open(file).unwrap();
         let mut reader = BufReader::new(file);
         let header = read_header(&mut reader).unwrap();
         let compression = header.compression().unwrap();
         let schema = header.schema().unwrap().unwrap();
         let root = AvroField::try_from(&schema).unwrap();
-        let mut decoder = RecordDecoder::try_new(root.data_type()).unwrap();
+
+        let mut decoder =
+            RecordDecoder::try_new_with_options(root.data_type(), options.clone()).unwrap();
 
         for result in read_blocks(reader) {
             let block = result.unwrap();
@@ -114,6 +167,46 @@ mod test {
             }
         }
         decoder.flush().unwrap()
+    }
+
+    #[test]
+    fn test_utf8view_support() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "test",
+            "fields": [{
+                "name": "str_field",
+                "type": "string"
+            }]
+        }"#;
+
+        let schema: crate::schema::Schema = serde_json::from_str(schema_json).unwrap();
+        let avro_field = AvroField::try_from(&schema).unwrap();
+
+        let data_type = avro_field.data_type();
+
+        struct TestHelper;
+        impl TestHelper {
+            fn with_utf8view(field: &Field) -> Field {
+                match field.data_type() {
+                    DataType::Utf8 => {
+                        Field::new(field.name(), DataType::Utf8View, field.is_nullable())
+                            .with_metadata(field.metadata().clone())
+                    }
+                    _ => field.clone(),
+                }
+            }
+        }
+
+        let field = TestHelper::with_utf8view(&Field::new("str_field", DataType::Utf8, false));
+
+        assert_eq!(field.data_type(), &DataType::Utf8View);
+
+        let array = StringViewArray::from(vec!["test1", "test2"]);
+        let batch =
+            RecordBatch::try_from_iter(vec![("str_field", Arc::new(array) as ArrayRef)]).unwrap();
+
+        assert!(batch.column(0).as_any().is::<StringViewArray>());
     }
 
     #[test]

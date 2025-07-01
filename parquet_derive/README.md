@@ -28,6 +28,8 @@ Derive also has some support for the chrono time library. You must must enable t
 
 ## Usage
 
+See example in [ParquetRecordWriter](<https://docs.rs/parquet_derive/latest/parquet_derive/derive.ParquetRecordWriter.html>) for reading/writing to a parquet file.
+
 Add this to your Cargo.toml:
 
 ```toml
@@ -134,6 +136,8 @@ chunks.read_from_row_group(&mut *row_group, 1).unwrap();
 
 Testing a `*_derive` crate requires an intermediate crate. Go to `parquet_derive_test` and run `cargo test` for
 unit tests.
+
+To compile and test doctests, run `cargo test --doc -- --show-output`
 
 ## Docs
 

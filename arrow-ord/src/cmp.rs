@@ -33,6 +33,7 @@ use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
+use std::cmp::Ordering;
 use std::ops::Not;
 
 #[derive(Debug, Copy, Clone)]
@@ -565,24 +566,42 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     /// Item.0 is the array, Item.1 is the index
     type Item = (&'a GenericByteViewArray<T>, usize);
 
+    #[inline(always)]
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
-        // # Safety
-        // The index is within bounds as it is checked in value()
         let l_view = unsafe { l.0.views().get_unchecked(l.1) };
-        let l_len = *l_view as u32;
-
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            // For eq case, we can directly compare the inlined bytes
+            return l_view == r_view;
+        }
+
+        let l_len = *l_view as u32;
         let r_len = *r_view as u32;
         // This is a fast path for equality check.
         // We don't need to look at the actual bytes to determine if they are equal.
         if l_len != r_len {
             return false;
         }
+        if l_len == 0 && r_len == 0 {
+            return true;
+        }
 
+        // # Safety
+        // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_eq() }
     }
 
+    #[inline(always)]
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
+        // If both arrays use only the inline buffer
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            let l_view = unsafe { l.0.views().get_unchecked(l.1) };
+            let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+            return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+                < GenericByteViewArray::<T>::inline_key_fast(*r_view);
+        }
+
+        // Fallback to the generic, unchecked comparison for non-inline cases
         // # Safety
         // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
@@ -618,14 +637,21 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 }
 
 /// Compares two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+#[inline(always)]
 pub fn compare_byte_view<T: ByteViewType>(
     left: &GenericByteViewArray<T>,
     left_idx: usize,
     right: &GenericByteViewArray<T>,
     right_idx: usize,
-) -> std::cmp::Ordering {
+) -> Ordering {
     assert!(left_idx < left.len());
     assert!(right_idx < right.len());
+    if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
+        let l_view = unsafe { left.views().get_unchecked(left_idx) };
+        let r_view = unsafe { right.views().get_unchecked(right_idx) };
+        return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+            .cmp(&GenericByteViewArray::<T>::inline_key_fast(*r_view));
+    }
     unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
 }
 

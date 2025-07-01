@@ -246,9 +246,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array_reader::build_array_reader;
     use crate::arrow::array_reader::list_array::ListArrayReader;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
+    use crate::arrow::array_reader::ArrayReaderBuilder;
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
     use crate::arrow::{parquet_to_arrow_schema, ArrowWriter, ProjectionMask};
     use crate::file::properties::WriterProperties;
@@ -563,7 +563,9 @@ mod tests {
         )
         .unwrap();
 
-        let mut array_reader = build_array_reader(fields.as_ref(), &mask, &file_reader).unwrap();
+        let mut array_reader = ArrayReaderBuilder::new(&file_reader)
+            .build_array_reader(fields.as_ref(), &mask)
+            .unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();
         assert_eq!(batch.data_type(), array_reader.get_data_type());

@@ -202,9 +202,6 @@ pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::{SchemaDescriptor, Type};
 use arrow_schema::{FieldRef, Schema};
-// continue to export deprecated methods until they are removed
-#[allow(deprecated)]
-pub use self::schema::arrow_to_parquet_schema;
 
 pub use self::schema::{
     add_encoded_arrow_schema_to_metadata, encode_arrow_schema, parquet_to_arrow_field_levels,
@@ -251,10 +248,25 @@ pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionMask {
-    /// If present a leaf column should be included if the value at
+    /// If `Some`, a leaf column should be included if the value at
     /// the corresponding index is true
     ///
-    /// If `None`, include all columns
+    /// If `None`, all columns should be included
+    ///
+    /// # Examples
+    ///
+    /// Given the original parquet schema with leaf columns is `[a, b, c, d]`
+    ///
+    /// A mask of `[true, false, true, false]` will result in a schema 2
+    /// elements long:
+    /// * `fields[0]`: `a`
+    /// * `fields[1]`: `c`    
+    ///
+    /// A mask of `None` will result in a schema 4 elements long:
+    /// * `fields[0]`: `a`
+    /// * `fields[1]`: `b`
+    /// * `fields[2]`: `c`
+    /// * `fields[3]`: `d`
     mask: Option<Vec<bool>>,
 }
 
@@ -466,7 +478,7 @@ mod test {
             .unwrap();
         assert_eq!(
             err.to_string(),
-            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..341"
+            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..357"
         );
     }
 
@@ -554,6 +566,7 @@ mod test {
         let batch = RecordBatch::try_from_iter(vec![("id", array)]).unwrap();
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
+            .set_write_page_header_statistics(true)
             .build();
 
         let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
