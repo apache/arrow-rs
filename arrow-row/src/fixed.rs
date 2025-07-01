@@ -310,7 +310,7 @@ pub fn encode_not_null<T: FixedLengthEncoding>(
                 val.encode()
             };
             to_write[1..].copy_from_slice(encoded.as_ref());
-            *offset = *offset + T::ENCODED_LEN;
+            *offset += T::ENCODED_LEN;
         }
     }
     match opts.descending {
