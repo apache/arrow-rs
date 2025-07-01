@@ -174,7 +174,7 @@ where
                         // follow C++ implementation and use overflow/reinterpret cast from  i32 to u32 which will map
                         // `i32::MIN..0` to `(i32::MAX as u32)..u32::MAX`
                         ArrowType::UInt32
-                    },
+                    }
                     ArrowType::Decimal32(_, _) => target_type.clone(),
                     _ => ArrowType::Int32,
                 }
@@ -185,7 +185,7 @@ where
                         // follow C++ implementation and use overflow/reinterpret cast from  i64 to u64 which will map
                         // `i64::MIN..0` to `(i64::MAX as u64)..u64::MAX`
                         ArrowType::UInt64
-                    },
+                    }
                     ArrowType::Decimal64(_, _) => target_type.clone(),
                     _ => ArrowType::Int64,
                 }
@@ -330,7 +330,7 @@ where
                 }
                 .with_precision_and_scale(*p, *s)?;
 
-                Arc::new(array) as ArrayRef                
+                Arc::new(array) as ArrayRef
             }
             ArrowType::Decimal128(p, s) => {
                 // See above comment. Conversion to `i128` is likewise infallible.
