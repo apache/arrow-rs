@@ -16,7 +16,7 @@ use std::ops::Deref;
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
+pub use self::decimal::{VariantDecimal, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 pub use self::list::VariantList;
 pub use self::metadata::VariantMetadata;
 pub use self::object::VariantObject;

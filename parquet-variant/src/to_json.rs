@@ -18,10 +18,11 @@
 //! Module for converting Variant data to JSON format
 use arrow_schema::ArrowError;
 use base64::{engine::general_purpose, Engine as _};
-use serde_json::Value;
+use rust_decimal::prelude::*;
+use serde_json::{Number, Value};
 use std::io::Write;
 
-use crate::variant::{Variant, VariantList, VariantObject};
+use crate::{variant::{Variant, VariantList, VariantObject}, VariantDecimal};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -245,6 +246,27 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
         .map_err(|e| ArrowError::InvalidArgumentError(format!("UTF-8 conversion error: {e}")))
 }
 
+fn variant_decimal_to_json_value(decimal: &impl VariantDecimal) -> Result<Value, ArrowError> {
+    let integer = decimal.integer() as i128;
+    let scale = decimal.scale() as u32;
+    if scale == 0 {
+        return Ok(Value::from(integer));
+    }
+    let divisor = 10_i128.pow(scale);
+    if integer % divisor != 0 {
+        // try decimal
+        if let Ok(dec) = Decimal::try_from_i128_with_scale(integer, scale) {
+            if let Ok(value) = serde_json::from_str::<Number>(&dec.to_string()) {
+                return Ok(serde_json::Value::Number(value));
+            }
+        }
+        // fall back to floating point
+        return Ok(Value::from(integer as f64 / divisor as f64));
+    }
+    // integer perfect division
+    Ok(Value::from(integer / divisor))
+}
+
 /// Convert [`Variant`] to [`serde_json::Value`]
 ///
 /// This function converts a Variant to a [`serde_json::Value`], which is useful
@@ -287,58 +309,13 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
             .map(Value::Number)
             .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string())),
         Variant::Decimal4(decimal4) => {
-            let scale = decimal4.scale();
-            let integer = decimal4.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i32.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            Ok(Value::from(integer))
+            variant_decimal_to_json_value(decimal4)
         }
         Variant::Decimal8(decimal8) => {
-            let scale = decimal8.scale();
-            let integer = decimal8.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i64.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            Ok(Value::from(integer))
+            variant_decimal_to_json_value(decimal8)
         }
         Variant::Decimal16(decimal16) => {
-            let scale = decimal16.scale();
-            let integer = decimal16.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i128.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            // i128 has higher precision than any 64-bit type. Try a lossless narrowing cast to
-            // i64 or u64 first, falling back to a lossy narrowing cast to f64 if necessary.
-            let value = i64::try_from(integer)
-                .map(Value::from)
-                .or_else(|_| u64::try_from(integer).map(Value::from))
-                .unwrap_or_else(|_| Value::from(integer as f64));
-            Ok(value)
+            variant_decimal_to_json_value(decimal16)
         }
         Variant::Date(date) => Ok(Value::String(format_date_string(date))),
         Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),

@@ -40,6 +40,12 @@ macro_rules! format_decimal {
     }};
 }
 
+// Common trait to classify VariantDecimalXXX types
+pub trait VariantDecimal {
+    fn integer(&self) -> i128;
+    fn scale(&self) -> u32;
+}
+
 /// Represents a 4-byte decimal value in the Variant format.
 ///
 /// This struct stores a decimal number using a 32-bit signed integer for the coefficient
@@ -98,6 +104,16 @@ impl VariantDecimal4 {
     /// For example, if the decimal is `123.4567`, this will return `4`.
     pub fn scale(&self) -> u8 {
         self.scale
+    }
+}
+
+impl VariantDecimal for VariantDecimal4 {
+    fn integer(&self) -> i128 {
+        self.integer() as i128
+    }
+
+    fn scale(&self) -> u32 {
+        self.scale() as u32
     }
 }
 
@@ -169,6 +185,16 @@ impl VariantDecimal8 {
     }
 }
 
+impl VariantDecimal for VariantDecimal8 {
+    fn integer(&self) -> i128 {
+        self.integer() as i128
+    }
+
+    fn scale(&self) -> u32 {
+        self.scale() as u32
+    }
+}
+
 impl fmt::Display for VariantDecimal8 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         format_decimal!(f, self.integer, self.scale, i64)
@@ -234,6 +260,16 @@ impl VariantDecimal16 {
     /// For example, if the decimal is `12345678901234567.890`, this will return `3`.
     pub fn scale(&self) -> u8 {
         self.scale
+    }
+}
+
+impl VariantDecimal for VariantDecimal16 {
+    fn integer(&self) -> i128 {
+        self.integer() as i128
+    }
+
+    fn scale(&self) -> u32 {
+        self.scale() as u32
     }
 }
 
