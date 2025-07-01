@@ -122,6 +122,7 @@ encryption = ["dep:ring"]
 # Explicitely enabling rust_backend and zlib-rs features for flate2
 flate2-rust_backened = ["flate2/rust_backend"]
 flate2-zlib-rs = ["flate2/zlib-rs"]
+flate2 = ["flate2-zlib-rs"]
 
 
 [[example]]
