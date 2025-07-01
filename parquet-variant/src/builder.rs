@@ -506,9 +506,9 @@ impl VariantBuilder {
         self
     }
 
-    /// Adds a single field name to the [`MetadataBuilder`].
+    /// Adds a single field name to the field name directory in the Variant metadata.
     ///
-    /// This method does the same thing as [`with_field_names`] but adds one field name at a time.
+    /// This method does the same thing as [`VariantBuilder::with_field_names`] but adds one field name at a time.
     pub fn add_field_name(&mut self, field_name: &str) {
         self.metadata_builder.upsert_field_name(field_name);
     }
