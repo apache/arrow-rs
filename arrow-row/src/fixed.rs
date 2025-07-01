@@ -91,7 +91,7 @@ macro_rules! encode_signed {
             }
 
             #[inline]
-            fn encode_desc(self) -> Self::Encoded {
+            fn encode_desc(self) -> [u8; $n] {
                 // fast path for descending order
                 let b = !self;
                 let mut b = b.to_be_bytes();
