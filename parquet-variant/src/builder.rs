@@ -515,6 +515,7 @@ pub struct ListBuilder<'a> {
     /// Is there a pending nested object or list that needs to be finalized?
     pending: bool,
     validate_unique_fields: bool,
+    finished: bool,
 }
 
 impl<'a> ListBuilder<'a> {
@@ -526,6 +527,7 @@ impl<'a> ListBuilder<'a> {
             buffer: ValueBuffer::default(),
             pending: false,
             validate_unique_fields: false,
+            finished: false,
         }
     }
 
@@ -545,11 +547,15 @@ impl<'a> ListBuilder<'a> {
     /// Propagates the validation flag to any [`ObjectBuilder`]s created using
     /// [`ListBuilder::new_object`].
     pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
+        assert!(!self.finished, "ListBuilder has already been finished");
+
         self.validate_unique_fields = validate_unique_fields;
         self
     }
 
     pub fn new_object(&mut self) -> ObjectBuilder {
+        assert!(!self.finished, "ListBuilder has already been finished");
+
         self.check_new_offset();
 
         let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder)
@@ -560,6 +566,8 @@ impl<'a> ListBuilder<'a> {
     }
 
     pub fn new_list(&mut self) -> ListBuilder {
+        assert!(!self.finished, "ListBuilder has already been finished");
+
         self.check_new_offset();
 
         let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder)
@@ -570,6 +578,8 @@ impl<'a> ListBuilder<'a> {
     }
 
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        assert!(!self.finished, "ListBuilder has already been finished");
+
         self.check_new_offset();
 
         self.buffer.append_non_nested_value(value);
@@ -578,6 +588,12 @@ impl<'a> ListBuilder<'a> {
     }
 
     pub fn finish(mut self) {
+        self._finish()
+    }
+
+    fn _finish(&mut self) {
+        assert!(!self.finished, "ListBuilder has already been finished");
+
         self.check_new_offset();
 
         let data_size = self.buffer.offset();
@@ -600,6 +616,16 @@ impl<'a> ListBuilder<'a> {
 
         // Append values
         self.parent_buffer.append_slice(self.buffer.inner());
+
+        self.finished = true;
+    }
+}
+
+impl Drop for ListBuilder<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self._finish();
+        }
     }
 }
 
@@ -616,6 +642,7 @@ pub struct ObjectBuilder<'a, 'b> {
     validate_unique_fields: bool,
     /// Set of duplicate fields to report for errors
     duplicate_fields: HashSet<u32>,
+    finished: bool,
 }
 
 impl<'a, 'b> ObjectBuilder<'a, 'b> {
@@ -628,6 +655,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             pending: None,
             validate_unique_fields: false,
             duplicate_fields: HashSet::new(),
+            finished: false,
         }
     }
 
@@ -647,6 +675,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
     /// but the old value remains in the buffer, resulting in a larger variant
     pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
+        assert!(!self.finished, "ObjectBuilder has already been finished");
+
         self.check_pending_field();
 
         let field_id = self.metadata_builder.upsert_field_name(key);
@@ -664,6 +694,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     /// When this is enabled, calling [`ObjectBuilder::finish`] will return an error
     /// if any duplicate field keys were added using [`ObjectBuilder::insert`].
     pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
+        assert!(!self.finished, "ObjectBuilder has already been finished");
+
         self.validate_unique_fields = validate_unique_fields;
         self
     }
@@ -671,6 +703,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     /// Return a new [`ObjectBuilder`] to add a nested object with the specified
     /// key to the object.
     pub fn new_object(&mut self, key: &'b str) -> ObjectBuilder {
+        assert!(!self.finished, "ObjectBuilder has already been finished");
+
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
@@ -684,6 +718,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     /// Return a new [`ListBuilder`] to add a list with the specified key to the
     /// object.
     pub fn new_list(&mut self, key: &'b str) -> ListBuilder {
+        assert!(!self.finished, "ObjectBuilder has already been finished");
+
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
@@ -698,6 +734,15 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     ///
     /// This consumes self and writes the object to the parent buffer.
     pub fn finish(mut self) -> Result<(), ArrowError> {
+        self._finish()
+    }
+
+    /// Internal function to finalize object
+    ///
+    /// This doesn't consume self but just writes the object to the parent buffer.
+    fn _finish(&mut self) -> Result<(), ArrowError> {
+        assert!(!self.finished, "ObjectBuilder has already been finished");
+
         self.check_pending_field();
 
         if self.validate_unique_fields && !self.duplicate_fields.is_empty() {
@@ -752,7 +797,17 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
 
         self.parent_buffer.append_slice(self.buffer.inner());
 
+        self.finished = true;
+
         Ok(())
+    }
+}
+
+impl Drop for ObjectBuilder<'_, '_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self._finish().expect("Failed to finalize ObjectBuilder");
+        }
     }
 }
 
