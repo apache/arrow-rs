@@ -46,8 +46,11 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Test
+
+      - name: Test parquet-variant
         run: cargo test -p parquet-variant
+      - name: Test parquet-variant with all features
+        run: cargo test -p parquet-variant --all-features
 
   # test compilation
   linux-features:
