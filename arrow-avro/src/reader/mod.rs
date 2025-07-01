@@ -18,15 +18,15 @@
 //! Avro reader
 //!
 //! This module provides facilities to read Apache Avro-encoded files or streams
-//! into Arrow's [`RecordBatch`] format. In particular, it introduces:
+//! into Arrow's `RecordBatch` format. In particular, it introduces:
 //!
-//! * [`ReaderBuilder`]: Configures Avro reading, e.g., batch size
-//! * [`Reader`]: Yields [`RecordBatch`] values, implementing [`Iterator`]
-//! * [`Decoder`]: A low-level push-based decoder for Avro records
+//! * `ReaderBuilder`: Configures Avro reading, e.g., batch size
+//! * `Reader`: Yields `RecordBatch` values, implementing `Iterator`
+//! * `Decoder`: A low-level push-based decoder for Avro records
 //!
 //! # Basic Usage
 //!
-//! [`Reader`] can be used directly with synchronous data sources, such as [`std::fs::File`].
+//! `Reader` can be used directly with synchronous data sources, such as [`std::fs::File`].
 //!
 //! ## Reading a Single Batch
 //!
@@ -42,7 +42,7 @@
 //!
 //! # Async Usage
 //!
-//! The lower-level [`Decoder`] can be integrated with various forms of async data streams,
+//! The lower-level `Decoder` can be integrated with various forms of async data streams,
 //! and is designed to be agnostic to different async IO primitives within
 //! the Rust ecosystem. It works by incrementally decoding Avro data from byte slices.
 //!
@@ -121,7 +121,7 @@ fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
     })
 }
 
-/// A low-level interface for decoding Avro-encoded bytes into Arrow [`RecordBatch`].
+/// A low-level interface for decoding Avro-encoded bytes into Arrow `RecordBatch`.
 #[derive(Debug)]
 pub struct Decoder {
     record_decoder: RecordDecoder,
@@ -130,8 +130,7 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    /// Create a new [`Decoder`], wrapping an existing [`RecordDecoder`].
-    pub fn new(record_decoder: RecordDecoder, batch_size: usize) -> Self {
+    fn new(record_decoder: RecordDecoder, batch_size: usize) -> Self {
         Self {
             record_decoder,
             batch_size,
@@ -167,7 +166,7 @@ impl Decoder {
         Ok(total_consumed)
     }
 
-    /// Produce a [`RecordBatch`] if at least one row is fully decoded, returning
+    /// Produce a `RecordBatch` if at least one row is fully decoded, returning
     /// `Ok(None)` if no new rows are available.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         if self.decoded_rows == 0 {
@@ -181,7 +180,7 @@ impl Decoder {
 }
 
 /// A builder to create an [`Avro Reader`](Reader) that reads Avro data
-/// into Arrow [`RecordBatch`].
+/// into Arrow `RecordBatch`.
 #[derive(Debug)]
 pub struct ReaderBuilder {
     batch_size: usize,
