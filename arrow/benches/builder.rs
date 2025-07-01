@@ -111,12 +111,12 @@ fn bench_string(c: &mut Criterion) {
 fn bench_decimal32(c: &mut Criterion) {
     c.bench_function("bench_decimal32_builder", |b| {
         b.iter(|| {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             let mut decimal_builder = Decimal32Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
-                decimal_builder.append_value(rng.gen_range::<i32, _>(0..999999999));
+                decimal_builder.append_value(rng.random_range::<i32, _>(0..999999999));
             }
-            black_box(
+            hint::black_box(
                 decimal_builder
                     .finish()
                     .with_precision_and_scale(9, 0)
@@ -129,12 +129,12 @@ fn bench_decimal32(c: &mut Criterion) {
 fn bench_decimal64(c: &mut Criterion) {
     c.bench_function("bench_decimal64_builder", |b| {
         b.iter(|| {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             let mut decimal_builder = Decimal64Builder::with_capacity(BATCH_SIZE);
             for _ in 0..BATCH_SIZE {
-                decimal_builder.append_value(rng.gen_range::<i64, _>(0..9999999999));
+                decimal_builder.append_value(rng.random_range::<i64, _>(0..9999999999));
             }
-            black_box(
+            hint::black_box(
                 decimal_builder
                     .finish()
                     .with_precision_and_scale(18, 0)
