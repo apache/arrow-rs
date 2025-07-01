@@ -902,7 +902,7 @@ mod tests {
             let mut obj = builder.new_object();
             obj.insert("name", "John");
             obj.insert("age", 42i8);
-            obj.finish();
+            let _ = obj.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -919,7 +919,7 @@ mod tests {
             obj.insert("zebra", "stripes"); // ID = 0
             obj.insert("apple", "red"); // ID = 1
             obj.insert("banana", "yellow"); // ID = 2
-            obj.finish();
+            let _ = obj.finish();
         }
 
         let (_, value) = builder.finish();
@@ -943,7 +943,7 @@ mod tests {
         let mut object_builder = builder.new_object();
         object_builder.insert("name", "Ron Artest");
         object_builder.insert("name", "Metta World Peace");
-        object_builder.finish();
+        let _ = object_builder.finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1064,14 +1064,14 @@ mod tests {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("id", 1);
             object_builder.insert("type", "Cauliflower");
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("id", 2);
             object_builder.insert("type", "Beets");
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         list_builder.finish();
@@ -1112,13 +1112,13 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("a", 1);
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("b", 2);
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         list_builder.finish();
@@ -1165,7 +1165,7 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("a", 1);
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         list_builder.append_value(2);
@@ -1173,7 +1173,7 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("b", 2);
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         list_builder.append_value(3);
@@ -1223,10 +1223,10 @@ mod tests {
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
-                inner_object_builder.finish();
+                let _ = inner_object_builder.finish();
             }
 
-            outer_object_builder.finish();
+            let _ = outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -1265,11 +1265,11 @@ mod tests {
                 inner_object_builder.insert("b", false);
                 inner_object_builder.insert("c", "a");
 
-                inner_object_builder.finish();
+                let _ = inner_object_builder.finish();
             }
 
             outer_object_builder.insert("b", false);
-            outer_object_builder.finish();
+            let _ = outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -1313,10 +1313,10 @@ mod tests {
                     inner_object_list_builder.finish();
                 }
 
-                inner_object_builder.finish();
+                let _ = inner_object_builder.finish();
             }
 
-            outer_object_builder.finish();
+            let _ = outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -1361,12 +1361,12 @@ mod tests {
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
-                inner_object_builder.finish();
+                let _ = inner_object_builder.finish();
             }
 
             outer_object_builder.insert("b", true);
 
-            outer_object_builder.finish();
+            let _ = outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
