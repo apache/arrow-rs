@@ -92,7 +92,7 @@ sysinfo = { version = "0.35.0", default-features = false, features = ["system"] 
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
+default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "simdutf8"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
