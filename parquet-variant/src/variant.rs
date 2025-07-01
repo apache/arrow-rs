@@ -163,7 +163,7 @@ impl Deref for ShortString<'_> {
 /// // parse the header metadata
 /// assert_eq!(
 ///   Variant::from("HI"),
-///   Variant::try_new(&metadata, &value).unwrap()
+///   Variant::new(&metadata, &value)
 /// );
 /// ```
 ///
@@ -178,6 +178,38 @@ impl Deref for ShortString<'_> {
 ///   _ => println!("Other variant"),
 /// }
 /// ```
+///
+/// # Validation
+///
+/// Every instance of variant is either _valid_ or _invalid_. depending on whether the
+/// underlying bytes are a valid encoding of a variant value (see below).
+///
+/// Instances produced by [`Self::try_new`], [`Self::try_new_with_metadata`], or [`Self::validate`]
+/// are fully _validated_. They always contain _valid_ data, and infallible accesses such as
+/// iteration and indexing are panic-free. The validation cost is `O(m + v)` where `m` and
+/// `v` are the number of bytes in the metadata and value buffers, respectively.
+///
+/// Instances produced by [`Self::new`] and [`Self::new_with_metadata`] are _unvalidated_ and so
+/// they may contain either _valid_ or _invalid_ data. Infallible accesses to variant objects and
+/// arrays, such as iteration and indexing will panic if the underlying bytes are _invalid_, and
+/// fallible alternatives are provided as panic-free alternatives. [`Self::validate`] can also be
+/// used to _validate_ an _unvalidated_ instance, if desired.
+///
+/// _Unvalidated_ instances can be constructed in constant time. This can be useful if the caller
+/// knows the underlying bytes were already validated previously, or if the caller intends to
+/// perform a small number of (fallible) accesses to a large variant value.
+///
+/// A _validated_ variant value guarantees that the associated [metadata] and all nested [object]
+/// and [array] values are _valid_. Primitive variant subtypes are always _valid_ by construction.
+///
+/// # Safety
+///
+/// Even an _invalid_ variant value is still _safe_ to use in the Rust sense. Accessing it with
+/// infallible methods may cause panics but will never lead to undefined behavior.
+///
+/// [metadata]: VariantMetadata#Validation
+/// [object]: VariantObject#Validation
+/// [array]: VariantList#Validation
 #[derive(Clone, Debug, PartialEq)]
 pub enum Variant<'m, 'v> {
     /// Primitive type: Null
@@ -225,7 +257,9 @@ pub enum Variant<'m, 'v> {
 }
 
 impl<'m, 'v> Variant<'m, 'v> {
-    /// Create a new `Variant` from metadata and value.
+    /// Attempts to interpret a metadata and value buffer pair as a new `Variant`.
+    ///
+    /// The instance is fully [validated].
     ///
     /// # Example
     /// ```
@@ -238,12 +272,38 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///   Variant::try_new(&metadata, &value).unwrap()
     /// );
     /// ```
+    ///
+    /// [validated]: Self#Validation
     pub fn try_new(metadata: &'m [u8], value: &'v [u8]) -> Result<Self, ArrowError> {
         let metadata = VariantMetadata::try_new(metadata)?;
         Self::try_new_with_metadata(metadata, value)
     }
 
-    /// Create a new variant with existing metadata
+    /// Attempts to interpret a metadata and value buffer pair as a new `Variant`.
+    ///
+    /// The instance is [unvalidated].
+    ///
+    /// # Example
+    /// ```
+    /// use parquet_variant::{Variant, VariantMetadata};
+    /// let metadata = [0x01, 0x00, 0x00];
+    /// let value = [0x09, 0x48, 0x49];
+    /// // parse the header metadata
+    /// assert_eq!(
+    ///   Variant::from("HI"),
+    ///   Variant::new(&metadata, &value)
+    /// );
+    /// ```
+    ///
+    /// [unvalidated]: Self#Validation
+    pub fn new(metadata: &'m [u8], value: &'v [u8]) -> Self {
+        let metadata = VariantMetadata::try_new_impl(metadata).expect("Invalid variant metadata");
+        Self::try_new_with_metadata_impl(metadata, value).expect("Invalid variant data")
+    }
+
+    /// Create a new variant with existing metadata.
+    ///
+    /// The instance is fully [validated].
     ///
     /// # Example
     /// ```
@@ -251,13 +311,30 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let metadata = [0x01, 0x00, 0x00];
     /// let value = [0x09, 0x48, 0x49];
     /// // parse the header metadata first
-    /// let metadata = VariantMetadata::try_new(&metadata).unwrap();
+    /// let metadata = VariantMetadata::new(&metadata);
     /// assert_eq!(
     ///   Variant::from("HI"),
     ///   Variant::try_new_with_metadata(metadata, &value).unwrap()
     /// );
     /// ```
+    ///
+    /// [validated]: Self#Validation
     pub fn try_new_with_metadata(
+        metadata: VariantMetadata<'m>,
+        value: &'v [u8],
+    ) -> Result<Self, ArrowError> {
+        Self::try_new_with_metadata_impl(metadata, value)?.validate()
+    }
+
+    /// Similar to [`Self::try_new_with_metadata`], but [unvalidated].
+    ///
+    /// [unvalidated]: Self#Validation
+    pub fn new_with_metadata(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
+        Self::try_new_with_metadata_impl(metadata, value).expect("Invalid variant")
+    }
+
+    // The actual constructor, which only performs shallow (constant-time) validation.
+    fn try_new_with_metadata_impl(
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
@@ -305,10 +382,43 @@ impl<'m, 'v> Variant<'m, 'v> {
             VariantBasicType::ShortString => {
                 Variant::ShortString(decoder::decode_short_string(value_metadata, value_data)?)
             }
-            VariantBasicType::Object => Variant::Object(VariantObject::try_new(metadata, value)?),
-            VariantBasicType::Array => Variant::List(VariantList::try_new(metadata, value)?),
+            VariantBasicType::Object => {
+                Variant::Object(VariantObject::try_new_impl(metadata, value)?)
+            }
+            VariantBasicType::Array => Variant::List(VariantList::try_new_impl(metadata, value)?),
         };
         Ok(new_self)
+    }
+
+    /// True if this variant instance has already been [validated].
+    ///
+    /// [validated]: Self#Validation
+    pub fn is_validated(&self) -> bool {
+        match self {
+            Variant::List(list) => list.is_validated(),
+            Variant::Object(obj) => obj.is_validated(),
+            _ => true,
+        }
+    }
+
+    /// Recursively validates this variant value, ensuring that infallible access will not panic due
+    /// to invalid bytes.
+    ///
+    /// Variant leaf values are always valid by construction, but [objects] and [arrays] can be
+    /// constructed in unvalidated (and potentially invalid) state.
+    ///
+    /// If [`Self::is_validated`] is true, validation is a no-op. Otherwise, the cost is `O(m + v)`
+    /// where `m` and `v` are the sizes of metadata and value buffers, respectively.
+    ///
+    /// [objects]: VariantObject#Validation
+    /// [arrays]: VariantList#Validation
+    pub fn validate(self) -> Result<Self, ArrowError> {
+        use Variant::*;
+        match self {
+            List(list) => list.validate().map(List),
+            Object(obj) => obj.validate().map(Object),
+            _ => Ok(self),
+        }
     }
 
     /// Converts this variant to `()` if it is null.
@@ -834,7 +944,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// #   builder.finish()
     /// # };
     /// // object that is {"name": "John"}
-    ///  let variant = Variant::try_new(&metadata, &value).unwrap();
+    ///  let variant = Variant::new(&metadata, &value);
     /// // use the `as_object` method to access the object
     /// let obj = variant.as_object().expect("variant should be an object");
     /// assert_eq!(obj.get("name"), Some(Variant::from("John")));
@@ -864,7 +974,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// #   builder.finish()
     /// # };
     /// // list that is ["John", "Doe"]
-    /// let variant = Variant::try_new(&metadata, &value).unwrap();
+    /// let variant = Variant::new(&metadata, &value);
     /// // use the `as_list` method to access the list
     /// let list = variant.as_list().expect("variant should be a list");
     /// assert_eq!(list.len(), 2);
