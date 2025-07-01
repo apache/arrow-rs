@@ -252,22 +252,38 @@ pub fn encode<T: FixedLengthEncoding>(
     nulls: &NullBuffer,
     opts: SortOptions,
 ) {
-    for (value_idx, is_valid) in nulls.iter().enumerate() {
-        let offset = &mut offsets[value_idx + 1];
-        let end_offset = *offset + T::ENCODED_LEN;
-        if is_valid {
-            let to_write = &mut data[*offset..end_offset];
-            to_write[0] = 1;
-            let mut encoded = values[value_idx].encode();
-            if opts.descending {
-                // Flip bits to reverse order
-                encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
+    #[inline]
+    fn encode<const DESC: bool, T: FixedLengthEncoding>(
+        data: &mut [u8],
+        offsets: &mut [usize],
+        values: &[T],
+        nulls: &NullBuffer,
+        opts: SortOptions,
+    ) {
+        let null_sentinel = null_sentinel(opts);
+        for ((is_valid, offset), val) in
+            nulls.iter().zip(offsets[1..].iter_mut()).zip(values.iter())
+        {
+            let end_offset = *offset + T::ENCODED_LEN;
+            if is_valid {
+                let to_write = &mut data[*offset..end_offset];
+                to_write[0] = 1;
+                let encoded = if DESC {
+                    val.encode_desc()
+                } else {
+                    val.encode()
+                };
+
+                to_write[1..].copy_from_slice(encoded.as_ref())
+            } else {
+                data[*offset] = null_sentinel;
             }
-            to_write[1..].copy_from_slice(encoded.as_ref())
-        } else {
-            data[*offset] = null_sentinel(opts);
+            *offset = end_offset;
         }
-        *offset = end_offset;
+    }
+    match opts.descending {
+        true => encode::<true, T>(data, offsets, values, nulls, opts),
+        false => encode::<false, T>(data, offsets, values, nulls, opts),
     }
 }
 
