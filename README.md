@@ -74,7 +74,6 @@ Planned Release Schedule
 [`56.1.0`]: https://github.com/apache/arrow-rs/issues/7837
 [`56.2.0`]: https://github.com/apache/arrow-rs/issues/7836
 [`57.0.0`]: https://github.com/apache/arrow-rs/issues/7835
-
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
