@@ -755,6 +755,9 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
             names.sort_unstable();
 
             let joined = names.join(", ");
+
+            self.finished = true;
+
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Duplicate field keys detected: [{joined}]",
             )));
@@ -1506,6 +1509,9 @@ mod tests {
             nested_result.unwrap_err().to_string(),
             "Invalid argument error: Duplicate field keys detected: [x]"
         );
+
+        inner_list.finish();
+        outer_list.finish();
 
         // Valid object should succeed
         let mut list = builder.new_list();
