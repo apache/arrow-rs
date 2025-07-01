@@ -26,7 +26,7 @@ use std::fmt::Formatter;
 use std::io::SeekFrom;
 use std::ops::Range;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use bytes::{Buf, Bytes};
@@ -38,7 +38,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
-use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroups};
+use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache, RowGroups};
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection,
@@ -588,6 +588,12 @@ where
             .filter(|index| !index.is_empty())
             .map(|x| x[row_group_idx].as_slice());
 
+        let cache_projection = match self.compute_cache_projection(&projection) {
+            Some(projection) => projection,
+            None => ProjectionMask::none(meta.columns().len()),
+        };
+        let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(batch_size)));
+
         let mut row_group = InMemoryRowGroup {
             // schema: meta.schema_descr_ptr(),
             row_count: meta.num_rows() as usize,
@@ -613,8 +619,14 @@ where
                     .fetch(&mut self.input, predicate.projection(), selection)
                     .await?;
 
-                let array_reader = ArrayReaderBuilder::new(&row_group)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                let mut cache_projection = predicate.projection().clone();
+                cache_projection.intersect(&projection);
+                let array_reader = ArrayReaderBuilder::new(&row_group).build_array_reader(
+                    self.fields.as_deref(),
+                    predicate.projection(),
+                    &cache_projection,
+                    row_group_cache.clone(),
+                )?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
@@ -662,11 +674,26 @@ where
         let plan = plan_builder.build();
 
         let array_reader = ArrayReaderBuilder::new(&row_group)
-            .build_array_reader(self.fields.as_deref(), &projection)?;
+            .build_array_reader(
+                self.fields.as_deref(),
+                &projection,
+                &cache_projection,
+                row_group_cache.clone(),
+            )?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
         Ok((self, Some(reader)))
+    }
+
+    fn compute_cache_projection(&self, projection: &ProjectionMask) -> Option<ProjectionMask> {
+        let filters = self.filter.as_ref()?;
+        let mut cache_projection = filters.predicates.first()?.projection().clone();
+        for predicate in filters.predicates.iter() {
+            cache_projection.union(&predicate.projection());
+        }
+        cache_projection.intersect(projection);
+        Some(cache_projection)
     }
 }
 

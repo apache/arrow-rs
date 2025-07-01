@@ -247,6 +247,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 mod tests {
     use super::*;
     use crate::arrow::array_reader::list_array::ListArrayReader;
+    use crate::arrow::array_reader::row_group_cache::RowGroupCache;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
     use crate::arrow::array_reader::ArrayReaderBuilder;
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
@@ -259,7 +260,7 @@ mod tests {
     use arrow_array::{Array, PrimitiveArray};
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::Fields;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     fn list_type<OffsetSize: OffsetSizeTrait>(
         data_type: ArrowType,
@@ -562,9 +563,10 @@ mod tests {
             file_metadata.key_value_metadata(),
         )
         .unwrap();
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(1000)));
 
         let mut array_reader = ArrayReaderBuilder::new(&file_reader)
-            .build_array_reader(fields.as_ref(), &mask)
+            .build_array_reader(fields.as_ref(), &mask, &ProjectionMask::all(), cache)
             .unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();

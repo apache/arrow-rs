@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
+use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
+use crate::arrow::array_reader::row_group_cache::RowGroupCache;
 use crate::arrow::array_reader::{
     make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
     FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
@@ -49,9 +51,14 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: Option<&ParquetField>,
         mask: &ProjectionMask,
+        cache_mask: &ProjectionMask,
+        cache: Arc<Mutex<RowGroupCache>>,
     ) -> Result<Box<dyn ArrayReader>> {
         let reader = field
-            .and_then(|field| self.build_reader(field, mask).transpose())
+            .and_then(|field| {
+                self.build_reader(field, mask, cache_mask, cache)
+                    .transpose()
+            })
             .transpose()?
             .unwrap_or_else(|| make_empty_array_reader(self.num_rows()));
 
@@ -67,15 +74,33 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        cache_mask: &ProjectionMask,
+        cache: Arc<Mutex<RowGroupCache>>,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         match field.field_type {
-            ParquetFieldType::Primitive { .. } => self.build_primitive_reader(field, mask),
+            ParquetFieldType::Primitive { col_idx, .. } => {
+                if let Some(reader) = self.build_primitive_reader(field, mask)? {
+                    if cache_mask.leaf_included(col_idx) {
+                        Ok(Some(Box::new(CachedArrayReader::new(
+                            reader, cache, col_idx,
+                        ))))
+                    } else {
+                        Ok(Some(reader))
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
             ParquetFieldType::Group { .. } => match &field.arrow_type {
-                DataType::Map(_, _) => self.build_map_reader(field, mask),
-                DataType::Struct(_) => self.build_struct_reader(field, mask),
-                DataType::List(_) => self.build_list_reader(field, mask, false),
-                DataType::LargeList(_) => self.build_list_reader(field, mask, true),
-                DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask),
+                DataType::Map(_, _) => self.build_map_reader(field, mask, cache_mask, cache),
+                DataType::Struct(_) => self.build_struct_reader(field, mask, cache_mask, cache),
+                DataType::List(_) => self.build_list_reader(field, mask, cache_mask, cache, false),
+                DataType::LargeList(_) => {
+                    self.build_list_reader(field, mask, cache_mask, cache, true)
+                }
+                DataType::FixedSizeList(_, _) => {
+                    self.build_fixed_size_list_reader(field, mask, cache_mask, cache)
+                }
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
@@ -86,12 +111,14 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        cache_mask: &ProjectionMask,
+        cache: Arc<Mutex<RowGroupCache>>,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 2);
 
-        let key_reader = self.build_reader(&children[0], mask)?;
-        let value_reader = self.build_reader(&children[1], mask)?;
+        let key_reader = self.build_reader(&children[0], mask, cache_mask, cache.clone())?;
+        let value_reader = self.build_reader(&children[1], mask, cache_mask, cache)?;
 
         match (key_reader, value_reader) {
             (Some(key_reader), Some(value_reader)) => {
@@ -137,12 +164,14 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        cache_mask: &ProjectionMask,
+        cache: Arc<Mutex<RowGroupCache>>,
         is_large: bool,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
 
-        let reader = match self.build_reader(&children[0], mask)? {
+        let reader = match self.build_reader(&children[0], mask, cache_mask, cache)? {
             Some(item_reader) => {
                 // Need to retrieve underlying data type to handle projection
                 let item_type = item_reader.get_data_type().clone();
@@ -184,11 +213,13 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        cache_mask: &ProjectionMask,
+        cache: Arc<Mutex<RowGroupCache>>,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
 
-        let reader = match self.build_reader(&children[0], mask)? {
+        let reader = match self.build_reader(&children[0], mask, cache_mask, cache)? {
             Some(item_reader) => {
                 let item_type = item_reader.get_data_type().clone();
                 let reader = match &field.arrow_type {
@@ -318,6 +349,8 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        cache_mask: &ProjectionMask,
+        cache: Arc<Mutex<RowGroupCache>>,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let arrow_fields = match &field.arrow_type {
             DataType::Struct(children) => children,
@@ -330,7 +363,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         let mut builder = SchemaBuilder::with_capacity(children.len());
 
         for (arrow, parquet) in arrow_fields.iter().zip(children) {
-            if let Some(reader) = self.build_reader(parquet, mask)? {
+            if let Some(reader) = self.build_reader(parquet, mask, cache_mask, cache.clone())? {
                 // Need to retrieve underlying data type to handle projection
                 let child_type = reader.get_data_type().clone();
                 builder.push(arrow.as_ref().clone().with_data_type(child_type));
@@ -374,9 +407,10 @@ mod tests {
             file_metadata.key_value_metadata(),
         )
         .unwrap();
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(1000)));
 
         let array_reader = ArrayReaderBuilder::new(&file_reader)
-            .build_array_reader(fields.as_ref(), &mask)
+            .build_array_reader(fields.as_ref(), &mask, &ProjectionMask::all(), cache)
             .unwrap();
 
         // Create arrow types
