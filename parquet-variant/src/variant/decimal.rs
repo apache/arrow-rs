@@ -17,13 +17,38 @@
 use arrow_schema::ArrowError;
 use std::fmt;
 
-// Macro to format decimal values, using only integer arithmetic to avoid floating point precision loss
+// All decimal types use the same try_new implementation
+macro_rules! decimal_try_new {
+    ($integer:ident, $scale:ident) => {{
+        // Validate that scale doesn't exceed precision
+        if $scale > Self::MAX_PRECISION {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Scale {} is larger than max precision {}",
+                $scale,
+                Self::MAX_PRECISION,
+            )));
+        }
+
+        // Validate that the integer value fits within the precision
+        if $integer.unsigned_abs() > Self::MAX_UNSCALED_VALUE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "{} is wider than max precision {}",
+                $integer,
+                Self::MAX_PRECISION
+            )));
+        }
+
+        Ok(Self { $integer, $scale })
+    }};
+}
+
+// All decimal values format the same way, using integer arithmetic to avoid floating point precision loss
 macro_rules! format_decimal {
     ($f:expr, $integer:expr, $scale:expr, $int_type:ty) => {{
         let integer = if $scale == 0 {
             $integer
         } else {
-            let divisor = (10 as $int_type).pow($scale as u32);
+            let divisor = <$int_type>::pow(10, $scale as u32);
             let remainder = $integer % divisor;
             if remainder != 0 {
                 // Track the sign explicitly, in case the quotient is zero
@@ -67,29 +92,11 @@ pub struct VariantDecimal4 {
 }
 
 impl VariantDecimal4 {
-    pub(crate) const MAX_PRECISION: u32 = 9;
-    pub(crate) const MAX_UNSCALED_VALUE: u32 = 10_u32.pow(Self::MAX_PRECISION) - 1;
+    pub(crate) const MAX_PRECISION: u8 = 9;
+    pub(crate) const MAX_UNSCALED_VALUE: u32 = u32::pow(10, Self::MAX_PRECISION as u32) - 1;
 
     pub fn try_new(integer: i32, scale: u8) -> Result<Self, ArrowError> {
-        // Validate that scale doesn't exceed precision
-        if scale as u32 > Self::MAX_PRECISION {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Scale {} of a 4-byte decimal cannot exceed the max precision {}",
-                scale,
-                Self::MAX_PRECISION,
-            )));
-        }
-
-        // Validate that the integer value fits within the precision
-        if integer.unsigned_abs() > Self::MAX_UNSCALED_VALUE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "{} is too large to store in a 4-byte decimal with max precision {}",
-                integer,
-                Self::MAX_PRECISION
-            )));
-        }
-
-        Ok(VariantDecimal4 { integer, scale })
+        decimal_try_new!(integer, scale)
     }
 
     /// Returns the underlying value of the decimal.
@@ -145,29 +152,11 @@ pub struct VariantDecimal8 {
 }
 
 impl VariantDecimal8 {
-    pub(crate) const MAX_PRECISION: u32 = 18;
-    pub(crate) const MAX_UNSCALED_VALUE: u64 = 10_u64.pow(Self::MAX_PRECISION) - 1;
+    pub(crate) const MAX_PRECISION: u8 = 18;
+    pub(crate) const MAX_UNSCALED_VALUE: u64 = u64::pow(10, Self::MAX_PRECISION as u32) - 1;
 
     pub fn try_new(integer: i64, scale: u8) -> Result<Self, ArrowError> {
-        // Validate that scale doesn't exceed precision
-        if scale as u32 > Self::MAX_PRECISION {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Scale {} of an 8-byte decimal cannot exceed the max precision {}",
-                scale,
-                Self::MAX_PRECISION,
-            )));
-        }
-
-        // Validate that the integer value fits within the precision
-        if integer.unsigned_abs() > Self::MAX_UNSCALED_VALUE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "{} is too large to store in an 8-byte decimal with max precision {}",
-                integer,
-                Self::MAX_PRECISION
-            )));
-        }
-
-        Ok(VariantDecimal8 { integer, scale })
+        decimal_try_new!(integer, scale)
     }
 
     /// Returns the underlying value of the decimal.
@@ -223,29 +212,11 @@ pub struct VariantDecimal16 {
 }
 
 impl VariantDecimal16 {
-    const MAX_PRECISION: u32 = 38;
-    const MAX_UNSCALED_VALUE: u128 = 10_u128.pow(Self::MAX_PRECISION) - 1;
+    const MAX_PRECISION: u8 = 38;
+    const MAX_UNSCALED_VALUE: u128 = u128::pow(10, Self::MAX_PRECISION as u32) - 1;
 
     pub fn try_new(integer: i128, scale: u8) -> Result<Self, ArrowError> {
-        // Validate that scale doesn't exceed precision
-        if scale as u32 > Self::MAX_PRECISION {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Scale {} of a 16-byte decimal cannot exceed the max precision {}",
-                scale,
-                Self::MAX_PRECISION,
-            )));
-        }
-
-        // Validate that the integer value fits within the precision
-        if integer.unsigned_abs() > Self::MAX_UNSCALED_VALUE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "{} is too large to store in a 16-byte decimal with max precision {}",
-                integer,
-                Self::MAX_PRECISION
-            )));
-        }
-
-        Ok(VariantDecimal16 { integer, scale })
+        decimal_try_new!(integer, scale)
     }
 
     /// Returns the underlying value of the decimal.
@@ -279,6 +250,65 @@ impl fmt::Display for VariantDecimal16 {
     }
 }
 
+// Infallible conversion from a narrower decimal type to a wider one
+macro_rules! impl_from_decimal_for_decimal {
+    ($from_ty:ty, $for_ty:ty) => {
+        impl From<$from_ty> for $for_ty {
+            fn from(decimal: $from_ty) -> Self {
+                Self {
+                    integer: decimal.integer.into(),
+                    scale: decimal.scale,
+                }
+            }
+        }
+    };
+}
+
+impl_from_decimal_for_decimal!(VariantDecimal4, VariantDecimal8);
+impl_from_decimal_for_decimal!(VariantDecimal4, VariantDecimal16);
+impl_from_decimal_for_decimal!(VariantDecimal8, VariantDecimal16);
+
+// Fallible conversion from a wider decimal type to a narrower one
+macro_rules! impl_try_from_decimal_for_decimal {
+    ($from_ty:ty, $for_ty:ty) => {
+        impl TryFrom<$from_ty> for $for_ty {
+            type Error = ArrowError;
+
+            fn try_from(decimal: $from_ty) -> Result<Self, ArrowError> {
+                let Ok(integer) = decimal.integer.try_into() else {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Value {} is wider than max precision {}",
+                        decimal.integer,
+                        Self::MAX_PRECISION
+                    )));
+                };
+                Self::try_new(integer, decimal.scale)
+            }
+        }
+    };
+}
+
+impl_try_from_decimal_for_decimal!(VariantDecimal8, VariantDecimal4);
+impl_try_from_decimal_for_decimal!(VariantDecimal16, VariantDecimal4);
+impl_try_from_decimal_for_decimal!(VariantDecimal16, VariantDecimal8);
+
+// Fallible conversion from a decimal's underlying integer type
+macro_rules! impl_try_from_int_for_decimal {
+    ($from_ty:ty, $for_ty:ty) => {
+        impl TryFrom<$from_ty> for $for_ty {
+            type Error = ArrowError;
+
+            fn try_from(integer: $from_ty) -> Result<Self, ArrowError> {
+                Self::try_new(integer, 0)
+            }
+        }
+    };
+}
+
+impl_try_from_int_for_decimal!(i32, VariantDecimal4);
+impl_try_from_int_for_decimal!(i64, VariantDecimal8);
+impl_try_from_int_for_decimal!(i128, VariantDecimal16);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,7 +324,7 @@ mod tests {
         assert!(decimal4_too_large
             .unwrap_err()
             .to_string()
-            .contains("too large"));
+            .contains("wider than max precision"));
 
         let decimal4_too_small = VariantDecimal4::try_new(-1_000_000_000_i32, 2);
         assert!(
@@ -304,7 +334,7 @@ mod tests {
         assert!(decimal4_too_small
             .unwrap_err()
             .to_string()
-            .contains("too large"));
+            .contains("wider than max precision"));
 
         // Test valid edge cases for Decimal4
         let decimal4_max_valid = VariantDecimal4::try_new(999_999_999_i32, 2);
@@ -328,7 +358,7 @@ mod tests {
         assert!(decimal8_too_large
             .unwrap_err()
             .to_string()
-            .contains("too large"));
+            .contains("wider than max precision"));
 
         let decimal8_too_small = VariantDecimal8::try_new(-1_000_000_000_000_000_000_i64, 2);
         assert!(
@@ -338,7 +368,7 @@ mod tests {
         assert!(decimal8_too_small
             .unwrap_err()
             .to_string()
-            .contains("too large"));
+            .contains("wider than max precision"));
 
         // Test valid edge cases for Decimal8
         let decimal8_max_valid = VariantDecimal8::try_new(999_999_999_999_999_999_i64, 2);
@@ -363,7 +393,7 @@ mod tests {
         assert!(decimal16_too_large
             .unwrap_err()
             .to_string()
-            .contains("too large"));
+            .contains("wider than max precision"));
 
         let decimal16_too_small =
             VariantDecimal16::try_new(-100000000000000000000000000000000000000_i128, 2);
@@ -374,7 +404,7 @@ mod tests {
         assert!(decimal16_too_small
             .unwrap_err()
             .to_string()
-            .contains("too large"));
+            .contains("wider than max precision"));
 
         // Test valid edge cases for Decimal16
         let decimal16_max_valid =
@@ -403,7 +433,7 @@ mod tests {
         assert!(decimal4_invalid_scale
             .unwrap_err()
             .to_string()
-            .contains("cannot exceed the max precision"));
+            .contains("larger than max precision"));
 
         let decimal4_invalid_scale_large = VariantDecimal4::try_new(123_i32, 20);
         assert!(
@@ -427,7 +457,7 @@ mod tests {
         assert!(decimal8_invalid_scale
             .unwrap_err()
             .to_string()
-            .contains("cannot exceed the max precision"));
+            .contains("larger than max precision"));
 
         let decimal8_invalid_scale_large = VariantDecimal8::try_new(123_i64, 25);
         assert!(
@@ -451,7 +481,7 @@ mod tests {
         assert!(decimal16_invalid_scale
             .unwrap_err()
             .to_string()
-            .contains("cannot exceed the max precision"));
+            .contains("larger than max precision"));
 
         let decimal16_invalid_scale_large = VariantDecimal16::try_new(123_i128, 50);
         assert!(

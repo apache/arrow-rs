@@ -18,7 +18,7 @@
 //! Module for parsing JSON strings as Variant
 
 pub use crate::variant::{VariantDecimal4, VariantDecimal8};
-use crate::{VariantBuilderExt, ListBuilder, ObjectBuilder, Variant, VariantBuilder};
+use crate::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use arrow_schema::ArrowError;
 use rust_decimal::prelude::*;
 use serde_json::{Number, Value};
@@ -97,11 +97,11 @@ fn variant_from_number<'a, 'b>(n: &Number) -> Result<Variant<'a, 'b>, ArrowError
                 let unscaled: i128 = dec.mantissa();
                 let scale = dec.scale() as u8;
                 if unscaled.abs() <= VariantDecimal4::MAX_UNSCALED_VALUE as i128
-                    && scale <= VariantDecimal4::MAX_PRECISION as u8
+                    && scale <= VariantDecimal4::MAX_PRECISION
                 {
                     (unscaled as i32, scale).try_into()
                 } else if unscaled.abs() <= VariantDecimal8::MAX_UNSCALED_VALUE as i128
-                    && scale <= VariantDecimal8::MAX_PRECISION as u8
+                    && scale <= VariantDecimal8::MAX_PRECISION
                 {
                     (unscaled as i64, scale).try_into()
                 } else {
@@ -146,7 +146,7 @@ fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(),
                 };
                 append_json(value, &mut field_builder)?;
             }
-            obj_builder.finish();
+            obj_builder.finish().unwrap();
         }
     };
     Ok(())

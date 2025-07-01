@@ -102,16 +102,6 @@ impl ColumnWriter<'_> {
     }
 }
 
-#[deprecated(
-    since = "54.0.0",
-    note = "Seems like a stray and nobody knows what's it for. Will be removed in the next release."
-)]
-#[allow(missing_docs)]
-pub enum Level {
-    Page,
-    Column,
-}
-
 /// Gets a specific column writer corresponding to column descriptor `descr`.
 pub fn get_column_writer<'a>(
     descr: ColumnDescPtr,

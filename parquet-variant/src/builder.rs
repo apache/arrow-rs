@@ -16,7 +16,9 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
-use std::collections::BTreeMap;
+use arrow_schema::ArrowError;
+use indexmap::{IndexMap, IndexSet};
+use std::collections::HashSet;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -233,27 +235,24 @@ impl ValueBuffer {
 
 #[derive(Default)]
 struct MetadataBuilder {
-    field_name_to_id: BTreeMap<String, u32>,
-    field_names: Vec<String>,
+    // Field names -- field_ids are assigned in insert order
+    field_names: IndexSet<String>,
 }
 
 impl MetadataBuilder {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
-        use std::collections::btree_map::Entry;
-        match self.field_name_to_id.entry(field_name.to_string()) {
-            Entry::Occupied(entry) => *entry.get(),
-            Entry::Vacant(entry) => {
-                let id = self.field_names.len() as u32;
-                entry.insert(id);
-                self.field_names.push(field_name.to_string());
-                id
-            }
-        }
+        let (id, _) = self.field_names.insert_full(field_name.to_string());
+
+        id as u32
     }
 
     fn num_field_names(&self) -> usize {
         self.field_names.len()
+    }
+
+    fn field_name(&self, i: usize) -> &str {
+        &self.field_names[i]
     }
 
     fn metadata_size(&self) -> usize {
@@ -438,10 +437,27 @@ impl MetadataBuilder {
 /// );
 ///
 /// ```
+/// # Example: Unique Field Validation
+///
+/// This example shows how enabling unique field validation will cause an error
+/// if the same field is inserted more than once.
+/// ```
+/// use parquet_variant::VariantBuilder;
+///
+/// let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+/// let mut obj = builder.new_object();
+///
+/// obj.insert("a", 1);
+/// obj.insert("a", 2); // duplicate field
+///
+/// let result = obj.finish(); // returns Err
+/// assert!(result.is_err());
+/// ```
 #[derive(Default)]
 pub struct VariantBuilder {
     buffer: ValueBuffer,
     metadata_builder: MetadataBuilder,
+    validate_unique_fields: bool,
 }
 
 impl VariantBuilder {
@@ -449,7 +465,18 @@ impl VariantBuilder {
         Self {
             buffer: ValueBuffer::default(),
             metadata_builder: MetadataBuilder::default(),
+            validate_unique_fields: false,
         }
+    }
+
+    /// Enables validation of unique field keys in nested objects.
+    ///
+    /// This setting is propagated to all [`ObjectBuilder`]s created through this [`VariantBuilder`]
+    /// (including via any [`ListBuilder`]), and causes [`ObjectBuilder::finish()`] to return
+    /// an error if duplicate keys were inserted.
+    pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
+        self.validate_unique_fields = validate_unique_fields;
+        self
     }
 
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
@@ -457,6 +484,7 @@ impl VariantBuilder {
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_list(&mut self) -> ListBuilder {
         ListBuilder::new(&mut self.buffer, &mut self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields)
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
@@ -464,6 +492,7 @@ impl VariantBuilder {
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_object(&mut self) -> ObjectBuilder {
         ObjectBuilder::new(&mut self.buffer, &mut self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields)
     }
 
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
@@ -485,6 +514,7 @@ pub struct ListBuilder<'a> {
     buffer: ValueBuffer,
     /// Is there a pending nested object or list that needs to be finalized?
     pending: bool,
+    validate_unique_fields: bool,
 }
 
 impl<'a> ListBuilder<'a> {
@@ -495,6 +525,7 @@ impl<'a> ListBuilder<'a> {
             offsets: vec![0],
             buffer: ValueBuffer::default(),
             pending: false,
+            validate_unique_fields: false,
         }
     }
 
@@ -509,10 +540,20 @@ impl<'a> ListBuilder<'a> {
         self.pending = false;
     }
 
+    /// Enables unique field key validation for objects created within this list.
+    ///
+    /// Propagates the validation flag to any [`ObjectBuilder`]s created using
+    /// [`ListBuilder::new_object`].
+    pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
+        self.validate_unique_fields = validate_unique_fields;
+        self
+    }
+
     pub fn new_object(&mut self) -> ObjectBuilder {
         self.check_new_offset();
 
-        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
+        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields);
         self.pending = true;
 
         obj_builder
@@ -521,7 +562,8 @@ impl<'a> ListBuilder<'a> {
     pub fn new_list(&mut self) -> ListBuilder {
         self.check_new_offset();
 
-        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder);
+        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields);
         self.pending = true;
 
         list_builder
@@ -567,10 +609,13 @@ impl<'a> ListBuilder<'a> {
 pub struct ObjectBuilder<'a, 'b> {
     parent_buffer: &'a mut ValueBuffer,
     metadata_builder: &'a mut MetadataBuilder,
-    fields: BTreeMap<u32, usize>, // (field_id, offset)
+    fields: IndexMap<u32, usize>, // (field_id, offset)
     buffer: ValueBuffer,
     /// Is there a pending list or object that needs to be finalized?
     pending: Option<(&'b str, usize)>,
+    validate_unique_fields: bool,
+    /// Set of duplicate fields to report for errors
+    duplicate_fields: HashSet<u32>,
 }
 
 impl<'a, 'b> ObjectBuilder<'a, 'b> {
@@ -578,19 +623,21 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         Self {
             parent_buffer,
             metadata_builder,
-            fields: BTreeMap::new(),
+            fields: IndexMap::new(),
             buffer: ValueBuffer::default(),
             pending: None,
+            validate_unique_fields: false,
+            duplicate_fields: HashSet::new(),
         }
     }
 
     fn check_pending_field(&mut self) {
-        let Some((field_name, field_start)) = self.pending.as_ref() else {
+        let Some(&(field_name, field_start)) = self.pending.as_ref() else {
             return;
         };
 
         let field_id = self.metadata_builder.upsert_field_name(field_name);
-        self.fields.insert(field_id, *field_start);
+        self.fields.insert(field_id, field_start);
 
         self.pending = None;
     }
@@ -605,8 +652,20 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let field_id = self.metadata_builder.upsert_field_name(key);
         let field_start = self.buffer.offset();
 
-        self.fields.insert(field_id, field_start);
+        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
+            self.duplicate_fields.insert(field_id);
+        }
+
         self.buffer.append_non_nested_value(value);
+    }
+
+    /// Enables validation for unique field keys when inserting into this object.
+    ///
+    /// When this is enabled, calling [`ObjectBuilder::finish`] will return an error
+    /// if any duplicate field keys were added using [`ObjectBuilder::insert`].
+    pub fn with_validate_unique_fields(mut self, validate_unique_fields: bool) -> Self {
+        self.validate_unique_fields = validate_unique_fields;
+        self
     }
 
     /// Return a new [`ObjectBuilder`] to add a nested object with the specified
@@ -615,7 +674,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
-        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder);
+        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields);
         self.pending = Some((key, field_start));
 
         obj_builder
@@ -627,7 +687,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         self.check_pending_field();
 
         let field_start = self.buffer.offset();
-        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder);
+        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder)
+            .with_validate_unique_fields(self.validate_unique_fields);
         self.pending = Some((key, field_start));
 
         list_builder
@@ -636,23 +697,37 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     /// Finalize object
     ///
     /// This consumes self and writes the object to the parent buffer.
-    pub fn finish(mut self) {
+    pub fn finish(mut self) -> Result<(), ArrowError> {
         self.check_pending_field();
+
+        if self.validate_unique_fields && !self.duplicate_fields.is_empty() {
+            let mut names = self
+                .duplicate_fields
+                .iter()
+                .map(|id| self.metadata_builder.field_name(*id as usize))
+                .collect::<Vec<_>>();
+
+            names.sort_unstable();
+
+            let joined = names.join(", ");
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Duplicate field keys detected: [{joined}]",
+            )));
+        }
 
         let data_size = self.buffer.offset();
         let num_fields = self.fields.len();
         let is_large = num_fields > u8::MAX as usize;
 
-        let field_ids_by_sorted_field_name = self
-            .metadata_builder
-            .field_name_to_id
-            .iter()
-            .filter_map(|(_, id)| self.fields.contains_key(id).then_some(*id))
-            .collect::<Vec<_>>();
+        self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
+            let key_a = &self.metadata_builder.field_name(field_a_id as usize);
+            let key_b = &self.metadata_builder.field_name(field_b_id as usize);
+            key_a.cmp(key_b)
+        });
 
-        let max_id = self.fields.keys().last().copied().unwrap_or(0) as usize;
+        let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
 
-        let id_size = int_size(max_id);
+        let id_size = int_size(max_id as usize);
         let offset_size = int_size(data_size);
 
         // Write header
@@ -664,19 +739,20 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         );
 
         // Write field IDs (sorted order)
-        for id in &field_ids_by_sorted_field_name {
-            write_offset(self.parent_buffer.inner_mut(), *id as usize, id_size);
+        for (&id, _) in &self.fields {
+            write_offset(self.parent_buffer.inner_mut(), id as usize, id_size);
         }
 
         // Write field offsets
-        for id in &field_ids_by_sorted_field_name {
-            let &offset = self.fields.get(id).unwrap();
+        for (_, &offset) in &self.fields {
             write_offset(self.parent_buffer.inner_mut(), offset, offset_size);
         }
 
         write_offset(self.parent_buffer.inner_mut(), data_size, offset_size);
 
         self.parent_buffer.append_slice(self.buffer.inner());
+
+        Ok(())
     }
 }
 
@@ -864,7 +940,7 @@ mod tests {
             let mut obj = builder.new_object();
             obj.insert("name", "John");
             obj.insert("age", 42i8);
-            obj.finish();
+            let _ = obj.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -881,7 +957,7 @@ mod tests {
             obj.insert("zebra", "stripes"); // ID = 0
             obj.insert("apple", "red"); // ID = 1
             obj.insert("banana", "yellow"); // ID = 2
-            obj.finish();
+            let _ = obj.finish();
         }
 
         let (_, value) = builder.finish();
@@ -900,81 +976,12 @@ mod tests {
     }
 
     #[test]
-    fn test_object_and_metadata_ordering() {
-        let mut builder = VariantBuilder::new();
-
-        let mut obj = builder.new_object();
-
-        obj.insert("zebra", "stripes"); // ID = 0
-        obj.insert("apple", "red"); // ID = 1
-
-        {
-            // fields_map is ordered by insertion order (field id)
-            let fields_map = obj.fields.keys().copied().collect::<Vec<_>>();
-            assert_eq!(fields_map, vec![0, 1]);
-
-            // dict is ordered by field names
-            let dict_metadata = obj
-                .metadata_builder
-                .field_name_to_id
-                .iter()
-                .map(|(f, i)| (f.as_str(), *i))
-                .collect::<Vec<_>>();
-
-            assert_eq!(dict_metadata, vec![("apple", 1), ("zebra", 0)]);
-
-            // dict_keys is ordered by insertion order (field id)
-            let dict_keys = obj
-                .metadata_builder
-                .field_names
-                .iter()
-                .map(|k| k.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(dict_keys, vec!["zebra", "apple"]);
-        }
-
-        obj.insert("banana", "yellow"); // ID = 2
-
-        {
-            // fields_map is ordered by insertion order (field id)
-            let fields_map = obj.fields.keys().copied().collect::<Vec<_>>();
-            assert_eq!(fields_map, vec![0, 1, 2]);
-
-            // dict is ordered by field names
-            let dict_metadata = obj
-                .metadata_builder
-                .field_name_to_id
-                .iter()
-                .map(|(f, i)| (f.as_str(), *i))
-                .collect::<Vec<_>>();
-
-            assert_eq!(
-                dict_metadata,
-                vec![("apple", 1), ("banana", 2), ("zebra", 0)]
-            );
-
-            // dict_keys is ordered by insertion order (field id)
-            let dict_keys = obj
-                .metadata_builder
-                .field_names
-                .iter()
-                .map(|k| k.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(dict_keys, vec!["zebra", "apple", "banana"]);
-        }
-
-        obj.finish();
-
-        builder.finish();
-    }
-
-    #[test]
     fn test_duplicate_fields_in_object() {
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
         object_builder.insert("name", "Ron Artest");
         object_builder.insert("name", "Metta World Peace");
-        object_builder.finish();
+        let _ = object_builder.finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1095,14 +1102,14 @@ mod tests {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("id", 1);
             object_builder.insert("type", "Cauliflower");
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("id", 2);
             object_builder.insert("type", "Beets");
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         list_builder.finish();
@@ -1143,13 +1150,13 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("a", 1);
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("b", 2);
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         list_builder.finish();
@@ -1196,7 +1203,7 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("a", 1);
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         list_builder.append_value(2);
@@ -1204,7 +1211,7 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("b", 2);
-            object_builder.finish();
+            let _ = object_builder.finish();
         }
 
         list_builder.append_value(3);
@@ -1254,10 +1261,10 @@ mod tests {
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
-                inner_object_builder.finish();
+                let _ = inner_object_builder.finish();
             }
 
-            outer_object_builder.finish();
+            let _ = outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -1280,8 +1287,10 @@ mod tests {
         /*
         {
             "c": {
+                "b": false,
                 "c": "a"
-            }
+            },
+            "b": false,
         }
 
         */
@@ -1291,26 +1300,31 @@ mod tests {
             let mut outer_object_builder = builder.new_object();
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
+                inner_object_builder.insert("b", false);
                 inner_object_builder.insert("c", "a");
-                inner_object_builder.finish();
+
+                let _ = inner_object_builder.finish();
             }
 
-            outer_object_builder.finish();
+            outer_object_builder.insert("b", false);
+            let _ = outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_object = variant.as_object().unwrap();
 
-        assert_eq!(outer_object.len(), 1);
-        assert_eq!(outer_object.field_name(0).unwrap(), "c");
+        assert_eq!(outer_object.len(), 2);
+        assert_eq!(outer_object.field_name(0).unwrap(), "b");
 
-        let inner_object_variant = outer_object.field(0).unwrap();
+        let inner_object_variant = outer_object.field(1).unwrap();
         let inner_object = inner_object_variant.as_object().unwrap();
 
-        assert_eq!(inner_object.len(), 1);
-        assert_eq!(inner_object.field_name(0).unwrap(), "c");
-        assert_eq!(inner_object.field(0).unwrap(), Variant::from("a"));
+        assert_eq!(inner_object.len(), 2);
+        assert_eq!(inner_object.field_name(0).unwrap(), "b");
+        assert_eq!(inner_object.field(0).unwrap(), Variant::from(false));
+        assert_eq!(inner_object.field_name(1).unwrap(), "c");
+        assert_eq!(inner_object.field(1).unwrap(), Variant::from("a"));
     }
 
     #[test]
@@ -1337,10 +1351,10 @@ mod tests {
                     inner_object_list_builder.finish();
                 }
 
-                inner_object_builder.finish();
+                let _ = inner_object_builder.finish();
             }
 
-            outer_object_builder.finish();
+            let _ = outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -1385,12 +1399,12 @@ mod tests {
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
-                inner_object_builder.finish();
+                let _ = inner_object_builder.finish();
             }
 
             outer_object_builder.insert("b", true);
 
-            outer_object_builder.finish();
+            let _ = outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -1425,5 +1439,64 @@ mod tests {
 
         assert_eq!(outer_object.field_name(1).unwrap(), "b");
         assert_eq!(outer_object.field(1).unwrap(), Variant::from(true));
+    }
+
+    #[test]
+    fn test_object_without_unique_field_validation() {
+        let mut builder = VariantBuilder::new();
+
+        // Root object with duplicates
+        let mut obj = builder.new_object();
+        obj.insert("a", 1);
+        obj.insert("a", 2);
+        assert!(obj.finish().is_ok());
+
+        // Deeply nested list structure with duplicates
+        let mut outer_list = builder.new_list();
+        let mut inner_list = outer_list.new_list();
+        let mut nested_obj = inner_list.new_object();
+        nested_obj.insert("x", 1);
+        nested_obj.insert("x", 2);
+        assert!(nested_obj.finish().is_ok());
+    }
+
+    #[test]
+    fn test_object_with_unique_field_validation() {
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
+
+        // Root-level object with duplicates
+        let mut root_obj = builder.new_object();
+        root_obj.insert("a", 1);
+        root_obj.insert("b", 2);
+        root_obj.insert("a", 3);
+        root_obj.insert("b", 4);
+
+        let result = root_obj.finish();
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: Duplicate field keys detected: [a, b]"
+        );
+
+        // Deeply nested list -> list -> object with duplicate
+        let mut outer_list = builder.new_list();
+        let mut inner_list = outer_list.new_list();
+        let mut nested_obj = inner_list.new_object();
+        nested_obj.insert("x", 1);
+        nested_obj.insert("x", 2);
+
+        let nested_result = nested_obj.finish();
+        assert_eq!(
+            nested_result.unwrap_err().to_string(),
+            "Invalid argument error: Duplicate field keys detected: [x]"
+        );
+
+        // Valid object should succeed
+        let mut list = builder.new_list();
+        let mut valid_obj = list.new_object();
+        valid_obj.insert("m", 1);
+        valid_obj.insert("n", 2);
+
+        let valid_result = valid_obj.finish();
+        assert!(valid_result.is_ok());
     }
 }

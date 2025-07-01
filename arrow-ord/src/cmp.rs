@@ -33,6 +33,7 @@ use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
+use std::cmp::Ordering;
 use std::ops::Not;
 
 #[derive(Debug, Copy, Clone)]
@@ -571,7 +572,7 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
             // For eq case, we can directly compare the inlined bytes
-            return l_view.cmp(r_view).is_eq();
+            return l_view == r_view;
         }
 
         let l_len = *l_view as u32;
@@ -592,15 +593,15 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
 
     #[inline(always)]
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
+        // If both arrays use only the inline buffer
         if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
             let l_view = unsafe { l.0.views().get_unchecked(l.1) };
             let r_view = unsafe { r.0.views().get_unchecked(r.1) };
-            let l_len = *l_view as u32 as usize;
-            let r_len = *r_view as u32 as usize;
-            let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len) };
-            let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len) };
-            return l_bytes.cmp(r_bytes).is_lt();
+            return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+                < GenericByteViewArray::<T>::inline_key_fast(*r_view);
         }
+
+        // Fallback to the generic, unchecked comparison for non-inline cases
         // # Safety
         // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
@@ -642,17 +643,14 @@ pub fn compare_byte_view<T: ByteViewType>(
     left_idx: usize,
     right: &GenericByteViewArray<T>,
     right_idx: usize,
-) -> std::cmp::Ordering {
+) -> Ordering {
     assert!(left_idx < left.len());
     assert!(right_idx < right.len());
     if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
         let l_view = unsafe { left.views().get_unchecked(left_idx) };
         let r_view = unsafe { right.views().get_unchecked(right_idx) };
-        let l_len = *l_view as u32 as usize;
-        let r_len = *r_view as u32 as usize;
-        let l_bytes = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len) };
-        let r_bytes = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len) };
-        return l_bytes.cmp(r_bytes);
+        return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+            .cmp(&GenericByteViewArray::<T>::inline_key_fast(*r_view));
     }
     unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
 }
