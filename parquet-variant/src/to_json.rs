@@ -22,7 +22,10 @@ use rust_decimal::prelude::*;
 use serde_json::{Number, Value};
 use std::io::Write;
 
-use crate::{variant::{Variant, VariantList, VariantObject}, VariantDecimal};
+use crate::{
+    variant::{Variant, VariantList, VariantObject},
+    VariantDecimal,
+};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -247,8 +250,8 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
 }
 
 fn variant_decimal_to_json_value(decimal: &impl VariantDecimal) -> Result<Value, ArrowError> {
-    let integer = decimal.integer() as i128;
-    let scale = decimal.scale() as u32;
+    let integer = decimal.integer();
+    let scale = decimal.scale();
     if scale == 0 {
         return Ok(Value::from(integer));
     }
@@ -308,15 +311,9 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
         Variant::Double(f) => serde_json::Number::from_f64(*f)
             .map(Value::Number)
             .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string())),
-        Variant::Decimal4(decimal4) => {
-            variant_decimal_to_json_value(decimal4)
-        }
-        Variant::Decimal8(decimal8) => {
-            variant_decimal_to_json_value(decimal8)
-        }
-        Variant::Decimal16(decimal16) => {
-            variant_decimal_to_json_value(decimal16)
-        }
+        Variant::Decimal4(decimal4) => variant_decimal_to_json_value(decimal4),
+        Variant::Decimal8(decimal8) => variant_decimal_to_json_value(decimal8),
+        Variant::Decimal16(decimal16) => variant_decimal_to_json_value(decimal16),
         Variant::Date(date) => Ok(Value::String(format_date_string(date))),
         Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
         Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),

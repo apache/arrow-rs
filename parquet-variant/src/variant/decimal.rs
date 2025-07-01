@@ -265,7 +265,7 @@ impl VariantDecimal16 {
 
 impl VariantDecimal for VariantDecimal16 {
     fn integer(&self) -> i128 {
-        self.integer() as i128
+        self.integer()
     }
 
     fn scale(&self) -> u32 {
