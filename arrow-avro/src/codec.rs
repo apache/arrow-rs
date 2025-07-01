@@ -88,7 +88,7 @@ impl AvroDataType {
 #[derive(Debug, Clone)]
 pub struct AvroField {
     name: String,
-    data_type: AvroDataType,
+    pub(crate) data_type: AvroDataType,
 }
 
 impl AvroField {

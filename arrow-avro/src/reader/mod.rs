@@ -15,11 +15,84 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Read Avro data to Arrow
+//! Avro reader
+//!
+//! This module provides facilities to read Apache Avro-encoded files or streams
+//! into Arrow's [`RecordBatch`] format. In particular, it introduces:
+//!
+//! * [`ReaderBuilder`]: Configures Avro reading, e.g., batch size
+//! * [`Reader`]: Yields [`RecordBatch`] values, implementing [`Iterator`]
+//! * [`Decoder`]: A low-level push-based decoder for Avro records
+//!
+//! # Basic Usage
+//!
+//! [`Reader`] can be used directly with synchronous data sources, such as [`std::fs::File`].
+//!
+//! ## Reading a Single Batch
+//!
+//! ```
+//! # use std::fs::File;
+//! # use std::io::BufReader;
+//! # use arrow_avro::reader::ReaderBuilder;
+//!
+//! let file = File::open("../testing/data/avro/alltypes_plain.avro").unwrap();
+//! let mut avro = ReaderBuilder::new().build(BufReader::new(file)).unwrap();
+//! let batch = avro.next().unwrap();
+//! ```
+//!
+//! # Async Usage
+//!
+//! The lower-level [`Decoder`] can be integrated with various forms of async data streams,
+//! and is designed to be agnostic to different async IO primitives within
+//! the Rust ecosystem. It works by incrementally decoding Avro data from byte slices.
+//!
+//! For example, see below for how it could be used with an arbitrary `Stream` of `Bytes`:
+//!
+//! ```
+//! # use std::task::{Poll, ready};
+//! # use bytes::{Buf, Bytes};
+//! # use arrow_schema::ArrowError;
+//! # use futures::stream::{Stream, StreamExt};
+//! # use arrow_array::RecordBatch;
+//! # use arrow_avro::reader::Decoder;
+//!
+//! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
+//!     mut decoder: Decoder,
+//!     mut input: S,
+//! ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+//!     let mut buffered = Bytes::new();
+//!     futures::stream::poll_fn(move |cx| {
+//!         loop {
+//!             if buffered.is_empty() {
+//!                 buffered = match ready!(input.poll_next_unpin(cx)) {
+//!                     Some(b) => b,
+//!                     None => break,
+//!                 };
+//!             }
+//!             let decoded = match decoder.decode(buffered.as_ref()) {
+//!                 Ok(decoded) => decoded,
+//!                 Err(e) => return Poll::Ready(Some(Err(e))),
+//!             };
+//!             let read = buffered.len();
+//!             buffered.advance(decoded);
+//!             if decoded != read {
+//!                 break
+//!             }
+//!         }
+//!         // Convert any fully-decoded rows to a RecordBatch, if available
+//!         Poll::Ready(decoder.flush().transpose())
+//!     })
+//! }
+//! ```
+//!
 
-use crate::reader::block::{Block, BlockDecoder};
-use crate::reader::header::{Header, HeaderDecoder};
-use arrow_schema::ArrowError;
+use crate::codec::AvroField;
+use crate::schema::Schema as AvroSchema;
+use arrow_array::{RecordBatch, RecordBatchReader};
+use arrow_schema::{ArrowError, SchemaRef};
+use block::BlockDecoder;
+use header::{Header, HeaderDecoder};
+use record::RecordDecoder;
 use std::io::BufRead;
 
 mod block;
@@ -28,50 +101,7 @@ mod header;
 mod record;
 mod vlq;
 
-/// Configuration options for reading Avro data into Arrow arrays
-///
-/// This struct contains configuration options that control how Avro data is
-/// converted into Arrow arrays. It allows customizing various aspects of the
-/// data conversion process.
-///
-/// # Examples
-///
-/// ```
-/// # use arrow_avro::reader::ReadOptions;
-/// // Use default options (regular StringArray for strings)
-/// let default_options = ReadOptions::default();
-///
-/// // Enable Utf8View support for better string performance
-/// let options = ReadOptions::default()
-///     .with_utf8view(true);
-/// ```
-#[derive(Default, Debug, Clone)]
-pub struct ReadOptions {
-    use_utf8view: bool,
-}
-
-impl ReadOptions {
-    /// Create a new `ReadOptions` with default values
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set whether to use StringViewArray for string data
-    ///
-    /// When enabled, string data from Avro files will be loaded into
-    /// Arrow's StringViewArray instead of the standard StringArray.
-    pub fn with_utf8view(mut self, use_utf8view: bool) -> Self {
-        self.use_utf8view = use_utf8view;
-        self
-    }
-
-    /// Get whether StringViewArray is enabled for string data
-    pub fn use_utf8view(&self) -> bool {
-        self.use_utf8view
-    }
-}
-
-/// Read a [`Header`] from the provided [`BufRead`]
+/// Read the Avro file header (magic, metadata, sync marker) from `reader`.
 fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
     let mut decoder = HeaderDecoder::default();
     loop {
@@ -86,32 +116,300 @@ fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
             break;
         }
     }
-
-    decoder
-        .flush()
-        .ok_or_else(|| ArrowError::ParseError("Unexpected EOF".to_string()))
+    decoder.flush().ok_or_else(|| {
+        ArrowError::ParseError("Unexpected EOF while reading Avro header".to_string())
+    })
 }
 
-/// Return an iterator of [`Block`] from the provided [`BufRead`]
-fn read_blocks<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<Block, ArrowError>> {
-    let mut decoder = BlockDecoder::default();
+/// A low-level interface for decoding Avro-encoded bytes into Arrow [`RecordBatch`].
+#[derive(Debug)]
+pub struct Decoder {
+    record_decoder: RecordDecoder,
+    batch_size: usize,
+    decoded_rows: usize,
+}
 
-    let mut try_next = move || {
-        loop {
-            let buf = reader.fill_buf()?;
-            if buf.is_empty() {
+impl Decoder {
+    /// Create a new [`Decoder`], wrapping an existing [`RecordDecoder`].
+    pub fn new(record_decoder: RecordDecoder, batch_size: usize) -> Self {
+        Self {
+            record_decoder,
+            batch_size,
+            decoded_rows: 0,
+        }
+    }
+
+    /// Return the Arrow schema for the rows decoded by this decoder
+    pub fn schema(&self) -> SchemaRef {
+        self.record_decoder.schema().clone()
+    }
+
+    /// Return the configured maximum number of rows per batch
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    /// Feed `data` into the decoder row by row until we either:
+    /// - consume all bytes in `data`, or
+    /// - reach `batch_size` decoded rows.
+    ///
+    /// Returns the number of bytes consumed.
+    pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
+        let mut total_consumed = 0usize;
+        while total_consumed < data.len() && self.decoded_rows < self.batch_size {
+            let consumed = self.record_decoder.decode(&data[total_consumed..], 1)?;
+            if consumed == 0 {
                 break;
             }
-            let read = buf.len();
-            let decoded = decoder.decode(buf)?;
-            reader.consume(decoded);
-            if decoded != read {
-                break;
+            total_consumed += consumed;
+            self.decoded_rows += 1;
+        }
+        Ok(total_consumed)
+    }
+
+    /// Produce a [`RecordBatch`] if at least one row is fully decoded, returning
+    /// `Ok(None)` if no new rows are available.
+    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        if self.decoded_rows == 0 {
+            Ok(None)
+        } else {
+            let batch = self.record_decoder.flush()?;
+            self.decoded_rows = 0;
+            Ok(Some(batch))
+        }
+    }
+}
+
+/// A builder to create an [`Avro Reader`](Reader) that reads Avro data
+/// into Arrow [`RecordBatch`].
+#[derive(Debug)]
+pub struct ReaderBuilder {
+    batch_size: usize,
+    strict_mode: bool,
+    utf8_view: bool,
+    schema: Option<AvroSchema<'static>>,
+}
+
+impl Default for ReaderBuilder {
+    fn default() -> Self {
+        Self {
+            batch_size: 1024,
+            strict_mode: false,
+            utf8_view: false,
+            schema: None,
+        }
+    }
+}
+
+impl ReaderBuilder {
+    /// Creates a new [`ReaderBuilder`] with default settings:
+    /// - `batch_size` = 1024
+    /// - `strict_mode` = false
+    /// - `utf8_view` = false
+    /// - `schema` = None
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the row-based batch size
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Set whether to use StringViewArray for string data
+    ///
+    /// When enabled, string data from Avro files will be loaded into
+    /// Arrow's StringViewArray instead of the standard StringArray.
+    pub fn with_utf8_view(mut self, utf8_view: bool) -> Self {
+        self.utf8_view = utf8_view;
+        self
+    }
+
+    /// Get whether StringViewArray is enabled for string data
+    pub fn use_utf8view(&self) -> bool {
+        self.utf8_view
+    }
+
+    /// Controls whether certain Avro unions of the form `[T, "null"]` should produce an error.
+    pub fn with_strict_mode(mut self, strict_mode: bool) -> Self {
+        self.strict_mode = strict_mode;
+        self
+    }
+
+    /// Sets the Avro schema.
+    ///
+    /// If a schema is not provided, the schema will be read from the Avro file header.
+    pub fn with_schema(mut self, schema: AvroSchema<'static>) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    /// Create a [`Reader`] from this builder and a `BufRead`
+    pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
+        let header = read_header(&mut reader)?;
+        let compression = header.compression()?;
+        let root_field = if let Some(schema) = &self.schema {
+            AvroField::try_from(schema)?
+        } else {
+            let avro_schema: Option<AvroSchema<'_>> = header
+                .schema()
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+            let avro_schema = avro_schema.ok_or_else(|| {
+                ArrowError::ParseError("No Avro schema present in file header".to_string())
+            })?;
+            AvroField::try_from(&avro_schema)?
+        };
+        let record_decoder = RecordDecoder::try_new_with_options(
+            root_field.data_type(),
+            self.utf8_view,
+            self.strict_mode,
+        )?;
+        let decoder = Decoder::new(record_decoder, self.batch_size);
+        Ok(Reader {
+            reader,
+            header,
+            compression,
+            decoder,
+            block_decoder: BlockDecoder::default(),
+            block_data: Vec::new(),
+            finished: false,
+        })
+    }
+
+    /// Create a [`Decoder`] from this builder and a `BufRead` by
+    /// reading and parsing the Avro file's header. This will
+    /// not create a full [`Reader`].
+    pub fn build_decoder<R: BufRead>(self, mut reader: R) -> Result<Decoder, ArrowError> {
+        let record_decoder = if let Some(schema) = self.schema {
+            let root_field = AvroField::try_from(&schema)?;
+            RecordDecoder::try_new_with_options(
+                root_field.data_type(),
+                self.utf8_view,
+                self.strict_mode,
+            )?
+        } else {
+            let header = read_header(&mut reader)?;
+            let avro_schema = header
+                .schema()
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?
+                .ok_or_else(|| {
+                    ArrowError::ParseError("No Avro schema present in file header".to_string())
+                })?;
+            let root_field = AvroField::try_from(&avro_schema)?;
+            RecordDecoder::try_new_with_options(
+                root_field.data_type(),
+                self.utf8_view,
+                self.strict_mode,
+            )?
+        };
+        Ok(Decoder::new(record_decoder, self.batch_size))
+    }
+}
+
+/// A high-level Avro `Reader` that reads container-file blocks
+/// and feeds them into a row-level [`Decoder`].
+#[derive(Debug)]
+pub struct Reader<R> {
+    reader: R,
+    header: Header,
+    compression: Option<crate::compression::CompressionCodec>,
+    decoder: Decoder,
+    block_decoder: BlockDecoder,
+    block_data: Vec<u8>,
+    finished: bool,
+}
+
+impl<R> Reader<R> {
+    /// Return the Arrow schema discovered from the Avro file header
+    pub fn schema(&self) -> SchemaRef {
+        self.decoder.schema()
+    }
+
+    /// Return the Avro container-file header
+    pub fn avro_header(&self) -> &Header {
+        &self.header
+    }
+}
+
+impl<R: BufRead> Reader<R> {
+    /// Reads the next [`RecordBatch`] from the Avro file or `Ok(None)` on EOF
+    fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        if self.finished {
+            return Ok(None);
+        }
+        loop {
+            if !self.block_data.is_empty() {
+                let consumed = self.decoder.decode(&self.block_data)?;
+                if consumed > 0 {
+                    self.block_data.drain(..consumed);
+                }
+                match self.decoder.flush()? {
+                    None => {
+                        if !self.block_data.is_empty() {
+                            break;
+                        }
+                    }
+                    Some(batch) => {
+                        return Ok(Some(batch));
+                    }
+                }
+            }
+            let maybe_block = {
+                let buf = self.reader.fill_buf()?;
+                if buf.is_empty() {
+                    None
+                } else {
+                    let read_len = buf.len();
+                    let consumed_len = self.block_decoder.decode(buf)?;
+                    self.reader.consume(consumed_len);
+                    if consumed_len == 0 && read_len != 0 {
+                        return Err(ArrowError::ParseError(
+                            "Could not decode next Avro block from partial data".to_string(),
+                        ));
+                    }
+                    self.block_decoder.flush()
+                }
+            };
+            match maybe_block {
+                Some(block) => {
+                    let block_data = if let Some(ref codec) = self.compression {
+                        codec.decompress(&block.data)?
+                    } else {
+                        block.data
+                    };
+                    self.block_data = block_data;
+                }
+                None => {
+                    self.finished = true;
+                    if !self.block_data.is_empty() {
+                        let consumed = self.decoder.decode(&self.block_data)?;
+                        self.block_data.drain(..consumed);
+                    }
+                    return self.decoder.flush();
+                }
             }
         }
-        Ok(decoder.flush())
-    };
-    std::iter::from_fn(move || try_next().transpose())
+        self.decoder.flush()
+    }
+}
+
+impl<R: BufRead> Iterator for Reader<R> {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.read() {
+            Ok(Some(batch)) => Some(Ok(batch)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+impl<R: BufRead> RecordBatchReader for Reader<R> {
+    fn schema(&self) -> SchemaRef {
+        self.schema()
+    }
 }
 
 #[cfg(test)]
@@ -119,54 +417,58 @@ mod test {
     use crate::codec::{AvroDataType, AvroField, Codec};
     use crate::compression::CompressionCodec;
     use crate::reader::record::RecordDecoder;
-    use crate::reader::{read_blocks, read_header};
+    use crate::reader::vlq::VLQDecoder;
+    use crate::reader::{read_header, Decoder, ReaderBuilder};
     use crate::test_util::arrow_test_data;
     use arrow_array::*;
-    use arrow_schema::{DataType, Field};
+    use arrow_schema::{ArrowError, DataType, Field, Schema};
+    use bytes::{Buf, BufMut, Bytes};
+    use futures::executor::block_on;
+    use futures::{stream, Stream, StreamExt, TryStreamExt};
     use std::collections::HashMap;
+    use std::fs;
     use std::fs::File;
-    use std::io::BufReader;
+    use std::io::{BufReader, Cursor, Read};
     use std::sync::Arc;
+    use std::task::{ready, Poll};
 
-    fn read_file(file: &str, batch_size: usize) -> RecordBatch {
-        read_file_with_options(file, batch_size, &crate::ReadOptions::default())
+    fn read_file(path: &str, batch_size: usize, utf8_view: bool) -> RecordBatch {
+        let file = File::open(path).unwrap();
+        let reader = ReaderBuilder::new()
+            .with_batch_size(batch_size)
+            .with_utf8_view(utf8_view)
+            .build(BufReader::new(file))
+            .unwrap();
+        let schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        arrow::compute::concat_batches(&schema, &batches).unwrap()
     }
 
-    fn read_file_with_options(
-        file: &str,
-        batch_size: usize,
-        options: &crate::ReadOptions,
-    ) -> RecordBatch {
-        let file = File::open(file).unwrap();
-        let mut reader = BufReader::new(file);
-        let header = read_header(&mut reader).unwrap();
-        let compression = header.compression().unwrap();
-        let schema = header.schema().unwrap().unwrap();
-        let root = AvroField::try_from(&schema).unwrap();
-
-        let mut decoder =
-            RecordDecoder::try_new_with_options(root.data_type(), options.clone()).unwrap();
-
-        for result in read_blocks(reader) {
-            let block = result.unwrap();
-            assert_eq!(block.sync, header.sync());
-            if let Some(c) = compression {
-                let decompressed = c.decompress(&block.data).unwrap();
-
-                let mut offset = 0;
-                let mut remaining = block.count;
-                while remaining > 0 {
-                    let to_read = remaining.max(batch_size);
-                    offset += decoder
-                        .decode(&decompressed[offset..], block.count)
-                        .unwrap();
-
-                    remaining -= to_read;
+    fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
+        mut decoder: Decoder,
+        mut input: S,
+    ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
+        let mut buffered = Bytes::new();
+        futures::stream::poll_fn(move |cx| {
+            loop {
+                if buffered.is_empty() {
+                    buffered = match ready!(input.poll_next_unpin(cx)) {
+                        Some(b) => b,
+                        None => break,
+                    };
                 }
-                assert_eq!(offset, decompressed.len());
+                let decoded = match decoder.decode(buffered.as_ref()) {
+                    Ok(decoded) => decoded,
+                    Err(e) => return Poll::Ready(Some(Err(e))),
+                };
+                let read = buffered.len();
+                buffered.advance(decoded);
+                if decoded != read {
+                    break;
+                }
             }
-        }
-        decoder.flush().unwrap()
+            Poll::Ready(decoder.flush().transpose())
+        })
     }
 
     #[test]
@@ -304,8 +606,35 @@ mod test {
         for file in files {
             let file = arrow_test_data(file);
 
-            assert_eq!(read_file(&file, 8), expected);
-            assert_eq!(read_file(&file, 3), expected);
+            assert_eq!(read_file(&file, 8, false), expected);
+            assert_eq!(read_file(&file, 3, false), expected);
         }
+    }
+
+    #[test]
+    fn test_decode_stream_with_schema() {
+        const PROVIDED_SCHEMA: &str =
+            r#"{"type":"record","name":"test","fields":[{"name":"f2","type":"string"}]}"#;
+        let schema_s2: crate::schema::Schema = serde_json::from_str(PROVIDED_SCHEMA).unwrap();
+        let record_val = "some_string";
+        let mut body = vec![];
+        body.push((record_val.len() as u8) << 1);
+        body.extend_from_slice(record_val.as_bytes());
+        let mut reader_placeholder = Cursor::new(&[] as &[u8]);
+        let decoder = ReaderBuilder::new()
+            .with_batch_size(1)
+            .with_schema(schema_s2)
+            .build_decoder(&mut reader_placeholder)
+            .unwrap();
+        let stream = Box::pin(stream::once(async { Bytes::from(body) }));
+        let decoded_stream = decode_stream(decoder, stream);
+        let batches: Vec<RecordBatch> = block_on(decoded_stream.try_collect()).unwrap();
+        let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
+        let expected_field = Field::new("f2", DataType::Utf8, false);
+        let expected_schema = Arc::new(Schema::new(vec![expected_field]));
+        let expected_array = Arc::new(StringArray::from(vec![record_val]));
+        let expected_batch = RecordBatch::try_new(expected_schema, vec![expected_array]).unwrap();
+        assert_eq!(batch, expected_batch);
+        assert_eq!(batch.schema().field(0).name(), "f2");
     }
 }

@@ -20,7 +20,7 @@
 //! This benchmark suite compares the performance characteristics of StringArray vs
 //! StringViewArray across three key dimensions:
 //! 1. Array creation performance
-//! 2. String value access operations  
+//! 2. String value access operations
 //! 3. Avro file reading with each array type
 
 use std::fs::File;
@@ -31,7 +31,6 @@ use std::time::Duration;
 use arrow::array::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_array::{ArrayRef, Int32Array, StringArray, StringViewArray};
-use arrow_avro::ReadOptions;
 use arrow_schema::ArrowError;
 use criterion::*;
 use tempfile::NamedTempFile;
@@ -79,7 +78,7 @@ fn create_avro_test_file(row_count: usize, str_length: usize) -> Result<NamedTem
 
 fn read_avro_test_file(
     file_path: &std::path::Path,
-    options: &ReadOptions,
+    use_utf8view: bool,
 ) -> Result<RecordBatch, ArrowError> {
     let file = File::open(file_path)?;
     let mut reader = BufReader::new(file);
@@ -110,7 +109,7 @@ fn read_avro_test_file(
         ints.push(i32::from_le_bytes(int_bytes));
     }
 
-    let string_array: ArrayRef = if options.use_utf8view() {
+    let string_array: ArrayRef = if use_utf8view {
         Arc::new(StringViewArray::from_iter(
             strings.iter().map(|s| Some(s.as_str())),
         ))
@@ -123,7 +122,7 @@ fn read_avro_test_file(
     let int_array: ArrayRef = Arc::new(Int32Array::from(ints));
 
     let schema = Arc::new(Schema::new(vec![
-        if options.use_utf8view() {
+        if use_utf8view {
             Field::new("string_field", DataType::Utf8View, false)
         } else {
             Field::new("string_field", DataType::Utf8, false)
@@ -214,7 +213,7 @@ fn bench_string_operations(c: &mut Criterion) {
                 for i in 0..rows {
                     sum_len += string_array.value(i).len();
                 }
-                criterion::black_box(sum_len)
+                black_box(sum_len)
             })
         });
 
@@ -224,7 +223,7 @@ fn bench_string_operations(c: &mut Criterion) {
                 for i in 0..rows {
                     sum_len += string_view_array.value(i).len();
                 }
-                criterion::black_box(sum_len)
+                black_box(sum_len)
             })
         });
     }
@@ -244,16 +243,14 @@ fn bench_avro_reader(c: &mut Criterion) {
 
         group.bench_function(format!("string_array_{str_length}_chars"), |b| {
             b.iter(|| {
-                let options = ReadOptions::default();
-                let batch = read_avro_test_file(file_path, &options).unwrap();
+                let batch = read_avro_test_file(file_path, false).unwrap();
                 criterion::black_box(batch)
             })
         });
 
         group.bench_function(format!("string_view_{str_length}_chars"), |b| {
             b.iter(|| {
-                let options = ReadOptions::default().with_utf8view(true);
-                let batch = read_avro_test_file(file_path, &options).unwrap();
+                let batch = read_avro_test_file(file_path, true).unwrap();
                 criterion::black_box(batch)
             })
         });

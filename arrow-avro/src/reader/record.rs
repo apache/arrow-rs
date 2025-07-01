@@ -19,7 +19,6 @@ use crate::codec::{AvroDataType, Codec, Nullability};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
-use crate::reader::ReadOptions;
 use crate::schema::*;
 use arrow_array::types::*;
 use arrow_array::*;
@@ -33,34 +32,43 @@ use std::io::Read;
 use std::sync::Arc;
 
 /// Decodes avro encoded data into [`RecordBatch`]
+#[derive(Debug)]
 pub struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     use_utf8view: bool,
+    strict_mode: bool,
 }
 
 impl RecordDecoder {
     /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
     pub fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        Self::try_new_with_options(data_type, ReadOptions::default())
+        Self::try_new_with_options(data_type, false, false)
     }
 
-    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options
+    /// Creates a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options.
     ///
     /// This method allows you to customize how the Avro data is decoded into Arrow arrays.
     ///
-    /// # Parameters
-    /// * `data_type` - The Avro data type to decode
-    /// * `options` - Configuration options for decoding
+    /// # Arguments
+    /// * `data_type` - The Avro data type to decode.
+    /// * `use_utf8view` - A flag indicating whether to use `Utf8View` for string types.
+    /// * `strict_mode` - A flag to enable strict decoding, returning an error if the data
+    ///   does not conform to the schema.
+    ///
+    /// # Errors
+    /// This function will return an error if the provided `data_type` is not a `Record`.
     pub fn try_new_with_options(
         data_type: &AvroDataType,
-        options: ReadOptions,
+        use_utf8view: bool,
+        strict_mode: bool,
     ) -> Result<Self, ArrowError> {
         match Decoder::try_new(data_type)? {
             Decoder::Record(fields, encodings) => Ok(Self {
                 schema: Arc::new(ArrowSchema::new(fields)),
                 fields: encodings,
-                use_utf8view: options.use_utf8view(),
+                use_utf8view,
+                strict_mode,
             }),
             encoding => Err(ArrowError::ParseError(format!(
                 "Expected record got {encoding:?}"
