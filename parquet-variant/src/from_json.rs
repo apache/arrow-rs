@@ -17,10 +17,8 @@
 
 //! Module for parsing JSON strings as Variant
 
-pub use crate::variant::{VariantDecimal4, VariantDecimal8};
 use crate::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use arrow_schema::ArrowError;
-use rust_decimal::prelude::*;
 use serde_json::{Number, Value};
 
 /// Converts a JSON string to Variant using [`VariantBuilder`]. The resulting `value` and `metadata`
