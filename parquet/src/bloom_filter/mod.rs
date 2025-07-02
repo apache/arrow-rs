@@ -248,8 +248,10 @@ impl Sbbf {
     /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
     pub(crate) fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
-        let bitset = vec![0_u8; num_bytes];
-        Self::new(&bitset)
+        assert_eq!(num_bytes % size_of::<Block>(), 0);
+        let num_blocks = num_bytes / size_of::<Block>();
+        let bitset = vec![Block::ZERO; num_blocks];
+        Self(bitset)
     }
 
     pub(crate) fn new(bitset: &[u8]) -> Self {
