@@ -1,3 +1,4 @@
+use crate::arrow::array_reader::row_group_cache::BatchID;
 use crate::arrow::array_reader::{row_group_cache::RowGroupCache, ArrayReader};
 use crate::arrow::arrow_reader::RowSelector;
 use crate::errors::Result;
@@ -59,9 +60,9 @@ pub struct CachedArrayReader {
     selections: VecDeque<RowSelector>,
     /// Role of this reader (Producer or Consumer)
     role: CacheRole,
-    /// Local cache to store batches between read_records and consume_batch calls
+    /// Local buffer to store batches between read_records and consume_batch calls
     /// This ensures data is available even if the shared cache evicts items
-    local_cache: HashMap<usize, ArrayRef>,
+    local_buffer: HashMap<BatchID, ArrayRef>,
 }
 
 impl CachedArrayReader {
@@ -83,23 +84,34 @@ impl CachedArrayReader {
             batch_size,
             selections: VecDeque::new(),
             role,
-            local_cache: HashMap::new(),
+            local_buffer: HashMap::new(),
         }
     }
 
-    fn get_batch_id_from_position(&self, position: usize) -> usize {
-        position / self.batch_size
+    fn get_batch_id_from_position(&self, row_id: usize) -> BatchID {
+        BatchID {
+            val: row_id / self.batch_size,
+        }
     }
 
-    fn fetch_batch(&mut self, batch_id: usize) -> Result<usize> {
-        let row_id = batch_id * self.batch_size;
+    fn fetch_batch(&mut self, batch_id: BatchID) -> Result<usize> {
+        let row_id = batch_id.val * self.batch_size;
         if self.inner_position < row_id {
             let to_skip = row_id - self.inner_position;
             let skipped = self.inner.skip_records(to_skip)?;
+            assert_eq!(skipped, to_skip);
             self.inner_position += skipped;
         }
 
         let read = self.inner.read_records(self.batch_size)?;
+
+        // If there are no remaining records (EOF), return immediately without
+        // attempting to cache an empty batch. This prevents inserting zero-length
+        // arrays into the cache which can later cause panics when slicing.
+        if read == 0 {
+            return Ok(0);
+        }
+
         let array = self.inner.consume_batch()?;
 
         // Store in both shared cache and local cache
@@ -113,7 +125,7 @@ impl CachedArrayReader {
         // Note: if the shared cache is full (_cached == false), we continue without caching
         // The local cache will still store the data for this reader's use
 
-        self.local_cache.insert(batch_id, array);
+        self.local_buffer.insert(batch_id, array);
 
         self.inner_position += read;
         Ok(read)
@@ -127,10 +139,15 @@ impl CachedArrayReader {
         // Remove batches that are at least one batch behind the current position
         // This ensures we don't remove batches that might still be needed for the current batch
         // We can safely remove batch_id if current_batch_id > batch_id + 1
-        if current_batch_id > 1 {
+        if current_batch_id.val > 1 {
             let mut cache = self.cache.lock().unwrap();
-            for batch_id_to_remove in 0..(current_batch_id - 1) {
-                cache.remove(self.column_idx, batch_id_to_remove);
+            for batch_id_to_remove in 0..(current_batch_id.val - 1) {
+                cache.remove(
+                    self.column_idx,
+                    BatchID {
+                        val: batch_id_to_remove,
+                    },
+                );
             }
         }
     }
@@ -151,14 +168,14 @@ impl ArrayReader for CachedArrayReader {
             let batch_id = self.get_batch_id_from_position(self.outer_position + read);
 
             // Check local cache first
-            let cached = if let Some(array) = self.local_cache.get(&batch_id) {
+            let cached = if let Some(array) = self.local_buffer.get(&batch_id) {
                 Some(array.clone())
             } else {
                 // If not in local cache, check shared cache
                 let shared_cached = self.cache.lock().unwrap().get(self.column_idx, batch_id);
                 if let Some(array) = shared_cached.as_ref() {
                     // Store in local cache for later use in consume_batch
-                    self.local_cache.insert(batch_id, array.clone());
+                    self.local_buffer.insert(batch_id, array.clone());
                 }
                 shared_cached
             };
@@ -166,9 +183,9 @@ impl ArrayReader for CachedArrayReader {
             match cached {
                 Some(array) => {
                     let array_len = array.len();
-                    if array_len + batch_id * self.batch_size - self.outer_position > 0 {
+                    if array_len + batch_id.val * self.batch_size - self.outer_position > 0 {
                         // the cache batch has some records that we can select
-                        let v = array_len + batch_id * self.batch_size - self.outer_position;
+                        let v = array_len + batch_id.val * self.batch_size - self.outer_position;
                         let select_cnt = std::cmp::min(num_records - read, v);
                         read += select_cnt;
                         self.selections.push_back(RowSelector::select(select_cnt));
@@ -179,6 +196,11 @@ impl ArrayReader for CachedArrayReader {
                 }
                 None => {
                     let read_from_inner = self.fetch_batch(batch_id)?;
+
+                    // Reached end-of-file, no more records to read
+                    if read_from_inner == 0 {
+                        break;
+                    }
 
                     let select_from_this_batch = std::cmp::min(num_records - read, read_from_inner);
                     read += select_from_this_batch;
@@ -209,7 +231,7 @@ impl ArrayReader for CachedArrayReader {
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let row_count = self.selections.iter().map(|s| s.row_count).sum::<usize>();
         if row_count == 0 {
-            return Ok(new_empty_array(&self.inner.get_data_type()));
+            return Ok(new_empty_array(self.inner.get_data_type()));
         }
 
         let start_position = self.outer_position - row_count;
@@ -244,7 +266,7 @@ impl ArrayReader for CachedArrayReader {
             let mask_array = BooleanArray::from(mask);
             // Read from local cache instead of shared cache to avoid cache eviction issues
             let cached = self
-                .local_cache
+                .local_buffer
                 .get(&batch_id)
                 .expect("data must be already cached in the read_records call, this is a bug");
             let cached = cached.slice(overlap_start - batch_start, selection_length);
@@ -253,7 +275,7 @@ impl ArrayReader for CachedArrayReader {
         }
 
         self.selections.clear();
-        self.local_cache.clear();
+        self.local_buffer.clear();
 
         // For consumers, cleanup batches that have been completely consumed
         // This reduces the memory usage of the shared cache
@@ -262,7 +284,7 @@ impl ArrayReader for CachedArrayReader {
         }
 
         match selected_arrays.len() {
-            0 => Ok(new_empty_array(&self.inner.get_data_type())),
+            0 => Ok(new_empty_array(self.inner.get_data_type())),
             1 => Ok(selected_arrays.into_iter().next().unwrap()),
             _ => Ok(arrow_select::concat::concat(
                 &selected_arrays
@@ -501,14 +523,14 @@ mod tests {
         assert_eq!(read1, 3);
         assert_eq!(consumer_reader.outer_position, 3);
         // Check that batch 0 is in cache after read_records
-        assert!(cache.lock().unwrap().get(0, 0).is_some());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
 
         let array1 = consumer_reader.consume_batch().unwrap();
         assert_eq!(array1.len(), 3);
 
         // After first consume_batch, batch 0 should still be in cache
         // (current_batch_id = 3/3 = 1, cleanup only happens if current_batch_id > 1)
-        assert!(cache.lock().unwrap().get(0, 0).is_some());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
 
         // Read second batch (positions 3-5, batch 1)
         let read2 = consumer_reader.read_records(3).unwrap();
@@ -519,8 +541,8 @@ mod tests {
 
         // After second consume_batch, batch 0 should be removed
         // (current_batch_id = 6/3 = 2, cleanup removes batches 0..(2-1) = 0..1, so removes batch 0)
-        assert!(cache.lock().unwrap().get(0, 0).is_none());
-        assert!(cache.lock().unwrap().get(0, 1).is_some());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_none());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 1 }).is_some());
 
         // Read third batch (positions 6-8, batch 2)
         let read3 = consumer_reader.read_records(3).unwrap();
@@ -531,9 +553,9 @@ mod tests {
 
         // After third consume_batch, batches 0 and 1 should be removed
         // (current_batch_id = 9/3 = 3, cleanup removes batches 0..(3-1) = 0..2, so removes batches 0 and 1)
-        assert!(cache.lock().unwrap().get(0, 0).is_none());
-        assert!(cache.lock().unwrap().get(0, 1).is_none());
-        assert!(cache.lock().unwrap().get(0, 2).is_some());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_none());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 1 }).is_none());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 2 }).is_some());
     }
 
     #[test]
@@ -550,7 +572,7 @@ mod tests {
         assert_eq!(array1.len(), 3);
 
         // Verify batch 0 is in cache
-        assert!(cache.lock().unwrap().get(0, 0).is_some());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
 
         // Read second batch (positions 3-5) - producer should NOT remove batch 0
         let read2 = producer_reader.read_records(3).unwrap();
@@ -559,8 +581,8 @@ mod tests {
         assert_eq!(array2.len(), 3);
 
         // Verify both batch 0 and batch 1 are still present (no removal for producer)
-        assert!(cache.lock().unwrap().get(0, 0).is_some());
-        assert!(cache.lock().unwrap().get(0, 1).is_some());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 1 }).is_some());
     }
 
     #[test]
@@ -575,12 +597,15 @@ mod tests {
         assert_eq!(records_read, 3);
 
         // Verify data is in both caches
-        assert!(cache.lock().unwrap().get(0, 0).is_some());
-        assert!(cached_reader.local_cache.get(&0).is_some());
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
+        assert!(cached_reader
+            .local_buffer
+            .get(&BatchID { val: 0 })
+            .is_some());
 
         // Simulate cache eviction by manually removing from shared cache
-        cache.lock().unwrap().remove(0, 0);
-        assert!(cache.lock().unwrap().get(0, 0).is_none());
+        cache.lock().unwrap().remove(0, BatchID { val: 0 });
+        assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_none());
 
         // Even though shared cache was evicted, consume_batch should still work
         // because data is preserved in local cache
@@ -591,6 +616,6 @@ mod tests {
         assert_eq!(int32_array.values(), &[1, 2, 3]);
 
         // Local cache should be cleared after consume_batch
-        assert!(cached_reader.local_cache.is_empty());
+        assert!(cached_reader.local_buffer.is_empty());
     }
 }

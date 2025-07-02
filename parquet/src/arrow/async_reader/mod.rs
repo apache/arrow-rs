@@ -592,7 +592,11 @@ where
             Some(projection) => projection,
             None => ProjectionMask::none(meta.columns().len()),
         };
-        let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(batch_size, None)));
+        let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(
+            batch_size,
+            // None,
+            Some(1024 * 1024 * 100),
+        )));
 
         let mut row_group = InMemoryRowGroup {
             // schema: meta.schema_descr_ptr(),
@@ -696,7 +700,7 @@ where
         let filters = self.filter.as_ref()?;
         let mut cache_projection = filters.predicates.first()?.projection().clone();
         for predicate in filters.predicates.iter() {
-            cache_projection.union(&predicate.projection());
+            cache_projection.union(predicate.projection());
         }
         cache_projection.intersect(projection);
         Some(cache_projection)
