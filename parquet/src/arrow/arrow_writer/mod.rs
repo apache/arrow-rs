@@ -236,15 +236,12 @@ impl<W: Write + Send> ArrowWriter<W> {
 
         let max_row_group_size = props.max_row_group_size();
 
+        let props_ptr = Arc::new(props);
         let file_writer =
-            SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::new(props.clone()))?;
+            SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::clone(&props_ptr))?;
 
-        let row_group_writer_factory = ArrowRowGroupWriterFactory::new(
-            &file_writer,
-            schema,
-            arrow_schema.clone(),
-            props.into(),
-        );
+        let row_group_writer_factory =
+            ArrowRowGroupWriterFactory::new(&file_writer, schema, arrow_schema.clone(), props_ptr);
 
         Ok(Self {
             writer: file_writer,
@@ -797,8 +794,7 @@ impl ArrowColumnWriter {
 
 /// Encodes [`RecordBatch`] to a parquet row group
 pub struct ArrowRowGroupWriter {
-    /// [`ArrowColumnWriter`] for each column in a row group
-    pub writers: Vec<ArrowColumnWriter>,
+    writers: Vec<ArrowColumnWriter>,
     schema: SchemaRef,
     buffered_rows: usize,
 }
@@ -828,6 +824,11 @@ impl ArrowRowGroupWriter {
             .into_iter()
             .map(|writer| writer.close())
             .collect()
+    }
+
+    /// Get [`ArrowColumnWriter`]s for all columns in a row group
+    pub fn into_column_writers(self) -> Vec<ArrowColumnWriter> {
+        self.writers
     }
 }
 

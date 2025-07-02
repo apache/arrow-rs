@@ -1162,7 +1162,7 @@ async fn test_multi_threaded_encrypted_writing() {
         .unwrap();
 
     // Get column writers with encryptor from ArrowRowGroupWriter
-    let col_writers = arrow_row_group_writer.writers;
+    let col_writers = arrow_row_group_writer.into_column_writers();
     let num_columns = col_writers.len();
 
     // Create a channel for each column writer to send ArrowLeafColumn data to
@@ -1181,9 +1181,10 @@ async fn test_multi_threaded_encrypted_writing() {
     }
 
     // Send the ArrowLeafColumn data to the respective column writer channels
-    for (channel_idx, (array, field)) in to_write.iter().zip(schema.fields()).enumerate() {
-        for c in compute_leaves(field, array).into_iter().flatten() {
-            let _ = col_array_channels[channel_idx].send(c).await;
+    let mut worker_iter = col_array_channels.iter_mut();
+    for (array, field) in to_write.iter().zip(schema.fields()) {
+        for leaves in compute_leaves(field, array).unwrap() {
+            worker_iter.next().unwrap().send(leaves).await.unwrap();
         }
     }
     drop(col_array_channels);
