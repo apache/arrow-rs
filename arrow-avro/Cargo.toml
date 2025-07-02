@@ -52,12 +52,12 @@ zstd = { version = "0.13", default-features = false, optional = true }
 crc = { version = "3.0", optional = true }
 
 [dev-dependencies]
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+rand = { version = "0.9.1", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 criterion = { version = "0.6.0", default-features = false }
 tempfile = "3.3"
 arrow = { workspace = true }
 futures = "0.3.31"
-bytes = "1.10.0"
+bytes = "1.10.1"
 
 [[bench]]
 name = "avro_reader"
