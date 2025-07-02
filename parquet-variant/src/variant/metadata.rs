@@ -24,7 +24,7 @@ use crate::utils::{
 use arrow_schema::ArrowError;
 
 /// Header structure for [`VariantMetadata`]
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantMetadataHeader {
     version: u8,
     is_sorted: bool,
@@ -128,7 +128,7 @@ impl VariantMetadataHeader {
 ///
 /// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
     header: VariantMetadataHeader,

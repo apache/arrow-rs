@@ -263,7 +263,7 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
     });
 }
 
-// Creates objects with a homogenous schema (same field names)
+// Creates objects with a partially homogenous schema (same field names)
 /*
     {
         "id": &[u8],        // Following are common across all objects
@@ -272,7 +272,7 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
         "ended": u32,
         "span_name": String,
 
-        "attributees": {
+        "attributes": {
             // following fields are randomized
         }
     }
