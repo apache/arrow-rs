@@ -19,7 +19,7 @@ extern crate parquet_variant;
 
 use criterion::*;
 
-use parquet_variant::VariantBuilder;
+use parquet_variant::{Variant, VariantBuilder};
 use rand::{
     distr::{uniform::SampleUniform, Alphanumeric},
     rngs::StdRng,
@@ -388,6 +388,114 @@ fn bench_object_list_partially_same_schema(c: &mut Criterion) {
     });
 }
 
+// Benchmark validation performance
+fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
+    let mut rng = StdRng::seed_from_u64(42);
+    let mut string_table = RandomStringGenerator::new(&mut rng, 117);
+    
+    // Pre-generate test data
+    let mut test_data = Vec::new();
+    for _ in 0..100 {
+        let mut builder = VariantBuilder::new();
+        let mut obj = builder.new_object();
+        obj.insert("field1", string_table.next());
+        obj.insert("field2", rng.random::<i32>());
+        obj.insert("field3", rng.random::<bool>());
+        
+        let mut list = obj.new_list("field4");
+        for _ in 0..10 {
+            list.append_value(rng.random::<i32>());
+        }
+        list.finish();
+        
+        obj.finish().unwrap();
+        test_data.push(builder.finish());
+    }
+    
+    let mut group = c.benchmark_group("validation");
+    
+    group.bench_function("validated_construction", |b| {
+        b.iter(|| {
+            for (metadata, value) in &test_data {
+                let variant = Variant::try_new(metadata, value).unwrap();
+                hint::black_box(variant);
+            }
+        })
+    });
+    
+    group.bench_function("unvalidated_construction", |b| {
+        b.iter(|| {
+            for (metadata, value) in &test_data {
+                let variant = Variant::new(metadata, value);
+                hint::black_box(variant);
+            }
+        })
+    });
+    
+    group.bench_function("validation_cost", |b| {
+        // Create unvalidated variants first
+        let unvalidated: Vec<_> = test_data.iter()
+            .map(|(metadata, value)| Variant::new(metadata, value))
+            .collect();
+            
+        b.iter(|| {
+            for variant in &unvalidated {
+                let validated = variant.clone().validate().unwrap();
+                hint::black_box(validated);
+            }
+        })
+    });
+    
+    group.finish();
+}
+
+// Benchmark iteration performance on validated vs unvalidated variants
+fn bench_iteration_performance(c: &mut Criterion) {
+    let mut rng = StdRng::seed_from_u64(42);
+    
+    // Create a complex nested structure
+    let mut builder = VariantBuilder::new();
+    let mut list = builder.new_list();
+    
+    for i in 0..1000 {
+        let mut obj = list.new_object();
+        obj.insert(&format!("field_{}", i), rng.random::<i32>());
+        obj.insert("nested_data", format!("data_{}", i).as_str());
+        obj.finish().unwrap();
+    }
+    list.finish();
+    
+    let (metadata, value) = builder.finish();
+    let validated = Variant::try_new(&metadata, &value).unwrap();
+    let unvalidated = Variant::new(&metadata, &value);
+    
+    let mut group = c.benchmark_group("iteration");
+    
+    group.bench_function("validated_iteration", |b| {
+        b.iter(|| {
+            if let Some(list) = validated.as_list() {
+                for item in list.iter() {
+                    hint::black_box(item);
+                }
+            }
+        })
+    });
+    
+    group.bench_function("unvalidated_fallible_iteration", |b| {
+        b.iter(|| {
+            if let Some(list) = unvalidated.as_list() {
+                for item_result in list.iter_try() {
+                    if let Ok(item) = item_result {
+                        hint::black_box(item);
+                    }
+                }
+            }
+        })
+    });
+    
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_object_field_names_reverse_order,
@@ -396,7 +504,9 @@ criterion_group!(
     bench_object_unknown_schema,
     bench_object_list_unknown_schema,
     bench_object_partially_same_schema,
-    bench_object_list_partially_same_schema
+    bench_object_list_partially_same_schema,
+    bench_validation_validated_vs_unvalidated,
+    bench_iteration_performance
 );
 
 criterion_main!(benches);
