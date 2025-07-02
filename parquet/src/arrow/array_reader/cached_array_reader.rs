@@ -105,10 +105,13 @@ impl CachedArrayReader {
         // Store in both shared cache and local cache
         // The shared cache is for coordination between readers
         // The local cache ensures data is available for our consume_batch call
-        self.cache
+        let _cached = self
+            .cache
             .lock()
             .unwrap()
             .insert(self.column_idx, batch_id, array.clone());
+        // Note: if the shared cache is full (_cached == false), we continue without caching
+        // The local cache will still store the data for this reader's use
 
         self.local_cache.insert(batch_id, array);
 
