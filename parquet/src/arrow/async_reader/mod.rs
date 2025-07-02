@@ -38,7 +38,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
-use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache, RowGroups};
+use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache, RowGroups};
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection,
@@ -592,7 +592,7 @@ where
             Some(projection) => projection,
             None => ProjectionMask::none(meta.columns().len()),
         };
-        let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(batch_size)));
+        let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(batch_size, None)));
 
         let mut row_group = InMemoryRowGroup {
             // schema: meta.schema_descr_ptr(),
@@ -625,7 +625,11 @@ where
                     .build_array_reader_with_cache(
                         self.fields.as_deref(),
                         predicate.projection(),
-                        (&cache_projection, row_group_cache.clone(), crate::arrow::array_reader::CacheRole::Producer),
+                        CacheOptions {
+                            projection_mask: &cache_projection,
+                            cache: row_group_cache.clone(),
+                            role: crate::arrow::array_reader::CacheRole::Producer,
+                        },
                     )?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
@@ -676,7 +680,11 @@ where
         let array_reader = ArrayReaderBuilder::new(&row_group).build_array_reader_with_cache(
             self.fields.as_deref(),
             &projection,
-            (&cache_projection, row_group_cache.clone(), crate::arrow::array_reader::CacheRole::Consumer),
+            CacheOptions {
+                projection_mask: &cache_projection,
+                cache: row_group_cache.clone(),
+                role: crate::arrow::array_reader::CacheRole::Consumer,
+            },
         )?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
