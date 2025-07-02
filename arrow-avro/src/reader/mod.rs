@@ -177,6 +177,16 @@ impl Decoder {
             Ok(Some(batch))
         }
     }
+
+    /// Returns the number of rows that can be added to this decoder before it is full.
+    pub fn capacity(&self) -> usize {
+        self.batch_size.saturating_sub(self.decoded_rows)
+    }
+
+    /// Returns true if the decoder has reached its capacity for the current batch.
+    pub fn batch_is_full(&self) -> bool {
+        self.capacity() == 0
+    }
 }
 
 /// A builder to create an [`Avro Reader`](Reader) that reads Avro data
@@ -208,6 +218,32 @@ impl ReaderBuilder {
     /// - `schema` = None
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn make_record_decoder(&self, schema: &AvroSchema<'_>) -> Result<RecordDecoder, ArrowError> {
+        let root_field = AvroField::try_from(schema)?;
+        RecordDecoder::try_new_with_options(
+            root_field.data_type(),
+            self.utf8_view,
+            self.strict_mode,
+        )
+    }
+
+    fn build_impl<R: BufRead>(self, reader: &mut R) -> Result<(Header, Decoder), ArrowError> {
+        let header = read_header(reader)?;
+        let record_decoder = if let Some(schema) = &self.schema {
+            self.make_record_decoder(schema)?
+        } else {
+            let avro_schema: Option<AvroSchema<'_>> = header
+                .schema()
+                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+            let avro_schema = avro_schema.ok_or_else(|| {
+                ArrowError::ParseError("No Avro schema present in file header".to_string())
+            })?;
+            self.make_record_decoder(&avro_schema)?
+        };
+        let decoder = Decoder::new(record_decoder, self.batch_size);
+        Ok((header, decoder))
     }
 
     /// Sets the row-based batch size
@@ -246,32 +282,14 @@ impl ReaderBuilder {
 
     /// Create a [`Reader`] from this builder and a `BufRead`
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
-        let header = read_header(&mut reader)?;
-        let compression = header.compression()?;
-        let root_field = if let Some(schema) = &self.schema {
-            AvroField::try_from(schema)?
-        } else {
-            let avro_schema: Option<AvroSchema<'_>> = header
-                .schema()
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
-            let avro_schema = avro_schema.ok_or_else(|| {
-                ArrowError::ParseError("No Avro schema present in file header".to_string())
-            })?;
-            AvroField::try_from(&avro_schema)?
-        };
-        let record_decoder = RecordDecoder::try_new_with_options(
-            root_field.data_type(),
-            self.utf8_view,
-            self.strict_mode,
-        )?;
-        let decoder = Decoder::new(record_decoder, self.batch_size);
+        let (header, decoder) = self.build_impl(&mut reader)?;
         Ok(Reader {
             reader,
             header,
-            compression,
             decoder,
             block_decoder: BlockDecoder::default(),
             block_data: Vec::new(),
+            block_cursor: 0,
             finished: false,
         })
     }
@@ -280,46 +298,33 @@ impl ReaderBuilder {
     /// reading and parsing the Avro file's header. This will
     /// not create a full [`Reader`].
     pub fn build_decoder<R: BufRead>(self, mut reader: R) -> Result<Decoder, ArrowError> {
-        let record_decoder = if let Some(schema) = self.schema {
-            let root_field = AvroField::try_from(&schema)?;
-            RecordDecoder::try_new_with_options(
-                root_field.data_type(),
-                self.utf8_view,
-                self.strict_mode,
-            )?
-        } else {
-            let header = read_header(&mut reader)?;
-            let avro_schema = header
-                .schema()
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?
-                .ok_or_else(|| {
-                    ArrowError::ParseError("No Avro schema present in file header".to_string())
-                })?;
-            let root_field = AvroField::try_from(&avro_schema)?;
-            RecordDecoder::try_new_with_options(
-                root_field.data_type(),
-                self.utf8_view,
-                self.strict_mode,
-            )?
-        };
-        Ok(Decoder::new(record_decoder, self.batch_size))
+        match self.schema {
+            Some(ref schema) => {
+                let record_decoder = self.make_record_decoder(schema)?;
+                Ok(Decoder::new(record_decoder, self.batch_size))
+            }
+            None => {
+                let (_, decoder) = self.build_impl(&mut reader)?;
+                Ok(decoder)
+            }
+        }
     }
 }
 
 /// A high-level Avro `Reader` that reads container-file blocks
 /// and feeds them into a row-level [`Decoder`].
 #[derive(Debug)]
-pub struct Reader<R> {
+pub struct Reader<R: BufRead> {
     reader: R,
     header: Header,
-    compression: Option<crate::compression::CompressionCodec>,
     decoder: Decoder,
     block_decoder: BlockDecoder,
     block_data: Vec<u8>,
+    block_cursor: usize,
     finished: bool,
 }
 
-impl<R> Reader<R> {
+impl<R: BufRead> Reader<R> {
     /// Return the Arrow schema discovered from the Avro file header
     pub fn schema(&self) -> SchemaRef {
         self.decoder.schema()
@@ -329,64 +334,41 @@ impl<R> Reader<R> {
     pub fn avro_header(&self) -> &Header {
         &self.header
     }
-}
 
-impl<R: BufRead> Reader<R> {
     /// Reads the next [`RecordBatch`] from the Avro file or `Ok(None)` on EOF
     fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        if self.finished {
-            return Ok(None);
-        }
-        loop {
-            if !self.block_data.is_empty() {
-                let consumed = self.decoder.decode(&self.block_data)?;
-                if consumed > 0 {
-                    self.block_data.drain(..consumed);
-                }
-                match self.decoder.flush()? {
-                    None => {
-                        if !self.block_data.is_empty() {
-                            break;
-                        }
-                    }
-                    Some(batch) => {
-                        return Ok(Some(batch));
-                    }
-                }
-            }
-            let maybe_block = {
+        'outer: while !self.finished && !self.decoder.batch_is_full() {
+            while self.block_cursor == self.block_data.len() {
                 let buf = self.reader.fill_buf()?;
                 if buf.is_empty() {
-                    None
-                } else {
-                    let read_len = buf.len();
-                    let consumed_len = self.block_decoder.decode(buf)?;
-                    self.reader.consume(consumed_len);
-                    if consumed_len == 0 && read_len != 0 {
-                        return Err(ArrowError::ParseError(
-                            "Could not decode next Avro block from partial data".to_string(),
-                        ));
-                    }
-                    self.block_decoder.flush()
+                    self.finished = true;
+                    break 'outer;
                 }
-            };
-            match maybe_block {
-                Some(block) => {
-                    let block_data = if let Some(ref codec) = self.compression {
+                // Try to decode another block from the buffered reader.
+                let consumed = self.block_decoder.decode(buf)?;
+                self.reader.consume(consumed);
+                if let Some(block) = self.block_decoder.flush() {
+                    // Successfully decoded a block.
+                    let block_data = if let Some(ref codec) = self.header.compression()? {
                         codec.decompress(&block.data)?
                     } else {
                         block.data
                     };
                     self.block_data = block_data;
+                    self.block_cursor = 0;
+                } else if consumed == 0 {
+                    // The block decoder made no progress on a non-empty buffer.
+                    return Err(ArrowError::ParseError(
+                        "Could not decode next Avro block from partial data".to_string(),
+                    ));
                 }
-                None => {
-                    self.finished = true;
-                    if !self.block_data.is_empty() {
-                        let consumed = self.decoder.decode(&self.block_data)?;
-                        self.block_data.drain(..consumed);
-                    }
-                    return self.decoder.flush();
-                }
+            }
+            // Try to decode more rows from the current block.
+            let consumed = self.decoder.decode(&self.block_data[self.block_cursor..])?;
+            if consumed == 0 && self.block_cursor < self.block_data.len() {
+                self.block_cursor = self.block_data.len();
+            } else {
+                self.block_cursor += consumed;
             }
         }
         self.decoder.flush()
