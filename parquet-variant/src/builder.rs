@@ -615,6 +615,14 @@ impl<'a> ListBuilder<'a> {
     }
 }
 
+/// Drop implementation for ListBuilder does nothing
+/// as the `finish` method must be called to finalize the list.
+/// This is to ensure that the list is always finalized before its parent builder
+/// is finalized.
+impl Drop for ListBuilder<'_> {
+    fn drop(&mut self) {}
+}
+
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
@@ -764,6 +772,14 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
 
         Ok(())
     }
+}
+
+/// Drop implementation for ObjectBuilder does nothing
+/// as the `finish` method must be called to finalize the object.
+/// This is to ensure that the object is always finalized before its parent builder
+/// is finalized.
+impl Drop for ObjectBuilder<'_, '_> {
+    fn drop(&mut self) {}
 }
 
 #[cfg(test)]
