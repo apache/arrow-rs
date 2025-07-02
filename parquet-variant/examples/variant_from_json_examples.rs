@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let json_result = variant_to_json_string(&variant)?;
     let json_value = variant_to_json_value(&variant)?;
     let pretty_json = serde_json::to_string_pretty(&json_value)?;
-    println!("{}", pretty_json);
+    println!("{pretty_json}");
 
     let mut buffer = Vec::new();
     variant_to_json(&mut buffer, &variant)?;

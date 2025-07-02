@@ -18,7 +18,7 @@
 //! Module for parsing JSON strings as Variant
 
 pub use crate::variant::{VariantDecimal4, VariantDecimal8};
-use crate::{VariantBuilderExt, ListBuilder, ObjectBuilder, Variant, VariantBuilder};
+use crate::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use arrow_schema::ArrowError;
 use rust_decimal::prelude::*;
 use serde_json::{Number, Value};
@@ -125,7 +125,7 @@ fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(),
                 };
                 append_json(value, &mut field_builder)?;
             }
-            obj_builder.finish();
+            obj_builder.finish().unwrap();
         }
     };
     Ok(())

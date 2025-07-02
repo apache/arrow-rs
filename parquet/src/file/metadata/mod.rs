@@ -208,22 +208,6 @@ impl ParquetMetaData {
         self.file_decryptor = file_decryptor;
     }
 
-    /// Creates Parquet metadata from file metadata, a list of row
-    /// group metadata, and the column index structures.
-    #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataBuilder")]
-    pub fn new_with_page_index(
-        file_metadata: FileMetaData,
-        row_groups: Vec<RowGroupMetaData>,
-        column_index: Option<ParquetColumnIndex>,
-        offset_index: Option<ParquetOffsetIndex>,
-    ) -> Self {
-        ParquetMetaDataBuilder::new(file_metadata)
-            .set_row_groups(row_groups)
-            .set_column_index(column_index)
-            .set_offset_index(offset_index)
-            .build()
-    }
-
     /// Convert this ParquetMetaData into a [`ParquetMetaDataBuilder`]
     pub fn into_builder(self) -> ParquetMetaDataBuilder {
         self.into()
@@ -1394,20 +1378,6 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets optional file path for this column chunk.
     pub fn set_file_path(mut self, value: String) -> Self {
         self.0.file_path = Some(value);
-        self
-    }
-
-    /// Sets file offset in bytes.
-    ///
-    /// This field was meant to provide an alternate to storing `ColumnMetadata` directly in
-    /// the `ColumnChunkMetadata`. However, most Parquet readers assume the `ColumnMetadata`
-    /// is stored inline and ignore this field.
-    #[deprecated(
-        since = "53.0.0",
-        note = "The Parquet specification requires this field to be 0"
-    )]
-    pub fn set_file_offset(mut self, value: i64) -> Self {
-        self.0.file_offset = value;
         self
     }
 

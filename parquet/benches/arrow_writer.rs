@@ -19,8 +19,6 @@
 extern crate criterion;
 
 use criterion::{Criterion, Throughput};
-use std::env;
-use std::fs::File;
 
 extern crate arrow;
 extern crate parquet;
@@ -349,9 +347,8 @@ fn write_batch_enable_bloom_filter(batch: &RecordBatch) -> Result<()> {
 
 #[inline]
 fn write_batch_with_option(batch: &RecordBatch, props: Option<WriterProperties>) -> Result<()> {
-    let path = env::temp_dir().join("arrow_writer.temp");
-    let file = File::create(path).unwrap();
-    let mut writer = ArrowWriter::try_new(file, batch.schema(), props)?;
+    let mut file = vec![];
+    let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), props)?;
 
     writer.write(batch)?;
     writer.close()?;
