@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use crate::arrow::array_reader::row_group_cache::BatchID;
 use crate::arrow::array_reader::{row_group_cache::RowGroupCache, ArrayReader};
 use crate::arrow::arrow_reader::RowSelector;
@@ -598,10 +615,7 @@ mod tests {
 
         // Verify data is in both caches
         assert!(cache.lock().unwrap().get(0, BatchID { val: 0 }).is_some());
-        assert!(cached_reader
-            .local_buffer
-            .get(&BatchID { val: 0 })
-            .is_some());
+        assert!(cached_reader.local_buffer.contains_key(&BatchID { val: 0 }));
 
         // Simulate cache eviction by manually removing from shared cache
         cache.lock().unwrap().remove(0, BatchID { val: 0 });
