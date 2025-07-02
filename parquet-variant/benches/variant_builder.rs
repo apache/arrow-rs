@@ -485,10 +485,8 @@ fn bench_iteration_performance(c: &mut Criterion) {
     group.bench_function("unvalidated_fallible_iteration", |b| {
         b.iter(|| {
             if let Some(list) = unvalidated.as_list() {
-                for item_result in list.iter_try() {
-                    if let Ok(item) = item_result {
-                        hint::black_box(item);
-                    }
+                for item in list.iter_try().flatten() {
+                    hint::black_box(item);
                 }
             }
         })
