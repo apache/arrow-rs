@@ -392,7 +392,7 @@ fn bench_object_list_partially_same_schema(c: &mut Criterion) {
 fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(42);
     let mut string_table = RandomStringGenerator::new(&mut rng, 117);
-    
+
     // Pre-generate test data
     let mut test_data = Vec::new();
     for _ in 0..100 {
@@ -401,19 +401,19 @@ fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
         obj.insert("field1", string_table.next());
         obj.insert("field2", rng.random::<i32>());
         obj.insert("field3", rng.random::<bool>());
-        
+
         let mut list = obj.new_list("field4");
         for _ in 0..10 {
             list.append_value(rng.random::<i32>());
         }
         list.finish();
-        
+
         obj.finish().unwrap();
         test_data.push(builder.finish());
     }
-    
+
     let mut group = c.benchmark_group("validation");
-    
+
     group.bench_function("validated_construction", |b| {
         b.iter(|| {
             for (metadata, value) in &test_data {
@@ -422,7 +422,7 @@ fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
             }
         })
     });
-    
+
     group.bench_function("unvalidated_construction", |b| {
         b.iter(|| {
             for (metadata, value) in &test_data {
@@ -431,13 +431,14 @@ fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
             }
         })
     });
-    
+
     group.bench_function("validation_cost", |b| {
         // Create unvalidated variants first
-        let unvalidated: Vec<_> = test_data.iter()
+        let unvalidated: Vec<_> = test_data
+            .iter()
             .map(|(metadata, value)| Variant::new(metadata, value))
             .collect();
-            
+
         b.iter(|| {
             for variant in &unvalidated {
                 let validated = variant.clone().validate().unwrap();
@@ -445,18 +446,18 @@ fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
             }
         })
     });
-    
+
     group.finish();
 }
 
 // Benchmark iteration performance on validated vs unvalidated variants
 fn bench_iteration_performance(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(42);
-    
+
     // Create a complex nested structure
     let mut builder = VariantBuilder::new();
     let mut list = builder.new_list();
-    
+
     for i in 0..1000 {
         let mut obj = list.new_object();
         obj.insert(&format!("field_{}", i), rng.random::<i32>());
@@ -464,13 +465,13 @@ fn bench_iteration_performance(c: &mut Criterion) {
         obj.finish().unwrap();
     }
     list.finish();
-    
+
     let (metadata, value) = builder.finish();
     let validated = Variant::try_new(&metadata, &value).unwrap();
     let unvalidated = Variant::new(&metadata, &value);
-    
+
     let mut group = c.benchmark_group("iteration");
-    
+
     group.bench_function("validated_iteration", |b| {
         b.iter(|| {
             if let Some(list) = validated.as_list() {
@@ -480,7 +481,7 @@ fn bench_iteration_performance(c: &mut Criterion) {
             }
         })
     });
-    
+
     group.bench_function("unvalidated_fallible_iteration", |b| {
         b.iter(|| {
             if let Some(list) = unvalidated.as_list() {
@@ -492,7 +493,7 @@ fn bench_iteration_performance(c: &mut Criterion) {
             }
         })
     });
-    
+
     group.finish();
 }
 
