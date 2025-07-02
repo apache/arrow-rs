@@ -89,36 +89,15 @@ fn variant_from_number<'a, 'b>(n: &Number) -> Result<Variant<'a, 'b>, ArrowError
             Ok(i.into())
         }
     } else {
-        // Try decimal
-        // TODO: Replace with custom decimal parsing as the rust_decimal library only supports
-        // a max unscaled value of 2^96.
-        match Decimal::from_str_exact(n.as_str()) {
-            Ok(dec) => {
-                let unscaled: i128 = dec.mantissa();
-                let scale = dec.scale() as u8;
-                if unscaled.abs() <= VariantDecimal4::MAX_UNSCALED_VALUE as i128
-                    && scale <= VariantDecimal4::MAX_PRECISION as u8
-                {
-                    (unscaled as i32, scale).try_into()
-                } else if unscaled.abs() <= VariantDecimal8::MAX_UNSCALED_VALUE as i128
-                    && scale <= VariantDecimal8::MAX_PRECISION as u8
-                {
-                    (unscaled as i64, scale).try_into()
-                } else {
-                    (unscaled, scale).try_into()
-                }
-            }
-            Err(_) => {
-                // Try double
-                match n.as_f64() {
-                    Some(f) => return Ok(f.into()),
-                    None => Err(ArrowError::InvalidArgumentError(format!(
-                        "Failed to parse {} as number",
-                        n.as_str()
-                    ))),
-                }?
-            }
-        }
+        // Todo: Try decimal once we implement custom JSON parsing where we have access to strings
+        // Try double - currently json_to_variant does not produce decimal
+        match n.as_f64() {
+            Some(f) => return Ok(f.into()),
+            None => Err(ArrowError::InvalidArgumentError(format!(
+                "Failed to parse {} as number",
+                n.to_string()
+            ))),
+        }?
     }
 }
 

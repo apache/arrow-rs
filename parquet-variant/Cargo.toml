@@ -37,7 +37,7 @@ arrow-schema = { workspace = true }
 chrono = { workspace = true }
 # "arbitrary_precision" allows us to manually parse numbers. "preserve_order" does not automatically
 # sort object keys
-serde_json = { version = "1.0", features = ["arbitrary_precision", "preserve_order"] }
+serde_json = { version = "1.0" }
 rust_decimal = "1.37.2"
 base64 = "0.22"
 
