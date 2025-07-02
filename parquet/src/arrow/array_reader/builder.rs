@@ -21,6 +21,7 @@ use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
 use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
+use crate::arrow::array_reader::cached_array_reader::CacheRole;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::row_group_cache::RowGroupCache;
@@ -41,7 +42,8 @@ pub struct ArrayReaderBuilder<'a> {
     row_groups: &'a dyn RowGroups,
 }
 
-type CacheContext<'a> = (&'a ProjectionMask, Arc<Mutex<RowGroupCache>>);
+/// Cache context type containing projection mask, cache, and role
+type CacheContext<'a> = (&'a ProjectionMask, Arc<Mutex<RowGroupCache>>, CacheRole);
 
 impl<'a> ArrayReaderBuilder<'a> {
     pub fn new(row_groups: &'a dyn RowGroups) -> Self {
@@ -96,13 +98,13 @@ impl<'a> ArrayReaderBuilder<'a> {
                 let Some(reader) = self.build_primitive_reader(field, mask)? else {
                     return Ok(None);
                 };
-                let Some((cache_mask, cache)) = cache_context else {
+                let Some((cache_mask, cache, role)) = cache_context else {
                     return Ok(Some(reader));
                 };
 
                 if cache_mask.leaf_included(col_idx) {
                     Ok(Some(Box::new(CachedArrayReader::new(
-                        reader, cache, col_idx,
+                        reader, cache, col_idx, role,
                     ))))
                 } else {
                     Ok(Some(reader))

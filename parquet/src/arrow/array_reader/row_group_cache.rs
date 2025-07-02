@@ -48,6 +48,13 @@ impl RowGroupCache {
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }
+
+    /// Removes a cached array for the given column and row ID
+    /// Returns true if the entry was found and removed, false otherwise
+    pub fn remove(&mut self, column_idx: usize, row_id: usize) -> bool {
+        let key = CacheKey { column_idx, row_id };
+        self.cache.remove(&key).is_some()
+    }
 }
 
 #[cfg(test)]
@@ -76,5 +83,45 @@ mod tests {
         // Test different row_id
         let miss = cache.get(0, 1000);
         assert!(miss.is_none());
+    }
+
+    #[test]
+    fn test_cache_remove() {
+        let mut cache = RowGroupCache::new(1000);
+
+        // Create test arrays
+        let array1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let array2: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+
+        // Insert arrays
+        cache.insert(0, 0, array1.clone());
+        cache.insert(0, 1000, array2.clone());
+        cache.insert(1, 0, array1.clone());
+
+        // Verify they're there
+        assert!(cache.get(0, 0).is_some());
+        assert!(cache.get(0, 1000).is_some());
+        assert!(cache.get(1, 0).is_some());
+
+        // Remove one entry
+        let removed = cache.remove(0, 0);
+        assert!(removed);
+        assert!(cache.get(0, 0).is_none());
+        
+        // Other entries should still be there
+        assert!(cache.get(0, 1000).is_some());
+        assert!(cache.get(1, 0).is_some());
+
+        // Try to remove non-existent entry
+        let not_removed = cache.remove(0, 0);
+        assert!(!not_removed);
+
+        // Remove remaining entries
+        assert!(cache.remove(0, 1000));
+        assert!(cache.remove(1, 0));
+        
+        // Cache should be empty
+        assert!(cache.get(0, 1000).is_none());
+        assert!(cache.get(1, 0).is_none());
     }
 }

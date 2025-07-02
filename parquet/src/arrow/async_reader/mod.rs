@@ -625,7 +625,7 @@ where
                     .build_array_reader_with_cache(
                         self.fields.as_deref(),
                         predicate.projection(),
-                        (&cache_projection, row_group_cache.clone()),
+                        (&cache_projection, row_group_cache.clone(), crate::arrow::array_reader::CacheRole::Producer),
                     )?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
@@ -676,7 +676,7 @@ where
         let array_reader = ArrayReaderBuilder::new(&row_group).build_array_reader_with_cache(
             self.fields.as_deref(),
             &projection,
-            (&cache_projection, row_group_cache.clone()),
+            (&cache_projection, row_group_cache.clone(), crate::arrow::array_reader::CacheRole::Consumer),
         )?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
