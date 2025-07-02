@@ -24,12 +24,9 @@ pub struct CachedArrayReader {
     outer_position: usize,
     /// Current position in the inner reader
     inner_position: usize,
-    /// Number of records accumulated to be returned in next consume_batch()
-    pending_records: usize,
-    /// Number of records to skip in next batch operation
-    pending_skips: usize,
     /// Batch size for the cache
     batch_size: usize,
+    /// Selections to be applied to the next consume_batch()
     selections: VecDeque<RowSelector>,
 }
 
@@ -41,29 +38,21 @@ impl CachedArrayReader {
         column_idx: usize,
     ) -> Self {
         let batch_size = cache.lock().unwrap().batch_size();
+
         Self {
             inner,
             cache,
             column_idx,
             outer_position: 0,
             inner_position: 0,
-            pending_records: 0,
-            pending_skips: 0,
             batch_size,
             selections: VecDeque::new(),
         }
     }
 
-    /// Gets the batch size from the cache
-    fn batch_size(&self) -> usize {
-        self.batch_size
-    }
-
     fn get_batch_id_from_position(&self, position: usize) -> usize {
         position / self.batch_size
     }
-
-    fn sync_inner_position(&mut self) {}
 
     fn fetch_batch(&mut self, batch_id: usize) -> Result<usize> {
         let row_id = batch_id * self.batch_size;

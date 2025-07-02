@@ -18,7 +18,7 @@ pub struct CacheKey {
 pub struct RowGroupCache {
     /// Cache storage mapping (column_idx, row_id) -> ArrayRef
     cache: HashMap<CacheKey, ArrayRef>,
-    /// Batch size used for cache entries
+    /// Cache granularity
     batch_size: usize,
 }
 

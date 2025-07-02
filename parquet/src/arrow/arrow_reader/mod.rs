@@ -755,16 +755,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }
-
-    fn compute_cache_projection(&self, projection: &ProjectionMask) -> Option<ProjectionMask> {
-        let filters = self.filter.as_ref()?;
-        let mut cache_projection = filters.predicates.first()?.projection().clone();
-        for predicate in filters.predicates.iter() {
-            cache_projection.union(&predicate.projection());
-        }
-        cache_projection.intersect(projection);
-        Some(cache_projection)
-    }
 }
 
 struct ReaderRowGroups<T: ChunkReader> {
