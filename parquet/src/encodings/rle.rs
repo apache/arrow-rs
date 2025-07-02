@@ -136,7 +136,7 @@ impl RleEncoder {
         } else {
             if self.repeat_count >= 8 {
                 // The current RLE run has ended and we've gathered enough. Flush first.
-                assert_eq!(self.bit_packed_count, 0);
+                debug_assert_eq!(self.bit_packed_count, 0);
                 self.flush_rle_run();
             }
             self.repeat_count = 1;
@@ -147,7 +147,7 @@ impl RleEncoder {
         self.num_buffered_values += 1;
         if self.num_buffered_values == 8 {
             // Buffered values are full. Flush them.
-            assert_eq!(self.bit_packed_count % 8, 0);
+            debug_assert_eq!(self.bit_packed_count % 8, 0);
             self.flush_buffered_values();
         }
     }
@@ -221,7 +221,7 @@ impl RleEncoder {
     }
 
     fn flush_rle_run(&mut self) {
-        assert!(self.repeat_count > 0);
+        debug_assert!(self.repeat_count > 0);
         let indicator_value = self.repeat_count << 1;
         self.bit_writer.put_vlq_int(indicator_value as u64);
         self.bit_writer.put_aligned(
@@ -253,14 +253,13 @@ impl RleEncoder {
         }
     }
 
-    #[inline(never)]
     fn flush_buffered_values(&mut self) {
         if self.repeat_count >= 8 {
             self.num_buffered_values = 0;
             if self.bit_packed_count > 0 {
                 // In this case we choose RLE encoding. Flush the current buffered values
                 // as bit-packed encoding.
-                assert_eq!(self.bit_packed_count % 8, 0);
+                debug_assert_eq!(self.bit_packed_count % 8, 0);
                 self.flush_bit_packed_run(true)
             }
             return;
@@ -271,7 +270,7 @@ impl RleEncoder {
         if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
             // We've reached the maximum value that can be hold in a single bit-packed
             // run.
-            assert!(self.indicator_byte_pos >= 0);
+            debug_assert!(self.indicator_byte_pos >= 0);
             self.flush_bit_packed_run(true);
         } else {
             self.flush_bit_packed_run(false);
