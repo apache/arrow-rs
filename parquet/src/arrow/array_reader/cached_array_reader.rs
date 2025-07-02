@@ -5,7 +5,7 @@ use arrow_array::{new_empty_array, ArrayRef, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 /// Role of the cached array reader
@@ -59,6 +59,9 @@ pub struct CachedArrayReader {
     selections: VecDeque<RowSelector>,
     /// Role of this reader (Producer or Consumer)
     role: CacheRole,
+    /// Local cache to store batches between read_records and consume_batch calls
+    /// This ensures data is available even if the shared cache evicts items
+    local_cache: HashMap<usize, ArrayRef>,
 }
 
 impl CachedArrayReader {
@@ -80,6 +83,7 @@ impl CachedArrayReader {
             batch_size,
             selections: VecDeque::new(),
             role,
+            local_cache: HashMap::new(),
         }
     }
 
@@ -98,12 +102,15 @@ impl CachedArrayReader {
         let read = self.inner.read_records(self.batch_size)?;
         let array = self.inner.consume_batch()?;
 
-        // Both producers and consumers insert data into the cache when fetching from underlying reader
-        // The difference is that consumers will remove consumed batches later
+        // Store in both shared cache and local cache
+        // The shared cache is for coordination between readers
+        // The local cache ensures data is available for our consume_batch call
         self.cache
             .lock()
             .unwrap()
-            .insert(self.column_idx, batch_id, array);
+            .insert(self.column_idx, batch_id, array.clone());
+
+        self.local_cache.insert(batch_id, array);
 
         self.inner_position += read;
         Ok(read)
@@ -139,7 +146,19 @@ impl ArrayReader for CachedArrayReader {
         let mut read = 0;
         while read < num_records {
             let batch_id = self.get_batch_id_from_position(self.outer_position + read);
-            let cached = self.cache.lock().unwrap().get(self.column_idx, batch_id);
+
+            // Check local cache first
+            let cached = if let Some(array) = self.local_cache.get(&batch_id) {
+                Some(array.clone())
+            } else {
+                // If not in local cache, check shared cache
+                let shared_cached = self.cache.lock().unwrap().get(self.column_idx, batch_id);
+                if let Some(array) = shared_cached.as_ref() {
+                    // Store in local cache for later use in consume_batch
+                    self.local_cache.insert(batch_id, array.clone());
+                }
+                shared_cached
+            };
 
             match cached {
                 Some(array) => {
@@ -220,21 +239,21 @@ impl ArrayReader for CachedArrayReader {
             }
 
             let mask_array = BooleanArray::from(mask);
+            // Read from local cache instead of shared cache to avoid cache eviction issues
             let cached = self
-                .cache
-                .lock()
-                .unwrap()
-                .get(self.column_idx, batch_id)
-                .expect("data must be already cached in the read_records call");
+                .local_cache
+                .get(&batch_id)
+                .expect("data must be already cached in the read_records call, this is a bug");
             let cached = cached.slice(overlap_start - batch_start, selection_length);
             let filtered = arrow_select::filter::filter(&cached, &mask_array)?;
             selected_arrays.push(filtered);
         }
 
         self.selections.clear();
+        self.local_cache.clear();
 
         // For consumers, cleanup batches that have been completely consumed
-        // This reduces the memory usage of the cache
+        // This reduces the memory usage of the shared cache
         if self.role == CacheRole::Consumer {
             self.cleanup_consumed_batches();
         }
@@ -539,5 +558,36 @@ mod tests {
         // Verify both batch 0 and batch 1 are still present (no removal for producer)
         assert!(cache.lock().unwrap().get(0, 0).is_some());
         assert!(cache.lock().unwrap().get(0, 1).is_some());
+    }
+
+    #[test]
+    fn test_local_cache_protects_against_eviction() {
+        let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6]);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3))); // Batch size 3
+        let mut cached_reader =
+            CachedArrayReader::new(Box::new(mock_reader), cache.clone(), 0, CacheRole::Consumer);
+
+        // Read records which should populate both shared and local cache
+        let records_read = cached_reader.read_records(3).unwrap();
+        assert_eq!(records_read, 3);
+
+        // Verify data is in both caches
+        assert!(cache.lock().unwrap().get(0, 0).is_some());
+        assert!(cached_reader.local_cache.get(&0).is_some());
+
+        // Simulate cache eviction by manually removing from shared cache
+        cache.lock().unwrap().remove(0, 0);
+        assert!(cache.lock().unwrap().get(0, 0).is_none());
+
+        // Even though shared cache was evicted, consume_batch should still work
+        // because data is preserved in local cache
+        let array = cached_reader.consume_batch().unwrap();
+        assert_eq!(array.len(), 3);
+
+        let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int32_array.values(), &[1, 2, 3]);
+
+        // Local cache should be cleared after consume_batch
+        assert!(cached_reader.local_cache.is_empty());
     }
 }
