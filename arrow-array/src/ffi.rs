@@ -1576,7 +1576,7 @@ mod tests_from_ffi {
         let mut strings = vec![];
 
         for i in 0..1000 {
-            strings.push(format!("string: {}", i));
+            strings.push(format!("string: {i}"));
         }
 
         let string_array = StringArray::from(strings);

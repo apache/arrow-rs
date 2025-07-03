@@ -43,10 +43,7 @@ that demonstrate how to build a Flight server implemented with [tonic](https://d
 
 ## Feature Flags
 
-- `flight-sql`: Enables experimental support for
-  [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
-
-- `flight-sql-experimental` : Deprecated feature and will be removed in next release
+- `flight-sql`: Support for [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
 
 - `tls`: Enables `tls` on `tonic`
 

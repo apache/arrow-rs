@@ -940,7 +940,7 @@ impl std::fmt::Debug for UnionArray {
 
         if let Some(offsets) = &self.offsets {
             writeln!(f, "-- offsets buffer:")?;
-            writeln!(f, "{:?}", offsets)?;
+            writeln!(f, "{offsets:?}")?;
         }
 
         let fields = match self.data_type() {

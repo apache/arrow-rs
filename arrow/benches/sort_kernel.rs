@@ -113,6 +113,43 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
+    // This will generate string view arrays with 2^12 elements, each with a length fixed 10, and without nulls.
+    let arr = create_string_view_array_with_fixed_len(2usize.pow(12), 0.0, 10);
+    c.bench_function("sort string_view[10] to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    // This will generate string view arrays with 2^12 elements, each with a length fixed 10, and with 50% nulls.
+    let arr = create_string_view_array_with_fixed_len(2usize.pow(12), 0.5, 10);
+    c.bench_function("sort string_view[10] nulls to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    // This will generate string view arrays with 2^12 elements, each with a length randomly chosen from 0 to max 400, and without nulls.
+    let arr = create_string_view_array(2usize.pow(12), 0.0);
+    c.bench_function("sort string_view[0-400] to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    // This will generate string view arrays with 2^12 elements, each with a length randomly chosen from 0 to max 400, and with 50% nulls.
+    let arr = create_string_view_array(2usize.pow(12), 0.5);
+    c.bench_function("sort string_view[0-400] nulls to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    // This will generate string view arrays with 2^12 elements, each with a length < 12 bytes which is inlined data, and without nulls.
+    let arr = create_string_view_array_with_max_len(2usize.pow(12), 0.0, 12);
+    c.bench_function("sort string_view_inlined[0-12] to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    // This will generate string view arrays with 2^12 elements, each with a length < 12 bytes which is inlined data, and with 50% nulls.
+    let arr = create_string_view_array_with_max_len(2usize.pow(12), 0.5, 12);
+    c.bench_function(
+        "sort string_view_inlined[0-12] nulls to indices 2^12",
+        |b| b.iter(|| bench_sort_to_indices(&arr, None)),
+    );
+
     let arr = create_string_dict_array::<Int32Type>(2usize.pow(12), 0.0, 10);
     c.bench_function("sort string[10] dict to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))

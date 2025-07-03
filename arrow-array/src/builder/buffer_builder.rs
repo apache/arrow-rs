@@ -45,6 +45,10 @@ pub type Float32BufferBuilder = BufferBuilder<f32>;
 /// Buffer builder for 64-bit floating point type.
 pub type Float64BufferBuilder = BufferBuilder<f64>;
 
+/// Buffer builder for 32-bit decimal type.
+pub type Decimal32BufferBuilder = BufferBuilder<<Decimal32Type as ArrowPrimitiveType>::Native>;
+/// Buffer builder for 64-bit decimal type.
+pub type Decimal64BufferBuilder = BufferBuilder<<Decimal64Type as ArrowPrimitiveType>::Native>;
 /// Buffer builder for 128-bit decimal type.
 pub type Decimal128BufferBuilder = BufferBuilder<<Decimal128Type as ArrowPrimitiveType>::Native>;
 /// Buffer builder for 256-bit decimal type.

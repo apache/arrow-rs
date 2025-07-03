@@ -22,11 +22,12 @@ use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{Array, ArrayAccessor, ArrayRef, GenericByteArray, OffsetSizeTrait, Scalar};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder, ByteView};
+use arrow_data::{ArrayData, ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use core::str;
 use num::ToPrimitive;
 use std::any::Any;
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -77,8 +78,9 @@ use super::ByteArrayType;
 ///                          0    31       63      95    127
 /// ```
 ///
-/// * Strings with length <= 12 are stored directly in the view. See
-///   [`Self::inline_value`] to access the inlined prefix from a short view.
+/// * Strings with length <= 12 ([`MAX_INLINE_VIEW_LEN`]) are stored directly in
+///   the view. See [`Self::inline_value`] to access the inlined prefix from a
+///   short view.
 ///
 /// * Strings with length > 12: The first four bytes are stored inline in the
 ///   view and the entire string is stored in one of the buffers. See [`ByteView`]
@@ -128,6 +130,7 @@ use super::ByteArrayType;
 /// assert_eq!(value, "this string is also longer than 12 bytes");
 /// ```
 ///
+/// [`MAX_INLINE_VIEW_LEN`]: arrow_data::MAX_INLINE_VIEW_LEN
 /// [`arrow_compute`]: https://docs.rs/arrow/latest/arrow/compute/index.html
 ///
 /// Unlike [`GenericByteArray`], there are no constraints on the offsets other
@@ -316,7 +319,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
-        let b = if len <= 12 {
+        let b = if len <= MAX_INLINE_VIEW_LEN {
             Self::inline_value(v, len as usize)
         } else {
             let view = ByteView::from(*v);
@@ -331,10 +334,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///
     /// # Safety
     /// - The `view` must be a valid element from `Self::views()` that adheres to the view layout.
-    /// - The `len` must be the length of the inlined value. It should never be larger than 12.
+    /// - The `len` must be the length of the inlined value. It should never be larger than [`MAX_INLINE_VIEW_LEN`].
     #[inline(always)]
     pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] {
-        debug_assert!(len <= 12);
+        debug_assert!(len <= MAX_INLINE_VIEW_LEN as usize);
         std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
     }
 
@@ -347,7 +350,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     pub fn bytes_iter(&self) -> impl Iterator<Item = &[u8]> {
         self.views.iter().map(move |v| {
             let len = *v as u32;
-            if len <= 12 {
+            if len <= MAX_INLINE_VIEW_LEN {
                 unsafe { Self::inline_value(v, len as usize) }
             } else {
                 let view = ByteView::from(*v);
@@ -371,7 +374,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 return &[] as &[u8];
             }
 
-            if prefix_len <= 4 || len <= 12 {
+            if prefix_len <= 4 || len as u32 <= MAX_INLINE_VIEW_LEN {
                 unsafe { StringViewArray::inline_value(v, prefix_len) }
             } else {
                 let view = ByteView::from(*v);
@@ -401,7 +404,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 return &[] as &[u8];
             }
 
-            if len <= 12 {
+            if len as u32 <= MAX_INLINE_VIEW_LEN {
                 unsafe { &StringViewArray::inline_value(v, len)[len - suffix_len..] }
             } else {
                 let view = ByteView::from(*v);
@@ -479,17 +482,43 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         builder.finish()
     }
 
+    /// Returns the total number of bytes used by all non inlined views in all
+    /// buffers.
+    ///
+    /// Note this does not account for views that point at the same underlying
+    /// data in buffers
+    ///
+    /// For example, if the array has three strings views:
+    /// * View with length = 9 (inlined)
+    /// * View with length = 32 (non inlined)
+    /// * View with length = 16 (non inlined)
+    ///
+    /// Then this method would report 48
+    pub fn total_buffer_bytes_used(&self) -> usize {
+        self.views()
+            .iter()
+            .map(|v| {
+                let len = *v as u32;
+                if len > MAX_INLINE_VIEW_LEN {
+                    len as usize
+                } else {
+                    0
+                }
+            })
+            .sum()
+    }
+
     /// Compare two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
     ///
     /// Comparing two ByteView types are non-trivial.
     /// It takes a bit of patience to understand why we don't just compare two &[u8] directly.
     ///
     /// ByteView types give us the following two advantages, and we need to be careful not to lose them:
-    /// (1) For string/byte smaller than 12 bytes, the entire data is inlined in the view.
+    /// (1) For string/byte smaller than [`MAX_INLINE_VIEW_LEN`] bytes, the entire data is inlined in the view.
     ///     Meaning that reading one array element requires only one memory access
     ///     (two memory access required for StringArray, one for offset buffer, the other for value buffer).
     ///
-    /// (2) For string/byte larger than 12 bytes, we can still be faster than (for certain operations) StringArray/ByteArray,
+    /// (2) For string/byte larger than [`MAX_INLINE_VIEW_LEN`] bytes, we can still be faster than (for certain operations) StringArray/ByteArray,
     ///     thanks to the inlined 4 bytes.
     ///     Consider equality check:
     ///     If the first four bytes of the two strings are different, we can return false immediately (with just one memory access).
@@ -499,8 +528,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///   e.g., if the inlined 4 bytes are different, we can directly return unequal without looking at the full string.
     ///
     /// # Order check flow
-    /// (1) if both string are smaller than 12 bytes, we can directly compare the data inlined to the view.
-    /// (2) if any of the string is larger than 12 bytes, we need to compare the full string.
+    /// (1) if both string are smaller than [`MAX_INLINE_VIEW_LEN`] bytes, we can directly compare the data inlined to the view.
+    /// (2) if any of the string is larger than [`MAX_INLINE_VIEW_LEN`] bytes, we need to compare the full string.
     ///     (2.1) if the inlined 4 bytes are different, we can return the result immediately.
     ///     (2.2) o.w., we need to compare the full string.
     ///
@@ -511,25 +540,30 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         left_idx: usize,
         right: &GenericByteViewArray<T>,
         right_idx: usize,
-    ) -> std::cmp::Ordering {
+    ) -> Ordering {
         let l_view = left.views().get_unchecked(left_idx);
-        let l_len = *l_view as u32;
+        let l_byte_view = ByteView::from(*l_view);
 
         let r_view = right.views().get_unchecked(right_idx);
-        let r_len = *r_view as u32;
+        let r_byte_view = ByteView::from(*r_view);
+
+        let l_len = l_byte_view.length;
+        let r_len = r_byte_view.length;
 
         if l_len <= 12 && r_len <= 12 {
-            let l_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len as usize) };
-            let r_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len as usize) };
-            return l_data.cmp(r_data);
+            return Self::inline_key_fast(*l_view).cmp(&Self::inline_key_fast(*r_view));
         }
 
         // one of the string is larger than 12 bytes,
         // we then try to compare the inlined data first
-        let l_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 4) };
-        let r_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 4) };
-        if r_inlined_data != l_inlined_data {
-            return l_inlined_data.cmp(r_inlined_data);
+
+        // Note: In theory, ByteView is only used for string which is larger than 12 bytes,
+        // but we can still use it to get the inlined prefix for shorter strings.
+        // The prefix is always the first 4 bytes of the view, for both short and long strings.
+        let l_inlined_be = l_byte_view.prefix.swap_bytes();
+        let r_inlined_be = r_byte_view.prefix.swap_bytes();
+        if l_inlined_be != r_inlined_be {
+            return l_inlined_be.cmp(&r_inlined_be);
         }
 
         // unfortunately, we need to compare the full data
@@ -537,6 +571,63 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
 
         l_full_data.cmp(r_full_data)
+    }
+
+    /// Builds a 128-bit composite key for an inline value:
+    ///
+    /// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting).
+    /// - Low  32 bits: the length in big-endian byte order, acting as a tiebreaker so shorter strings
+    ///   (or those with fewer meaningful bytes) always numerically sort before longer ones.
+    ///
+    /// This function extracts the length and the 12-byte inline string data from the raw
+    /// little-endian `u128` representation, converts them to big-endian ordering, and packs them
+    /// into a single `u128` value suitable for fast, branchless comparisons.
+    ///
+    /// ### Why include length?
+    ///
+    /// A pure 96-bit content comparison can’t distinguish between two values whose inline bytes
+    /// compare equal—either because one is a true prefix of the other or because zero-padding
+    /// hides extra bytes. By tucking the 32-bit length into the lower bits, a single `u128` compare
+    /// handles both content and length in one go.
+    ///
+    /// Example: comparing "bar" (3 bytes) vs "bar\0" (4 bytes)
+    ///
+    /// | String     | Bytes 0–4 (length LE) | Bytes 4–16 (data + padding)    |
+    /// |------------|-----------------------|---------------------------------|
+    /// | `"bar"`   | `03 00 00 00`         | `62 61 72` + 9 × `00`           |
+    /// | `"bar\0"`| `04 00 00 00`         | `62 61 72 00` + 8 × `00`        |
+    ///
+    /// Both inline parts become `62 61 72 00…00`, so they tie on content. The length field
+    /// then differentiates:
+    ///
+    /// ```text
+    /// key("bar")   = 0x0000000000000000000062617200000003
+    /// key("bar\0") = 0x0000000000000000000062617200000004
+    /// ⇒ key("bar") < key("bar\0")
+    /// ```
+    #[inline(always)]
+    pub fn inline_key_fast(raw: u128) -> u128 {
+        // Convert the raw u128 (little-endian) into bytes for manipulation
+        let raw_bytes = raw.to_le_bytes();
+
+        // Extract the length (first 4 bytes), convert to big-endian u32, and promote to u128
+        let len_le = &raw_bytes[0..4];
+        let len_be = u32::from_le_bytes(len_le.try_into().unwrap()).to_be() as u128;
+
+        // Extract the inline string bytes (next 12 bytes), place them into the lower 12 bytes of a 16-byte array,
+        // padding the upper 4 bytes with zero to form a little-endian u128 value
+        let mut inline_bytes = [0u8; 16];
+        inline_bytes[4..16].copy_from_slice(&raw_bytes[4..16]);
+
+        // Convert to big-endian to ensure correct lexical ordering
+        let inline_u128 = u128::from_le_bytes(inline_bytes).to_be();
+
+        // Shift right by 32 bits to discard the zero padding (upper 4 bytes),
+        // so that the inline string occupies the high 96 bits
+        let inline_part = inline_u128 >> 32;
+
+        // Combine the inline string part (high 96 bits) and length (low 32 bits) into the final key
+        (inline_part << 32) | len_be
     }
 }
 
@@ -846,7 +937,10 @@ impl From<Vec<Option<String>>> for StringViewArray {
 #[cfg(test)]
 mod tests {
     use crate::builder::{BinaryViewBuilder, StringViewBuilder};
-    use crate::{Array, BinaryViewArray, StringViewArray};
+    use crate::types::BinaryViewType;
+    use crate::{
+        Array, BinaryViewArray, GenericBinaryArray, GenericByteViewArray, StringViewArray,
+    };
     use arrow_buffer::{Buffer, ScalarBuffer};
     use arrow_data::ByteView;
 
@@ -1061,5 +1155,73 @@ mod tests {
         assert_eq!(array1, array1.clone());
         assert_eq!(array2, array2.clone());
         assert_eq!(array1, array2);
+    }
+
+    /// Integration tests for `inline_key_fast` covering:
+    ///
+    /// 1. Monotonic ordering across increasing lengths and lexical variations.
+    /// 2. Cross-check against `GenericBinaryArray` comparison to ensure semantic equivalence.
+    ///
+    /// This also includes a specific test for the “bar” vs. “bar\0” case, demonstrating why
+    /// the length field is required even when all inline bytes fit in 12 bytes.
+    #[test]
+    fn test_inline_key_fast_various_lengths_and_lexical() {
+        /// Helper to create a raw u128 value representing an inline ByteView
+        /// - `length`: number of meaningful bytes (≤ 12)
+        /// - `data`: the actual inline data
+        fn make_raw_inline(length: u32, data: &[u8]) -> u128 {
+            assert!(length as usize <= 12, "Inline length must be ≤ 12");
+            assert!(data.len() == length as usize, "Data must match length");
+
+            let mut raw_bytes = [0u8; 16];
+            raw_bytes[0..4].copy_from_slice(&length.to_le_bytes()); // little-endian length
+            raw_bytes[4..(4 + data.len())].copy_from_slice(data); // inline data
+            u128::from_le_bytes(raw_bytes)
+        }
+
+        // Test inputs: include the specific "bar" vs "bar\0" case, plus length and lexical variations
+        let test_inputs: Vec<&[u8]> = vec![
+            b"a",
+            b"aa",
+            b"aaa",
+            b"aab",
+            b"abcd",
+            b"abcde",
+            b"abcdef",
+            b"abcdefg",
+            b"abcdefgh",
+            b"abcdefghi",
+            b"abcdefghij",
+            b"abcdefghijk",
+            b"abcdefghijkl", // 12 bytes, max inline
+            b"bar",
+            b"bar\0", // special case to test length tiebreaker
+            b"xyy",
+            b"xyz",
+        ];
+
+        // Monotonic key order: content then length，and cross-check against GenericBinaryArray comparison
+        let array: GenericBinaryArray<i32> =
+            GenericBinaryArray::from(test_inputs.iter().map(|s| Some(*s)).collect::<Vec<_>>());
+
+        for i in 0..array.len() - 1 {
+            let v1 = array.value(i);
+            let v2 = array.value(i + 1);
+            // Ensure lexical ordering matches
+            assert!(v1 < v2, "Array compare failed: {v1:?} !< {v2:?}");
+            // Ensure fast key compare matches
+            let key1 = GenericByteViewArray::<BinaryViewType>::inline_key_fast(make_raw_inline(
+                v1.len() as u32,
+                v1,
+            ));
+            let key2 = GenericByteViewArray::<BinaryViewType>::inline_key_fast(make_raw_inline(
+                v2.len() as u32,
+                v2,
+            ));
+            assert!(
+                key1 < key2,
+                "Key compare failed: key({v1:?})=0x{key1:032x} !< key({v2:?})=0x{key2:032x}",
+            );
+        }
     }
 }

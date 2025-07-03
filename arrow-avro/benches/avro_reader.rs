@@ -38,7 +38,7 @@ use tempfile::NamedTempFile;
 
 fn create_test_data(count: usize, str_length: usize) -> Vec<String> {
     (0..count)
-        .map(|i| format!("str_{}", i) + &"a".repeat(str_length))
+        .map(|i| format!("str_{i}") + &"a".repeat(str_length))
         .collect()
 }
 
@@ -101,7 +101,7 @@ fn read_avro_test_file(
         reader.read_exact(&mut buf)?;
 
         let s = String::from_utf8(buf)
-            .map_err(|e| ArrowError::ParseError(format!("Invalid UTF-8: {}", e)))?;
+            .map_err(|e| ArrowError::ParseError(format!("Invalid UTF-8: {e}")))?;
 
         strings.push(s);
 
@@ -143,7 +143,7 @@ fn bench_array_creation(c: &mut Criterion) {
         let data = create_test_data(10000, str_length);
         let row_count = 1000;
 
-        group.bench_function(format!("string_array_{}_chars", str_length), |b| {
+        group.bench_function(format!("string_array_{str_length}_chars"), |b| {
             b.iter(|| {
                 let string_array =
                     StringArray::from_iter(data[0..row_count].iter().map(|s| Some(s.as_str())));
@@ -163,11 +163,11 @@ fn bench_array_creation(c: &mut Criterion) {
                 )
                 .unwrap();
 
-                criterion::black_box(batch)
+                std::hint::black_box(batch)
             })
         });
 
-        group.bench_function(format!("string_view_{}_chars", str_length), |b| {
+        group.bench_function(format!("string_view_{str_length}_chars"), |b| {
             b.iter(|| {
                 let string_array =
                     StringViewArray::from_iter(data[0..row_count].iter().map(|s| Some(s.as_str())));
@@ -187,7 +187,7 @@ fn bench_array_creation(c: &mut Criterion) {
                 )
                 .unwrap();
 
-                criterion::black_box(batch)
+                std::hint::black_box(batch)
             })
         });
     }
@@ -208,23 +208,23 @@ fn bench_string_operations(c: &mut Criterion) {
         let string_view_array =
             StringViewArray::from_iter(data[0..rows].iter().map(|s| Some(s.as_str())));
 
-        group.bench_function(format!("string_array_value_{}_chars", str_length), |b| {
+        group.bench_function(format!("string_array_value_{str_length}_chars"), |b| {
             b.iter(|| {
                 let mut sum_len = 0;
                 for i in 0..rows {
                     sum_len += string_array.value(i).len();
                 }
-                criterion::black_box(sum_len)
+                std::hint::black_box(sum_len)
             })
         });
 
-        group.bench_function(format!("string_view_value_{}_chars", str_length), |b| {
+        group.bench_function(format!("string_view_value_{str_length}_chars"), |b| {
             b.iter(|| {
                 let mut sum_len = 0;
                 for i in 0..rows {
                     sum_len += string_view_array.value(i).len();
                 }
-                criterion::black_box(sum_len)
+                std::hint::black_box(sum_len)
             })
         });
     }
@@ -242,19 +242,19 @@ fn bench_avro_reader(c: &mut Criterion) {
         let temp_file = create_avro_test_file(row_count, str_length).unwrap();
         let file_path = temp_file.path();
 
-        group.bench_function(format!("string_array_{}_chars", str_length), |b| {
+        group.bench_function(format!("string_array_{str_length}_chars"), |b| {
             b.iter(|| {
                 let options = ReadOptions::default();
                 let batch = read_avro_test_file(file_path, &options).unwrap();
-                criterion::black_box(batch)
+                std::hint::black_box(batch)
             })
         });
 
-        group.bench_function(format!("string_view_{}_chars", str_length), |b| {
+        group.bench_function(format!("string_view_{str_length}_chars"), |b| {
             b.iter(|| {
                 let options = ReadOptions::default().with_utf8view(true);
                 let batch = read_avro_test_file(file_path, &options).unwrap();
-                criterion::black_box(batch)
+                std::hint::black_box(batch)
             })
         });
     }

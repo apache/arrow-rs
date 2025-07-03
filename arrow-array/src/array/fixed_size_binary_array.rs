@@ -87,7 +87,7 @@ impl FixedSizeBinaryArray {
     ) -> Result<Self, ArrowError> {
         let data_type = DataType::FixedSizeBinary(size);
         let s = size.to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {}", size))
+            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
         let len = values.len() / s;

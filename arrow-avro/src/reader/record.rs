@@ -21,16 +21,20 @@ use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
 use crate::reader::ReadOptions;
 use crate::schema::*;
+use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
+
+const DEFAULT_CAPACITY: usize = 1024;
 
 /// Decodes avro encoded data into [`RecordBatch`]
 pub struct RecordDecoder {
@@ -113,7 +117,7 @@ enum Decoder {
     String(OffsetBufferBuilder<i32>, Vec<u8>),
     /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
     StringView(OffsetBufferBuilder<i32>, Vec<u8>),
-    List(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
+    Array(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
     Record(Fields, Vec<Decoder>),
     Map(
         FieldRef,
@@ -122,6 +126,9 @@ enum Decoder {
         Vec<u8>,
         Box<Decoder>,
     ),
+    Fixed(i32, Vec<u8>),
+    Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
+    Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
 }
 
@@ -157,11 +164,50 @@ impl Decoder {
             Codec::TimestampMicros(is_utc) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            Codec::Fixed(_) => return nyi("decoding fixed"),
+            Codec::Fixed(sz) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Decimal(precision, scale, size) => {
+                let p = *precision;
+                let s = *scale;
+                let sz = *size;
+                let prec = p as u8;
+                let scl = s.unwrap_or(0) as i8;
+                match (sz, p) {
+                    (Some(fixed_size), _) if fixed_size <= 16 => {
+                        let builder =
+                            Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
+                        return Ok(Self::Decimal128(p, s, sz, builder));
+                    }
+                    (Some(fixed_size), _) if fixed_size <= 32 => {
+                        let builder =
+                            Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
+                        return Ok(Self::Decimal256(p, s, sz, builder));
+                    }
+                    (Some(fixed_size), _) => {
+                        return Err(ArrowError::ParseError(format!(
+                            "Unsupported decimal size: {fixed_size:?}"
+                        )));
+                    }
+                    (None, p) if p <= DECIMAL128_MAX_PRECISION as usize => {
+                        let builder =
+                            Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
+                        Self::Decimal128(p, s, sz, builder)
+                    }
+                    (None, p) if p <= DECIMAL256_MAX_PRECISION as usize => {
+                        let builder =
+                            Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
+                        Self::Decimal256(p, s, sz, builder)
+                    }
+                    (None, _) => {
+                        return Err(ArrowError::ParseError(format!(
+                            "Decimal precision {p} exceeds maximum supported"
+                        )));
+                    }
+                }
+            }
             Codec::Interval => return nyi("decoding interval"),
             Codec::List(item) => {
                 let decoder = Self::try_new(item)?;
-                Self::List(
+                Self::Array(
                     Arc::new(item.field_with_name("item")),
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                     Box::new(decoder),
@@ -196,8 +242,8 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
+            Codec::Uuid => Self::Fixed(16, Vec::with_capacity(DEFAULT_CAPACITY)),
         };
-
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
                 nullability,
@@ -223,7 +269,7 @@ impl Decoder {
             Self::Binary(offsets, _) | Self::String(offsets, _) | Self::StringView(offsets, _) => {
                 offsets.push_length(0);
             }
-            Self::List(_, offsets, e) => {
+            Self::Array(_, offsets, e) => {
                 offsets.push_length(0);
                 e.append_null();
             }
@@ -231,6 +277,11 @@ impl Decoder {
             Self::Map(_, _koff, moff, _, _) => {
                 moff.push_length(0);
             }
+            Self::Fixed(sz, accum) => {
+                accum.extend(std::iter::repeat(0u8).take(*sz as usize));
+            }
+            Self::Decimal128(_, _, _, builder) => builder.append_value(0),
+            Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
             Self::Nullable(_, _, _) => unreachable!("Nulls cannot be nested"),
         }
     }
@@ -256,10 +307,9 @@ impl Decoder {
                 offsets.push_length(data.len());
                 values.extend_from_slice(data);
             }
-            Self::List(_, _, _) => {
-                return Err(ArrowError::NotYetImplemented(
-                    "Decoding ListArray".to_string(),
-                ))
+            Self::Array(_, off, encoding) => {
+                let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
+                off.push_length(total_items);
             }
             Self::Record(_, encodings) => {
                 for encoding in encodings {
@@ -267,13 +317,37 @@ impl Decoder {
                 }
             }
             Self::Map(_, koff, moff, kdata, valdec) => {
-                let newly_added = read_map_blocks(buf, |cur| {
+                let newly_added = read_blocks(buf, |cur| {
                     let kb = cur.get_bytes()?;
                     koff.push_length(kb.len());
                     kdata.extend_from_slice(kb);
                     valdec.decode(cur)
                 })?;
                 moff.push_length(newly_added);
+            }
+            Self::Fixed(sz, accum) => {
+                let fx = buf.get_fixed(*sz as usize)?;
+                accum.extend_from_slice(fx);
+            }
+            Self::Decimal128(_, _, size, builder) => {
+                let raw = if let Some(s) = size {
+                    buf.get_fixed(*s)?
+                } else {
+                    buf.get_bytes()?
+                };
+                let ext = sign_extend_to::<16>(raw)?;
+                let val = i128::from_be_bytes(ext);
+                builder.append_value(val);
+            }
+            Self::Decimal256(_, _, size, builder) => {
+                let raw = if let Some(s) = size {
+                    buf.get_fixed(*s)?
+                } else {
+                    buf.get_bytes()?
+                };
+                let ext = sign_extend_to::<32>(raw)?;
+                let val = i256::from_be_bytes(ext);
+                builder.append_value(val);
             }
             Self::Nullable(nullability, nulls, e) => {
                 let is_valid = buf.get_bool()? == matches!(nullability, Nullability::NullFirst);
@@ -326,7 +400,6 @@ impl Decoder {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values);
                 let array = StringArray::new(offsets, values.into(), nulls.clone());
-
                 let values: Vec<&str> = (0..array.len())
                     .map(|i| {
                         if array.is_valid(i) {
@@ -339,7 +412,7 @@ impl Decoder {
 
                 Arc::new(StringViewArray::from(values))
             }
-            Self::List(field, offsets, values) => {
+            Self::Array(field, offsets, values) => {
                 let values = values.flush(None)?;
                 let offsets = flush_offsets(offsets);
                 Arc::new(ListArray::new(field.clone(), offsets, values, nulls))
@@ -384,11 +457,35 @@ impl Decoder {
                 let map_arr = MapArray::new(map_field.clone(), moff, entries_struct, nulls, false);
                 Arc::new(map_arr)
             }
+            Self::Fixed(sz, accum) => {
+                let b: Buffer = flush_values(accum).into();
+                let arr = FixedSizeBinaryArray::try_new(*sz, b, nulls)
+                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                Arc::new(arr)
+            }
+            Self::Decimal128(precision, scale, _, builder) => {
+                let mut b = std::mem::take(builder);
+                let (_, vals, _) = b.finish().into_parts();
+                let scl = scale.unwrap_or(0);
+                let dec = Decimal128Array::new(vals, nulls)
+                    .with_precision_and_scale(*precision as u8, scl as i8)
+                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                Arc::new(dec)
+            }
+            Self::Decimal256(precision, scale, _, builder) => {
+                let mut b = std::mem::take(builder);
+                let (_, vals, _) = b.finish().into_parts();
+                let scl = scale.unwrap_or(0);
+                let dec = Decimal256Array::new(vals, nulls)
+                    .with_precision_and_scale(*precision as u8, scl as i8)
+                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                Arc::new(dec)
+            }
         })
     }
 }
 
-fn read_map_blocks(
+fn read_blocks(
     buf: &mut AvroCursor,
     decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
 ) -> Result<usize, ArrowError> {
@@ -452,7 +549,30 @@ fn flush_primitive<T: ArrowPrimitiveType>(
     PrimitiveArray::new(flush_values(values).into(), nulls)
 }
 
-const DEFAULT_CAPACITY: usize = 1024;
+/// Sign extends a byte slice to a fixed-size array of N bytes.
+/// This is done by filling the leading bytes with 0x00 for positive numbers
+/// or 0xFF for negative numbers.
+#[inline]
+fn sign_extend_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
+    if raw.len() > N {
+        return Err(ArrowError::ParseError(format!(
+            "Cannot extend a slice of length {} to {} bytes.",
+            raw.len(),
+            N
+        )));
+    }
+    let mut arr = [0u8; N];
+    let pad_len = N - raw.len();
+    // Determine the byte to use for padding based on the sign bit of the raw data.
+    let extension_byte = if raw.is_empty() || (raw[0] & 0x80 == 0) {
+        0x00
+    } else {
+        0xFF
+    };
+    arr[..pad_len].fill(extension_byte);
+    arr[pad_len..].copy_from_slice(raw);
+    Ok(arr)
+}
 
 #[cfg(test)]
 mod tests {
@@ -461,6 +581,17 @@ mod tests {
         cast::AsArray, Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
         IntervalMonthDayNanoArray, ListArray, MapArray, StringArray, StructArray,
     };
+
+    fn encode_avro_int(value: i32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut v = (value << 1) ^ (value >> 31);
+        while v & !0x7F != 0 {
+            buf.push(((v & 0x7F) | 0x80) as u8);
+            v >>= 7;
+        }
+        buf.push(v as u8);
+        buf
+    }
 
     fn encode_avro_long(value: i64) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -530,5 +661,299 @@ mod tests {
         let map_arr = array.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(map_arr.len(), 1);
         assert_eq!(map_arr.value_length(0), 0);
+    }
+
+    #[test]
+    fn test_fixed_decoding() {
+        let avro_type = avro_from_codec(Codec::Fixed(3));
+        let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
+
+        let data1 = [1u8, 2, 3];
+        let mut cursor1 = AvroCursor::new(&data1);
+        decoder
+            .decode(&mut cursor1)
+            .expect("Failed to decode data1");
+        assert_eq!(cursor1.position(), 3, "Cursor should advance by fixed size");
+
+        let data2 = [4u8, 5, 6];
+        let mut cursor2 = AvroCursor::new(&data2);
+        decoder
+            .decode(&mut cursor2)
+            .expect("Failed to decode data2");
+        assert_eq!(cursor2.position(), 3, "Cursor should advance by fixed size");
+
+        let array = decoder.flush(None).expect("Failed to flush decoder");
+
+        assert_eq!(array.len(), 2, "Array should contain two items");
+        let fixed_size_binary_array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .expect("Failed to downcast to FixedSizeBinaryArray");
+
+        assert_eq!(
+            fixed_size_binary_array.value_length(),
+            3,
+            "Fixed size of binary values should be 3"
+        );
+        assert_eq!(
+            fixed_size_binary_array.value(0),
+            &[1, 2, 3],
+            "First item mismatch"
+        );
+        assert_eq!(
+            fixed_size_binary_array.value(1),
+            &[4, 5, 6],
+            "Second item mismatch"
+        );
+    }
+
+    #[test]
+    fn test_fixed_decoding_empty() {
+        let avro_type = avro_from_codec(Codec::Fixed(5));
+        let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
+
+        let array = decoder
+            .flush(None)
+            .expect("Failed to flush decoder for empty input");
+
+        assert_eq!(array.len(), 0, "Array should be empty");
+        let fixed_size_binary_array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .expect("Failed to downcast to FixedSizeBinaryArray for empty array");
+
+        assert_eq!(
+            fixed_size_binary_array.value_length(),
+            5,
+            "Fixed size of binary values should be 5 as per type"
+        );
+    }
+
+    #[test]
+    fn test_uuid_decoding() {
+        let avro_type = avro_from_codec(Codec::Uuid);
+        let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
+
+        let data1 = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let mut cursor1 = AvroCursor::new(&data1);
+        decoder
+            .decode(&mut cursor1)
+            .expect("Failed to decode data1");
+        assert_eq!(
+            cursor1.position(),
+            16,
+            "Cursor should advance by fixed size"
+        );
+    }
+
+    #[test]
+    fn test_array_decoding() {
+        let item_dt = avro_from_codec(Codec::Int32);
+        let list_dt = avro_from_codec(Codec::List(Arc::new(item_dt)));
+        let mut decoder = Decoder::try_new(&list_dt).unwrap();
+        let mut row1 = Vec::new();
+        row1.extend_from_slice(&encode_avro_long(2));
+        row1.extend_from_slice(&encode_avro_int(10));
+        row1.extend_from_slice(&encode_avro_int(20));
+        row1.extend_from_slice(&encode_avro_long(0));
+        let row2 = encode_avro_long(0);
+        let mut cursor = AvroCursor::new(&row1);
+        decoder.decode(&mut cursor).unwrap();
+        let mut cursor2 = AvroCursor::new(&row2);
+        decoder.decode(&mut cursor2).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let list_arr = array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list_arr.len(), 2);
+        let offsets = list_arr.value_offsets();
+        assert_eq!(offsets, &[0, 2, 2]);
+        let values = list_arr.values();
+        let int_arr = values.as_primitive::<Int32Type>();
+        assert_eq!(int_arr.len(), 2);
+        assert_eq!(int_arr.value(0), 10);
+        assert_eq!(int_arr.value(1), 20);
+    }
+
+    #[test]
+    fn test_array_decoding_with_negative_block_count() {
+        let item_dt = avro_from_codec(Codec::Int32);
+        let list_dt = avro_from_codec(Codec::List(Arc::new(item_dt)));
+        let mut decoder = Decoder::try_new(&list_dt).unwrap();
+        let mut data = encode_avro_long(-3);
+        data.extend_from_slice(&encode_avro_long(12));
+        data.extend_from_slice(&encode_avro_int(1));
+        data.extend_from_slice(&encode_avro_int(2));
+        data.extend_from_slice(&encode_avro_int(3));
+        data.extend_from_slice(&encode_avro_long(0));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let list_arr = array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list_arr.len(), 1);
+        assert_eq!(list_arr.value_length(0), 3);
+        let values = list_arr.values().as_primitive::<Int32Type>();
+        assert_eq!(values.len(), 3);
+        assert_eq!(values.value(0), 1);
+        assert_eq!(values.value(1), 2);
+        assert_eq!(values.value(2), 3);
+    }
+
+    #[test]
+    fn test_nested_array_decoding() {
+        let inner_ty = avro_from_codec(Codec::List(Arc::new(avro_from_codec(Codec::Int32))));
+        let nested_ty = avro_from_codec(Codec::List(Arc::new(inner_ty.clone())));
+        let mut decoder = Decoder::try_new(&nested_ty).unwrap();
+        let mut buf = Vec::new();
+        buf.extend(encode_avro_long(1));
+        buf.extend(encode_avro_long(2));
+        buf.extend(encode_avro_int(5));
+        buf.extend(encode_avro_int(6));
+        buf.extend(encode_avro_long(0));
+        buf.extend(encode_avro_long(0));
+        let mut cursor = AvroCursor::new(&buf);
+        decoder.decode(&mut cursor).unwrap();
+        let arr = decoder.flush(None).unwrap();
+        let outer = arr.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(outer.len(), 1);
+        assert_eq!(outer.value_length(0), 1);
+        let inner = outer.values().as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(inner.value_length(0), 2);
+        let values = inner
+            .values()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(values.values(), &[5, 6]);
+    }
+
+    #[test]
+    fn test_array_decoding_empty_array() {
+        let value_type = avro_from_codec(Codec::Utf8);
+        let map_type = avro_from_codec(Codec::List(Arc::new(value_type)));
+        let mut decoder = Decoder::try_new(&map_type).unwrap();
+        let data = encode_avro_long(0);
+        decoder.decode(&mut AvroCursor::new(&data)).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let list_arr = array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list_arr.len(), 1);
+        assert_eq!(list_arr.value_length(0), 0);
+    }
+
+    #[test]
+    fn test_decimal_decoding_fixed256() {
+        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(32)));
+        let mut decoder = Decoder::try_new(&dt).unwrap();
+        let row1 = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x30, 0x39,
+        ];
+        let row2 = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0x85,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&row1);
+        data.extend_from_slice(&row2);
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let arr = decoder.flush(None).unwrap();
+        let dec = arr.as_any().downcast_ref::<Decimal256Array>().unwrap();
+        assert_eq!(dec.len(), 2);
+        assert_eq!(dec.value_as_string(0), "123.45");
+        assert_eq!(dec.value_as_string(1), "-1.23");
+    }
+
+    #[test]
+    fn test_decimal_decoding_fixed128() {
+        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(16)));
+        let mut decoder = Decoder::try_new(&dt).unwrap();
+        let row1 = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x30, 0x39,
+        ];
+        let row2 = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0x85,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&row1);
+        data.extend_from_slice(&row2);
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let arr = decoder.flush(None).unwrap();
+        let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(dec.len(), 2);
+        assert_eq!(dec.value_as_string(0), "123.45");
+        assert_eq!(dec.value_as_string(1), "-1.23");
+    }
+
+    #[test]
+    fn test_decimal_decoding_bytes_with_nulls() {
+        let dt = avro_from_codec(Codec::Decimal(4, Some(1), None));
+        let inner = Decoder::try_new(&dt).unwrap();
+        let mut decoder = Decoder::Nullable(
+            Nullability::NullSecond,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(inner),
+        );
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&encode_avro_bytes(&[0x04, 0xD2]));
+        data.extend_from_slice(&encode_avro_int(1));
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&encode_avro_bytes(&[0xFB, 0x2E]));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap(); // row1
+        decoder.decode(&mut cursor).unwrap(); // row2
+        decoder.decode(&mut cursor).unwrap(); // row3
+        let arr = decoder.flush(None).unwrap();
+        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(dec_arr.len(), 3);
+        assert!(dec_arr.is_valid(0));
+        assert!(!dec_arr.is_valid(1));
+        assert!(dec_arr.is_valid(2));
+        assert_eq!(dec_arr.value_as_string(0), "123.4");
+        assert_eq!(dec_arr.value_as_string(2), "-123.4");
+    }
+
+    #[test]
+    fn test_decimal_decoding_bytes_with_nulls_fixed_size() {
+        let dt = avro_from_codec(Codec::Decimal(6, Some(2), Some(16)));
+        let inner = Decoder::try_new(&dt).unwrap();
+        let mut decoder = Decoder::Nullable(
+            Nullability::NullSecond,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(inner),
+        );
+        let row1 = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0xE2, 0x40,
+        ];
+        let row3 = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+            0x1D, 0xC0,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&row1);
+        data.extend_from_slice(&encode_avro_int(1));
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&row3);
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let arr = decoder.flush(None).unwrap();
+        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+        assert_eq!(dec_arr.len(), 3);
+        assert!(dec_arr.is_valid(0));
+        assert!(!dec_arr.is_valid(1));
+        assert!(dec_arr.is_valid(2));
+        assert_eq!(dec_arr.value_as_string(0), "1234.56");
+        assert_eq!(dec_arr.value_as_string(2), "-1234.56");
     }
 }

@@ -356,8 +356,7 @@ pub fn make_encoder<'a>(
                 NullableEncoder::new(Box::new(formatter) as Box<dyn Encoder + 'a>, nulls)
             }
             false => return Err(ArrowError::JsonError(format!(
-                "Unsupported data type for JSON encoding: {:?}",
-                d
+                "Unsupported data type for JSON encoding: {d:?}",
             )))
         }
     };

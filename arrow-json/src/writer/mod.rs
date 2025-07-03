@@ -2078,7 +2078,7 @@ mod tests {
                     None => out.extend_from_slice(b"null"),
                     Some(UnionValue::Int32(v)) => out.extend_from_slice(v.to_string().as_bytes()),
                     Some(UnionValue::String(v)) => {
-                        out.extend_from_slice(format!("\"{}\"", v).as_bytes())
+                        out.extend_from_slice(format!("\"{v}\"").as_bytes())
                     }
                 }
             }

@@ -298,6 +298,26 @@ pub fn create_string_view_array_with_max_len(
 }
 
 /// Creates a random (but fixed-seeded) array of a given size, null density and length
+pub fn create_string_view_array_with_fixed_len(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
+) -> StringViewArray {
+    let rng = &mut seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+/// Creates a random (but fixed-seeded) array of a given size, null density and length
 pub fn create_string_view_array_with_len(
     size: usize,
     null_density: f32,
