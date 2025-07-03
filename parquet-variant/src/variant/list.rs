@@ -27,7 +27,7 @@ use arrow_schema::ArrowError;
 const NUM_HEADER_BYTES: usize = 1;
 
 /// A parsed version of the variant array value header byte.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct VariantListHeader {
     num_elements_size: OffsetSizeBytes,
     offset_size: OffsetSizeBytes,
@@ -118,7 +118,7 @@ impl VariantListHeader {
 ///
 /// [valid]: VariantMetadata#Validation
 /// [Variant spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-data-for-array-basic_type3
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantList<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],

@@ -27,7 +27,7 @@ use arrow_schema::ArrowError;
 const NUM_HEADER_BYTES: usize = 1;
 
 /// Header structure for [`VariantObject`]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct VariantObjectHeader {
     num_elements_size: OffsetSizeBytes,
     field_id_size: OffsetSizeBytes,
@@ -115,7 +115,7 @@ impl VariantObjectHeader {
 ///
 /// [valid]: VariantMetadata#Validation
 /// [Variant spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-data-for-object-basic_type2
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantObject<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
@@ -397,20 +397,17 @@ mod tests {
         let missing_field = variant_obj.get("missing");
         assert!(missing_field.is_none());
 
-        // https://github.com/apache/arrow-rs/issues/7784
-        // Fixme: The following assertion will panic! That is not good
-        // let missing_field_name = variant_obj.field_name(3);
-        // assert!(missing_field_name.is_none());
-        //
-        // Fixme: The `.field_name()` will panic! This is not good
-        // let missing_field_name = variant_obj.field_name(300);
-        // assert!(missing_field_name.is_none());
+        let missing_field_name = variant_obj.field_name(3);
+        assert!(missing_field_name.is_none());
 
-        // let missing_field_value = variant_obj.field(3);
-        // assert!(missing_field_value.is_none());
+        let missing_field_name = variant_obj.field_name(300);
+        assert!(missing_field_name.is_none());
 
-        // let missing_field_value = variant_obj.field(300);
-        // assert!(missing_field_value.is_none());
+        let missing_field_value = variant_obj.field(3);
+        assert!(missing_field_value.is_none());
+
+        let missing_field_value = variant_obj.field(300);
+        assert!(missing_field_value.is_none());
 
         // Test fields iterator
         let fields: Vec<_> = variant_obj.iter().collect();
