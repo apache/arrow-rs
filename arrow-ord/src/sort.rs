@@ -299,7 +299,7 @@ fn sort_bytes<T: ByteArrayType>(
     let mut valids: Vec<(u32, &[u8], usize)> = value_indices
         .into_iter()
         .map(|idx| {
-            let slice:&[u8] = values.value(idx as usize).as_ref();
+            let slice: &[u8] = values.value(idx as usize).as_ref();
             (idx, slice, slice.len())
         })
         .collect();

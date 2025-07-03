@@ -113,6 +113,16 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
+    let arr = create_string_array::<i32>(2usize.pow(12), 0.0);
+    c.bench_function("sort string[0-400] to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array::<i32>(2usize.pow(12), 0.5);
+    c.bench_function("sort string[0-400] nulls to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
     // This will generate string view arrays with 2^12 elements, each with a length fixed 10, and without nulls.
     let arr = create_string_view_array_with_fixed_len(2usize.pow(12), 0.0, 10);
     c.bench_function("sort string_view[10] to indices 2^12", |b| {
