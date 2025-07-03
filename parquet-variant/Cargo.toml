@@ -35,10 +35,14 @@ rust-version = "1.83"
 [dependencies]
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
-serde_json = "1.0"
+serde_json = { version = "1.0", optional = true }
 base64 = "0.22"
 indexmap = "2.10.0"
 
+[features]
+default = []
+
+serde_json = ["dep:serde_json"]
 
 [lib]
 name = "parquet_variant"
