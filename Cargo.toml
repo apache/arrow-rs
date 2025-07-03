@@ -40,6 +40,7 @@ members = [
     "arrow-string",
     "parquet",
     "parquet-variant",
+    "parquet-variant-json",
     "parquet_derive",
     "parquet_derive_test",
 ]
