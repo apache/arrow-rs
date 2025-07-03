@@ -413,6 +413,18 @@ where
         Ok(())
     }
 
+    /// Gets a reference to the underlying writer.
+    pub fn get_ref(&self) -> &W {
+        &self.writer
+    }
+
+    /// Gets a mutable reference to the underlying writer.
+    ///
+    /// It is inadvisable to directly write to the underlying writer.
+    pub fn get_mut(&mut self) -> &mut W {
+        &mut self.writer
+    }
+
     /// Unwraps this `Writer<W>`, returning the underlying writer
     pub fn into_inner(self) -> W {
         self.writer
