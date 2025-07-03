@@ -62,7 +62,6 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
             hint::black_box(converter.append(&mut rows, &cols).unwrap());
         });
     });
-
 }
 
 fn bench_iter(c: &mut Criterion) {
