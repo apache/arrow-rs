@@ -295,7 +295,7 @@ fn sort_bytes<T: ByteArrayType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    // 1. 构造 (idx, slice, len) 列表
+    // 1. construct a list of (index, raw_bytes, length)
     let mut valids: Vec<(u32, &[u8], usize)> = value_indices
         .into_iter()
         .map(|idx| {
@@ -304,19 +304,19 @@ fn sort_bytes<T: ByteArrayType>(
         })
         .collect();
 
-    // 2. 计算需要部分排序的元素数量 vlimit
+    // 2. compute the number of non-null entries to partially sort
     let vlimit = match (limit, options.nulls_first) {
         (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
         _ => valids.len(),
     };
 
-    // 3. 比较函数：4 字节前缀 → 8 字节块对齐 → 剩余字节 → 长度
+    // 3. comparator function for mixed byte views
     let cmp_bytes = |a: &(u32, &[u8], usize), b: &(u32, &[u8], usize)| {
         let (_, a_bytes, a_len) = *a;
         let (_, b_bytes, b_len) = *b;
         let min_len = a_len.min(b_len);
 
-        // 3.1 前 4 字节 u32 前缀比较
+        // 3. compare the prefix of the first 4 bytes
         let pref = min_len.min(4);
         let mut pa = 0u32;
         let mut pb = 0u32;
@@ -328,7 +328,7 @@ fn sort_bytes<T: ByteArrayType>(
             return pa.cmp(&pb);
         }
 
-        // 3.2 8 字节块级无对齐比较
+        // 3.2 Use 8 bytes to compare one by one if the prefix is equal
         let mut i = pref;
         while i + 8 <= min_len {
             let raw_a = unsafe { std::ptr::read_unaligned(a_bytes.as_ptr().add(i) as *const u64) };
@@ -341,7 +341,7 @@ fn sort_bytes<T: ByteArrayType>(
             i += 8;
         }
 
-        // 3.3 剩余字节逐一比较
+        // 3.3 Compare remaining bytes one by one
         while i < min_len {
             let xa = unsafe { *a_bytes.get_unchecked(i) };
             let xb = unsafe { *b_bytes.get_unchecked(i) };
@@ -351,29 +351,27 @@ fn sort_bytes<T: ByteArrayType>(
             i += 1;
         }
 
-        // 3.4 完全相等时，按长度决定先后
+        // 3.4 If all bytes are equal, compare lengths
         a_len.cmp(&b_len)
     };
 
-    // 4. 对 valids 的前 vlimit 项进行不稳定排序
+    // 4. Partially sort according to ascending/descending
     if !options.descending {
         sort_unstable_by(&mut valids, vlimit, cmp_bytes);
     } else {
         sort_unstable_by(&mut valids, vlimit, |x, y| cmp_bytes(x, y).reverse());
     }
 
-    // 5. 根据 nulls_first／limit 拼接最终的 index 列表
+    // 5. Assemble nulls and sorted indices into final output
     let total = valids.len() + nulls.len();
     let out_limit = limit.unwrap_or(total).min(total);
     let mut out = Vec::with_capacity(out_limit);
 
     if options.nulls_first {
-        // 先放 null
         out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
         let rem = out_limit - out.len();
         out.extend(valids.iter().map(|&(i, _, _)| i).take(rem));
     } else {
-        // 先放非 null
         out.extend(valids.iter().map(|&(i, _, _)| i).take(out_limit));
         let rem = out_limit - out.len();
         out.extend_from_slice(&nulls[..rem]);
