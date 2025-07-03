@@ -311,25 +311,24 @@ fn sort_byte_view<T: ByteViewType>(
     limit: Option<usize>,
 ) -> UInt32Array {
     // 1. Build a list of (index, raw_view, length)
-    let mut valids: Vec<_> = value_indices
-        .into_iter()
-        .map(|idx| {
-            // SAFETY: we know idx < values.len()
-            let raw = unsafe { *values.views().get_unchecked(idx as usize) };
-            (idx, raw)
-        })
-        .collect();
+    let mut valids: Vec<_>;
     // 2. Compute the number of non-null entries to partially sort
     let vlimit: usize = match (limit, options.nulls_first) {
-        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
-        _ => valids.len(),
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(value_indices.len()),
+        _ => value_indices.len(),
     };
     // 3.a Check if all views are inline (no data buffers)
     if values.data_buffers().is_empty() {
-        let cmp_inline = |a: &(u32, u128), b: &(u32, u128)| {
-            GenericByteViewArray::<T>::inline_key_fast(a.1)
-                .cmp(&GenericByteViewArray::<T>::inline_key_fast(b.1))
-        };
+        valids = value_indices
+            .into_iter()
+            .map(|idx| {
+                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+                // SAFETY: we know raw is a valid inline view
+                let inline_key = GenericByteViewArray::<T>::inline_key_fast(raw);
+                (idx, inline_key)
+            })
+            .collect();
+        let cmp_inline = |a: &(u32, u128), b: &(u32, u128)| a.1.cmp(&b.1);
 
         // Partially sort according to ascending/descending
         if !options.descending {
@@ -338,6 +337,14 @@ fn sort_byte_view<T: ByteViewType>(
             sort_unstable_by(&mut valids, vlimit, |x, y| cmp_inline(x, y).reverse());
         }
     } else {
+        valids = value_indices
+            .into_iter()
+            .map(|idx| {
+                // SAFETY: we know idx < values.len()
+                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+                (idx, raw)
+            })
+            .collect();
         // 3.b Mixed comparator: first prefix, then inline vs full comparison
         let cmp_mixed = |a: &(u32, u128), b: &(u32, u128)| {
             let (_, raw_a) = *a;
