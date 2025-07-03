@@ -774,7 +774,6 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     }
 }
 
-
 /// Drop implementation for ObjectBuilder does nothing
 /// as the `finish` method must be called to finalize the object.
 /// This is to ensure that the object is always finalized before its parent builder
