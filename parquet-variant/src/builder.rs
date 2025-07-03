@@ -237,30 +237,43 @@ impl ValueBuffer {
 struct MetadataBuilder {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
+
+    // flag that checks if field names by insertion order are also lexicographically sorted
+    is_sorted: bool,
 }
 
 impl MetadataBuilder {
-    /// Pre-populates the list of field names
-    fn from_field_names<'a>(field_name: impl Iterator<Item = &'a str>) -> Self {
-        Self {
-            field_names: IndexSet::from_iter(field_name.map(|f| f.to_string())),
-        }
-    }
-
-    /// Checks whether field names by insertion order is lexicographically sorted
-    fn is_sorted(&self) -> bool {
-        !self.field_names.is_empty() && self.field_names.iter().is_sorted()
-    }
-
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
-        let (id, _) = self.field_names.insert_full(field_name.to_string());
+        let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
+
+        if new_entry {
+            let n = self.num_field_names();
+
+            self.is_sorted =
+                n == 1 || self.is_sorted & (self.field_names[n - 2] < self.field_names[n - 1]);
+
+            if n == 1 {
+                self.is_sorted = true;
+            } else {
+                self.is_sorted &= self.field_names[n - 2] < self.field_names[n - 1];
+            }
+        }
 
         id as u32
     }
 
+    /// Returns the number of field names stored in the metadata builder.
+    /// Note: this method should be the only place to call `self.field_names.len()`
+    ///
+    /// # Panics
+    ///
+    /// If the number of field names exceeds the maximum allowed value for `u32`.
     fn num_field_names(&self) -> usize {
-        self.field_names.len()
+        let n = self.field_names.len();
+        assert!(n <= u32::MAX as usize);
+
+        n
     }
 
     fn field_name(&self, i: usize) -> &str {
@@ -287,10 +300,8 @@ impl MetadataBuilder {
 
         let mut metadata = Vec::with_capacity(metadata_size);
 
-        let field_names_sorted = self.is_sorted();
-
         // Write header: version=1, field names are sorted, with calculated offset_size
-        metadata.push(0x01 | (field_names_sorted as u8) << 4 | ((offset_size - 1) << 6));
+        metadata.push(0x01 | (self.is_sorted as u8) << 4 | ((offset_size - 1) << 6));
 
         // Write dictionary size
         write_offset(&mut metadata, nkeys, offset_size);
@@ -310,6 +321,23 @@ impl MetadataBuilder {
         }
 
         metadata
+    }
+}
+
+impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
+    fn from_iter<T: IntoIterator<Item = S>>(iter: T) -> Self {
+        let mut this = Self::default();
+        this.extend(iter);
+
+        this
+    }
+}
+
+impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
+    fn extend<T: IntoIterator<Item = S>>(&mut self, iter: T) {
+        for field_name in iter {
+            self.upsert_field_name(field_name.as_ref());
+        }
     }
 }
 
@@ -501,7 +529,7 @@ impl VariantBuilder {
     /// know the field names beforehand. Sorted dictionaries can accelerate field access when
     /// reading [`Variant`]s.
     pub fn with_field_names<'a>(mut self, field_names: impl Iterator<Item = &'a str>) -> Self {
-        self.metadata_builder = MetadataBuilder::from_field_names(field_names);
+        self.metadata_builder.extend(field_names);
 
         self
     }
@@ -1585,13 +1613,13 @@ mod tests {
         );
 
         // check metadata builders say it's sorted
-        assert!(variant1.metadata_builder.is_sorted());
-        assert!(variant2.metadata_builder.is_sorted());
+        assert!(variant1.metadata_builder.is_sorted);
+        assert!(variant2.metadata_builder.is_sorted);
 
         {
             // test the bad case and break the sort order
             variant2.add_field_name("a");
-            assert!(!variant2.metadata_builder.is_sorted());
+            assert!(!variant2.metadata_builder.is_sorted);
 
             // per the spec, make sure the variant will fail to build if only metadata is provided
             let (m, v) = variant2.finish();
@@ -1680,5 +1708,26 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(field_names, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn test_building_sorted_dictionary() {
+        let mut builder = VariantBuilder::new();
+        assert!(!builder.metadata_builder.is_sorted);
+        assert_eq!(builder.metadata_builder.num_field_names(), 0);
+
+        builder.add_field_name("a");
+
+        assert!(builder.metadata_builder.is_sorted);
+        assert_eq!(builder.metadata_builder.num_field_names(), 1);
+
+        let builder = builder.with_field_names(["b", "c", "d"].into_iter());
+
+        assert!(builder.metadata_builder.is_sorted);
+        assert_eq!(builder.metadata_builder.num_field_names(), 4);
+
+        let builder = builder.with_field_names(["z", "y"].into_iter());
+        assert!(!builder.metadata_builder.is_sorted);
+        assert_eq!(builder.metadata_builder.num_field_names(), 6);
     }
 }
