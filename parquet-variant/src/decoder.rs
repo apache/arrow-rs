@@ -22,12 +22,14 @@ use crate::ShortString;
 use arrow_schema::ArrowError;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 
-use std::array::TryFromSliceError;
 use std::num::TryFromIntError;
 
-// Makes the code a bit more readable
-pub(crate) const VARIANT_VALUE_HEADER_BYTES: usize = 1;
-
+/// The basic type of a [`Variant`] value, encoded in the first two bits of the
+/// header byte.
+///
+/// See the [Variant Encoding specification] for details
+///
+///[Variant Encoding specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantBasicType {
     Primitive = 0,
@@ -36,6 +38,12 @@ pub enum VariantBasicType {
     Array = 3,
 }
 
+/// The type of [`VariantBasicType::Primitive`], for a primitive [`Variant`]
+/// value.
+///
+/// See the [Variant Encoding specification] for details
+///
+///[Variant Encoding specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantPrimitiveType {
     Null = 0,
@@ -194,11 +202,6 @@ impl OffsetSizeBytes {
 pub(crate) fn get_primitive_type(metadata: u8) -> Result<VariantPrimitiveType, ArrowError> {
     // last 6 bits contain the primitive-type, see spec
     VariantPrimitiveType::try_from(metadata >> 2)
-}
-
-/// To be used in `map_err` when unpacking an integer from a slice of bytes.
-fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
-    ArrowError::InvalidArgumentError(e.to_string())
 }
 
 /// Decodes an Int8 from the value section of a variant.
