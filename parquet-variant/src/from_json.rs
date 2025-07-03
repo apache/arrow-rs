@@ -92,8 +92,7 @@ fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError
         match n.as_f64() {
             Some(f) => return Ok(f.into()),
             None => Err(ArrowError::InvalidArgumentError(format!(
-                "Failed to parse {} as number",
-                n
+                "Failed to parse {n} as number",
             ))),
         }?
     }
