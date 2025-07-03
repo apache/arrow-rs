@@ -21,7 +21,7 @@ use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
 use std::io::Write;
 
-use crate::variant::{Variant, VariantList, VariantObject};
+use parquet_variant::variant::{Variant, VariantList, VariantObject};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -366,7 +366,6 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
     use chrono::{DateTime, NaiveDate, Utc};
 
     #[test]
@@ -490,7 +489,7 @@ mod tests {
 
     #[test]
     fn test_short_string_to_json() -> Result<(), ArrowError> {
-        use crate::variant::ShortString;
+        use parquet_variant::ShortString;
         let short_string = ShortString::try_new("short")?;
         let variant = Variant::ShortString(short_string);
         let json = variant_to_json_string(&variant)?;
@@ -598,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_primitive_json_conversion() {
-        use crate::variant::ShortString;
+        use parquet_variant::ShortString;
 
         // Null
         JsonTest {
@@ -848,7 +847,7 @@ mod tests {
 
     #[test]
     fn test_simple_object_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         // Create a simple object with various field types
         let mut builder = VariantBuilder::new();
@@ -884,7 +883,7 @@ mod tests {
 
     #[test]
     fn test_empty_object_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -906,7 +905,7 @@ mod tests {
 
     #[test]
     fn test_object_with_special_characters_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -936,7 +935,7 @@ mod tests {
 
     #[test]
     fn test_simple_list_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -966,7 +965,7 @@ mod tests {
 
     #[test]
     fn test_empty_list_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -988,7 +987,7 @@ mod tests {
 
     #[test]
     fn test_mixed_type_list_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -1020,7 +1019,7 @@ mod tests {
 
     #[test]
     fn test_object_field_ordering_in_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -1050,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_list_with_various_primitive_types_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -1086,7 +1085,7 @@ mod tests {
 
     #[test]
     fn test_object_with_various_primitive_types_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 

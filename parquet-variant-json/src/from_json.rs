@@ -17,7 +17,6 @@
 
 //! Module for parsing JSON strings as Variant
 
-use crate::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use arrow_schema::ArrowError;
 use serde_json::{Number, Value};
 
