@@ -1,3 +1,4 @@
+use chrono::{DateTime, NaiveDateTime, Utc};
 use parquet::basic::Type;
 use parquet::data_type::{Int96, Int96Type};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -9,7 +10,6 @@ use rand::seq::SliceRandom;
 use std::fs::File;
 use std::sync::Arc;
 use tempfile::Builder;
-use chrono::{DateTime, NaiveDateTime, Utc};
 
 fn datetime_to_int96(dt: &str) -> Int96 {
     let naive = NaiveDateTime::parse_from_str(dt, "%Y-%m-%d %H:%M:%S%.f").unwrap();
@@ -77,13 +77,19 @@ fn verify_ordering(data: Vec<Int96>) {
 
     let stats = column.statistics().unwrap();
     assert_eq!(stats.physical_type(), Type::INT96);
-    
+
     if let Statistics::Int96(stats) = stats {
         let min = stats.min_opt().unwrap();
         let max = stats.max_opt().unwrap();
-        
-        assert_eq!(*min, expected_min, "Min value should be {expected_min} but was {min}");
-        assert_eq!(*max, expected_max, "Max value should be {expected_max} but was {max}");
+
+        assert_eq!(
+            *min, expected_min,
+            "Min value should be {expected_min} but was {min}"
+        );
+        assert_eq!(
+            *max, expected_max,
+            "Max value should be {expected_max} but was {max}"
+        );
         assert_eq!(stats.null_count_opt(), Some(0));
     } else {
         panic!("Expected Int96 statistics");
