@@ -319,50 +319,51 @@ fn sort_byte_view<T: ByteViewType>(
             (idx, raw)
         })
         .collect();
-    // Compute the number of non-null entries to partially sort
+    // 2. Compute the number of non-null entries to partially sort
     let vlimit: usize = match (limit, options.nulls_first) {
         (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
         _ => valids.len(),
     };
-    // 2. Check if all views are inline (no data buffers)
+    // 3.a Check if all views are inline (no data buffers)
     if values.data_buffers().is_empty() {
         let cmp_inline = |a: &(u32, u128), b: &(u32, u128)| {
             GenericByteViewArray::<T>::inline_key_fast(a.1)
                 .cmp(&GenericByteViewArray::<T>::inline_key_fast(b.1))
         };
 
+        // Partially sort according to ascending/descending
         if !options.descending {
             sort_unstable_by(&mut valids, vlimit, cmp_inline);
         } else {
             sort_unstable_by(&mut valids, vlimit, |x, y| cmp_inline(x, y).reverse());
         }
     } else {
-        // 3. Mixed comparator: first prefix, then inline vs full comparison
+        // 3.b Mixed comparator: first prefix, then inline vs full comparison
         let cmp_mixed = |a: &(u32, u128), b: &(u32, u128)| {
             let (_, raw_a) = *a;
             let (_, raw_b) = *b;
             let len_a = raw_a as u32;
             let len_b = raw_b as u32;
-            // 3.1 Both inline (≤12 bytes): compare full 128-bit key including length
+            // 3.b.1 Both inline (≤12 bytes): compare full 128-bit key including length
             if len_a <= MAX_INLINE_VIEW_LEN && len_b <= MAX_INLINE_VIEW_LEN {
                 return GenericByteViewArray::<T>::inline_key_fast(raw_a)
                     .cmp(&GenericByteViewArray::<T>::inline_key_fast(raw_b));
             }
 
-            // 3.2 Compare 4-byte prefix in big-endian order
+            // 3.b.2 Compare 4-byte prefix in big-endian order
             let pref_a = ByteView::from(raw_a).prefix.swap_bytes();
             let pref_b = ByteView::from(raw_b).prefix.swap_bytes();
             if pref_a != pref_b {
                 return pref_a.cmp(&pref_b);
             }
 
-            // 3.3 Fallback to full byte-slice comparison
+            // 3.b.3 Fallback to full byte-slice comparison
             let full_a: &[u8] = unsafe { values.value_unchecked(a.0 as usize).as_ref() };
             let full_b: &[u8] = unsafe { values.value_unchecked(b.0 as usize).as_ref() };
             full_a.cmp(full_b)
         };
 
-        // 4. Partially sort according to ascending/descending
+        // 3.b.4 Partially sort according to ascending/descending
         if !options.descending {
             sort_unstable_by(&mut valids, vlimit, cmp_mixed);
         } else {
