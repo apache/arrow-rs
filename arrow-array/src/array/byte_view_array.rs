@@ -567,8 +567,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         }
 
         // unfortunately, we need to compare the full data
-        let l_full_data: &[u8] = unsafe { left.value_unchecked(left_idx).as_ref() };
-        let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
+        // we can skip the first 4 bytes of the view, those are known to be equal
+        let data = left
+            .buffers
+            .get_unchecked(l_byte_view.buffer_index as usize);
+        let offset = l_byte_view.offset as usize;
+        let l_full_data = data.get_unchecked(offset + 4..offset + l_byte_view.length as usize);
+
+        let data = right
+            .buffers
+            .get_unchecked(r_byte_view.buffer_index as usize);
+        let offset = r_byte_view.offset as usize;
+        let r_full_data = data.get_unchecked(offset + 4..offset + r_byte_view.length as usize);
 
         l_full_data.cmp(r_full_data)
     }

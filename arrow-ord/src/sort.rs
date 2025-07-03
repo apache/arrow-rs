@@ -338,16 +338,29 @@ fn sort_byte_view<T: ByteViewType>(
                 .cmp(&GenericByteViewArray::<T>::inline_key_fast(raw_b));
         }
 
+        let l_byte_view = ByteView::from(raw_a);
+        let r_byte_view = ByteView::from(raw_b);
+
         // 3.2 Compare 4-byte prefix in big-endian order
-        let pref_a = ByteView::from(raw_a).prefix.swap_bytes();
-        let pref_b = ByteView::from(raw_b).prefix.swap_bytes();
+        let pref_a = l_byte_view.prefix.swap_bytes();
+        let pref_b = r_byte_view.prefix.swap_bytes();
         if pref_a != pref_b {
             return pref_a.cmp(&pref_b);
         }
 
         // 3.3 Fallback to full byte-slice comparison
-        let full_a: &[u8] = unsafe { values.value_unchecked(a.0 as usize).as_ref() };
-        let full_b: &[u8] = unsafe { values.value_unchecked(b.0 as usize).as_ref() };
+        // we can skip the first 4 bytes of the view, those are known to be equal
+        let data = unsafe { values
+            .data_buffers()
+            .get_unchecked(l_byte_view.buffer_index as usize) };
+        let offset = l_byte_view.offset as usize;
+        let full_a = unsafe { data.get_unchecked(offset + 4..offset + l_byte_view.length as usize) };
+
+        let data = unsafe { values
+            .data_buffers()
+            .get_unchecked(r_byte_view.buffer_index as usize) };
+        let offset = r_byte_view.offset as usize;
+        let full_b = unsafe { data.get_unchecked(offset + 4..offset + r_byte_view.length as usize) };
         full_a.cmp(full_b)
     };
 
