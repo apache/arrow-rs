@@ -460,8 +460,8 @@ fn bench_iteration_performance(c: &mut Criterion) {
 
     for i in 0..1000 {
         let mut obj = list.new_object();
-        obj.insert(&format!("field_{}", i), rng.random::<i32>());
-        obj.insert("nested_data", format!("data_{}", i).as_str());
+        obj.insert(&format!("field_{i}"), rng.random::<i32>());
+        obj.insert("nested_data", format!("data_{i}").as_str());
         obj.finish().unwrap();
     }
     list.finish();

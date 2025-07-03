@@ -374,7 +374,7 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
             let obj_size = rng.random_range(0..10);
 
             for i in 0..obj_size {
-                let key = format!("field_{}", i);
+                let key = format!("field_{i}");
                 object_builder.insert(&key, rng.random::<i32>());
             }
             object_builder.finish().unwrap();
