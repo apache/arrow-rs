@@ -125,7 +125,7 @@ fn append_json<'m, 'v>(
                 };
                 append_json(value, &mut field_builder)?;
             }
-            obj_builder.finish().unwrap();
+            obj_builder.finish()?;
         }
     };
     Ok(())
