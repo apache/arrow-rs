@@ -216,11 +216,6 @@ harness = false
 required-features = ["test_utils", "json"]
 
 [[bench]]
-name = "json_writer_coerce_primitive"
-harness = false
-required-features = ["test_utils", "json"]
-
-[[bench]]
 name = "equal"
 harness = false
 required-features = ["test_utils"]
