@@ -51,8 +51,8 @@ fn map_csv_error(error: csv::Error) -> ArrowError {
         } => ArrowError::CsvError(format!(
             "Encountered unequal lengths between records on CSV file. Expected {} \
                  records, found {} records{}",
-            len,
             expected_len,
+            len,
             pos.as_ref()
                 .map(|pos| format!(" at line {}", pos.line()))
                 .unwrap_or_default(),

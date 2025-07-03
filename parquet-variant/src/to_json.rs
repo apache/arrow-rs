@@ -859,7 +859,7 @@ mod tests {
             obj.insert("age", 30i32);
             obj.insert("active", true);
             obj.insert("score", 95.5f64);
-            obj.finish();
+            obj.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();
@@ -890,7 +890,7 @@ mod tests {
 
         {
             let obj = builder.new_object();
-            obj.finish();
+            obj.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();
@@ -915,7 +915,7 @@ mod tests {
             obj.insert("message", "Hello \"World\"\nWith\tTabs");
             obj.insert("path", "C:\\Users\\Alice\\Documents");
             obj.insert("unicode", "😀 Smiley");
-            obj.finish();
+            obj.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();
@@ -1030,7 +1030,7 @@ mod tests {
             obj.insert("zebra", "last");
             obj.insert("alpha", "first");
             obj.insert("beta", "second");
-            obj.finish();
+            obj.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();
@@ -1098,7 +1098,7 @@ mod tests {
             obj.insert("float_field", 2.71f64);
             obj.insert("null_field", ());
             obj.insert("long_field", 999i64);
-            obj.finish();
+            obj.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();

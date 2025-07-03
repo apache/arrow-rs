@@ -163,7 +163,7 @@ fn bench_array_creation(c: &mut Criterion) {
                 )
                 .unwrap();
 
-                criterion::black_box(batch)
+                std::hint::black_box(batch)
             })
         });
 
@@ -187,7 +187,7 @@ fn bench_array_creation(c: &mut Criterion) {
                 )
                 .unwrap();
 
-                criterion::black_box(batch)
+                std::hint::black_box(batch)
             })
         });
     }
@@ -214,7 +214,7 @@ fn bench_string_operations(c: &mut Criterion) {
                 for i in 0..rows {
                     sum_len += string_array.value(i).len();
                 }
-                criterion::black_box(sum_len)
+                std::hint::black_box(sum_len)
             })
         });
 
@@ -224,7 +224,7 @@ fn bench_string_operations(c: &mut Criterion) {
                 for i in 0..rows {
                     sum_len += string_view_array.value(i).len();
                 }
-                criterion::black_box(sum_len)
+                std::hint::black_box(sum_len)
             })
         });
     }
@@ -246,7 +246,7 @@ fn bench_avro_reader(c: &mut Criterion) {
             b.iter(|| {
                 let options = ReadOptions::default();
                 let batch = read_avro_test_file(file_path, &options).unwrap();
-                criterion::black_box(batch)
+                std::hint::black_box(batch)
             })
         });
 
@@ -254,7 +254,7 @@ fn bench_avro_reader(c: &mut Criterion) {
             b.iter(|| {
                 let options = ReadOptions::default().with_utf8view(true);
                 let batch = read_avro_test_file(file_path, &options).unwrap();
-                criterion::black_box(batch)
+                std::hint::black_box(batch)
             })
         });
     }
