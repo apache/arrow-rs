@@ -295,12 +295,91 @@ fn sort_bytes<T: ByteArrayType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let mut valids = value_indices
+    // 1. 构造 (idx, slice, len) 列表
+    let mut valids: Vec<(u32, &[u8], usize)> = value_indices
         .into_iter()
-        .map(|index| (index, values.value(index as usize).as_ref()))
-        .collect::<Vec<(u32, &[u8])>>();
+        .map(|idx| {
+            let slice:&[u8] = values.value(idx as usize).as_ref();
+            (idx, slice, slice.len())
+        })
+        .collect();
 
-    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+    // 2. 计算需要部分排序的元素数量 vlimit
+    let vlimit = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
+        _ => valids.len(),
+    };
+
+    // 3. 比较函数：4 字节前缀 → 8 字节块对齐 → 剩余字节 → 长度
+    let cmp_bytes = |a: &(u32, &[u8], usize), b: &(u32, &[u8], usize)| {
+        let (_, a_bytes, a_len) = *a;
+        let (_, b_bytes, b_len) = *b;
+        let min_len = a_len.min(b_len);
+
+        // 3.1 前 4 字节 u32 前缀比较
+        let pref = min_len.min(4);
+        let mut pa = 0u32;
+        let mut pb = 0u32;
+        for i in 0..pref {
+            pa = (pa << 8) | (a_bytes[i] as u32);
+            pb = (pb << 8) | (b_bytes[i] as u32);
+        }
+        if pa != pb {
+            return pa.cmp(&pb);
+        }
+
+        // 3.2 8 字节块级无对齐比较
+        let mut i = pref;
+        while i + 8 <= min_len {
+            let raw_a = unsafe { std::ptr::read_unaligned(a_bytes.as_ptr().add(i) as *const u64) };
+            let raw_b = unsafe { std::ptr::read_unaligned(b_bytes.as_ptr().add(i) as *const u64) };
+            let wa = u64::from_be(raw_a);
+            let wb = u64::from_be(raw_b);
+            if wa != wb {
+                return wa.cmp(&wb);
+            }
+            i += 8;
+        }
+
+        // 3.3 剩余字节逐一比较
+        while i < min_len {
+            let xa = unsafe { *a_bytes.get_unchecked(i) };
+            let xb = unsafe { *b_bytes.get_unchecked(i) };
+            if xa != xb {
+                return xa.cmp(&xb);
+            }
+            i += 1;
+        }
+
+        // 3.4 完全相等时，按长度决定先后
+        a_len.cmp(&b_len)
+    };
+
+    // 4. 对 valids 的前 vlimit 项进行不稳定排序
+    if !options.descending {
+        sort_unstable_by(&mut valids, vlimit, cmp_bytes);
+    } else {
+        sort_unstable_by(&mut valids, vlimit, |x, y| cmp_bytes(x, y).reverse());
+    }
+
+    // 5. 根据 nulls_first／limit 拼接最终的 index 列表
+    let total = valids.len() + nulls.len();
+    let out_limit = limit.unwrap_or(total).min(total);
+    let mut out = Vec::with_capacity(out_limit);
+
+    if options.nulls_first {
+        // 先放 null
+        out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+        let rem = out_limit - out.len();
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(rem));
+    } else {
+        // 先放非 null
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(out_limit));
+        let rem = out_limit - out.len();
+        out.extend_from_slice(&nulls[..rem]);
+    }
+
+    out.into()
 }
 
 fn sort_byte_view<T: ByteViewType>(
