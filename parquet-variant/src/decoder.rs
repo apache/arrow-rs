@@ -29,7 +29,8 @@ use std::num::TryFromIntError;
 ///
 /// See the [Variant Encoding specification] for details
 ///
-///[Variant Encoding specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
+/// [`Variant`]: crate::Variant
+/// [Variant Encoding specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantBasicType {
     Primitive = 0,
@@ -43,7 +44,8 @@ pub enum VariantBasicType {
 ///
 /// See the [Variant Encoding specification] for details
 ///
-///[Variant Encoding specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
+/// [`Variant`]: crate::Variant
+/// [Variant Encoding specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantPrimitiveType {
     Null = 0,
