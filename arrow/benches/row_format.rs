@@ -59,7 +59,7 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     c.bench_function(&format!("append_rows {name}"), |b| {
         b.iter(|| {
             rows.clear();
-            hint::black_box(converter.append(&mut rows, &cols).unwrap());
+            hint::black_box(converter.append(&mut rows, &cols).unwrap())
         });
     });
 }
