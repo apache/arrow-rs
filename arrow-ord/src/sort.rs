@@ -323,7 +323,6 @@ fn sort_byte_view<T: ByteViewType>(
             .into_iter()
             .map(|idx| {
                 let raw = unsafe { *values.views().get_unchecked(idx as usize) };
-                // SAFETY: we know raw is a valid inline view
                 let inline_key = GenericByteViewArray::<T>::inline_key_fast(raw);
                 (idx, inline_key)
             })
