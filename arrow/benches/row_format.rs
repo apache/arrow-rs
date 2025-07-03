@@ -54,6 +54,16 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     c.bench_function(&format!("convert_rows {name}"), |b| {
         b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
     });
+
+    let mut rows = converter.empty_rows(0, 0);
+    c.bench_function(&format!("append_rows {name}"), |b| {
+        let cols = cols.clone();
+        b.iter(|| {
+            rows.clear();
+            converter.append(&mut rows, &cols).unwrap();
+            hint::black_box(&mut rows);
+        });
+    });
 }
 
 fn bench_iter(c: &mut Criterion) {

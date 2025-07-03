@@ -774,12 +774,51 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     }
 }
 
+
 /// Drop implementation for ObjectBuilder does nothing
 /// as the `finish` method must be called to finalize the object.
 /// This is to ensure that the object is always finalized before its parent builder
 /// is finalized.
 impl Drop for ObjectBuilder<'_, '_> {
     fn drop(&mut self) {}
+}
+
+/// Trait that abstracts functionality from Variant fconstruction implementations, namely
+/// `VariantBuilder`, `ListBuilder` and `ObjectFieldBuilder` to minimize code duplication.
+pub(crate) trait VariantBuilderExt<'m, 'v> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>);
+
+    fn new_list(&mut self) -> ListBuilder;
+
+    fn new_object(&mut self) -> ObjectBuilder;
+}
+
+impl<'m, 'v> VariantBuilderExt<'m, 'v> for ListBuilder<'_> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.append_value(value);
+    }
+
+    fn new_list(&mut self) -> ListBuilder {
+        self.new_list()
+    }
+
+    fn new_object(&mut self) -> ObjectBuilder {
+        self.new_object()
+    }
+}
+
+impl<'m, 'v> VariantBuilderExt<'m, 'v> for VariantBuilder {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.append_value(value);
+    }
+
+    fn new_list(&mut self) -> ListBuilder {
+        self.new_list()
+    }
+
+    fn new_object(&mut self) -> ObjectBuilder {
+        self.new_object()
+    }
 }
 
 #[cfg(test)]
