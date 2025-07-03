@@ -769,12 +769,14 @@ impl RowConverter {
         // and therefore must be valid
         let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
 
-        for (i, row) in rows.iter().enumerate() {
-            if !row.is_empty() {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Codecs {codecs:?} did not consume all bytes for row {i}, remaining bytes: {row:?}",
-                    codecs = &self.codecs
-                )));
+        if cfg!(test) {
+            for (i, row) in rows.iter().enumerate() {
+                if !row.is_empty() {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Codecs {codecs:?} did not consume all bytes for row {i}, remaining bytes: {row:?}",
+                        codecs = &self.codecs
+                    )));
+                }
             }
         }
 
