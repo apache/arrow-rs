@@ -131,9 +131,9 @@ fn append_json<'m, 'v>(
     Ok(())
 }
 
-struct ObjectFieldBuilder<'s, 'o, 'v> {
+struct ObjectFieldBuilder<'o, 'v, 's> {
     key: &'s str,
-    builder: &'o mut ObjectBuilder<'v, 's>,
+    builder: &'o mut ObjectBuilder<'v>,
 }
 
 impl<'m, 'v> VariantBuilderExt<'m, 'v> for ObjectFieldBuilder<'_, '_, '_> {

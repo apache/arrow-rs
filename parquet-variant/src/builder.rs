@@ -299,6 +299,82 @@ impl MetadataBuilder {
     }
 }
 
+/// Tracks information needed to correctly finalize a nested builder, for each parent builder type.
+///
+/// A child builder has no effect on its parent unless/until its `finalize` method is called, at
+/// which point the child appends the new value to the parent. As a (desirable) side effect,
+/// creating a parent state instance captures mutable references to a subset of the parent's fields,
+/// rendering the parent object completely unusable until the parent state goes out of scope. This
+/// ensures that at most one child builder can exist at a time.
+///
+/// The redundancy in buffer and metadata_builder is because all the references come from the
+/// parent, and we cannot "split" a mutable reference across two objects (parent state and the child
+/// builder that uses it). So everything has to be here. Rust layout optimizations should treat the
+/// variants as a union, so that accessing a `buffer` or `metadata_builder` is branch-free.
+enum ParentState<'a> {
+    Variant {
+        buffer: &'a mut ValueBuffer,
+        metadata_builder: &'a mut MetadataBuilder,
+    },
+    List {
+        buffer: &'a mut ValueBuffer,
+        metadata_builder: &'a mut MetadataBuilder,
+        offsets: &'a mut Vec<usize>,
+    },
+    Object {
+        buffer: &'a mut ValueBuffer,
+        metadata_builder: &'a mut MetadataBuilder,
+        fields: &'a mut IndexMap<u32, usize>,
+        field_name: &'a str,
+    },
+}
+
+impl ParentState<'_> {
+    fn buffer(&mut self) -> &mut ValueBuffer {
+        match self {
+            ParentState::Variant { buffer, .. } => buffer,
+            ParentState::List { buffer, .. } => buffer,
+            ParentState::Object { buffer, .. } => buffer,
+        }
+    }
+
+    fn metadata_builder(&mut self) -> &mut MetadataBuilder {
+        match self {
+            ParentState::Variant {
+                metadata_builder, ..
+            } => metadata_builder,
+            ParentState::List {
+                metadata_builder, ..
+            } => metadata_builder,
+            ParentState::Object {
+                metadata_builder, ..
+            } => metadata_builder,
+        }
+    }
+
+    // Performs any parent-specific aspects of finishing, after the child has appended all necessary
+    // bytes to the parent's value buffer. ListBuilder captures the new value's ending offset;
+    // ObjectBuilder associates the new value's starting offset with its field id; VariantBuilder
+    // doesn't need anything special.
+    fn finish(&mut self, starting_offset: usize) {
+        match self {
+            ParentState::Variant { .. } => (),
+            ParentState::List {
+                buffer, offsets, ..
+            } => offsets.push(buffer.offset()),
+            ParentState::Object {
+                metadata_builder,
+                fields,
+                field_name,
+                ..
+            } => {
+                let field_id = metadata_builder.upsert_field_name(field_name);
+                fields.insert(field_id, starting_offset);
+            }
+        }
+    }
+}
+
 /// Top level builder for [`Variant`] values
 ///
 /// # Example: create a Primitive Int8
@@ -479,20 +555,29 @@ impl VariantBuilder {
         self
     }
 
+    // Returns validate_unique_fields because we can no longer reference self once this method returns.
+    fn parent_state(&mut self) -> (ParentState, bool) {
+        let state = ParentState::Variant {
+            buffer: &mut self.buffer,
+            metadata_builder: &mut self.metadata_builder,
+        };
+        (state, self.validate_unique_fields)
+    }
+
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_list(&mut self) -> ListBuilder {
-        ListBuilder::new(&mut self.buffer, &mut self.metadata_builder)
-            .with_validate_unique_fields(self.validate_unique_fields)
+        let (parent_state, validate_unique_fields) = self.parent_state();
+        ListBuilder::new(parent_state, validate_unique_fields)
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_object(&mut self) -> ObjectBuilder {
-        ObjectBuilder::new(&mut self.buffer, &mut self.metadata_builder)
-            .with_validate_unique_fields(self.validate_unique_fields)
+        let (parent_state, validate_unique_fields) = self.parent_state();
+        ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
@@ -508,36 +593,20 @@ impl VariantBuilder {
 ///
 /// See the examples on [`VariantBuilder`] for usage.
 pub struct ListBuilder<'a> {
-    parent_buffer: &'a mut ValueBuffer,
-    metadata_builder: &'a mut MetadataBuilder,
+    parent_state: ParentState<'a>,
     offsets: Vec<usize>,
     buffer: ValueBuffer,
-    /// Is there a pending nested object or list that needs to be finalized?
-    pending: bool,
     validate_unique_fields: bool,
 }
 
 impl<'a> ListBuilder<'a> {
-    fn new(parent_buffer: &'a mut ValueBuffer, metadata_builder: &'a mut MetadataBuilder) -> Self {
+    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
-            parent_buffer,
-            metadata_builder,
+            parent_state,
             offsets: vec![0],
             buffer: ValueBuffer::default(),
-            pending: false,
-            validate_unique_fields: false,
+            validate_unique_fields,
         }
-    }
-
-    fn check_new_offset(&mut self) {
-        if !self.pending {
-            return;
-        }
-
-        let element_end = self.buffer.offset();
-        self.offsets.push(element_end);
-
-        self.pending = false;
     }
 
     /// Enables unique field key validation for objects created within this list.
@@ -549,45 +618,53 @@ impl<'a> ListBuilder<'a> {
         self
     }
 
+    // Returns validate_unique_fields because we can no longer reference self once this method returns.
+    fn parent_state(&mut self) -> (ParentState, bool) {
+        let state = ParentState::List {
+            buffer: &mut self.buffer,
+            metadata_builder: self.parent_state.metadata_builder(),
+            offsets: &mut self.offsets,
+        };
+        (state, self.validate_unique_fields)
+    }
+
+    /// Returns an object builder that can be used to append a new (nested) object to this list.
+    ///
+    /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
     pub fn new_object(&mut self) -> ObjectBuilder {
-        self.check_new_offset();
-
-        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder)
-            .with_validate_unique_fields(self.validate_unique_fields);
-        self.pending = true;
-
-        obj_builder
+        let (parent_state, validate_unique_fields) = self.parent_state();
+        ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
+    /// Returns a list builder that can be used to append a new (nested) list to this list.
+    ///
+    /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
     pub fn new_list(&mut self) -> ListBuilder {
-        self.check_new_offset();
-
-        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder)
-            .with_validate_unique_fields(self.validate_unique_fields);
-        self.pending = true;
-
-        list_builder
+        let (parent_state, validate_unique_fields) = self.parent_state();
+        ListBuilder::new(parent_state, validate_unique_fields)
     }
 
+    /// Appends a new primitive value to this list
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        self.check_new_offset();
-
         self.buffer.append_non_nested_value(value);
         let element_end = self.buffer.offset();
         self.offsets.push(element_end);
     }
 
+    /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) {
-        self.check_new_offset();
-
         let data_size = self.buffer.offset();
         let num_elements = self.offsets.len() - 1;
         let is_large = num_elements > u8::MAX as usize;
         let offset_size = int_size(data_size);
 
+        // Get parent's buffer
+        let parent_buffer = self.parent_state.buffer();
+        let starting_offset = parent_buffer.offset();
+
         // Write header
         write_header(
-            self.parent_buffer.inner_mut(),
+            parent_buffer.inner_mut(),
             array_header(is_large, offset_size),
             is_large,
             num_elements,
@@ -595,51 +672,36 @@ impl<'a> ListBuilder<'a> {
 
         // Write offsets
         for offset in &self.offsets {
-            write_offset(self.parent_buffer.inner_mut(), *offset, offset_size);
+            write_offset(parent_buffer.inner_mut(), *offset, offset_size);
         }
 
         // Append values
-        self.parent_buffer.append_slice(self.buffer.inner());
+        parent_buffer.append_slice(self.buffer.inner());
+        self.parent_state.finish(starting_offset);
     }
 }
 
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
-pub struct ObjectBuilder<'a, 'b> {
-    parent_buffer: &'a mut ValueBuffer,
-    metadata_builder: &'a mut MetadataBuilder,
+pub struct ObjectBuilder<'a> {
+    parent_state: ParentState<'a>,
     fields: IndexMap<u32, usize>, // (field_id, offset)
     buffer: ValueBuffer,
-    /// Is there a pending list or object that needs to be finalized?
-    pending: Option<(&'b str, usize)>,
     validate_unique_fields: bool,
     /// Set of duplicate fields to report for errors
     duplicate_fields: HashSet<u32>,
 }
 
-impl<'a, 'b> ObjectBuilder<'a, 'b> {
-    fn new(parent_buffer: &'a mut ValueBuffer, metadata_builder: &'a mut MetadataBuilder) -> Self {
+impl<'a> ObjectBuilder<'a> {
+    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
-            parent_buffer,
-            metadata_builder,
+            parent_state,
             fields: IndexMap::new(),
             buffer: ValueBuffer::default(),
-            pending: None,
-            validate_unique_fields: false,
+            validate_unique_fields,
             duplicate_fields: HashSet::new(),
         }
-    }
-
-    fn check_pending_field(&mut self) {
-        let Some(&(field_name, field_start)) = self.pending.as_ref() else {
-            return;
-        };
-
-        let field_id = self.metadata_builder.upsert_field_name(field_name);
-        self.fields.insert(field_id, field_start);
-
-        self.pending = None;
     }
 
     /// Add a field with key and value to the object
@@ -647,9 +709,10 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
     /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
     /// but the old value remains in the buffer, resulting in a larger variant
     pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
-        self.check_pending_field();
+        // Get metadata_builder from parent state
+        let metadata_builder = self.parent_state.metadata_builder();
 
-        let field_id = self.metadata_builder.upsert_field_name(key);
+        let field_id = metadata_builder.upsert_field_name(key);
         let field_start = self.buffer.offset();
 
         if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
@@ -668,43 +731,41 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         self
     }
 
-    /// Return a new [`ObjectBuilder`] to add a nested object with the specified
-    /// key to the object.
-    pub fn new_object(&mut self, key: &'b str) -> ObjectBuilder {
-        self.check_pending_field();
-
-        let field_start = self.buffer.offset();
-        let obj_builder = ObjectBuilder::new(&mut self.buffer, self.metadata_builder)
-            .with_validate_unique_fields(self.validate_unique_fields);
-        self.pending = Some((key, field_start));
-
-        obj_builder
+    // Returns validate_unique_fields because we can no longer reference self once this method returns.
+    fn parent_state<'b>(&'b mut self, key: &'b str) -> (ParentState<'b>, bool) {
+        let state = ParentState::Object {
+            buffer: &mut self.buffer,
+            metadata_builder: self.parent_state.metadata_builder(),
+            fields: &mut self.fields,
+            field_name: key,
+        };
+        (state, self.validate_unique_fields)
     }
 
-    /// Return a new [`ListBuilder`] to add a list with the specified key to the
-    /// object.
-    pub fn new_list(&mut self, key: &'b str) -> ListBuilder {
-        self.check_pending_field();
-
-        let field_start = self.buffer.offset();
-        let list_builder = ListBuilder::new(&mut self.buffer, self.metadata_builder)
-            .with_validate_unique_fields(self.validate_unique_fields);
-        self.pending = Some((key, field_start));
-
-        list_builder
-    }
-
-    /// Finalize object
+    /// Returns an object builder that can be used to append a new (nested) object to this list.
     ///
-    /// This consumes self and writes the object to the parent buffer.
-    pub fn finish(mut self) -> Result<(), ArrowError> {
-        self.check_pending_field();
+    /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
+    pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b> {
+        let (parent_state, validate_unique_fields) = self.parent_state(key);
+        ObjectBuilder::new(parent_state, validate_unique_fields)
+    }
 
+    /// Returns a list builder that can be used to append a new (nested) list to this list.
+    ///
+    /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
+    pub fn new_list<'b>(&'b mut self, key: &'b str) -> ListBuilder<'b> {
+        let (parent_state, validate_unique_fields) = self.parent_state(key);
+        ListBuilder::new(parent_state, validate_unique_fields)
+    }
+
+    /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
+    pub fn finish(mut self) -> Result<(), ArrowError> {
+        let metadata_builder = self.parent_state.metadata_builder();
         if self.validate_unique_fields && !self.duplicate_fields.is_empty() {
             let mut names = self
                 .duplicate_fields
                 .iter()
-                .map(|id| self.metadata_builder.field_name(*id as usize))
+                .map(|id| metadata_builder.field_name(*id as usize))
                 .collect::<Vec<_>>();
 
             names.sort_unstable();
@@ -720,8 +781,8 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let is_large = num_fields > u8::MAX as usize;
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
-            let key_a = &self.metadata_builder.field_name(field_a_id as usize);
-            let key_b = &self.metadata_builder.field_name(field_b_id as usize);
+            let key_a = &metadata_builder.field_name(field_a_id as usize);
+            let key_b = &metadata_builder.field_name(field_b_id as usize);
             key_a.cmp(key_b)
         });
 
@@ -730,9 +791,13 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         let id_size = int_size(max_id as usize);
         let offset_size = int_size(data_size);
 
+        // Get parent's buffer
+        let parent_buffer = self.parent_state.buffer();
+        let starting_offset = parent_buffer.offset();
+
         // Write header
         write_header(
-            self.parent_buffer.inner_mut(),
+            parent_buffer.inner_mut(),
             object_header(is_large, id_size, offset_size),
             is_large,
             num_fields,
@@ -740,24 +805,25 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
 
         // Write field IDs (sorted order)
         for (&id, _) in &self.fields {
-            write_offset(self.parent_buffer.inner_mut(), id as usize, id_size);
+            write_offset(parent_buffer.inner_mut(), id as usize, id_size);
         }
 
         // Write field offsets
         for (_, &offset) in &self.fields {
-            write_offset(self.parent_buffer.inner_mut(), offset, offset_size);
+            write_offset(parent_buffer.inner_mut(), offset, offset_size);
         }
 
-        write_offset(self.parent_buffer.inner_mut(), data_size, offset_size);
+        write_offset(parent_buffer.inner_mut(), data_size, offset_size);
 
-        self.parent_buffer.append_slice(self.buffer.inner());
+        parent_buffer.append_slice(self.buffer.inner());
+        self.parent_state.finish(starting_offset);
 
         Ok(())
     }
 }
 
-/// Trait that abstracts functionality from Variant fconstruction implementations, namely
-/// `VariantBuilder`, `ListBuilder` and `ObjectFieldBuilder` to minimize code duplication.
+/// Trait that abstracts functionality from Variant construction implementations, namely
+/// [`VariantBuilder`], [`ListBuilder`] and [`ObjectFieldBuilder`] to minimize code duplication.
 pub(crate) trait VariantBuilderExt<'m, 'v> {
     fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>);
 
