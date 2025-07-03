@@ -147,6 +147,14 @@ impl PartialOrd for Int96 {
 }
 
 impl Ord for Int96 {
+    /// Order `Int96` correctly for (deprecated) timestamp types.
+    ///
+    /// Note: this is done even though the Int96 type is deprecated and the
+    /// [spec does not define the sort order]
+    /// because some engines, notably Spark and DataBricks photon still write
+    /// Int96 timestamps and rely on their order for optimization.
+    ///
+    /// [spec does not define the sort order]: https://github.com/apache/parquet-format/blob/cf943c197f4fad826b14ba0c40eb0ffdab585285/src/main/thrift/parquet.thrift#L1079
     fn cmp(&self, other: &Self) -> Ordering {
         match self.get_days().cmp(&other.get_days()) {
             Ordering::Equal => self.get_nanos().cmp(&other.get_nanos()),
