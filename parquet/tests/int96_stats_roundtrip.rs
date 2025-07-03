@@ -82,8 +82,8 @@ fn verify_ordering(data: Vec<Int96>) {
         let min = stats.min_opt().unwrap();
         let max = stats.max_opt().unwrap();
         
-        assert_eq!(*min, expected_min, "Min value should be {} but was {}", expected_min, min);
-        assert_eq!(*max, expected_max, "Max value should be {} but was {}", expected_max, max);
+        assert_eq!(*min, expected_min, "Min value should be {expected_min} but was {min}");
+        assert_eq!(*max, expected_max, "Max value should be {expected_max} but was {max}");
         assert_eq!(stats.null_count_opt(), Some(0));
     } else {
         panic!("Expected Int96 statistics");
