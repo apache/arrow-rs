@@ -1565,4 +1565,116 @@ mod tests {
         let valid_result = valid_obj.finish();
         assert!(valid_result.is_ok());
     }
+
+    #[test]
+    fn test_variant_builder_to_list_builder_no_finish() {
+        // Create a list builder but never finish it
+        let mut builder = VariantBuilder::new();
+        let _list_builder = builder.new_list();
+
+        builder.append_value(42i8);
+
+        // The original builder should be unchanged
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        assert_eq!(variant, Variant::Int8(42));
+    }
+
+    #[test]
+    fn test_variant_builder_to_object_builder_no_finish() {
+        // Create an object builder but never finish it
+        let mut builder = VariantBuilder::new();
+        let _object_builder = builder.new_object();
+
+        builder.append_value(42i8);
+
+        // The original builder should be unchanged
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        assert_eq!(variant, Variant::Int8(42));
+    }
+
+    #[test]
+    fn test_list_builder_to_list_builder_no_finish() {
+        let mut builder = VariantBuilder::new();
+        let mut list_builder = builder.new_list();
+        list_builder.append_value(1i8);
+
+        // Create a nested list builder but never finish it
+        let _nested_list_builder = list_builder.new_list();
+
+        list_builder.append_value(2i8);
+
+        // The parent list should only contain the original values
+        list_builder.finish();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let list = variant.as_list().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list.get(0).unwrap(), Variant::Int8(1));
+        assert_eq!(list.get(1).unwrap(), Variant::Int8(2));
+    }
+
+    #[test]
+    fn test_list_builder_to_object_builder_no_finish() {
+        let mut builder = VariantBuilder::new();
+        let mut list_builder = builder.new_list();
+        list_builder.append_value(1i8);
+
+        // Create a nested object builder but never finish it
+        let _nested_object_builder = list_builder.new_object();
+
+        list_builder.append_value(2i8);
+
+        // The parent list should only contain the original values
+        list_builder.finish();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let list = variant.as_list().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list.get(0).unwrap(), Variant::Int8(1));
+        assert_eq!(list.get(1).unwrap(), Variant::Int8(2));
+    }
+
+    #[test]
+    fn test_object_builder_to_list_builder_no_finish() {
+        let mut builder = VariantBuilder::new();
+        let mut object_builder = builder.new_object();
+        object_builder.insert("first", 1i8);
+
+        // Create a nested list builder but never finish it
+        let _nested_list_builder = object_builder.new_list("nested");
+
+        object_builder.insert("second", 2i8);
+
+        // The parent object should only contain the original fields
+        object_builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
+        assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
+    }
+
+    #[test]
+    fn test_object_builder_to_object_builder_no_finish() {
+        let mut builder = VariantBuilder::new();
+        let mut object_builder = builder.new_object();
+        object_builder.insert("first", 1i8);
+
+        // Create a nested object builder but never finish it
+        let _nested_object_builder = object_builder.new_object("nested");
+
+        object_builder.insert("second", 2i8);
+
+        // The parent object should only contain the original fields
+        object_builder.finish().unwrap();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
+        assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
+    }
 }
