@@ -125,10 +125,18 @@ impl Int96 {
     }
 
     #[inline]
+    fn get_days(&self) -> i32 {
+        self.data()[2] as i32
+    }
+
+    #[inline]
+    fn get_nanos(&self) -> i64 {
+        ((self.data()[1] as i64) << 32) + self.data()[0] as i64
+    }
+
+    #[inline]
     fn data_as_days_and_nanos(&self) -> (i32, i64) {
-        let day = self.data()[2] as i32;
-        let nanos = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
-        (day, nanos)
+        (self.get_days(), self.get_nanos())
     }
 }
 
@@ -140,11 +148,8 @@ impl PartialOrd for Int96 {
 
 impl Ord for Int96 {
     fn cmp(&self, other: &Self) -> Ordering {
-        let (self_days, self_nanos) = self.data_as_days_and_nanos();
-        let (other_days, other_nanos) = other.data_as_days_and_nanos();
-
-        match self_days.cmp(&other_days) {
-            Ordering::Equal => self_nanos.cmp(&other_nanos),
+        match self.get_days().cmp(&other.get_days()) {
+            Ordering::Equal => self.get_nanos().cmp(&other.get_nanos()),
             ord => ord,
         }
     }
