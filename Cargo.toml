@@ -97,6 +97,10 @@ arrow-select = { version = "55.2.0", path = "./arrow-select" }
 arrow-string = { version = "55.2.0", path = "./arrow-string" }
 parquet = { version = "55.2.0", path = "./parquet", default-features = false }
 
+# These crates have not yet been released and thus do not use the workspace version
+parquet-variant = { version = "0.1.0", path = "./parquet-variant"}
+parquet-variant-json = { version = "0.1.0", path = "./parquet-variant-json" }
+
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 
 # release inherited profile keeping debug information and symbols

@@ -21,7 +21,7 @@ use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
 use std::io::Write;
 
-use parquet_variant::variant::{Variant, VariantList, VariantObject};
+use parquet_variant::{Variant, VariantList, VariantObject};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -61,7 +61,8 @@ fn format_binary_base64(bytes: &[u8]) -> String {
 ///
 ///
 /// ```rust
-/// # use parquet_variant::{Variant, variant_to_json};
+/// # use parquet_variant::{Variant};
+/// # use parquet_variant_json::variant_to_json;
 /// # use arrow_schema::ArrowError;
 /// let variant = Variant::from("Hello, World!");
 /// let mut buffer = Vec::new();
@@ -72,7 +73,8 @@ fn format_binary_base64(bytes: &[u8]) -> String {
 ///
 /// # Example: Create a [`Variant::Object`] and convert to JSON
 /// ```rust
-/// # use parquet_variant::{Variant, VariantBuilder, variant_to_json};
+/// # use parquet_variant::{Variant, VariantBuilder};
+/// # use parquet_variant_json::variant_to_json;
 /// # use arrow_schema::ArrowError;
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
@@ -203,7 +205,8 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// # Examples
 ///
 /// ```rust
-/// # use parquet_variant::{Variant, variant_to_json_string};
+/// # use parquet_variant::{Variant};
+/// # use parquet_variant_json::variant_to_json_string;
 /// # use arrow_schema::ArrowError;
 /// let variant = Variant::Int32(42);
 /// let json = variant_to_json_string(&variant)?;
@@ -222,7 +225,8 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// ```
 ///
 /// ```rust
-/// # use parquet_variant::{Variant, VariantBuilder, variant_to_json_string};
+/// # use parquet_variant::{Variant, VariantBuilder};
+/// # use parquet_variant_json::variant_to_json_string;
 /// # use arrow_schema::ArrowError;
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
@@ -263,7 +267,8 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
 /// # Examples
 ///
 /// ```rust
-/// # use parquet_variant::{Variant, variant_to_json_value};
+/// # use parquet_variant::{Variant};
+/// # use parquet_variant_json::variant_to_json_value;
 /// # use serde_json::Value;
 /// # use arrow_schema::ArrowError;
 /// let variant = Variant::from("hello");
@@ -367,6 +372,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
 mod tests {
     use super::*;
     use chrono::{DateTime, NaiveDate, Utc};
+    use parquet_variant::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
     #[test]
     fn test_decimal_edge_cases() -> Result<(), ArrowError> {
