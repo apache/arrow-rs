@@ -74,7 +74,7 @@ fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowErr
     Ok(())
 }
 
-fn variant_from_number<'a, 'b>(n: &Number) -> Result<Variant<'a, 'b>, ArrowError> {
+fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError> {
     if let Some(i) = n.as_i64() {
         // Find minimum Integer width to fit
         if i as i8 as i64 == i {
@@ -93,13 +93,16 @@ fn variant_from_number<'a, 'b>(n: &Number) -> Result<Variant<'a, 'b>, ArrowError
             Some(f) => return Ok(f.into()),
             None => Err(ArrowError::InvalidArgumentError(format!(
                 "Failed to parse {} as number",
-                n.to_string()
+                n
             ))),
         }?
     }
 }
 
-fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+fn append_json<'m, 'v>(
+    json: &'v Value,
+    builder: &mut impl VariantBuilderExt<'m, 'v>,
+) -> Result<(), ArrowError> {
     match json {
         Value::Null => builder.append_value(Variant::Null),
         Value::Bool(b) => builder.append_value(*b),
@@ -129,13 +132,13 @@ fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(),
     Ok(())
 }
 
-struct ObjectFieldBuilder<'a, 'b, 'c> {
-    key: &'a str,
-    builder: &'b mut ObjectBuilder<'c, 'a>,
+struct ObjectFieldBuilder<'s, 'o, 'v> {
+    key: &'s str,
+    builder: &'o mut ObjectBuilder<'v, 's>,
 }
 
-impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
-    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+impl<'m, 'v> VariantBuilderExt<'m, 'v> for ObjectFieldBuilder<'_, '_, '_> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.builder.insert(self.key, value);
     }
 

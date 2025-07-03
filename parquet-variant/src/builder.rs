@@ -758,16 +758,16 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
 
 /// Trait that abstracts functionality from Variant fconstruction implementations, namely
 /// `VariantBuilder`, `ListBuilder` and `ObjectFieldBuilder` to minimize code duplication.
-pub(crate) trait VariantBuilderExt {
-    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T);
+pub(crate) trait VariantBuilderExt<'m, 'v> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>);
 
     fn new_list(&mut self) -> ListBuilder;
 
     fn new_object(&mut self) -> ObjectBuilder;
 }
 
-impl VariantBuilderExt for ListBuilder<'_> {
-    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+impl<'m, 'v> VariantBuilderExt<'m, 'v> for ListBuilder<'_> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
 
@@ -780,8 +780,8 @@ impl VariantBuilderExt for ListBuilder<'_> {
     }
 }
 
-impl VariantBuilderExt for VariantBuilder {
-    fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+impl<'m, 'v> VariantBuilderExt<'m, 'v> for VariantBuilder {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
 
