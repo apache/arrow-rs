@@ -295,9 +295,16 @@ fn sort_bytes<T: ByteArrayType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
+    // Note: Why do we use 4‑byte prefix?
+    // Compute the 4‑byte prefix in BE order, or left‑pad if shorter.
+    // Most byte‐sequences differ in their first few bytes, so by
+    // comparing up to 4 bytes as a single u32 we avoid the overhead
+    // of a full lexicographical compare for the vast majority of cases.
+
     // 1. Build a vector of (index, 64‑bit prefix) pairs
     //    The high 32 bits store the big‑endian u32 of the first up to 4 bytes,
     //    the low 32 bits store the original slice length.
+    // This is similar to inline_key_fast function in GenericByteViewArray.
     let mut valids: Vec<(u32, u64)> = value_indices
         .into_iter()
         .map(|idx| {
