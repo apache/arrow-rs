@@ -890,6 +890,7 @@ impl<'m, 'v> VariantBuilderExt<'m, 'v> for VariantBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VariantMetadata;
 
     #[test]
     fn test_simple_usage() {
@@ -1600,14 +1601,19 @@ mod tests {
     fn test_variant_builder_to_list_builder_no_finish() {
         // Create a list builder but never finish it
         let mut builder = VariantBuilder::new();
-        let list_builder = builder.new_list();
+        let mut list_builder = builder.new_list();
+        list_builder.append_value("hi");
         drop(list_builder);
 
         builder.append_value(42i8);
 
         // The original builder should be unchanged
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert!(metadata.is_empty());
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
+        assert!(metadata.is_empty());
         assert_eq!(variant, Variant::Int8(42));
     }
 
@@ -1615,25 +1621,31 @@ mod tests {
     fn test_variant_builder_to_object_builder_no_finish() {
         // Create an object builder but never finish it
         let mut builder = VariantBuilder::new();
-        let object_builder = builder.new_object();
+        let mut object_builder = builder.new_object();
+        object_builder.insert("name", "unknown");
         drop(object_builder);
 
         builder.append_value(42i8);
 
         // The original builder should be unchanged
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(&metadata[0], "name"); // not rolled back
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         assert_eq!(variant, Variant::Int8(42));
     }
 
     #[test]
-    fn test_list_builder_to_list_builder_no_finish() {
+    fn test_list_builder_to_list_builder_inner_no_finish() {
         let mut builder = VariantBuilder::new();
         let mut list_builder = builder.new_list();
         list_builder.append_value(1i8);
 
         // Create a nested list builder but never finish it
-        let nested_list_builder = list_builder.new_list();
+        let mut nested_list_builder = list_builder.new_list();
+        nested_list_builder.append_value("hi");
         drop(nested_list_builder);
 
         list_builder.append_value(2i8);
@@ -1641,7 +1653,10 @@ mod tests {
         // The parent list should only contain the original values
         list_builder.finish();
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert!(metadata.is_empty());
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let list = variant.as_list().unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list.get(0).unwrap(), Variant::Int8(1));
@@ -1649,13 +1664,39 @@ mod tests {
     }
 
     #[test]
-    fn test_list_builder_to_object_builder_no_finish() {
+    fn test_list_builder_to_list_builder_outer_no_finish() {
+        let mut builder = VariantBuilder::new();
+        let mut list_builder = builder.new_list();
+        list_builder.append_value(1i8);
+
+        // Create a nested list builder and finish it
+        let mut nested_list_builder = list_builder.new_list();
+        nested_list_builder.append_value("hi");
+        nested_list_builder.finish();
+
+        // Drop the outer list builder without finishing it
+        drop(list_builder);
+
+        builder.append_value(2i8);
+
+        // Only the second attempt should appear in the final variant
+        let (metadata, value) = builder.finish();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert!(metadata.is_empty());
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
+        assert_eq!(variant, Variant::Int8(2));
+    }
+
+    #[test]
+    fn test_list_builder_to_object_builder_inner_no_finish() {
         let mut builder = VariantBuilder::new();
         let mut list_builder = builder.new_list();
         list_builder.append_value(1i8);
 
         // Create a nested object builder but never finish it
-        let nested_object_builder = list_builder.new_object();
+        let mut nested_object_builder = list_builder.new_object();
+        nested_object_builder.insert("name", "unknown");
         drop(nested_object_builder);
 
         list_builder.append_value(2i8);
@@ -1663,7 +1704,11 @@ mod tests {
         // The parent list should only contain the original values
         list_builder.finish();
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(&metadata[0], "name"); // not rolled back
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let list = variant.as_list().unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list.get(0).unwrap(), Variant::Int8(1));
@@ -1671,13 +1716,40 @@ mod tests {
     }
 
     #[test]
-    fn test_object_builder_to_list_builder_no_finish() {
+    fn test_list_builder_to_object_builder_outer_no_finish() {
+        let mut builder = VariantBuilder::new();
+        let mut list_builder = builder.new_list();
+        list_builder.append_value(1i8);
+
+        // Create a nested object builder and finish it
+        let mut nested_object_builder = list_builder.new_object();
+        nested_object_builder.insert("name", "unknown");
+        nested_object_builder.finish().unwrap();
+
+        // Drop the outer list builder without finishing it
+        drop(list_builder);
+
+        builder.append_value(2i8);
+
+        // Only the second attempt should appear in the final variant
+        let (metadata, value) = builder.finish();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(&metadata[0], "name"); // not rolled back
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
+        assert_eq!(variant, Variant::Int8(2));
+    }
+
+    #[test]
+    fn test_object_builder_to_list_builder_inner_no_finish() {
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
         object_builder.insert("first", 1i8);
 
         // Create a nested list builder but never finish it
-        let nested_list_builder = object_builder.new_list("nested");
+        let mut nested_list_builder = object_builder.new_list("nested");
+        nested_list_builder.append_value("hi");
         drop(nested_list_builder);
 
         object_builder.insert("second", 2i8);
@@ -1685,7 +1757,12 @@ mod tests {
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(&metadata[0], "first");
+        assert_eq!(&metadata[1], "second");
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let obj = variant.as_object().unwrap();
         assert_eq!(obj.len(), 2);
         assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
@@ -1693,13 +1770,41 @@ mod tests {
     }
 
     #[test]
-    fn test_object_builder_to_object_builder_no_finish() {
+    fn test_object_builder_to_list_builder_outer_no_finish() {
+        let mut builder = VariantBuilder::new();
+        let mut object_builder = builder.new_object();
+        object_builder.insert("first", 1i8);
+
+        // Create a nested list builder and finish it
+        let mut nested_list_builder = object_builder.new_list("nested");
+        nested_list_builder.append_value("hi");
+        nested_list_builder.finish();
+
+        // Drop the outer object builder without finishing it
+        drop(object_builder);
+
+        builder.append_value(2i8);
+
+        // Only the second attempt should appear in the final variant
+        let (metadata, value) = builder.finish();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(&metadata[0], "first");
+        assert_eq!(&metadata[1], "nested"); // not rolled back
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
+        assert_eq!(variant, Variant::Int8(2));
+    }
+
+    #[test]
+    fn test_object_builder_to_object_builder_inner_no_finish() {
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
         object_builder.insert("first", 1i8);
 
         // Create a nested object builder but never finish it
-        let nested_object_builder = object_builder.new_object("nested");
+        let mut nested_object_builder = object_builder.new_object("nested");
+        nested_object_builder.insert("name", "unknown");
         drop(nested_object_builder);
 
         object_builder.insert("second", 2i8);
@@ -1707,10 +1812,44 @@ mod tests {
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert_eq!(metadata.len(), 3);
+        assert_eq!(&metadata[0], "first");
+        assert_eq!(&metadata[1], "name"); // not rolled back
+        assert_eq!(&metadata[2], "second");
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let obj = variant.as_object().unwrap();
         assert_eq!(obj.len(), 2);
         assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
         assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
+    }
+
+    #[test]
+    fn test_object_builder_to_object_builder_outer_no_finish() {
+        let mut builder = VariantBuilder::new();
+        let mut object_builder = builder.new_object();
+        object_builder.insert("first", 1i8);
+
+        // Create a nested object builder and finish it
+        let mut nested_object_builder = object_builder.new_object("nested");
+        nested_object_builder.insert("name", "unknown");
+        nested_object_builder.finish().unwrap();
+
+        // Drop the outer object builder without finishing it
+        drop(object_builder);
+
+        builder.append_value(2i8);
+
+        // Only the second attempt should appear in the final variant
+        let (metadata, value) = builder.finish();
+        let metadata = VariantMetadata::try_new(&metadata).unwrap();
+        assert_eq!(metadata.len(), 3);
+        assert_eq!(&metadata[0], "first"); // not rolled back
+        assert_eq!(&metadata[1], "name"); // not rolled back
+        assert_eq!(&metadata[2], "nested"); // not rolled back
+
+        let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
+        assert_eq!(variant, Variant::Int8(2));
     }
 }
