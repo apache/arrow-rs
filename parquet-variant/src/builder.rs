@@ -543,6 +543,7 @@ impl ParentState<'_> {
 /// obj.insert("a", 1);
 /// obj.insert("a", 2); // duplicate field
 ///
+/// // When validation is enabled, finish will return an error
 /// let result = obj.finish(); // returns Err
 /// assert!(result.is_err());
 /// ```
@@ -597,10 +598,20 @@ impl VariantBuilder {
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
+    /// Append a non-nested value to the builder.
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder};
+    /// let mut builder = VariantBuilder::new();
+    /// // most primitive types can be appended directly as they implement `Into<Variant>`
+    /// builder.append_value(42i8);
+    /// ```
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         self.buffer.append_non_nested_value(value);
     }
 
+    /// Finish the builder and return the metadata and value buffers.
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
         (self.metadata_builder.finish(), self.buffer.into_inner())
     }
@@ -683,10 +694,19 @@ impl<'a> ListBuilder<'a> {
         parent_buffer.append_header(header, is_large, num_elements);
 
         // Write out the offset array followed by the value bytes
-        parent_buffer.append_offset_array(self.offsets, Some(data_size), offset_size);
+        let offsets = std::mem::take(&mut self.offsets);
+        parent_buffer.append_offset_array(offsets, Some(data_size), offset_size);
         parent_buffer.append_slice(self.buffer.inner());
         self.parent_state.finish(starting_offset);
     }
+}
+
+/// Drop implementation for ListBuilder does nothing
+/// as the `finish` method must be called to finalize the list.
+/// This is to ensure that the list is always finalized before its parent builder
+/// is finalized.
+impl Drop for ListBuilder<'_> {
+    fn drop(&mut self) {}
 }
 
 /// A builder for creating [`Variant::Object`] values.
@@ -812,13 +832,21 @@ impl<'a> ObjectBuilder<'a> {
         parent_buffer.append_offset_array(ids, None, id_size);
 
         // Write the field offset array, followed by the value bytes
-        let offsets = self.fields.into_values();
+        let offsets = std::mem::take(&mut self.fields).into_values();
         parent_buffer.append_offset_array(offsets, Some(data_size), offset_size);
         parent_buffer.append_slice(self.buffer.inner());
         self.parent_state.finish(starting_offset);
 
         Ok(())
     }
+}
+
+/// Drop implementation for ObjectBuilder does nothing
+/// as the `finish` method must be called to finalize the object.
+/// This is to ensure that the object is always finalized before its parent builder
+/// is finalized.
+impl Drop for ObjectBuilder<'_> {
+    fn drop(&mut self) {}
 }
 
 /// Trait that abstracts functionality from Variant construction implementations, such as
@@ -1555,6 +1583,9 @@ mod tests {
             "Invalid argument error: Duplicate field keys detected: [x]"
         );
 
+        inner_list.finish();
+        outer_list.finish();
+
         // Valid object should succeed
         let mut list = builder.new_list();
         let mut valid_obj = list.new_object();
@@ -1569,7 +1600,8 @@ mod tests {
     fn test_variant_builder_to_list_builder_no_finish() {
         // Create a list builder but never finish it
         let mut builder = VariantBuilder::new();
-        let _list_builder = builder.new_list();
+        let list_builder = builder.new_list();
+        drop(list_builder);
 
         builder.append_value(42i8);
 
@@ -1583,7 +1615,8 @@ mod tests {
     fn test_variant_builder_to_object_builder_no_finish() {
         // Create an object builder but never finish it
         let mut builder = VariantBuilder::new();
-        let _object_builder = builder.new_object();
+        let object_builder = builder.new_object();
+        drop(object_builder);
 
         builder.append_value(42i8);
 
@@ -1600,7 +1633,8 @@ mod tests {
         list_builder.append_value(1i8);
 
         // Create a nested list builder but never finish it
-        let _nested_list_builder = list_builder.new_list();
+        let nested_list_builder = list_builder.new_list();
+        drop(nested_list_builder);
 
         list_builder.append_value(2i8);
 
@@ -1621,7 +1655,8 @@ mod tests {
         list_builder.append_value(1i8);
 
         // Create a nested object builder but never finish it
-        let _nested_object_builder = list_builder.new_object();
+        let nested_object_builder = list_builder.new_object();
+        drop(nested_object_builder);
 
         list_builder.append_value(2i8);
 
@@ -1642,7 +1677,8 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested list builder but never finish it
-        let _nested_list_builder = object_builder.new_list("nested");
+        let nested_list_builder = object_builder.new_list("nested");
+        drop(nested_list_builder);
 
         object_builder.insert("second", 2i8);
 
@@ -1663,7 +1699,8 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested object builder but never finish it
-        let _nested_object_builder = object_builder.new_object("nested");
+        let nested_object_builder = object_builder.new_object("nested");
+        drop(nested_object_builder);
 
         object_builder.insert("second", 2i8);
 
