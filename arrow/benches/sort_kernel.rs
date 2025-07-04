@@ -103,13 +103,23 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
-    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.0, 10);
-    c.bench_function("sort string[10] to indices 2^12", |b| {
+    let arr = create_string_array_with_max_len::<i32>(2usize.pow(12), 0.0, 10);
+    c.bench_function("sort string[0-10] to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
-    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.5, 10);
-    c.bench_function("sort string[10] nulls to indices 2^12", |b| {
+    let arr = create_string_array_with_max_len::<i32>(2usize.pow(12), 0.5, 10);
+    c.bench_function("sort string[0-10] nulls to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_max_len::<i32>(2usize.pow(12), 0.0, 100);
+    c.bench_function("sort string[0-100] to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_max_len::<i32>(2usize.pow(12), 0.5, 100);
+    c.bench_function("sort string[0-100] nulls to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
@@ -120,6 +130,36 @@ fn add_benchmark(c: &mut Criterion) {
 
     let arr = create_string_array::<i32>(2usize.pow(12), 0.5);
     c.bench_function("sort string[0-400] nulls to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.0, 10);
+    c.bench_function("sort string[10] to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.5, 10);
+    c.bench_function("sort string[10] nulls to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.0, 100);
+    c.bench_function("sort string[100] to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.5, 100);
+    c.bench_function("sort string[100] nulls to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.0, 1000);
+    c.bench_function("sort string[1000] to indices 2^12", |b| {
+        b.iter(|| bench_sort_to_indices(&arr, None))
+    });
+
+    let arr = create_string_array_with_len::<i32>(2usize.pow(12), 0.5, 1000);
+    c.bench_function("sort string[1000] nulls to indices 2^12", |b| {
         b.iter(|| bench_sort_to_indices(&arr, None))
     });
 
