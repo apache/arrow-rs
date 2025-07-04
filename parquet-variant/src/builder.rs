@@ -809,7 +809,7 @@ impl<'a> ObjectBuilder<'a> {
 
         // Write field IDs (sorted order)
         let ids = self.fields.keys().map(|id| *id as usize);
-        parent_buffer.append_offset_array(ids, None, offset_size);
+        parent_buffer.append_offset_array(ids, None, id_size);
 
         // Write the field offset array, followed by the value bytes
         let offsets = self.fields.into_values();
