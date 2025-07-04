@@ -420,7 +420,8 @@ where
 
     /// Gets a mutable reference to the underlying writer.
     ///
-    /// It is inadvisable to directly write to the underlying writer.
+    /// Writing to the underlying writer must be done with care
+    /// to avoid corrupting the output JSON. 
     pub fn get_mut(&mut self) -> &mut W {
         &mut self.writer
     }
