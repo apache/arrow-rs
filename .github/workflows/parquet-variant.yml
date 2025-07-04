@@ -46,8 +46,10 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Test
+      - name: Test parquet-variant
         run: cargo test -p parquet-variant
+      - name: Test parquet-variant-json
+        run: cargo test -p parquet-variant-json
 
   # test compilation
   linux-features:
@@ -63,6 +65,8 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Check compilation
         run: cargo check -p parquet-variant
+      - name: Check compilation
+        run: cargo check -p parquet-variant-json
 
   clippy:
     name: Clippy
@@ -77,3 +81,5 @@ jobs:
         run: rustup component add clippy
       - name: Run clippy
         run: cargo clippy -p parquet-variant --all-targets --all-features -- -D warnings
+      - name: Run clippy
+        run: cargo clippy -p parquet-variant-json --all-targets --all-features -- -D warnings
