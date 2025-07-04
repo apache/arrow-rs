@@ -450,6 +450,7 @@ impl MetadataBuilder {
 /// obj.insert("a", 1);
 /// obj.insert("a", 2); // duplicate field
 ///
+/// // When validation is enabled, finish will return an error
 /// let result = obj.finish(); // returns Err
 /// assert!(result.is_err());
 /// ```
@@ -495,10 +496,20 @@ impl VariantBuilder {
             .with_validate_unique_fields(self.validate_unique_fields)
     }
 
+    /// Append a non-nested value to the builder.
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder};
+    /// let mut builder = VariantBuilder::new();
+    /// // most primitive types can be appended directly as they implement `Into<Variant>`
+    /// builder.append_value(42i8);
+    /// ```
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         self.buffer.append_non_nested_value(value);
     }
 
+    /// Finish the builder and return the metadata and value buffers.
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
         (self.metadata_builder.finish(), self.buffer.into_inner())
     }
@@ -577,6 +588,7 @@ impl<'a> ListBuilder<'a> {
         self.offsets.push(element_end);
     }
 
+    /// Finish the list, writing it to the parent buffer and consuming self.
     pub fn finish(mut self) {
         self.check_new_offset();
 
@@ -601,6 +613,14 @@ impl<'a> ListBuilder<'a> {
         // Append values
         self.parent_buffer.append_slice(self.buffer.inner());
     }
+}
+
+/// Drop implementation for ListBuilder does nothing
+/// as the `finish` method must be called to finalize the list.
+/// This is to ensure that the list is always finalized before its parent builder
+/// is finalized.
+impl Drop for ListBuilder<'_> {
+    fn drop(&mut self) {}
 }
 
 /// A builder for creating [`Variant::Object`] values.
@@ -694,9 +714,7 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
         list_builder
     }
 
-    /// Finalize object
-    ///
-    /// This consumes self and writes the object to the parent buffer.
+    /// Finalize the object, writing it to the parent buffer and consuming self.
     pub fn finish(mut self) -> Result<(), ArrowError> {
         self.check_pending_field();
 
@@ -754,6 +772,14 @@ impl<'a, 'b> ObjectBuilder<'a, 'b> {
 
         Ok(())
     }
+}
+
+/// Drop implementation for ObjectBuilder does nothing
+/// as the `finish` method must be called to finalize the object.
+/// This is to ensure that the object is always finalized before its parent builder
+/// is finalized.
+impl Drop for ObjectBuilder<'_, '_> {
+    fn drop(&mut self) {}
 }
 
 /// Trait that abstracts functionality from Variant fconstruction implementations, namely
@@ -1489,6 +1515,9 @@ mod tests {
             nested_result.unwrap_err().to_string(),
             "Invalid argument error: Duplicate field keys detected: [x]"
         );
+
+        inner_list.finish();
+        outer_list.finish();
 
         // Valid object should succeed
         let mut list = builder.new_list();
