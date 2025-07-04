@@ -295,12 +295,28 @@ fn sort_bytes<T: ByteArrayType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    // 1. construct a list of (index, raw_bytes, length)
-    let mut valids: Vec<(u32, &[u8], usize)> = value_indices
+    // 1. Build a vector of (index, 64‑bit prefix) pairs
+    //    The high 32 bits store the big‑endian u32 of the first up to 4 bytes,
+    //    the low 32 bits store the original slice length.
+    let mut valids: Vec<(u32, u64)> = value_indices
         .into_iter()
         .map(|idx| {
             let slice: &[u8] = values.value(idx as usize).as_ref();
-            (idx, slice, slice.len())
+            let len = slice.len() as u32;
+            // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
+            let prefix_u32 = if len >= 4 {
+                let raw = unsafe { std::ptr::read_unaligned(slice.as_ptr() as *const u32) };
+                u32::from_be(raw)
+            } else {
+                let mut v = 0u32;
+                for &b in slice {
+                    v = (v << 8) | (b as u32);
+                }
+                v << (8 * (4 - len))
+            };
+            // Pack into a single u64: (prefix << 32) | length
+            let prefix64 = ((prefix_u32 as u64) << 32) | (len as u64);
+            (idx, prefix64)
         })
         .collect();
 
@@ -310,49 +326,18 @@ fn sort_bytes<T: ByteArrayType>(
         _ => valids.len(),
     };
 
-    // 3. comparator function for mixed byte views
-    let cmp_bytes = |a: &(u32, &[u8], usize), b: &(u32, &[u8], usize)| {
-        let (_, a_bytes, a_len) = *a;
-        let (_, b_bytes, b_len) = *b;
-        let min_len = a_len.min(b_len);
-
-        // 3. compare the prefix of the first 4 bytes
-        let pref = min_len.min(4);
-        let mut pa = 0u32;
-        let mut pb = 0u32;
-        for i in 0..pref {
-            pa = (pa << 8) | (a_bytes[i] as u32);
-            pb = (pb << 8) | (b_bytes[i] as u32);
-        }
+    // 3. Comparator: compare the 64‑bit prefix first, then fall back to full slice comparison
+    let cmp_bytes = |a: &(u32, u64), b: &(u32, u64)| {
+        let &(ia, pa) = a;
+        let &(ib, pb) = b;
+        // 3.1 If prefixes differ, that's enough
         if pa != pb {
             return pa.cmp(&pb);
         }
-
-        // 3.2 Use 8 bytes to compare one by one if the prefix is equal
-        let mut i = pref;
-        while i + 8 <= min_len {
-            let raw_a = unsafe { std::ptr::read_unaligned(a_bytes.as_ptr().add(i) as *const u64) };
-            let raw_b = unsafe { std::ptr::read_unaligned(b_bytes.as_ptr().add(i) as *const u64) };
-            let wa = u64::from_be(raw_a);
-            let wb = u64::from_be(raw_b);
-            if wa != wb {
-                return wa.cmp(&wb);
-            }
-            i += 8;
-        }
-
-        // 3.3 Compare remaining bytes one by one
-        while i < min_len {
-            let xa = unsafe { *a_bytes.get_unchecked(i) };
-            let xb = unsafe { *b_bytes.get_unchecked(i) };
-            if xa != xb {
-                return xa.cmp(&xb);
-            }
-            i += 1;
-        }
-
-        // 3.4 If all bytes are equal, compare lengths
-        a_len.cmp(&b_len)
+        // 3.2 Otherwise, retrieve the original slices for a full lexicographical compare
+        let a_bytes: &[u8] = values.value(ia as usize).as_ref();
+        let b_bytes: &[u8] = values.value(ib as usize).as_ref();
+        a_bytes.cmp(b_bytes)
     };
 
     // 4. Partially sort according to ascending/descending
@@ -370,9 +355,9 @@ fn sort_bytes<T: ByteArrayType>(
     if options.nulls_first {
         out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
         let rem = out_limit - out.len();
-        out.extend(valids.iter().map(|&(i, _, _)| i).take(rem));
+        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
     } else {
-        out.extend(valids.iter().map(|&(i, _, _)| i).take(out_limit));
+        out.extend(valids.iter().map(|&(i, _)| i).take(out_limit));
         let rem = out_limit - out.len();
         out.extend_from_slice(&nulls[..rem]);
     }
