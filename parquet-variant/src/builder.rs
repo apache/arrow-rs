@@ -61,17 +61,6 @@ fn write_offset(buf: &mut Vec<u8>, value: usize, nbytes: u8) {
     buf.extend_from_slice(&bytes[..nbytes as usize]);
 }
 
-fn write_header(buf: &mut Vec<u8>, header_byte: u8, is_large: bool, num_items: usize) {
-    buf.push(header_byte);
-
-    if is_large {
-        let num_items = num_items as u32;
-        buf.extend_from_slice(&num_items.to_le_bytes());
-    } else {
-        let num_items = num_items as u8;
-        buf.push(num_items);
-    };
-}
 #[derive(Default)]
 struct ValueBuffer(Vec<u8>);
 
@@ -231,6 +220,36 @@ impl ValueBuffer {
             }
         }
     }
+
+    /// Writes out the header byte for a variant object or list
+    fn append_header(&mut self, header_byte: u8, is_large: bool, num_items: usize) {
+        let buf = self.inner_mut();
+        buf.push(header_byte);
+
+        if is_large {
+            let num_items = num_items as u32;
+            buf.extend_from_slice(&num_items.to_le_bytes());
+        } else {
+            let num_items = num_items as u8;
+            buf.push(num_items);
+        };
+    }
+
+    /// Writes out the offsets for an array of offsets, including the final offset (data size).
+    fn append_offset_array(
+        &mut self,
+        offsets: impl IntoIterator<Item = usize>,
+        data_size: Option<usize>,
+        nbytes: u8,
+    ) {
+        let buf = self.inner_mut();
+        for offset in offsets {
+            write_offset(buf, offset, nbytes);
+        }
+        if let Some(data_size) = data_size {
+            write_offset(buf, data_size, nbytes);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -291,7 +310,7 @@ impl MetadataBuilder {
         write_offset(&mut metadata, cur_offset, offset_size);
 
         // Write string data
-        for key in self.field_names.iter() {
+        for key in self.field_names {
             metadata.extend_from_slice(key.as_bytes());
         }
 
@@ -353,15 +372,13 @@ impl ParentState<'_> {
     }
 
     // Performs any parent-specific aspects of finishing, after the child has appended all necessary
-    // bytes to the parent's value buffer. ListBuilder captures the new value's ending offset;
+    // bytes to the parent's value buffer. ListBuilder records the new value's starting offset;
     // ObjectBuilder associates the new value's starting offset with its field id; VariantBuilder
     // doesn't need anything special.
     fn finish(&mut self, starting_offset: usize) {
         match self {
             ParentState::Variant { .. } => (),
-            ParentState::List {
-                buffer, offsets, ..
-            } => offsets.push(buffer.offset()),
+            ParentState::List { offsets, .. } => offsets.push(starting_offset),
             ParentState::Object {
                 metadata_builder,
                 fields,
@@ -603,7 +620,7 @@ impl<'a> ListBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
-            offsets: vec![0],
+            offsets: vec![],
             buffer: ValueBuffer::default(),
             validate_unique_fields,
         }
@@ -646,15 +663,14 @@ impl<'a> ListBuilder<'a> {
 
     /// Appends a new primitive value to this list
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.offsets.push(self.buffer.offset());
         self.buffer.append_non_nested_value(value);
-        let element_end = self.buffer.offset();
-        self.offsets.push(element_end);
     }
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) {
         let data_size = self.buffer.offset();
-        let num_elements = self.offsets.len() - 1;
+        let num_elements = self.offsets.len();
         let is_large = num_elements > u8::MAX as usize;
         let offset_size = int_size(data_size);
 
@@ -663,19 +679,11 @@ impl<'a> ListBuilder<'a> {
         let starting_offset = parent_buffer.offset();
 
         // Write header
-        write_header(
-            parent_buffer.inner_mut(),
-            array_header(is_large, offset_size),
-            is_large,
-            num_elements,
-        );
+        let header = array_header(is_large, offset_size);
+        parent_buffer.append_header(header, is_large, num_elements);
 
-        // Write offsets
-        for offset in &self.offsets {
-            write_offset(parent_buffer.inner_mut(), *offset, offset_size);
-        }
-
-        // Append values
+        // Write out the offset array followed by the value bytes
+        parent_buffer.append_offset_array(self.offsets, Some(data_size), offset_size);
         parent_buffer.append_slice(self.buffer.inner());
         self.parent_state.finish(starting_offset);
     }
@@ -796,25 +804,16 @@ impl<'a> ObjectBuilder<'a> {
         let starting_offset = parent_buffer.offset();
 
         // Write header
-        write_header(
-            parent_buffer.inner_mut(),
-            object_header(is_large, id_size, offset_size),
-            is_large,
-            num_fields,
-        );
+        let header = object_header(is_large, id_size, offset_size);
+        parent_buffer.append_header(header, is_large, num_fields);
 
         // Write field IDs (sorted order)
-        for (&id, _) in &self.fields {
-            write_offset(parent_buffer.inner_mut(), id as usize, id_size);
-        }
+        let ids = self.fields.keys().map(|id| *id as usize);
+        parent_buffer.append_offset_array(ids, None, offset_size);
 
-        // Write field offsets
-        for (_, &offset) in &self.fields {
-            write_offset(parent_buffer.inner_mut(), offset, offset_size);
-        }
-
-        write_offset(parent_buffer.inner_mut(), data_size, offset_size);
-
+        // Write the field offset array, followed by the value bytes
+        let offsets = self.fields.into_values();
+        parent_buffer.append_offset_array(offsets, Some(data_size), offset_size);
         parent_buffer.append_slice(self.buffer.inner());
         self.parent_state.finish(starting_offset);
 
@@ -822,8 +821,8 @@ impl<'a> ObjectBuilder<'a> {
     }
 }
 
-/// Trait that abstracts functionality from Variant construction implementations, namely
-/// [`VariantBuilder`], [`ListBuilder`] and [`ObjectFieldBuilder`] to minimize code duplication.
+/// Trait that abstracts functionality from Variant construction implementations, such as
+/// [`VariantBuilder`] and [`ListBuilder`], to minimize code duplication.
 pub(crate) trait VariantBuilderExt<'m, 'v> {
     fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>);
 
