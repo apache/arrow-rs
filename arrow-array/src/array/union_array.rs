@@ -790,10 +790,16 @@ impl Array for UnionArray {
                 .flatten()
             {
                 if logical_nulls.len() != self.len() {
-                    if self.offsets.is_some() {
-                        return Some(self.gather_nulls(vec![(0, logical_nulls)]).into());
+                    match &self.offsets {
+                         // Dense union: gather nulls based on offsets
+                        Some(_) => {
+                            return Some(self.gather_nulls(vec![(0, logical_nulls)]).into());
+                        }
+                        // Sparse union: slice logical nulls to match union length
+                        None => {
+                            return Some(logical_nulls.slice(0, self.len()));
+                        }
                     }
-                    return Some(logical_nulls.slice(0, self.len()));
                 }
                 return Some(logical_nulls);
             }
@@ -1101,7 +1107,7 @@ mod tests {
         // [null, 3, null]
         let union_slice = union_array.slice(1, 3);
         let logical_nulls = union_slice.logical_nulls().unwrap();
-        println!("union_slice:{:#?}", logical_nulls);
+
         assert_eq!(logical_nulls.len(), 3);
         assert!(logical_nulls.is_null(0));
         assert!(logical_nulls.is_valid(1));
