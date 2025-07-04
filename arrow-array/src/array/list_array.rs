@@ -26,6 +26,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use num::Integer;
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// A type that can be used within a variable-size array to encode offset information
@@ -313,12 +314,58 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Returns a reference to the values of this list
     ///
     /// Note: The list array may not refer to all values in the `values` array.
-    /// For example if the list array was sliced via [`Self::slice`] values will
-    /// still contain values both before and after the slice. See documentation
-    /// for [`Self`] for more details.
+    /// For example if the list array was created from a view of a larger array,
+    /// values will still contain values both before and after the current array.
+    /// If you need only the values that are part of the current array instance,
+    /// use [`Self::own_values`] instead. See documentation for [`Self`] for
+    /// more details.
     #[inline]
     pub fn values(&self) -> &ArrayRef {
         &self.values
+    }
+
+    /// Returns the values array containing only the values for the current array instance
+    ///
+    /// This method is essential for arrays that have been sliced from a larger array.
+    /// When an array is sliced, the underlying values array remains unchanged for
+    /// efficiency (zero-copy slicing), but it still contains values from before and
+    /// after the current array slice.
+    ///
+    /// Unlike [`Self::values`] which returns the entire underlying child array,
+    /// this method returns only the sub-array that corresponds to the current
+    /// array instance, as determined by the first and last offsets.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::ListArray;
+    /// # use arrow_array::types::Int32Type;
+    /// let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>([
+    ///     Some(vec![Some(1), Some(2)]),
+    ///     Some(vec![Some(3), Some(4)]),
+    ///     Some(vec![Some(5)]),
+    /// ]);
+    /// let view = list_array.slice(1, 2); // [[3, 4], [5]]
+    ///
+    /// // Original values contain all data from the parent array
+    /// assert_eq!(list_array.values().len(), 5);  // [1, 2, 3, 4, 5]
+    /// assert_eq!(view.values().len(), 5);        // Still contains [1, 2, 3, 4, 5]
+    ///
+    /// // Current array values contain only relevant data
+    /// assert_eq!(view.own_values().len(), 3);    // Only [3, 4, 5]
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This method is O(1) as it only calculates slice bounds and creates a new
+    /// view into the existing child array without copying data.
+    pub fn own_values(&self) -> ArrayRef {
+        let offsets = self.value_offsets();
+        if offsets.is_empty() {
+            return self.values.slice(0, 0);
+        }
+        let start = offsets[0].as_usize();
+        let end = offsets[offsets.len() - 1].as_usize();
+        self.values.slice(start, end - start)
     }
 
     /// Returns a clone of the value type of this list.
@@ -342,12 +389,68 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         self.values.slice(start, end - start)
     }
 
-    /// Returns the offset values in the offsets buffer.
+    /// Returns the offset values in the offsets buffer
     ///
-    /// See [`Self::offsets`] for more details.
+    /// Note: this returns the [`OffsetBuffer`] allowing for zero-copy cloning
+    ///
+    /// For arrays created by slicing, these offsets may not start at 0. If you need
+    /// offsets that start at 0, use [`Self::own_value_offsets`].
     #[inline]
     pub fn value_offsets(&self) -> &[OffsetSize] {
         &self.value_offsets
+    }
+
+    /// Returns normalized offset values that start from 0
+    ///
+    /// This method is essential for arrays that have been sliced from a larger array.
+    /// When an array is sliced, the underlying offset buffer remains unchanged for
+    /// efficiency (zero-copy slicing), but the offsets no longer start from 0.
+    ///
+    /// This method provides normalized offsets where the first offset is always 0,
+    /// and subsequent offsets represent the cumulative lengths from the start of
+    /// the current array instance.
+    ///
+    /// Returns a `Cow` (Clone on Write) which only creates an owned vector when
+    /// normalization is needed (i.e., when the first offset is not 0). If the
+    /// offsets already start from 0, a borrowed reference is returned for efficiency.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::ListArray;
+    /// # use arrow_array::types::Int32Type;
+    /// # use std::borrow::Cow;
+    /// let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>([
+    ///     Some(vec![Some(1), Some(2)]),
+    ///     Some(vec![Some(3), Some(4)]),
+    ///     Some(vec![Some(5)]),
+    /// ]);
+    /// let view = list_array.slice(1, 2); // [[3, 4], [5]]
+    ///
+    /// // Original offsets don't start from 0 after slicing
+    /// assert_eq!(view.value_offsets(), &[2, 4, 5]);
+    ///
+    /// // Normalized offsets start from 0 and represent lengths within the slice
+    /// assert_eq!(view.own_value_offsets().as_ref(), &[0, 2, 3]);
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// - **No normalization needed**: Returns `Cow::Borrowed` - O(1) time, no allocation
+    /// - **Normalization needed**: Returns `Cow::Owned` - O(n) time, allocates new vector
+    pub fn own_value_offsets(&self) -> Cow<'_, [OffsetSize]> {
+        let offsets = self.value_offsets();
+        if offsets.is_empty() || offsets[0].is_zero() {
+            // No normalization needed, return borrowed slice
+            Cow::Borrowed(offsets)
+        } else {
+            // Normalization needed, create owned vector
+            let first_offset = offsets[0];
+            let normalized: Vec<OffsetSize> = offsets
+                .iter()
+                .map(|&offset| offset - first_offset)
+                .collect();
+            Cow::Owned(normalized)
+        }
     }
 
     /// Returns the length for value at index `i`.
@@ -872,6 +975,13 @@ mod tests {
         assert_eq!(2, sliced_list_array.value_length(3));
         assert_eq!(6, sliced_list_array.value_offsets()[5]);
         assert_eq!(3, sliced_list_array.value_length(5));
+
+        // Check own offsets and values
+        assert_eq!(
+            vec![0, 0, 0, 2, 4, 4, 7],
+            sliced_list_array.own_value_offsets().as_ref()
+        );
+        assert_eq!(7, sliced_list_array.own_values().len()); // [2, 3, 4, 5, 6, 7, 8]
     }
 
     #[test]
@@ -936,6 +1046,13 @@ mod tests {
         assert_eq!(2, sliced_list_array.value_length(3));
         assert_eq!(6, sliced_list_array.value_offsets()[5]);
         assert_eq!(3, sliced_list_array.value_length(5));
+
+        // Check own offsets and values
+        assert_eq!(
+            vec![0, 0, 0, 2, 4, 4, 7],
+            sliced_list_array.own_value_offsets().as_ref()
+        );
+        assert_eq!(7, sliced_list_array.own_values().len()); // [2, 3, 4, 5, 6, 7, 8]
     }
 
     #[test]
@@ -1196,7 +1313,7 @@ mod tests {
         ListArray::new(field.clone(), offsets.clone(), values.clone(), None);
 
         let nulls = NullBuffer::new_null(3);
-        ListArray::new(field.clone(), offsets, values.clone(), Some(nulls));
+        ListArray::new(field.clone(), offsets.clone(), values.clone(), Some(nulls));
 
         let nulls = NullBuffer::new_null(3);
         let offsets = OffsetBuffer::new(vec![0, 1, 2, 4, 5].into());

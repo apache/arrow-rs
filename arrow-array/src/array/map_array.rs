@@ -22,6 +22,7 @@ use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlic
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// An array of key-value maps
@@ -169,8 +170,68 @@ impl MapArray {
     }
 
     /// Returns a reference to the [`StructArray`] entries of this map
+    ///
+    /// Note: For arrays that are views into a larger array, this may contain entries
+    /// that are not part of the current array instance. If you need only the entries
+    /// for the current array instance, use [`Self::own_entries`] instead.
     pub fn entries(&self) -> &StructArray {
         &self.entries
+    }
+
+    /// Returns the entries array containing only entries for the current array instance
+    ///
+    /// This method is essential for arrays that have been sliced from a larger array.
+    /// When an array is sliced, the underlying entries array remains unchanged for
+    /// efficiency (zero-copy slicing), but it still contains entries from before and
+    /// after the current array slice.
+    ///
+    /// Unlike [`Self::entries`] which returns the entire underlying struct array,
+    /// this method returns only the sub-array that corresponds to the current
+    /// array instance, as determined by the first and last offsets.
+    ///
+    /// # Example
+    /// ```
+    /// use arrow_array::builder::{MapBuilder, Int32Builder, StringBuilder};
+    /// use arrow_array::Array;
+    /// // Create a map array with multiple entries
+    /// let mut builder = MapBuilder::new(None,
+    ///     StringBuilder::new(),
+    ///     Int32Builder::new());
+    /// // Add entries: {"a": 1, "b": 2}, {"c": 3, "d": 4}
+    /// builder.keys().append_value("a");
+    /// builder.values().append_value(1);
+    /// builder.keys().append_value("b");
+    /// builder.values().append_value(2);
+    /// builder.append(true).unwrap();
+    /// builder.keys().append_value("c");
+    /// builder.values().append_value(3);
+    /// builder.keys().append_value("d");
+    /// builder.values().append_value(4);
+    /// builder.append(true).unwrap();
+    /// let map_array = builder.finish();
+    ///
+    /// let sliced = map_array.slice(1, 1); // Take second map: {"c": 3, "d": 4}
+    ///
+    /// // Original entries contain all data from the parent array
+    /// assert_eq!(map_array.entries().len(), 4);  // All entries: a, b, c, d
+    /// assert_eq!(sliced.entries().len(), 4);     // Still contains all entries
+    ///
+    /// // Current array entries contain only relevant data
+    /// assert_eq!(sliced.own_entries().len(), 2); // Only entries: c, d
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This method is O(1) as it only calculates slice bounds and creates a new
+    /// view into the existing struct array without copying data.
+    pub fn own_entries(&self) -> StructArray {
+        let offsets = self.value_offsets();
+        if offsets.is_empty() {
+            return self.entries.slice(0, 0);
+        }
+        let start = offsets[0] as usize;
+        let end = offsets[offsets.len() - 1] as usize;
+        self.entries.slice(start, end - start)
     }
 
     /// Returns the data type of the map's keys.
@@ -204,9 +265,74 @@ impl MapArray {
     }
 
     /// Returns the offset values in the offsets buffer
+    ///
+    /// Note: For arrays that are views into a larger array, these offsets may not start at 0.
+    /// If you need offsets that start at 0, use [`Self::own_value_offsets`] instead.
     #[inline]
     pub fn value_offsets(&self) -> &[i32] {
         &self.value_offsets
+    }
+
+    /// Returns normalized offset values that start from 0
+    ///
+    /// This method is essential for arrays that have been sliced from a larger array.
+    /// When an array is sliced, the underlying offset buffer remains unchanged for
+    /// efficiency (zero-copy slicing), but the offsets no longer start from 0.
+    ///
+    /// This method provides normalized offsets where the first offset is always 0,
+    /// and subsequent offsets represent the cumulative lengths from the start of
+    /// the current array instance.
+    ///
+    /// Returns a `Cow` (Clone on Write) which only creates an owned vector when
+    /// normalization is needed (i.e., when the first offset is not 0). If the
+    /// offsets already start from 0, a borrowed reference is returned for efficiency.
+    ///
+    /// # Example
+    /// ```
+    /// use arrow_array::builder::{MapBuilder, Int32Builder, StringBuilder};
+    /// use std::borrow::Cow;
+    /// // Create a map array with multiple entries
+    /// let mut builder = MapBuilder::new(None,
+    ///     StringBuilder::new(),
+    ///     Int32Builder::new());
+    /// // Add entries: {"a": 1, "b": 2}, {"c": 3}
+    /// builder.keys().append_value("a");
+    /// builder.values().append_value(1);
+    /// builder.keys().append_value("b");
+    /// builder.values().append_value(2);
+    /// builder.append(true).unwrap();
+    /// builder.keys().append_value("c");
+    /// builder.values().append_value(3);
+    /// builder.append(true).unwrap();
+    /// let map_array = builder.finish();
+    ///
+    /// let sliced = map_array.slice(1, 1); // Take second map: {"c": 3}
+    ///
+    /// // Original offsets don't start from 0 after slicing
+    /// assert_eq!(sliced.value_offsets(), &[2, 3]);
+    ///
+    /// // Normalized offsets start from 0 and represent lengths within the slice
+    /// assert_eq!(sliced.own_value_offsets().as_ref(), &[0, 1]);
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// - **No normalization needed**: Returns `Cow::Borrowed` - O(1) time, no allocation
+    /// - **Normalization needed**: Returns `Cow::Owned` - O(n) time, allocates new vector
+    pub fn own_value_offsets(&self) -> Cow<'_, [i32]> {
+        let offsets = self.value_offsets();
+        if offsets.is_empty() || offsets[0] == 0 {
+            // No normalization needed - return borrowed reference
+            Cow::Borrowed(offsets)
+        } else {
+            // Need to normalize - create owned Vec
+            let first_offset = offsets[0];
+            let normalized: Vec<i32> = offsets
+                .iter()
+                .map(|&offset| offset - first_offset)
+                .collect();
+            Cow::Owned(normalized)
+        }
     }
 
     /// Returns the length for value at index `i`.

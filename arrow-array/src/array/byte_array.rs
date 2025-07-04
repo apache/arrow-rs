@@ -25,7 +25,9 @@ use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
+use num::Zero;
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// An array of [variable length byte arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-binary-layout)
@@ -256,7 +258,68 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         &self.value_data
     }
 
+    /// Returns the offset values in the offsets buffer
+    ///
+    /// Note: this returns the [`OffsetBuffer`] allowing for zero-copy cloning
+    ///
+    /// For arrays created by slicing, these offsets may not start at 0. If you need
+    /// offsets that start at 0, use [`Self::own_value_offsets`].
+    #[inline]
+    pub fn value_offsets(&self) -> &[T::Offset] {
+        &self.value_offsets
+    }
+
+    /// Returns normalized offset values that start from 0
+    ///
+    /// This method is essential for arrays that have been sliced from a larger array.
+    /// When an array is sliced, the underlying offset buffer remains unchanged for
+    /// efficiency (zero-copy slicing), but the offsets no longer start from 0.
+    ///
+    /// This method provides normalized offsets where the first offset is always 0,
+    /// and subsequent offsets represent the cumulative lengths from the start of
+    /// the current array instance.
+    ///
+    /// Returns a `Cow` (Clone on Write) which only creates an owned vector when
+    /// normalization is needed (i.e., when the first offset is not 0). If the
+    /// offsets already start from 0, a borrowed reference is returned for efficiency.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{GenericByteArray, types::Utf8Type};
+    /// let array: GenericByteArray<Utf8Type> = vec!["hello", "world", "foo"].into();
+    /// let sliced = array.slice(1, 2); // ["world", "foo"]
+    ///
+    /// // Original offsets don't start from 0 after slicing
+    /// assert_eq!(sliced.value_offsets(), &[5, 10, 13]);
+    ///
+    /// // Normalized offsets start from 0 and represent lengths within the slice
+    /// assert_eq!(sliced.own_value_offsets().as_ref(), &[0, 5, 8]);
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// - **No normalization needed**: Returns `Cow::Borrowed` - O(1) time, no allocation
+    /// - **Normalization needed**: Returns `Cow::Owned` - O(n) time, allocates new vector
+    pub fn own_value_offsets(&self) -> Cow<'_, [T::Offset]> {
+        let offsets = self.value_offsets();
+        if offsets.is_empty() || offsets[0].is_zero() {
+            // No normalization needed - return borrowed reference
+            Cow::Borrowed(offsets)
+        } else {
+            // Need to normalize - create owned Vec
+            let first_offset = offsets[0];
+            let normalized: Vec<T::Offset> = offsets
+                .iter()
+                .map(|&offset| offset - first_offset)
+                .collect();
+            Cow::Owned(normalized)
+        }
+    }
+
     /// Returns the raw value data
+    ///
+    /// Note: this may contain data beyond what is referenced by this array.
+    /// If you need only the data referenced by this array, use [`Self::own_value_data`].
     pub fn value_data(&self) -> &[u8] {
         self.value_data.as_slice()
     }
@@ -269,10 +332,43 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         self.value_data()[start.as_usize()..end.as_usize()].is_ascii()
     }
 
-    /// Returns the offset values in the offsets buffer
-    #[inline]
-    pub fn value_offsets(&self) -> &[T::Offset] {
-        &self.value_offsets
+    /// Returns the value data containing only the bytes for the current array instance
+    ///
+    /// This method is essential for arrays that have been sliced from a larger array.
+    /// When an array is sliced, the underlying value buffer remains unchanged for
+    /// efficiency (zero-copy slicing), but it still contains data from before and
+    /// after the current array slice.
+    ///
+    /// Unlike [`Self::value_data`] which returns the entire underlying buffer,
+    /// this method returns only the byte slice that corresponds to the current
+    /// array instance, as determined by the first and last offsets.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{GenericByteArray, types::Utf8Type};
+    /// let array: GenericByteArray<Utf8Type> = vec!["hello", "world", "foo"].into();
+    /// let view = array.slice(1, 2); // ["world", "foo"]
+    ///
+    /// // Original value_data contains all data from the parent array
+    /// assert_eq!(array.value_data(), b"helloworldfoo");
+    /// assert_eq!(view.value_data(), b"helloworldfoo");  // Still contains "hello"
+    ///
+    /// // Current array data contains only relevant data
+    /// assert_eq!(view.own_value_data(), b"worldfoo");   // Only "world" and "foo"
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This method is O(1) as it only calculates slice bounds and returns a view
+    /// into the existing buffer without copying data.
+    pub fn own_value_data(&self) -> &[u8] {
+        let offsets = self.value_offsets();
+        if offsets.is_empty() {
+            return &[];
+        }
+        let start = offsets[0].as_usize();
+        let end = offsets[offsets.len() - 1].as_usize();
+        &self.value_data.as_slice()[start..end]
     }
 
     /// Returns the element at index `i`
@@ -585,6 +681,7 @@ where
 mod tests {
     use crate::{BinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
+    use std::borrow::Cow;
 
     #[test]
     fn try_new() {
@@ -631,5 +728,24 @@ mod tests {
         );
 
         BinaryArray::new(offsets, non_ascii_data, None);
+    }
+
+    #[test]
+    fn test_array_slice() {
+        // Test case 1: Offsets start from 0 - should return Cow::Borrowed
+        let array = BinaryArray::from(vec![b"hello" as &[u8], b"world", b"foo", b"bar"]);
+        let own_offsets = array.own_value_offsets();
+
+        // When offsets start from 0, should return borrowed data
+        assert!(matches!(own_offsets, Cow::Borrowed(_)));
+        assert_eq!(&*own_offsets, &[0, 5, 10, 13, 16]);
+
+        // Test case 2: Offsets don't start from 0 - should return Cow::Owned
+        let sliced = array.slice(1, 2); // [b"world", b"foo"]
+        let own_offsets = sliced.own_value_offsets();
+
+        // When offsets don't start from 0, should return owned data
+        assert!(matches!(own_offsets, Cow::Owned(_)));
+        assert_eq!(&*own_offsets, &[0, 5, 8]);
     }
 }
