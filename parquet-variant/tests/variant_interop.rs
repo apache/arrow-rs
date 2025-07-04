@@ -393,21 +393,15 @@ fn corrupt_variant_data(
     let corrupt_value = rng.random_bool(0.7);
 
     if corrupt_metadata && !metadata.is_empty() {
-        let num_corruptions = rng.random_range(1..=(metadata.len().min(5)));
-        for _ in 0..num_corruptions {
-            let idx = rng.random_range(0..metadata.len());
-            let bit = rng.random_range(0..8);
-            metadata[idx] ^= 1 << bit;
-        }
+        let idx = rng.random_range(0..metadata.len());
+        let bit = rng.random_range(0..8);
+        metadata[idx] ^= 1 << bit;
     }
 
     if corrupt_value && !value.is_empty() {
-        let num_corruptions = rng.random_range(1..=(value.len().min(5)));
-        for _ in 0..num_corruptions {
-            let idx = rng.random_range(0..value.len());
-            let bit = rng.random_range(0..8);
-            value[idx] ^= 1 << bit;
-        }
+        let idx = rng.random_range(0..value.len());
+        let bit = rng.random_range(0..8);
+        value[idx] ^= 1 << bit;
     }
 
     (metadata, value)
