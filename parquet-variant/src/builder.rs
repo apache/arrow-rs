@@ -750,7 +750,7 @@ impl<'a> ObjectBuilder<'a> {
         (state, self.validate_unique_fields)
     }
 
-    /// Returns an object builder that can be used to append a new (nested) object to this list.
+    /// Returns an object builder that can be used to append a new (nested) object to this object.
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
     pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b> {
@@ -758,7 +758,7 @@ impl<'a> ObjectBuilder<'a> {
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
-    /// Returns a list builder that can be used to append a new (nested) list to this list.
+    /// Returns a list builder that can be used to append a new (nested) list to this object.
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
     pub fn new_list<'b>(&'b mut self, key: &'b str) -> ListBuilder<'b> {
