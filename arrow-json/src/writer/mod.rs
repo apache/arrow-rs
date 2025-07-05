@@ -413,6 +413,19 @@ where
         Ok(())
     }
 
+    /// Gets a reference to the underlying writer.
+    pub fn get_ref(&self) -> &W {
+        &self.writer
+    }
+
+    /// Gets a mutable reference to the underlying writer.
+    ///
+    /// Writing to the underlying writer must be done with care
+    /// to avoid corrupting the output JSON.
+    pub fn get_mut(&mut self) -> &mut W {
+        &mut self.writer
+    }
+
     /// Unwraps this `Writer<W>`, returning the underlying writer
     pub fn into_inner(self) -> W {
         self.writer
