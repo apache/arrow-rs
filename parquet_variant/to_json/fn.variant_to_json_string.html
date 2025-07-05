@@ -1,0 +1,38 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Convert `Variant` to JSON `String`"><title>variant_to_json_string in parquet_variant::to_json - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="parquet_variant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0-nightly (e3843659e 2025-07-04)" data-channel="nightly" data-search-js="search-179e01a3.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-4e99c027.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-673ee1e0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../parquet_variant/index.html">parquet_<wbr>variant</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">variant_<wbr>to_<wbr>json_<wbr>string</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#arguments" title="Arguments">Arguments</a></li><li><a href="#returns" title="Returns">Returns</a></li><li><a href="#examples" title="Examples">Examples</a></li><li><a href="#example-create-a-variantobject-and-convert-to-json" title="Example: Create a `Variant::Object` and convert to JSON">Example: Create a <code>Variant::Object</code> and convert to JSON</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In parquet_<wbr>variant::<wbr>to_<wbr>json</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">parquet_variant</a>::<wbr><a href="index.html">to_json</a></div><h1>Function <span class="fn">variant_to_json_string</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/parquet_variant/to_json.rs.html#241-246">Source</a> </span></div><pre class="rust item-decl"><code>pub fn variant_to_json_string(
+    variant: &amp;<a class="enum" href="../enum.Variant.html" title="enum parquet_variant::Variant">Variant</a>&lt;'_, '_&gt;,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>, ArrowError&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Convert <a href="../enum.Variant.html" title="enum parquet_variant::Variant"><code>Variant</code></a> to JSON <a href="https://doc.rust-lang.org/nightly/alloc/string/struct.String.html" title="struct alloc::string::String"><code>String</code></a></p>
+<p>This is a convenience function that converts a Variant to a JSON string.
+This is the same as calling <a href="../fn.variant_to_json.html" title="fn parquet_variant::variant_to_json"><code>variant_to_json</code></a> with a <a href="https://doc.rust-lang.org/nightly/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec"><code>Vec</code></a>.
+It’s the simplest way to get a JSON representation when you just need a String result.</p>
+<h2 id="arguments"><a class="doc-anchor" href="#arguments">§</a>Arguments</h2>
+<ul>
+<li><code>variant</code> - The Variant value to convert</li>
+</ul>
+<h2 id="returns"><a class="doc-anchor" href="#returns">§</a>Returns</h2>
+<ul>
+<li><code>Ok(String)</code> containing the JSON representation</li>
+<li><code>Err</code> with error details if conversion fails</li>
+</ul>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>variant = Variant::Int32(<span class="number">42</span>);
+<span class="kw">let </span>json = variant_to_json_string(<span class="kw-2">&amp;</span>variant)<span class="question-mark">?</span>;
+<span class="macro">assert_eq!</span>(json, <span class="string">"42"</span>);</code></pre></div>
+<h2 id="example-create-a-variantobject-and-convert-to-json"><a class="doc-anchor" href="#example-create-a-variantobject-and-convert-to-json">§</a>Example: Create a <a href="../enum.Variant.html#variant.Object" title="variant parquet_variant::Variant::Object"><code>Variant::Object</code></a> and convert to JSON</h2>
+<p>This example shows how to create an object with two fields and convert it to JSON:</p>
+<div class="example-wrap"><pre class="language-json"><code>{
+  &quot;first_name&quot;: &quot;Jiaying&quot;,
+  &quot;last_name&quot;: &quot;Li&quot;
+}</code></pre></div>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>builder = VariantBuilder::new();
+<span class="comment">// Create an object builder that will write fields to the object
+</span><span class="kw">let </span><span class="kw-2">mut </span>object_builder = builder.new_object();
+object_builder.insert(<span class="string">"first_name"</span>, <span class="string">"Jiaying"</span>);
+object_builder.insert(<span class="string">"last_name"</span>, <span class="string">"Li"</span>);
+object_builder.finish();
+<span class="comment">// Finish the builder to get the metadata and value
+</span><span class="kw">let </span>(metadata, value) = builder.finish();
+<span class="comment">// Create the Variant and convert to JSON
+</span><span class="kw">let </span>variant = Variant::try_new(<span class="kw-2">&amp;</span>metadata, <span class="kw-2">&amp;</span>value)<span class="question-mark">?</span>;
+<span class="kw">let </span>json = variant_to_json_string(<span class="kw-2">&amp;</span>variant)<span class="question-mark">?</span>;
+<span class="macro">assert_eq!</span>(<span class="string">r#"{"first_name":"Jiaying","last_name":"Li"}"#</span>, json);</code></pre></div>
+</div></details></section></div></main></body></html>

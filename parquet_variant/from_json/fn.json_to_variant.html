@@ -1,0 +1,41 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Converts a JSON string to Variant using `VariantBuilder`. The resulting `value` and `metadata` buffers can be extracted using `builder.finish()`"><title>json_to_variant in parquet_variant::from_json - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="parquet_variant" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0-nightly (e3843659e 2025-07-04)" data-channel="nightly" data-search-js="search-179e01a3.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-4e99c027.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-673ee1e0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../parquet_variant/index.html">parquet_<wbr>variant</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">json_<wbr>to_<wbr>variant</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#arguments" title="Arguments">Arguments</a></li><li><a href="#returns" title="Returns">Returns</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In parquet_<wbr>variant::<wbr>from_<wbr>json</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">parquet_variant</a>::<wbr><a href="index.html">from_json</a></div><h1>Function <span class="fn">json_to_variant</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/parquet_variant/from_json.rs.html#64-70">Source</a> </span></div><pre class="rust item-decl"><code>pub fn json_to_variant(
+    json: &amp;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.str.html">str</a>,
+    builder: &amp;mut <a class="struct" href="../struct.VariantBuilder.html" title="struct parquet_variant::VariantBuilder">VariantBuilder</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.unit.html">()</a>, ArrowError&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Converts a JSON string to Variant using <a href="../struct.VariantBuilder.html" title="struct parquet_variant::VariantBuilder"><code>VariantBuilder</code></a>. The resulting <code>value</code> and <code>metadata</code>
+buffers can be extracted using <code>builder.finish()</code></p>
+<h2 id="arguments"><a class="doc-anchor" href="#arguments">§</a>Arguments</h2>
+<ul>
+<li><code>json</code> - The JSON string to parse as Variant.</li>
+<li><code>variant_builder</code> - Object of type <code>VariantBuilder</code> used to build the vatiant from the JSON
+string</li>
+</ul>
+<h2 id="returns"><a class="doc-anchor" href="#returns">§</a>Returns</h2>
+<ul>
+<li><code>Ok(())</code> if successful</li>
+<li><code>Err</code> with error details if the conversion fails</li>
+</ul>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>json_to_variant, variant_to_json, variant_to_json_string, variant_to_json_value, VariantBuilder
+};
+
+<span class="kw">let </span><span class="kw-2">mut </span>variant_builder = VariantBuilder::new();
+<span class="kw">let </span>person_string = <span class="string">"{\"name\":\"Alice\", \"age\":30, "</span>.to_string()
++ <span class="string">"\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
+</span>+ <span class="string">"\"additional_info\": null}"</span>;
+json_to_variant(<span class="kw-2">&amp;</span>person_string, <span class="kw-2">&amp;mut </span>variant_builder)<span class="question-mark">?</span>;
+
+<span class="kw">let </span>(metadata, value) = variant_builder.finish();
+
+<span class="kw">let </span>variant = parquet_variant::Variant::try_new(<span class="kw-2">&amp;</span>metadata, <span class="kw-2">&amp;</span>value)<span class="question-mark">?</span>;
+
+<span class="kw">let </span>json_result = variant_to_json_string(<span class="kw-2">&amp;</span>variant)<span class="question-mark">?</span>;
+<span class="kw">let </span>json_value = variant_to_json_value(<span class="kw-2">&amp;</span>variant)<span class="question-mark">?</span>;
+
+<span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
+variant_to_json(<span class="kw-2">&amp;mut </span>buffer, <span class="kw-2">&amp;</span>variant)<span class="question-mark">?</span>;
+<span class="kw">let </span>buffer_result = String::from_utf8(buffer)<span class="question-mark">?</span>;
+<span class="macro">assert_eq!</span>(json_result, <span class="string">"{\"additional_info\":null,\"age\":30,"</span>.to_string() +
+<span class="string">"\"email\":\"alice@example.com\",\"is_active\":true,\"name\":\"Alice\",\"score\":95.7}"</span>);
+<span class="macro">assert_eq!</span>(json_result, buffer_result);
+<span class="macro">assert_eq!</span>(json_result, serde_json::to_string(<span class="kw-2">&amp;</span>json_value)<span class="question-mark">?</span>);</code></pre></div>
+</div></details></section></div></main></body></html>

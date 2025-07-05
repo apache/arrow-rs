@@ -1,0 +1,99 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="API for reading/writing Arrow `RecordBatch`es and `Array`s to/from Parquet Files."><title>parquet::arrow - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="parquet" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0-nightly (e3843659e 2025-07-04)" data-channel="nightly" data-search-js="search-179e01a3.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-4e99c027.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-673ee1e0.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-32bb7600.css"></noscript><link rel="icon" href="https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button><a class="logo-container" href="../../parquet/index.html"><img src="https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg" alt=""></a></nav><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../parquet/index.html"><img src="https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg" alt="logo"></a><h2><a href="../../parquet/index.html">parquet</a><span class="version">55.2.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module arrow</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#schema-conversion" title="Schema Conversion">Schema Conversion</a></li><li><a href="#example-writing-arrow-recordbatch-to-parquet-file" title="Example: Writing Arrow `RecordBatch` to Parquet file">Example: Writing Arrow <code>RecordBatch</code> to Parquet file</a></li><li><a href="#example-reading-parquet-file-into-arrow-recordbatch" title="Example: Reading Parquet file into Arrow `RecordBatch`">Example: Reading Parquet file into Arrow <code>RecordBatch</code></a></li><li><a href="#example-reading-non-uniformly-encrypted-parquet-file-into-arrow-record-batch" title="Example: Reading non-uniformly encrypted parquet file into arrow record batch">Example: Reading non-uniformly encrypted parquet file into arrow record batch</a></li></ul><h3><a href="#reexports">Module Items</a></h3><ul class="block"><li><a href="#reexports" title="Re-exports">Re-exports</a></li><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#constants" title="Constants">Constants</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate parquet</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">parquet</a></div><h1>Module <span>arrow</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/parquet/arrow/mod.rs.html#18-755">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>API for reading/writing Arrow <a href="arrow_array::RecordBatch"><code>RecordBatch</code></a>es and <a href="arrow_array::Array"><code>Array</code></a>s to/from
+Parquet Files.</p>
+<p>See the <a href="../index.html" title="mod parquet">crate-level documentation</a> for more details on other APIs</p>
+<h2 id="schema-conversion"><a class="doc-anchor" href="#schema-conversion">§</a>Schema Conversion</h2>
+<p>These APIs ensure that data in Arrow <a href="arrow_array::RecordBatch"><code>RecordBatch</code></a>es written to Parquet are
+read back as <a href="arrow_array::RecordBatch"><code>RecordBatch</code></a>es with the exact same types and values.</p>
+<p>Parquet and Arrow have different type systems, and there is not
+always a one to one mapping between the systems. For example, data
+stored as a Parquet <a href="../basic/enum.Type.html#variant.BYTE_ARRAY" title="variant parquet::basic::Type::BYTE_ARRAY"><code>BYTE_ARRAY</code></a> can be read as either an Arrow
+<a href="arrow_array::BinaryViewArray"><code>BinaryViewArray</code></a> or <a href="arrow_array::BinaryArray"><code>BinaryArray</code></a>.</p>
+<p>To recover the original Arrow types, the writers in this module add a “hint” to
+the metadata in the <a href="constant.ARROW_SCHEMA_META_KEY.html" title="constant parquet::arrow::ARROW_SCHEMA_META_KEY"><code>ARROW_SCHEMA_META_KEY</code></a> key which records the original Arrow
+schema. The metadata hint follows the same convention as arrow-cpp based
+implementations such as <code>pyarrow</code>. The reader looks for the schema hint in the
+metadata to determine Arrow types, and if it is not present, infers the Arrow schema
+from the Parquet schema.</p>
+<p>In situations where the embedded Arrow schema is not compatible with the Parquet
+schema, the Parquet schema takes precedence and no error is raised.
+See <a href="https://github.com/apache/arrow-rs/issues/1663">#1663</a></p>
+<p>You can also control the type conversion process in more detail using:</p>
+<ul>
+<li>
+<p><a href="struct.ArrowSchemaConverter.html" title="struct parquet::arrow::ArrowSchemaConverter"><code>ArrowSchemaConverter</code></a> control the conversion of Arrow types to Parquet
+types.</p>
+</li>
+<li>
+<p><a href="arrow_reader/struct.ArrowReaderOptions.html#method.with_schema" title="method parquet::arrow::arrow_reader::ArrowReaderOptions::with_schema"><code>ArrowReaderOptions::with_schema</code></a> to explicitly specify your own Arrow schema hint
+to use when reading Parquet, overriding any metadata that may be present.</p>
+</li>
+</ul>
+<h2 id="example-writing-arrow-recordbatch-to-parquet-file"><a class="doc-anchor" href="#example-writing-arrow-recordbatch-to-parquet-file">§</a>Example: Writing Arrow <code>RecordBatch</code> to Parquet file</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code> <span class="kw">let </span>ids = Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]);
+ <span class="kw">let </span>vals = Int32Array::from(<span class="macro">vec!</span>[<span class="number">5</span>, <span class="number">6</span>, <span class="number">7</span>, <span class="number">8</span>]);
+ <span class="kw">let </span>batch = RecordBatch::try_from_iter(<span class="macro">vec!</span>[
+   (<span class="string">"id"</span>, Arc::new(ids) <span class="kw">as </span>ArrayRef),
+   (<span class="string">"val"</span>, Arc::new(vals) <span class="kw">as </span>ArrayRef),
+ ]).unwrap();
+
+ <span class="kw">let </span>file = tempfile().unwrap();
+
+ <span class="comment">// WriterProperties can be used to set Parquet file options
+ </span><span class="kw">let </span>props = WriterProperties::builder()
+     .set_compression(Compression::SNAPPY)
+     .build();
+
+ <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, batch.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
+
+ writer.write(<span class="kw-2">&amp;</span>batch).expect(<span class="string">"Writing batch"</span>);
+
+ <span class="comment">// writer must be closed to write footer
+ </span>writer.close().unwrap();</code></pre></div>
+<h2 id="example-reading-parquet-file-into-arrow-recordbatch"><a class="doc-anchor" href="#example-reading-parquet-file-into-arrow-recordbatch">§</a>Example: Reading Parquet file into Arrow <code>RecordBatch</code></h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>file = File::open(<span class="string">"data.parquet"</span>).unwrap();
+
+<span class="kw">let </span>builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+<span class="macro">println!</span>(<span class="string">"Converted arrow schema is: {}"</span>, builder.schema());
+
+<span class="kw">let </span><span class="kw-2">mut </span>reader = builder.build().unwrap();
+
+<span class="kw">let </span>record_batch = reader.next().unwrap().unwrap();
+
+<span class="macro">println!</span>(<span class="string">"Read {} records."</span>, record_batch.num_rows());</code></pre></div>
+<h2 id="example-reading-non-uniformly-encrypted-parquet-file-into-arrow-record-batch"><a class="doc-anchor" href="#example-reading-non-uniformly-encrypted-parquet-file-into-arrow-record-batch">§</a>Example: Reading non-uniformly encrypted parquet file into arrow record batch</h2>
+<p>Note: This requires the experimental <code>encryption</code> feature to be enabled at compile time.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code> <span class="kw">let </span>file = File::open(path).unwrap();
+
+ <span class="comment">// Define the AES encryption keys required required for decrypting the footer metadata
+ // and column-specific data. If only a footer key is used then it is assumed that the
+ // file uses uniform encryption and all columns are encrypted with the footer key.
+ // If any column keys are specified, other columns without a key provided are assumed
+ // to be unencrypted
+ </span><span class="kw">let </span>footer_key = <span class="string">"0123456789012345"</span>.as_bytes(); <span class="comment">// Keys are 128 bits (16 bytes)
+ </span><span class="kw">let </span>column_1_key = <span class="string">"1234567890123450"</span>.as_bytes();
+ <span class="kw">let </span>column_2_key = <span class="string">"1234567890123451"</span>.as_bytes();
+
+ <span class="kw">let </span>decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+     .with_column_key(<span class="string">"double_field"</span>, column_1_key.to_vec())
+     .with_column_key(<span class="string">"float_field"</span>, column_2_key.to_vec())
+     .build()
+     .unwrap();
+
+ <span class="kw">let </span>options = ArrowReaderOptions::default()
+  .with_file_decryption_properties(decryption_properties);
+ <span class="kw">let </span>reader_metadata = ArrowReaderMetadata::load(<span class="kw-2">&amp;</span>file, options.clone()).unwrap();
+ <span class="kw">let </span>file_metadata = reader_metadata.metadata().file_metadata();
+ <span class="macro">assert_eq!</span>(<span class="number">50</span>, file_metadata.num_rows());
+
+ <span class="kw">let </span><span class="kw-2">mut </span>reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+   .unwrap()
+   .build()
+   .unwrap();
+
+ <span class="kw">let </span>record_batch = reader.next().unwrap().unwrap();
+ <span class="macro">assert_eq!</span>(<span class="number">50</span>, record_batch.num_rows());</code></pre></div>
+</div></details><h2 id="reexports" class="section-header">Re-exports<a href="#reexports" class="anchor">§</a></h2><dl class="item-table reexports"><dt id="reexport.ArrowWriter"><code>pub use self::arrow_writer::<a class="struct" href="arrow_writer/struct.ArrowWriter.html" title="struct parquet::arrow::arrow_writer::ArrowWriter">ArrowWriter</a>;</code></dt><dt id="reexport.ParquetRecordBatchStreamBuilder"><code>pub use self::async_reader::<a class="type" href="async_reader/type.ParquetRecordBatchStreamBuilder.html" title="type parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder">ParquetRecordBatchStreamBuilder</a>;</code></dt><dt id="reexport.AsyncArrowWriter"><code>pub use self::async_writer::<a class="struct" href="async_writer/struct.AsyncArrowWriter.html" title="struct parquet::arrow::async_writer::AsyncArrowWriter">AsyncArrowWriter</a>;</code></dt></dl><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="arrow_reader/index.html" title="mod parquet::arrow::arrow_reader">arrow_<wbr>reader</a></dt><dd>Contains reader which reads parquet data into arrow [<code>RecordBatch</code>]</dd><dt><a class="mod" href="arrow_writer/index.html" title="mod parquet::arrow::arrow_writer">arrow_<wbr>writer</a></dt><dd>Contains writer which writes arrow data into parquet data.</dd><dt><a class="mod" href="async_reader/index.html" title="mod parquet::arrow::async_reader">async_<wbr>reader</a></dt><dd><code>async</code> API for reading Parquet files as [<code>RecordBatch</code>]es</dd><dt><a class="mod" href="async_writer/index.html" title="mod parquet::arrow::async_writer">async_<wbr>writer</a></dt><dd><code>async</code> API for writing [<code>RecordBatch</code>]es to Parquet files</dd><dt><a class="mod" href="buffer/index.html" title="mod parquet::arrow::buffer">buffer</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Logic for reading data into arrow buffers</dd><dt><a class="mod" href="decoder/index.html" title="mod parquet::arrow::decoder">decoder</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Specialized decoders optimised for decoding to arrow format</dd><dt><a class="mod" href="record_reader/index.html" title="mod parquet::arrow::record_reader">record_<wbr>reader</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.ArrowSchemaConverter.html" title="struct parquet::arrow::ArrowSchemaConverter">Arrow<wbr>Schema<wbr>Converter</a></dt><dd>Converter for Arrow schema to Parquet schema</dd><dt><a class="struct" href="struct.FieldLevels.html" title="struct parquet::arrow::FieldLevels">Field<wbr>Levels</a></dt><dd>Schema information necessary to decode a parquet file as arrow [<code>Fields</code>]</dd><dt><a class="struct" href="struct.ProjectionMask.html" title="struct parquet::arrow::ProjectionMask">Projection<wbr>Mask</a></dt><dd>A <a href="struct.ProjectionMask.html" title="struct parquet::arrow::ProjectionMask"><code>ProjectionMask</code></a> identifies a set of columns within a potentially nested schema to project</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.ARROW_SCHEMA_META_KEY.html" title="constant parquet::arrow::ARROW_SCHEMA_META_KEY">ARROW_<wbr>SCHEMA_<wbr>META_<wbr>KEY</a></dt><dd>Schema metadata key used to store serialized Arrow schema</dd><dt><a class="constant" href="constant.PARQUET_FIELD_ID_META_KEY.html" title="constant parquet::arrow::PARQUET_FIELD_ID_META_KEY">PARQUET_<wbr>FIELD_<wbr>ID_<wbr>META_<wbr>KEY</a></dt><dd>The value of this metadata key, if present on <a href="arrow_schema::Field::metadata"><code>Field::metadata</code></a>, will be used
+to populate <a href="../schema/types/struct.BasicTypeInfo.html#method.id" title="method parquet::schema::types::BasicTypeInfo::id"><code>BasicTypeInfo::id</code></a></dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.add_encoded_arrow_schema_to_metadata.html" title="fn parquet::arrow::add_encoded_arrow_schema_to_metadata">add_<wbr>encoded_<wbr>arrow_<wbr>schema_<wbr>to_<wbr>metadata</a></dt><dd>Mutates writer metadata by storing the encoded Arrow schema hint in
+<a href="constant.ARROW_SCHEMA_META_KEY.html" title="constant parquet::arrow::ARROW_SCHEMA_META_KEY"><code>ARROW_SCHEMA_META_KEY</code></a>.</dd><dt><a class="fn" href="fn.encode_arrow_schema.html" title="fn parquet::arrow::encode_arrow_schema">encode_<wbr>arrow_<wbr>schema</a></dt><dd>Encodes the Arrow schema into the IPC format, and base64 encodes it</dd><dt><a class="fn" href="fn.parquet_column.html" title="fn parquet::arrow::parquet_column">parquet_<wbr>column</a></dt><dd>Lookups up the parquet column by name</dd><dt><a class="fn" href="fn.parquet_to_arrow_field_levels.html" title="fn parquet::arrow::parquet_to_arrow_field_levels">parquet_<wbr>to_<wbr>arrow_<wbr>field_<wbr>levels</a></dt><dd>Convert a parquet <a href="../schema/types/struct.SchemaDescriptor.html" title="struct parquet::schema::types::SchemaDescriptor"><code>SchemaDescriptor</code></a> to <a href="struct.FieldLevels.html" title="struct parquet::arrow::FieldLevels"><code>FieldLevels</code></a></dd><dt><a class="fn" href="fn.parquet_to_arrow_schema.html" title="fn parquet::arrow::parquet_to_arrow_schema">parquet_<wbr>to_<wbr>arrow_<wbr>schema</a></dt><dd>Convert Parquet schema to Arrow schema including optional metadata</dd><dt><a class="fn" href="fn.parquet_to_arrow_schema_by_columns.html" title="fn parquet::arrow::parquet_to_arrow_schema_by_columns">parquet_<wbr>to_<wbr>arrow_<wbr>schema_<wbr>by_<wbr>columns</a></dt><dd>Convert parquet schema to arrow schema including optional metadata,
+only preserving some leaf columns.</dd></dl></section></div></main></body></html>
