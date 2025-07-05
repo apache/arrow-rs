@@ -620,15 +620,15 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     pub fn inline_key_fast(raw: u128) -> u128 {
         let raw_bytes = raw.to_le_bytes();
 
-        // Extract length field from little-endian raw input and convert to big-endian
-        let length_be = u32::from_le_bytes(raw_bytes[0..4].try_into().unwrap()).to_be();
+        // Parse native length from LE, then write BE bytes
+        let length = u32::from_le_bytes(raw_bytes[0..4].try_into().unwrap());
 
         // Build a 16-byte buffer with:
         // - bytes [0..12] = inline string data
         // - bytes [12..16] = big-endian length
         let mut buf = [0u8; 16];
         buf[0..12].copy_from_slice(&raw_bytes[4..16]);
-        buf[12..16].copy_from_slice(&length_be.to_be_bytes());
+        buf[12..16].copy_from_slice(&length.to_be_bytes());
 
         // Interpret as a big-endian u128 for final comparison key
         u128::from_be_bytes(buf)
