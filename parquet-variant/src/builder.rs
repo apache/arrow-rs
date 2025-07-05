@@ -1768,4 +1768,82 @@ mod tests {
         assert!(!builder.metadata_builder.is_sorted);
         assert_eq!(builder.metadata_builder.num_field_names(), 6);
     }
+
+    #[test]
+    fn test_metadata_builder_from_iter() {
+        let metadata = MetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
+        assert_eq!(metadata.num_field_names(), 3);
+        assert_eq!(metadata.field_name(0), "apple");
+        assert_eq!(metadata.field_name(1), "banana");
+        assert_eq!(metadata.field_name(2), "cherry");
+        assert!(metadata.is_sorted);
+
+        let metadata = MetadataBuilder::from_iter(["zebra", "apple", "banana"]);
+        assert_eq!(metadata.num_field_names(), 3);
+        assert_eq!(metadata.field_name(0), "zebra");
+        assert_eq!(metadata.field_name(1), "apple");
+        assert_eq!(metadata.field_name(2), "banana");
+        assert!(!metadata.is_sorted);
+
+        let metadata = MetadataBuilder::from_iter(Vec::<&str>::new());
+        assert_eq!(metadata.num_field_names(), 0);
+        assert!(!metadata.is_sorted);
+    }
+
+    #[test]
+    fn test_metadata_builder_extend() {
+        let mut metadata = MetadataBuilder::default();
+        assert_eq!(metadata.num_field_names(), 0);
+        assert!(!metadata.is_sorted);
+
+        metadata.extend(["apple", "cherry"]);
+        assert_eq!(metadata.num_field_names(), 2);
+        assert_eq!(metadata.field_name(0), "apple");
+        assert_eq!(metadata.field_name(1), "cherry");
+        assert!(metadata.is_sorted);
+
+        // extend with more field names that maintain sort order
+        metadata.extend(vec!["dinosaur", "monkey"]);
+        assert_eq!(metadata.num_field_names(), 4);
+        assert_eq!(metadata.field_name(2), "dinosaur");
+        assert_eq!(metadata.field_name(3), "monkey");
+        assert!(metadata.is_sorted);
+
+        // test extending with duplicate field names
+        let initial_count = metadata.num_field_names();
+        metadata.extend(["apple", "monkey"]);
+        assert_eq!(metadata.num_field_names(), initial_count); // No new fields added
+    }
+
+    #[test]
+    fn test_metadata_builder_extend_sort_order() {
+        let mut metadata = MetadataBuilder::default();
+
+        metadata.extend(["middle"]);
+        assert!(metadata.is_sorted);
+
+        metadata.extend(["zebra"]);
+        assert!(metadata.is_sorted);
+
+        // add field that breaks sort order
+        metadata.extend(["apple"]);
+        assert!(!metadata.is_sorted);
+    }
+
+    #[test]
+    fn test_metadata_builder_from_iter_with_string_types() {
+        // &str
+        let metadata = MetadataBuilder::from_iter(["a", "b", "c"]);
+        assert_eq!(metadata.num_field_names(), 3);
+
+        // string
+        let metadata =
+            MetadataBuilder::from_iter(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(metadata.num_field_names(), 3);
+
+        // mixed types (anything that implements AsRef<str>)
+        let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
+        let metadata = MetadataBuilder::from_iter(field_names);
+        assert_eq!(metadata.num_field_names(), 3);
+    }
 }
