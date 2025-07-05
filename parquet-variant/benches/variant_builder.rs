@@ -441,7 +441,7 @@ fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
 
         b.iter(|| {
             for variant in &unvalidated {
-                let validated = variant.clone().validate().unwrap();
+                let validated = variant.clone().with_full_validation().unwrap();
                 hint::black_box(validated);
             }
         })

@@ -417,7 +417,7 @@ fn test_validation_workflow(metadata: &[u8], value: &[u8]) {
     };
 
     // Step 2: Try validation
-    let validation_result = std::panic::catch_unwind(|| variant.clone().validate());
+    let validation_result = std::panic::catch_unwind(|| variant.clone().with_full_validation());
 
     match validation_result {
         Ok(Ok(validated)) => {
@@ -515,7 +515,7 @@ fn test_validation_workflow_simple(metadata: &[u8], value: &[u8]) {
     };
 
     // Step 2: Try validation
-    let validation_result = std::panic::catch_unwind(|| variant.clone().validate());
+    let validation_result = std::panic::catch_unwind(|| variant.clone().with_full_validation());
 
     match validation_result {
         Ok(Ok(validated)) => {

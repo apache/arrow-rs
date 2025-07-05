@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -16,6 +14,7 @@ use std::ops::Deref;
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 pub use self::list::VariantList;
 pub use self::metadata::VariantMetadata;
@@ -24,6 +23,7 @@ use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
 use crate::utils::{first_byte_from_slice, slice_from_slice};
+use std::ops::Deref;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
@@ -184,7 +184,7 @@ impl Deref for ShortString<'_> {
 /// Every instance of variant is either _valid_ or _invalid_. depending on whether the
 /// underlying bytes are a valid encoding of a variant value (see below).
 ///
-/// Instances produced by [`Self::try_new`], [`Self::try_new_with_metadata`], or [`Self::validate`]
+/// Instances produced by [`Self::try_new`], [`Self::try_new_with_metadata`], or [`Self::with_full_validation`]
 /// are fully _validated_. They always contain _valid_ data, and infallible accesses such as
 /// iteration and indexing are panic-free. The validation cost is `O(m + v)` where `m` and
 /// `v` are the number of bytes in the metadata and value buffers, respectively.
@@ -192,7 +192,7 @@ impl Deref for ShortString<'_> {
 /// Instances produced by [`Self::new`] and [`Self::new_with_metadata`] are _unvalidated_ and so
 /// they may contain either _valid_ or _invalid_ data. Infallible accesses to variant objects and
 /// arrays, such as iteration and indexing will panic if the underlying bytes are _invalid_, and
-/// fallible alternatives are provided as panic-free alternatives. [`Self::validate`] can also be
+/// fallible alternatives are provided as panic-free alternatives. [`Self::with_full_validation`] can also be
 /// used to _validate_ an _unvalidated_ instance, if desired.
 ///
 /// _Unvalidated_ instances can be constructed in constant time. This can be useful if the caller
@@ -297,8 +297,10 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// [unvalidated]: Self#Validation
     pub fn new(metadata: &'m [u8], value: &'v [u8]) -> Self {
-        let metadata = VariantMetadata::try_new_impl(metadata).expect("Invalid variant metadata");
-        Self::try_new_with_metadata_impl(metadata, value).expect("Invalid variant data")
+        let metadata = VariantMetadata::try_new_with_shallow_validation(metadata)
+            .expect("Invalid variant metadata");
+        Self::try_new_with_metadata_and_shallow_validation(metadata, value)
+            .expect("Invalid variant data")
     }
 
     /// Create a new variant with existing metadata.
@@ -323,18 +325,19 @@ impl<'m, 'v> Variant<'m, 'v> {
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
-        Self::try_new_with_metadata_impl(metadata, value)?.validate()
+        Self::try_new_with_metadata_and_shallow_validation(metadata, value)?.with_full_validation()
     }
 
     /// Similar to [`Self::try_new_with_metadata`], but [unvalidated].
     ///
     /// [unvalidated]: Self#Validation
     pub fn new_with_metadata(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
-        Self::try_new_with_metadata_impl(metadata, value).expect("Invalid variant")
+        Self::try_new_with_metadata_and_shallow_validation(metadata, value)
+            .expect("Invalid variant")
     }
 
     // The actual constructor, which only performs shallow (constant-time) validation.
-    fn try_new_with_metadata_impl(
+    fn try_new_with_metadata_and_shallow_validation(
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
@@ -382,10 +385,12 @@ impl<'m, 'v> Variant<'m, 'v> {
             VariantBasicType::ShortString => {
                 Variant::ShortString(decoder::decode_short_string(value_metadata, value_data)?)
             }
-            VariantBasicType::Object => {
-                Variant::Object(VariantObject::try_new_impl(metadata, value)?)
-            }
-            VariantBasicType::Array => Variant::List(VariantList::try_new_impl(metadata, value)?),
+            VariantBasicType::Object => Variant::Object(
+                VariantObject::try_new_with_shallow_validation(metadata, value)?,
+            ),
+            VariantBasicType::Array => Variant::List(VariantList::try_new_with_shallow_validation(
+                metadata, value,
+            )?),
         };
         Ok(new_self)
     }
@@ -393,10 +398,10 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// True if this variant instance has already been [validated].
     ///
     /// [validated]: Self#Validation
-    pub fn is_validated(&self) -> bool {
+    pub fn is_fully_validated(&self) -> bool {
         match self {
-            Variant::List(list) => list.is_validated(),
-            Variant::Object(obj) => obj.is_validated(),
+            Variant::List(list) => list.is_fully_validated(),
+            Variant::Object(obj) => obj.is_fully_validated(),
             _ => true,
         }
     }
@@ -407,16 +412,16 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Variant leaf values are always valid by construction, but [objects] and [arrays] can be
     /// constructed in unvalidated (and potentially invalid) state.
     ///
-    /// If [`Self::is_validated`] is true, validation is a no-op. Otherwise, the cost is `O(m + v)`
+    /// If [`Self::is_fully_validated`] is true, validation is a no-op. Otherwise, the cost is `O(m + v)`
     /// where `m` and `v` are the sizes of metadata and value buffers, respectively.
     ///
     /// [objects]: VariantObject#Validation
     /// [arrays]: VariantList#Validation
-    pub fn validate(self) -> Result<Self, ArrowError> {
+    pub fn with_full_validation(self) -> Result<Self, ArrowError> {
         use Variant::*;
         match self {
-            List(list) => list.validate().map(List),
-            Object(obj) => obj.validate().map(Object),
+            List(list) => list.with_full_validation().map(List),
+            Object(obj) => obj.with_full_validation().map(Object),
             _ => Ok(self),
         }
     }
