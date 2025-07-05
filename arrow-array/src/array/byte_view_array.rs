@@ -475,19 +475,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     pub fn gc(&self) -> Self {
         let len = self.len();
         let mut builder = GenericByteViewBuilder::<T>::with_capacity(len);
-        let views = self.views();          // &[u8] 长度数组
+        let views = self.views();
 
         for i in 0..len {
-            // 1) null 检查
             if self.is_null(i) {
                 builder.append_null();
                 continue;
             }
-            // 2) 直接 unsafe 取值，去掉 Option 解包
+
+
             let native: &T::Native = unsafe { self.value_unchecked(i) };
             let bytes: &[u8]     = native.as_ref();
 
-            // 3) 通过 views[i] 拿长度，省去 zip/map 迭代器
             let length = views[i] as u32;
             if length <= MAX_INLINE_VIEW_LEN {
                 builder.append_inlined(bytes, length);
