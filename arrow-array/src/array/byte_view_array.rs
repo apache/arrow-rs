@@ -618,28 +618,20 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// - any multi‑byte string ordering was completely incorrect
     #[inline(always)]
     pub fn inline_key_fast(raw: u128) -> u128 {
-        // STEP 1: Read raw bytes in little‑endian
-        // raw_bytes[0..4]   = length (LE u32)
-        // raw_bytes[4..16]  = up to 12 bytes of data + zero padding
         let raw_bytes = raw.to_le_bytes();
 
-        // STEP 2: Extract length (LE u32) and convert to BE u32,
-        // then widen to u128 for OR’ing into low 32 bits
-        let length_be = u32::from_le_bytes(raw_bytes[0..4].try_into().unwrap()).to_be() as u128;
+        // Extract length field from little-endian raw input and convert to big-endian
+        let length_be = u32::from_le_bytes(raw_bytes[0..4].try_into().unwrap()).to_be();
 
-        // STEP 3: Manually pack 12 data bytes into a big‑endian 96‑bit integer
-        //   - byte 0 → bits 127–120 (MSB)
-        //   - byte 1 → bits 119–112
-        //   - …
-        //   - byte 11 → bits 31–24
-        let mut inline_part: u128 = 0;
-        for i in 0..12 {
-            inline_part = (inline_part << 8) | (raw_bytes[4 + i] as u128);
-        }
+        // Build a 16-byte buffer with:
+        // - bytes [0..12] = inline string data
+        // - bytes [12..16] = big-endian length
+        let mut buf = [0u8; 16];
+        buf[0..12].copy_from_slice(&raw_bytes[4..16]);
+        buf[12..16].copy_from_slice(&length_be.to_be_bytes());
 
-        // STEP 4: Combine into final key:
-        //   [ 96‑bit data | 32‑bit length ]
-        (inline_part << 32) | length_be
+        // Interpret as a big-endian u128 for final comparison key
+        u128::from_be_bytes(buf)
     }
 }
 
