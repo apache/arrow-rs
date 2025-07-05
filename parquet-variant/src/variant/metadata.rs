@@ -206,6 +206,16 @@ impl<'m> VariantMetadata<'m> {
         Ok(new_self)
     }
 
+    /// The number of metadata dictionary entries
+    pub fn len(&self) -> usize {
+        self.dictionary_size
+    }
+
+    /// True if this metadata dictionary contains no entries
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// True if this instance is fully [validated] for panic-free infallible accesses.
     ///
     /// [validated]: Self#Validation
