@@ -26,7 +26,7 @@
 
 pub mod coalesce;
 pub mod concat;
-mod dictionary;
+pub mod dictionary;
 pub mod filter;
 pub mod interleave;
 pub mod nullif;
