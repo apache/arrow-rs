@@ -250,8 +250,12 @@ impl MetadataBuilder {
         if new_entry {
             let n = self.num_field_names();
 
+            // Dictionary sort order tracking:
+            // - An empty dictionary is unsorted (ambiguous in spec but required by interop tests)
+            // - A single-entry dictionary is trivially sorted
+            // - Otherwise, an already-sorted dictionary becomes unsorted if the new entry breaks order
             self.is_sorted =
-                n == 1 || self.is_sorted & (self.field_names[n - 2] < self.field_names[n - 1]);
+                n == 1 || self.is_sorted && (self.field_names[n - 2] < self.field_names[n - 1]);
         }
 
         id as u32
