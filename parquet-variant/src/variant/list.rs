@@ -82,14 +82,14 @@ impl VariantListHeader {
 /// Every instance of variant list is either _valid_ or _invalid_. depending on whether the
 /// underlying bytes are a valid encoding of a variant array (see below).
 ///
-/// Instances produced by [`Self::try_new`] or [`Self::validate`] are fully _validated_. They always
+/// Instances produced by [`Self::try_new`] or [`Self::with_full_validation`] are fully _validated_. They always
 /// contain _valid_ data, and infallible accesses such as iteration and indexing are panic-free. The
 /// validation cost is linear in the number of underlying bytes.
 ///
 /// Instances produced by [`Self::new`] are _unvalidated_ and so they may contain either _valid_ or
 /// _invalid_ data. Infallible accesses such as iteration and indexing will panic if the underlying
 /// bytes are _invalid_, and fallible alternatives such as [`Self::iter_try`] and [`Self::get`] are
-/// provided as panic-free alternatives. [`Self::validate`] can also be used to _validate_ an
+/// provided as panic-free alternatives. [`Self::with_full_validation`] can also be used to _validate_ an
 /// _unvalidated_ instance, if desired.
 ///
 /// _Unvalidated_ instances can be constructed in constant time. This can be useful if the caller
@@ -136,18 +136,18 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// This constructor verifies that `value` points to a valid variant array value. In particular,
     /// that all offsets are in-bounds and point to valid (recursively validated) objects.
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
-        Self::try_new_impl(metadata, value)?.validate()
+        Self::try_new_with_shallow_validation(metadata, value)?.with_full_validation()
     }
 
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
-        Self::try_new_impl(metadata, value).expect("Invalid variant list value")
+        Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant list value")
     }
 
     /// Attempts to interpet `metadata` and `value` as a variant array, performing only basic
     /// (constant-cost) [validation].
     ///
     /// [validation]: Self#Validation
-    pub(crate) fn try_new_impl(
+    pub(crate) fn try_new_with_shallow_validation(
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
@@ -196,18 +196,18 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// True if this instance is fully [validated] for panic-free infallible accesses.
     ///
     /// [validated]: Self#Validation
-    pub fn is_validated(&self) -> bool {
+    pub fn is_fully_validated(&self) -> bool {
         self.validated
     }
 
     /// Performs a full [validation] of this variant array and returns the result.
     ///
     /// [validation]: Self#Validation
-    pub fn validate(mut self) -> Result<Self, ArrowError> {
+    pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
-            self.metadata = self.metadata.validate()?;
+            self.metadata = self.metadata.with_full_validation()?;
 
             // Iterate over all string keys in this dictionary in order to prove that the offset
             // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
@@ -232,19 +232,20 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// [invalid]: Self#Validation
     pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
         (index < self.num_elements).then(|| {
-            self.try_get_impl(index)
-                .and_then(Variant::validate)
+            self.try_get_with_shallow_validation(index)
+                .and_then(Variant::with_full_validation)
                 .expect("Invalid variant array element")
         })
     }
 
     /// Fallible version of `get`. Returns element by index, capturing validation errors
     pub fn try_get(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
-        self.try_get_impl(index)?.validate()
+        self.try_get_with_shallow_validation(index)?
+            .with_full_validation()
     }
 
     // Fallible version of `get`, performing only basic (constant-time) validation.
-    fn try_get_impl(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+    fn try_get_with_shallow_validation(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         // Fetch the value bytes between the two offsets for this index, from the value array region
         // of the byte buffer
         let byte_range = self.get_offset(index)?..self.get_offset(index + 1)?;
@@ -258,18 +259,21 @@ impl<'m, 'v> VariantList<'m, 'v> {
     ///
     /// [unvalidated]: Self#Validation
     pub fn iter(&self) -> impl Iterator<Item = Variant<'m, 'v>> + '_ {
-        self.iter_try_impl()
+        self.iter_try_with_shallow_validation()
             .map(|result| result.expect("Invalid variant list entry"))
     }
 
     /// Fallible iteration over the elements of this list.
     pub fn iter_try(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        self.iter_try_impl().map(|result| result?.validate())
+        self.iter_try_with_shallow_validation()
+            .map(|result| result?.with_full_validation())
     }
 
     // Fallible iteration that only performs basic (constant-time) validation.
-    fn iter_try_impl(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        (0..self.len()).map(move |i| self.try_get_impl(i))
+    fn iter_try_with_shallow_validation(
+        &self,
+    ) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
+        (0..self.len()).map(move |i| self.try_get_with_shallow_validation(i))
     }
 
     // Attempts to retrieve the ith offset from the offset array region of the byte buffer.
