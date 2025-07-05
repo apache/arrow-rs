@@ -490,6 +490,46 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// let result = obj.finish(); // returns Err
 /// assert!(result.is_err());
 /// ```
+///
+/// # Example: Sorted dictionaries
+///
+/// This example shows how to create a [`VariantBuilder`] with a pre-sorted field dictionary
+/// to improve field access performance when reading [`Variant`] objects.
+///
+/// You can use [`VariantBuilder::with_field_names`] to add multiple field names at once:
+/// ```
+/// use parquet_variant::{Variant, VariantBuilder};
+/// let mut builder = VariantBuilder::new()
+///     .with_field_names(["age", "name", "score"].into_iter());
+///
+/// let mut obj = builder.new_object();
+/// obj.insert("name", "Alice");
+/// obj.insert("age", 30);
+/// obj.insert("score", 95.5);
+/// obj.finish().unwrap();
+///
+/// let (metadata, value) = builder.finish();
+/// let variant = Variant::try_new(&metadata, &value).unwrap();
+/// ```
+///
+/// Alternatively, you can use [`VariantBuilder::add_field_name`] to add field names one by one:
+/// ```
+/// use parquet_variant::{Variant, VariantBuilder};
+/// let mut builder = VariantBuilder::new();
+/// builder.add_field_name("age"); // field id = 0
+/// builder.add_field_name("name"); // field id = 1
+/// builder.add_field_name("score"); // field id = 2
+///
+/// let mut obj = builder.new_object();
+/// obj.insert("name", "Bob"); // field id = 3
+/// obj.insert("age", 25);
+/// obj.insert("score", 88.0);
+/// obj.finish().unwrap();
+///
+/// let (metadata, value) = builder.finish();
+/// let variant = Variant::try_new(&metadata, &value).unwrap();
+/// ```
+///
 #[derive(Default)]
 pub struct VariantBuilder {
     buffer: ValueBuffer,
