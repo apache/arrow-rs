@@ -870,7 +870,11 @@ impl<'a> UnionEncoder<'a> {
 
         let union_fields = match array.data_type() {
             DataType::Union(fields, _) => fields,
-            _ => unreachable!("Union array's data type is not a union!"),
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Expected UnionArray to have Union data type".to_string(),
+                ))
+            }
         };
 
         let mut field_encoders = Vec::new();
@@ -903,12 +907,14 @@ impl Encoder for UnionEncoder<'_> {
 
         match self.format {
             UnionFormat::Simple => {
-                if let Some(&encoder_idx) = self.type_id_to_index.get(&type_id) {
-                    if !self.field_encoders[encoder_idx].is_null(value_idx) {
-                        self.field_encoders[encoder_idx].encode(value_idx, out);
-                    } else {
-                        out.extend_from_slice(b"null");
-                    }
+                let encoder_idx = self.type_id_to_index.get(&type_id).unwrap_or_else(|| {
+                    panic!(
+                        "Invalid type_id {} found in UnionArray, this indicates corrupted data",
+                        type_id
+                    );
+                });
+                if !self.field_encoders[*encoder_idx].is_null(value_idx) {
+                    self.field_encoders[*encoder_idx].encode(value_idx, out);
                 } else {
                     out.extend_from_slice(b"null");
                 }
@@ -924,14 +930,16 @@ impl Encoder for UnionEncoder<'_> {
                 encode_string("value", out);
                 out.push(b':');
 
-                if let Some(&encoder_idx) = self.type_id_to_index.get(&type_id) {
-                    if self.field_encoders[encoder_idx].is_null(value_idx) {
-                        out.extend_from_slice(b"null");
-                    } else {
-                        self.field_encoders[encoder_idx].encode(value_idx, out);
-                    }
-                } else {
+                let encoder_idx = self.type_id_to_index.get(&type_id).unwrap_or_else(|| {
+                    panic!(
+                        "Invalid type_id {} found in UnionArray, this indicates corrupted data",
+                        type_id
+                    );
+                });
+                if self.field_encoders[*encoder_idx].is_null(value_idx) {
                     out.extend_from_slice(b"null");
+                } else {
+                    self.field_encoders[*encoder_idx].encode(value_idx, out);
                 }
 
                 out.push(b'}');

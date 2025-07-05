@@ -2091,30 +2091,51 @@ mod tests {
         impl EncoderFactory for UnionEncoderFactory {
             fn make_default_encoder<'a>(
                 &self,
-                field: &'a FieldRef,
+                _field: &'a FieldRef,
                 array: &'a dyn Array,
-                options: &'a EncoderOptions,
+                _options: &'a EncoderOptions,
             ) -> Result<Option<NullableEncoder<'a>>, ArrowError> {
-                match array.data_type() {
-                    DataType::Union(_fields, _) => {
-                        if let Some(union_array) = array.as_any().downcast_ref::<UnionArray>() {
-                            let encoder = Box::new(UnionEncoder::try_new_with_format(
-                                field,
-                                union_array,
-                                options,
-                                UnionFormat::Simple,
-                            )?);
-
-                            let nulls = array.nulls().cloned();
-                            Ok(Some(NullableEncoder::new(encoder, nulls)))
-                        } else {
-                            Err(ArrowError::InvalidArgumentError(
-                                "Cannot downcast Array to UnionArray".to_string(),
-                            ))
-                        }
+                let data_type = array.data_type();
+                let fields = match data_type {
+                    DataType::Union(fields, UnionMode::Sparse) => fields,
+                    _ => return Ok(None),
+                };
+                // check that the fields are supported
+                let fields = fields.iter().map(|(_, f)| f).collect::<Vec<_>>();
+                for f in fields.iter() {
+                    match f.data_type() {
+                        DataType::Null => {}
+                        DataType::Int32 => {}
+                        DataType::Utf8 => {}
+                        _ => return Ok(None),
                     }
-                    _ => Ok(None),
                 }
+                let (_, type_ids, _, buffers) = array.as_union().clone().into_parts();
+                let mut values = Vec::with_capacity(type_ids.len());
+                for idx in 0..type_ids.len() {
+                    let type_id = type_ids[idx];
+                    let field = &fields[type_id as usize];
+                    let value = match field.data_type() {
+                        DataType::Null => None,
+                        DataType::Int32 => Some(UnionValue::Int32(
+                            buffers[type_id as usize]
+                                .as_primitive::<Int32Type>()
+                                .value(idx),
+                        )),
+                        DataType::Utf8 => Some(UnionValue::String(
+                            buffers[type_id as usize]
+                                .as_string::<i32>()
+                                .value(idx)
+                                .to_string(),
+                        )),
+                        _ => unreachable!(),
+                    };
+                    values.push(value);
+                }
+                let array_encoder =
+                    Box::new(UnionEncoder { array: values }) as Box<dyn Encoder + 'a>;
+                let nulls = array.nulls().cloned();
+                Ok(Some(NullableEncoder::new(array_encoder, nulls)))
             }
         }
 
@@ -2163,8 +2184,8 @@ mod tests {
     }
 
     #[test]
-    fn test_union_encoder_line_delimited_implicit_nulls() {
-        let (batch, encoder_factory) = make_union_encoder_test_data();
+    fn test_fallback_encoder_factory_line_delimited_implicit_nulls() {
+        let (batch, encoder_factory) = make_fallback_encoder_test_data();
 
         let mut buf = Vec::new();
         {
@@ -2188,8 +2209,8 @@ mod tests {
     }
 
     #[test]
-    fn test_union_encoder_line_delimited_explicit_nulls() {
-        let (batch, encoder_factory) = make_union_encoder_test_data();
+    fn test_fallback_encoder_factory_line_delimited_explicit_nulls() {
+        let (batch, encoder_factory) = make_fallback_encoder_test_data();
 
         let mut buf = Vec::new();
         {
@@ -2211,8 +2232,8 @@ mod tests {
     }
 
     #[test]
-    fn test_union_encoder_array_implicit_nulls() {
-        let (batch, encoder_factory) = make_union_encoder_test_data();
+    fn test_fallback_encoder_factory_array_implicit_nulls() {
+        let (batch, encoder_factory) = make_fallback_encoder_test_data();
 
         let json_value: Value = {
             let mut buf = Vec::new();
@@ -2234,8 +2255,8 @@ mod tests {
     }
 
     #[test]
-    fn test_union_encoder_array_explicit_nulls() {
-        let (batch, encoder_factory) = make_union_encoder_test_data();
+    fn test_fallback_encoder_factory_array_explicit_nulls() {
+        let (batch, encoder_factory) = make_fallback_encoder_test_data();
 
         let json_value: Value = {
             let mut buf = Vec::new();
@@ -2535,7 +2556,7 @@ mod tests {
 
     #[test]
     fn test_union_encoder_with_nulls() {
-        let (batch, _) = make_union_encoder_test_data();
+        let (batch, _) = make_fallback_encoder_test_data();
 
         let array = batch
             .column(0)
