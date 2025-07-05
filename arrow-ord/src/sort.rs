@@ -301,17 +301,14 @@ fn sort_bytes<T: ByteArrayType>(
     // comparing up to 4 bytes as a single u32 we avoid the overhead
     // of a full lexicographical compare for the vast majority of cases.
 
-    // 1. Build a vector of (index, 64‑bit prefix) pairs
-    //    The high 32 bits store the big‑endian u32 of the first up to 4 bytes,
-    //    the low 32 bits store the original slice length.
-    // This is similar to inline_key_fast function in GenericByteViewArray.
-    let mut valids: Vec<(u32, u64)> = value_indices
+    // 1. Build a vector of (index, prefix, length) tuples
+    let mut valids: Vec<(u32, u32, u64)> = value_indices
         .into_iter()
         .map(|idx| {
             let slice: &[u8] = values.value(idx as usize).as_ref();
-            let len = slice.len() as u32;
+            let len = slice.len() as u64;
             // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
-            let prefix_u32 = if len >= 4 {
+            let prefix = if slice.len() >= 4 {
                 let raw = unsafe { std::ptr::read_unaligned(slice.as_ptr() as *const u32) };
                 u32::from_be(raw)
             } else {
@@ -319,11 +316,9 @@ fn sort_bytes<T: ByteArrayType>(
                 for &b in slice {
                     v = (v << 8) | (b as u32);
                 }
-                v << (8 * (4 - len))
+                v << (8 * (4 - slice.len()))
             };
-            // Pack into a single u64: (prefix << 32) | length
-            let prefix64 = ((prefix_u32 as u64) << 32) | (len as u64);
-            (idx, prefix64)
+            (idx, prefix, len)
         })
         .collect();
 
@@ -333,15 +328,24 @@ fn sort_bytes<T: ByteArrayType>(
         _ => valids.len(),
     };
 
-    // 3. Comparator: compare the 64‑bit prefix first, then fall back to full slice comparison
-    let cmp_bytes = |a: &(u32, u64), b: &(u32, u64)| {
-        let &(ia, pa) = a;
-        let &(ib, pb) = b;
-        // 3.1 If prefixes differ, that's enough
-        if pa != pb {
-            return pa.cmp(&pb);
+    // 3. Comparator: compare prefix, then (when both slices shorter than 4) length, otherwise full slice
+    let cmp_bytes = |a: &(u32, u32, u64), b: &(u32, u32, u64)| {
+        let (ia, pa, la) = *a;
+        let (ib, pb, lb) = *b;
+        // 3.1 prefix (first 4 bytes)
+        let ord = pa.cmp(&pb);
+        if ord != Ordering::Equal {
+            return ord;
         }
-        // 3.2 Otherwise, retrieve the original slices for a full lexicographical compare
+        // 3.2 only if both slices had length < 4 (so prefix was padded)
+        // length compare only when prefix was padded (i.e. original length < 4)
+        if la < 4 || lb < 4 {
+            let ord = la.cmp(&lb);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        }
+        // 3.3 full lexicographical compare
         let a_bytes: &[u8] = values.value(ia as usize).as_ref();
         let b_bytes: &[u8] = values.value(ib as usize).as_ref();
         a_bytes.cmp(b_bytes)
@@ -362,9 +366,9 @@ fn sort_bytes<T: ByteArrayType>(
     if options.nulls_first {
         out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
         let rem = out_limit - out.len();
-        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(rem));
     } else {
-        out.extend(valids.iter().map(|&(i, _)| i).take(out_limit));
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(out_limit));
         let rem = out_limit - out.len();
         out.extend_from_slice(&nulls[..rem]);
     }
