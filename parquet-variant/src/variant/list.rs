@@ -243,14 +243,14 @@ impl<'m, 'v> VariantList<'m, 'v> {
         self.try_get_impl(index)?.validate()
     }
 
-    /// Fallible iteration over the elements of this list.
-    pub fn iter_try(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        self.iter_try_impl().map(|result| result?.validate())
-    }
-
-    // Fallible iteration that only performs basic (constant-time) validation.
-    fn iter_try_impl(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        (0..self.len()).map(move |i| self.try_get_impl(i))
+    // Fallible version of `get`, performing only basic (constant-time) validation.
+    fn try_get_impl(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+        // Fetch the value bytes between the two offsets for this index, from the value array region
+        // of the byte buffer
+        let byte_range = self.get_offset(index)?..self.get_offset(index + 1)?;
+        let value_bytes =
+            slice_from_slice_at_offset(self.value, self.first_value_byte, byte_range)?;
+        Variant::try_new_with_metadata(self.metadata, value_bytes)
     }
 
     /// Iterates over the values of this list. When working with [unvalidated] input, consider
@@ -262,21 +262,21 @@ impl<'m, 'v> VariantList<'m, 'v> {
             .map(|result| result.expect("Invalid variant list entry"))
     }
 
+    /// Fallible iteration over the elements of this list.
+    pub fn iter_try(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
+        self.iter_try_impl().map(|result| result?.validate())
+    }
+
+    // Fallible iteration that only performs basic (constant-time) validation.
+    fn iter_try_impl(&self) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
+        (0..self.len()).map(move |i| self.try_get_impl(i))
+    }
+
     // Attempts to retrieve the ith offset from the offset array region of the byte buffer.
     fn get_offset(&self, index: usize) -> Result<usize, ArrowError> {
         let byte_range = self.header.first_offset_byte()..self.first_value_byte;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
         self.header.offset_size.unpack_usize(offset_bytes, index)
-    }
-
-    // Fallible version of `get`, performing only basic (constant-time) validation.
-    fn try_get_impl(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
-        // Fetch the value bytes between the two offsets for this index, from the value array region
-        // of the byte buffer
-        let byte_range = self.get_offset(index)?..self.get_offset(index + 1)?;
-        let value_bytes =
-            slice_from_slice_at_offset(self.value, self.first_value_byte, byte_range)?;
-        Variant::try_new_with_metadata(self.metadata, value_bytes)
     }
 }
 

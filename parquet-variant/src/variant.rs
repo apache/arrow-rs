@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -16,6 +14,7 @@ use std::ops::Deref;
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 pub use self::list::VariantList;
 pub use self::metadata::VariantMetadata;
@@ -24,6 +23,7 @@ use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
 use crate::utils::{first_byte_from_slice, slice_from_slice};
+use std::ops::Deref;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
