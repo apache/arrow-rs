@@ -908,10 +908,7 @@ impl Encoder for UnionEncoder<'_> {
         match self.format {
             UnionFormat::Simple => {
                 let encoder_idx = self.type_id_to_index.get(&type_id).unwrap_or_else(|| {
-                    panic!(
-                        "Invalid type_id {} found in UnionArray, this indicates corrupted data",
-                        type_id
-                    );
+                    panic!("Invalid type_id {type_id} found in UnionArray, this indicates corrupted data");
                 });
                 if !self.field_encoders[*encoder_idx].is_null(value_idx) {
                     self.field_encoders[*encoder_idx].encode(value_idx, out);
@@ -924,17 +921,14 @@ impl Encoder for UnionEncoder<'_> {
 
                 encode_string("type_id", out);
                 out.push(b':');
-                write!(out, "{}", type_id).unwrap();
+                write!(out, "{type_id}").unwrap();
 
                 out.push(b',');
                 encode_string("value", out);
                 out.push(b':');
 
                 let encoder_idx = self.type_id_to_index.get(&type_id).unwrap_or_else(|| {
-                    panic!(
-                        "Invalid type_id {} found in UnionArray, this indicates corrupted data",
-                        type_id
-                    );
+                    panic!("Invalid type_id {type_id} found in UnionArray, this indicates corrupted data");
                 });
                 if self.field_encoders[*encoder_idx].is_null(value_idx) {
                     out.extend_from_slice(b"null");
