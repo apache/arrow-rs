@@ -305,10 +305,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
         (0..self.num_elements).map(move |i| {
-            Ok((
-                self.try_field_name(i)?,
-                self.try_field_with_shallow_validation(i)?,
-            ))
+            let field = self.try_field_with_shallow_validation(i)?;
+            Ok((self.try_field_name(i)?, field))
         })
     }
 

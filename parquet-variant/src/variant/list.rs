@@ -233,7 +233,6 @@ impl<'m, 'v> VariantList<'m, 'v> {
     pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
         (index < self.num_elements).then(|| {
             self.try_get_with_shallow_validation(index)
-                .and_then(Variant::with_full_validation)
                 .expect("Invalid variant array element")
         })
     }
