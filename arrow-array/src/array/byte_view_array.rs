@@ -607,7 +607,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// ```
     ///
     /// ### Why the old code failed
-    /// Fixed in: https://github.com/apache/arrow-rs/pull/7875
+    /// Fixed in: <https://github.com/apache/arrow-rs/pull/7875>
     /// In the previous implementation, we did:
     /// ```ignore
     /// let word_be = u128::from_le_bytes(raw.to_le_bytes()).to_be();
