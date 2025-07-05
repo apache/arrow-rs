@@ -781,29 +781,18 @@ impl Array for UnionArray {
         };
 
         if fields.len() <= 1 {
-            if let Some(logical_nulls) = self
-                .fields
-                .iter()
-                .flatten()
-                .map(Array::logical_nulls)
-                .next()
-                .flatten()
-            {
-                if logical_nulls.len() != self.len() {
-                    match &self.offsets {
-                         // Dense union: gather nulls based on offsets
-                        Some(_) => {
-                            return Some(self.gather_nulls(vec![(0, logical_nulls)]).into());
+            return self.fields.iter().find_map(|field_opt| {
+                field_opt
+                    .as_ref()
+                    .and_then(|field| field.logical_nulls())
+                    .map(|logical_nulls| {
+                        if self.is_dense() {
+                            self.gather_nulls(vec![(0, logical_nulls)]).into()
+                        } else {
+                            logical_nulls
                         }
-                        // Sparse union: slice logical nulls to match union length
-                        None => {
-                            return Some(logical_nulls.slice(0, self.len()));
-                        }
-                    }
-                }
-                return Some(logical_nulls);
-            }
-            return None;
+                    })
+            });
         }
 
         let logical_nulls = self.fields_logical_nulls();
