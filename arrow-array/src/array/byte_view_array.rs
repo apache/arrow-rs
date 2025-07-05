@@ -483,9 +483,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 continue;
             }
 
-
             let native: &T::Native = unsafe { self.value_unchecked(i) };
-            let bytes: &[u8]     = native.as_ref();
+            let bytes: &[u8] = native.as_ref();
 
             let length = views[i] as u32;
             if length <= MAX_INLINE_VIEW_LEN {
