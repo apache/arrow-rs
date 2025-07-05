@@ -575,28 +575,39 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
     /// Builds a 128-bit composite key for an inline value:
     ///
-    /// - High 96 bits: inline data in big‑endian byte order (for correct lexicographical sorting)
-    /// - Low  32 bits: length in big‑endian byte order (to tiebreak so that shorter values
-    ///   sort before longer when content bytes are identical)
+    /// - High 96 bits: the inline data in big-endian byte order (for correct lexicographical sorting).
+    /// - Low  32 bits: the length in big-endian byte order, acting as a tiebreaker so shorter strings
+    ///   (or those with fewer meaningful bytes) always numerically sort before longer ones.
     ///
-    /// This function takes a raw little‑endian `u128` that encodes:
-    ///  - bytes [0..4): little‑endian length (≤ 12)
-    ///  - bytes [4..16): up to 12 bytes of data (zero‑padded)
+    /// This function extracts the length and the 12-byte inline string data from the raw
+    /// little-endian `u128` representation, converts them to big-endian ordering, and packs them
+    /// into a single `u128` value suitable for fast, branchless comparisons.
     ///
-    /// It then:
-    /// 1. Extracts and converts the length to big‑endian for the low 32 bits.
-    /// 2. Manually assembles the 12 data bytes into a big‑endian 96‑bit integer.
-    /// 3. Combines both into one `u128` so that a single numeric comparison enforces
-    ///    lexicographical order followed by length tiebreaking.
+    /// ### Why include length?
     ///
-    /// ### Why length matters
+    /// A pure 96-bit content comparison can’t distinguish between two values whose inline bytes
+    /// compare equal—either because one is a true prefix of the other or because zero-padding
+    /// hides extra bytes. By tucking the 32-bit length into the lower bits, a single `u128` compare
+    /// handles both content and length in one go.
     ///
-    /// If you compare only the 96 bits of data, values like `"bar"` (3bytes) and `"bar\0"` (4bytes)
-    /// produce identical 96‑bit patterns (`62 61 72 00…00`) and cannot be distinguished.
-    /// Embedding the length in the low 32bits solves this: 3 < 4.
+    /// Example: comparing "bar" (3 bytes) vs "bar\0" (4 bytes)
+    ///
+    /// | String     | Bytes 0–4 (length LE) | Bytes 4–16 (data + padding)    |
+    /// |------------|-----------------------|---------------------------------|
+    /// | `"bar"`   | `03 00 00 00`         | `62 61 72` + 9 × `00`           |
+    /// | `"bar\0"`| `04 00 00 00`         | `62 61 72 00` + 8 × `00`        |
+    ///
+    /// Both inline parts become `62 61 72 00…00`, so they tie on content. The length field
+    /// then differentiates:
+    ///
+    /// ```text
+    /// key("bar")   = 0x0000000000000000000062617200000003
+    /// key("bar\0") = 0x0000000000000000000062617200000004
+    /// ⇒ key("bar") < key("bar\0")
+    /// ```
     ///
     /// ### Why the old code failed
-    ///
+    /// Fixed in: https://github.com/apache/arrow-rs/pull/7875
     /// In the previous implementation, we did:
     /// ```ignore
     /// let word_be = u128::from_le_bytes(raw.to_le_bytes()).to_be();
@@ -605,17 +616,6 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// reversing each string. As a result:
     /// - `"backend one"` was compared as if it were `"eno dnekcab"`, inverting lexicographical order
     /// - any multi‑byte string ordering was completely incorrect
-    ///
-    /// ### Corner cases without fix
-    ///
-    /// 1. `"backend one"` vs. `"backend two"`
-    ///    Reversal causes the suffix comparison to be wrong, so “one” might sort after “two.”
-    ///
-    /// 2. `"bar"` vs. `"bar\0"`
-    ///    Without the length field, both inline data yield `62 61 72 00…00` and tie forever.
-    ///    Embedding 3 vs. 4 in the low 32 bits breaks the tie correctly.
-    ///
-    /// ```rust
     #[inline(always)]
     pub fn inline_key_fast(raw: u128) -> u128 {
         // STEP 1: Read raw bytes in little‑endian
