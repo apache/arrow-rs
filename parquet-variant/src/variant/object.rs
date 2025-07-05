@@ -253,7 +253,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn try_field_with_shallow_validation(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         let value_bytes = slice_from_slice(self.value, self.first_value_byte..)?;
         let value_bytes = slice_from_slice(value_bytes, self.get_offset(i)?..)?;
-        Variant::try_new_with_metadata(self.metadata, value_bytes)
+        Variant::try_new_with_metadata_and_shallow_validation(self.metadata, value_bytes)
     }
 
     // Attempts to retrieve the ith offset from the field offset region of the byte buffer.
@@ -304,7 +304,12 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn iter_try_with_shallow_validation(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        (0..self.num_elements).map(move |i| Ok((self.try_field_name(i)?, self.try_field(i)?)))
+        (0..self.num_elements).map(move |i| {
+            Ok((
+                self.try_field_name(i)?,
+                self.try_field_with_shallow_validation(i)?,
+            ))
+        })
     }
 
     /// Returns the value of the field with the specified name, if any.

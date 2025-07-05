@@ -251,7 +251,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let byte_range = self.get_offset(index)?..self.get_offset(index + 1)?;
         let value_bytes =
             slice_from_slice_at_offset(self.value, self.first_value_byte, byte_range)?;
-        Variant::try_new_with_metadata(self.metadata, value_bytes)
+        Variant::try_new_with_metadata_and_shallow_validation(self.metadata, value_bytes)
     }
 
     /// Iterates over the values of this list. When working with [unvalidated] input, consider
