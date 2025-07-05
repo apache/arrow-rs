@@ -542,7 +542,7 @@ fn test_json_to_variant_unicode() -> Result<(), ArrowError> {
     );
     assert_eq!(
         metadata,
-        &[1u8, 2u8, 0u8, 1u8, 4u8, 97u8, 0xe7u8, 0x88u8, 0xb1u8]
+        &[0b10001u8, 2u8, 0u8, 1u8, 4u8, 97u8, 0xe7u8, 0x88u8, 0xb1u8]
     );
     JsonToVariantTest {
         json,
