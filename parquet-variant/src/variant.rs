@@ -210,7 +210,7 @@ impl Deref for ShortString<'_> {
 /// [metadata]: VariantMetadata#Validation
 /// [object]: VariantObject#Validation
 /// [array]: VariantList#Validation
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Variant<'m, 'v> {
     /// Primitive type: Null
     Null,
