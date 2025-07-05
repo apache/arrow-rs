@@ -252,12 +252,6 @@ impl MetadataBuilder {
 
             self.is_sorted =
                 n == 1 || self.is_sorted & (self.field_names[n - 2] < self.field_names[n - 1]);
-
-            if n == 1 {
-                self.is_sorted = true;
-            } else {
-                self.is_sorted &= self.field_names[n - 2] < self.field_names[n - 1];
-            }
         }
 
         id as u32
