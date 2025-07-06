@@ -621,7 +621,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let raw_bytes = raw.to_le_bytes();
 
         // Parse native length from LE, then write BE bytes
-        let length = u32::from_le_bytes(raw_bytes[0..4].try_into().unwrap());
+        let length = raw as u32;
 
         // Build a 16-byte buffer with:
         // - bytes [0..12] = inline string data
