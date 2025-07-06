@@ -1277,10 +1277,13 @@ mod tests {
             b"than12Byt",
             b"than12Bytes",
             b"than12Bytes\0",
+            b"than12Bytesx",
+            b"than12Bytex",
             b"than12Bytez",
             // Additional lexical tests
             b"xyy",
             b"xyz",
+            b"xza",
         ];
 
         // Create a GenericBinaryArray for cross-comparison of lex order
