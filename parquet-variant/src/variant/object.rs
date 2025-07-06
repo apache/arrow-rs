@@ -212,7 +212,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
             // Iterate over all string keys in this dictionary in order to prove that the offset
             // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
-            validate_fallible_iterator(self.iter_try_with_shallow_validation())?;
+            validate_fallible_iterator(self.iter_try())?;
             self.validated = true;
         }
         Ok(self)
