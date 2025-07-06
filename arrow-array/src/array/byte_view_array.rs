@@ -632,7 +632,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         //    - buf[0..12]  = inline string bytes (in original order)
         //    - buf[12..16] = length.to_be_bytes() (BE)
         let mut buf = [0u8; 16];
-        buf[0..12].copy_from_slice(&raw_bytes[4..16]);        // inline data
+        buf[0..12].copy_from_slice(&raw_bytes[4..16]); // inline data
 
         // Why convert length to big-endian for comparison?
         //
@@ -661,7 +661,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         // `.to_be_bytes()` allows us to construct
         // keys where standard numeric comparison (e.g., `<`, `>`) behaves
         // like lexicographic byte comparison.
-        buf[12..16].copy_from_slice(&length.to_be_bytes());   // length in BE
+        buf[12..16].copy_from_slice(&length.to_be_bytes()); // length in BE
 
         // 4. Deserialize the buffer as a big‑endian u128:
         //    buf[0] is MSB, buf[15] is LSB.
@@ -1236,11 +1236,14 @@ mod tests {
         /// the following 12 bytes contain the inline string data (unpadded).
         fn make_raw_inline(length: u32, data: &[u8]) -> u128 {
             assert!(length as usize <= 12, "Inline length must be ≤ 12");
-            assert!(data.len() == length as usize, "Data length must match `length`");
+            assert!(
+                data.len() == length as usize,
+                "Data length must match `length`"
+            );
 
             let mut raw_bytes = [0u8; 16];
             raw_bytes[0..4].copy_from_slice(&length.to_le_bytes()); // length stored little-endian
-            raw_bytes[4..(4 + data.len())].copy_from_slice(data);   // inline data
+            raw_bytes[4..(4 + data.len())].copy_from_slice(data); // inline data
             u128::from_le_bytes(raw_bytes)
         }
 
@@ -1278,7 +1281,6 @@ mod tests {
             // Additional lexical tests
             b"xyy",
             b"xyz",
-
         ];
 
         // Create a GenericBinaryArray for cross-comparison of lex order
