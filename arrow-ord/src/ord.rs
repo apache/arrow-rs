@@ -233,6 +233,37 @@ fn compare_fixed_list(
     Ok(f)
 }
 
+fn compare_map(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_map();
+    let right = right.as_map();
+
+    let c_opts = child_opts(opts);
+    let cmp = make_comparator(left.entries(), right.entries(), c_opts)?;
+
+    let l_o = left.offsets().clone();
+    let r_o = right.offsets().clone();
+    let f = compare(left, right, opts, move |i, j| {
+        let l_end = l_o[i + 1].as_usize();
+        let l_start = l_o[i].as_usize();
+
+        let r_end = r_o[j + 1].as_usize();
+        let r_start = r_o[j].as_usize();
+
+        for (i, j) in (l_start..l_end).zip(r_start..r_end) {
+            match cmp(i, j) {
+                Ordering::Equal => continue,
+                r => return r,
+            }
+        }
+        (l_end - l_start).cmp(&(r_end - r_start))
+    });
+    Ok(f)
+}
+
 fn compare_struct(
     left: &dyn Array,
     right: &dyn Array,
@@ -386,6 +417,7 @@ pub fn make_comparator(
                  _ => unreachable!()
              }
         },
+        (Map(_, _), Map(_, _)) => compare_map(left, right, opts),
         (lhs, rhs) => Err(ArrowError::InvalidArgumentError(match lhs == rhs {
             true => format!("The data type type {lhs:?} has no natural order"),
             false => "Can't compare arrays of different types".to_string(),
