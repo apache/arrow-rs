@@ -512,31 +512,30 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                     0
                 } else {
                     // SAFETY: We know index i is in bounds and not null
-                    let native: &T::Native = unsafe { self.value_unchecked(i) };
-                    let v: &[u8] = native.as_ref();
-                    let length = v.len() as u32;
+                    let v = unsafe { self.views().get_unchecked(i) };
 
-                    if length <= MAX_INLINE_VIEW_LEN {
-                        // INLINE CASE:
-                        //   - Pack the length in the first 4 bytes (little-endian).
-                        //   - Copy payload bytes directly into the remaining 12 bytes.
-                        let mut bytes = [0u8; 16];
-                        bytes[0..4].copy_from_slice(&length.to_le_bytes());
-                        bytes[4..4 + v.len()].copy_from_slice(v);
-                        // Convert the 16-byte array into the u128 view
-                        u128::from_le_bytes(bytes)
+                    let byte_view = ByteView::from(*v);
+                    if byte_view.length <= MAX_INLINE_VIEW_LEN {
+                        *v
                     } else {
+                        // SAFETY: We know index i is in bounds and not null
+                        let v: &[u8] = unsafe {
+                            let data = self.buffers.get_unchecked(byte_view.buffer_index as usize);
+                            data.get_unchecked(
+                                byte_view.offset as usize
+                                    ..byte_view.offset as usize + byte_view.length as usize,
+                            )
+                        };
+
                         // OUT-OF-LINE CASE:
                         //   - Record the current offset in data_buf before appending.
                         let offset = data_buf.len() as u32;
                         //   - Append the full byte slice into data_buf
                         data_buf.extend_from_slice(v);
-                        //   - Extract the first 4 bytes of v as the “prefix”
-                        let prefix = u32::from_le_bytes(v[0..4].try_into().unwrap());
                         //   - Construct a ByteView struct (length, prefix, block index=0, offset)
                         ByteView {
-                            length,
-                            prefix,
+                            length: byte_view.length,
+                            prefix: byte_view.prefix,
                             buffer_index: 0,
                             offset,
                         }
