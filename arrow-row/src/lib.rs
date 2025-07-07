@@ -536,9 +536,7 @@ impl RowConverter {
     fn supports_datatype(d: &DataType) -> bool {
         match d {
             _ if !d.is_nested() => true,
-            DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
-                Self::supports_datatype(f.data_type())
-            }
+            DataType::List(f) | DataType::LargeList(f) => Self::supports_datatype(f.data_type()),
             DataType::Struct(f) => f.iter().all(|x| Self::supports_datatype(x.data_type())),
             _ => false,
         }
@@ -2533,5 +2531,51 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
         assert_eq!(rows.row(0).cmp(&rows.row(1)), Ordering::Less);
+    }
+
+    #[test]
+    fn map_should_be_marked_as_unsupported() {
+        let map_data_type = Field::new_map(
+            "map",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+            false,
+            true,
+        )
+        .data_type()
+        .clone();
+
+        let is_supported = RowConverter::supports_fields(&[SortField::new(map_data_type)]);
+
+        assert_eq!(is_supported, false, "Map should not be supported");
+    }
+
+    #[test]
+    fn should_fail_to_create_row_converter_for_unsupported_map_type() {
+        let map_data_type = Field::new_map(
+            "map",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+            false,
+            true,
+        )
+        .data_type()
+        .clone();
+
+        let converter = RowConverter::new(vec![SortField::new(map_data_type)]);
+
+        match converter {
+            Err(ArrowError::NotYetImplemented(message)) => {
+                assert!(
+                    message.contains("Row format support not yet implemented for"),
+                    "Expected NotYetImplemented error for map data type, got: {}",
+                    message
+                );
+            }
+            Err(e) => panic!("Expected NotYetImplemented error, got: {}", e),
+            Ok(_) => panic!("Expected NotYetImplemented error for map data type"),
+        }
     }
 }
