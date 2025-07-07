@@ -509,7 +509,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 let raw_view: u128 = unsafe { *views.get_unchecked(i) };
                 let mut bv = ByteView::from(raw_view);
 
-                // INLINE CASE: if data fits in 16 bytes, reuse raw_view
+                // INLINE CASE: if data fits in MAX_INLINE_VIEW_LEN bytes, reuse raw_view
                 if bv.length <= MAX_INLINE_VIEW_LEN {
                     raw_view
                 } else {
