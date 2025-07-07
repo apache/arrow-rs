@@ -36,6 +36,7 @@ rust-version = "1.83"
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 indexmap = "2.10.0"
+simdutf8 = "0.1.5"
 
 
 [lib]
@@ -54,4 +55,8 @@ rand = { version = "0.9", default-features = false, features = [
 
 [[bench]]
 name = "variant_builder"
+harness = false
+
+[[bench]]
+name = "variant_validation"
 harness = false

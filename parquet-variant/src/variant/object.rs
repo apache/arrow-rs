@@ -17,7 +17,6 @@
 use crate::decoder::OffsetSizeBytes;
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
-    validate_fallible_iterator,
 };
 use crate::variant::{Variant, VariantMetadata};
 
@@ -206,13 +205,118 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// [validation]: Self#Validation
     pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
+            /*
+            (1) the associated variant metadata is [valid] (*)
+            (2) all field ids are valid metadata dictionary entries (*)
+            (3) field ids are lexically ordered according by their corresponding string values (*)
+            (4) all field offsets are in bounds (*)
+            (5) all field values are (recursively) _valid_ variant values (*)
+
+            */
+
+            // (1)
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
 
-            // Iterate over all string keys in this dictionary in order to prove that the offset
-            // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
-            validate_fallible_iterator(self.iter_try())?;
+            // (2)
+            // Field ids serve as indexes into the metadata buffer.
+            // As long as we guarantee the largest field id is < dictionary size,
+            // we can guarantee all field ids are valid metadata dictionaries
+
+            // (2), (3)
+            let byte_range = self.header.field_ids_start_byte()..self.first_field_offset_byte;
+            let field_id_bytes = slice_from_slice(self.value, byte_range)?;
+            // let field_id = self.header.field_id_size.unpack_usize(field_id_bytes, i)?;
+
+            let field_id_chunks = field_id_bytes.chunks_exact(self.header.field_id_size());
+            assert!(field_id_chunks.remainder().is_empty()); // guaranteed to be none
+
+            let field_ids = field_id_chunks
+                .map(|chunk| match self.header.field_id_size {
+                    OffsetSizeBytes::One => chunk[0] as usize,
+                    OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]) as usize,
+                    OffsetSizeBytes::Three => {
+                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
+                    }
+                    OffsetSizeBytes::Four => {
+                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            if self.metadata.is_sorted() {
+                // (3) is really easy since we just need to check if the field ids are sorted
+                let lexically_ordered = field_ids.is_sorted_by(|a, b| a < b);
+                if !lexically_ordered {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "field names not sorted".to_string(),
+                    ));
+                }
+
+                // (2) is easy because field ids is sorted so just get the last field id and check
+                if let Some(&last_field_id) = field_ids.last() {
+                    if last_field_id >= self.metadata.dictionary_size() {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "field id is not valid".to_string(),
+                        ));
+                    }
+                }
+            } else {
+                // (3)
+                // we're going to have to read out all field names from metadata and then check sortedness by &str
+
+                let lexically_ordered = field_ids
+                    .iter()
+                    .map(|&i| self.metadata.get(i))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .is_sorted();
+
+                if !lexically_ordered {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "field names not sorted".to_string(),
+                    ));
+                }
+
+                // (2) we have to scan to grab the max field id
+                if let Some(&max_field_id) = field_ids.iter().max() {
+                    if max_field_id >= self.metadata.dictionary_size() {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "field id is not valid".to_string(),
+                        ));
+                    }
+                }
+            }
+
+            // (4) (5)
+            let byte_range = self.first_field_offset_byte..self.first_value_byte;
+            let field_offset_bytes = slice_from_slice(self.value, byte_range)?;
+
+            let field_offset_chunks =
+                field_offset_bytes.chunks_exact(self.header.field_offset_size());
+            assert!(field_offset_chunks.remainder().is_empty());
+
+            let field_offsets = field_offset_chunks
+                .map(|chunk| match self.header.field_offset_size {
+                    OffsetSizeBytes::One => chunk[0] as usize,
+                    OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]) as usize,
+                    OffsetSizeBytes::Three => {
+                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
+                    }
+                    OffsetSizeBytes::Four => {
+                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            let value_buffer = slice_from_slice(self.value, self.first_value_byte..)?;
+
+            for &offset in field_offsets.iter().take(field_offsets.len() - 1) {
+                let value_bytes = slice_from_slice(value_buffer, offset..)?;
+
+                Variant::try_new_with_metadata_and_shallow_validation(self.metadata, value_bytes)?;
+            }
+
             self.validated = true;
         }
         Ok(self)

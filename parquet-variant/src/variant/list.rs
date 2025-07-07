@@ -17,7 +17,6 @@
 use crate::decoder::OffsetSizeBytes;
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-    validate_fallible_iterator,
 };
 use crate::variant::{Variant, VariantMetadata};
 
@@ -205,13 +204,62 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// [validation]: Self#Validation
     pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
+            /*
+            (1) the associated variant metadata is [valid] (*)
+            (2) all other offsets are in-bounds (*)
+            (3) all offsets are monotonically increasing (*)
+            (4) all values are (recursively) valid variant objects (*)
+            */
+
+            // (1)
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
 
-            // Iterate over all string keys in this dictionary in order to prove that the offset
-            // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
-            validate_fallible_iterator(self.iter_try())?;
+            // (2), (4)
+            // if we check all values are valid by using offset lookups,
+            // we know all offsets are in bounds if correct
+
+            // note how we do this once!
+            let byte_range = self.header.first_offset_byte()..self.first_value_byte;
+            let offset_bytes = slice_from_slice(self.value, byte_range)?;
+
+            let offset_chunks = offset_bytes.chunks_exact(self.header.offset_size());
+            assert!(offset_chunks.remainder().is_empty()); // guaranteed by shallow validation
+
+            let offsets = offset_chunks
+                .map(|chunk| match self.header.offset_size {
+                    OffsetSizeBytes::One => chunk[0] as usize,
+                    OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]) as usize,
+                    OffsetSizeBytes::Three => {
+                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
+                    }
+                    OffsetSizeBytes::Four => {
+                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            // (3)
+            let monotonic_offsets = offsets.is_sorted_by(|a, b| a < b);
+            if !monotonic_offsets {
+                return Err(ArrowError::InvalidArgumentError(
+                    "offsets are not monotonically increasing".to_string(),
+                ));
+            }
+
+            // (4)
+
+            let value_buffer = &self.value[self.first_value_byte..];
+
+            for i in 0..offsets.len() - 1 {
+                let start_offset = offsets[i];
+                let end_offset = offsets[i + 1];
+
+                let value_bytes = slice_from_slice(value_buffer, start_offset..end_offset)?;
+                Variant::try_new_with_metadata(self.metadata, value_bytes)?;
+            }
+
             self.validated = true;
         }
         Ok(self)
