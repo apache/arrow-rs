@@ -132,9 +132,9 @@ fn append_json<'m, 'v>(
     Ok(())
 }
 
-struct ObjectFieldBuilder<'s, 'o, 'v> {
+struct ObjectFieldBuilder<'o, 'v, 's> {
     key: &'s str,
-    builder: &'o mut ObjectBuilder<'v, 's>,
+    builder: &'o mut ObjectBuilder<'v>,
 }
 
 impl<'m, 'v> VariantBuilderExt<'m, 'v> for ObjectFieldBuilder<'_, '_, '_> {
@@ -679,7 +679,7 @@ mod test {
         );
         assert_eq!(
             metadata,
-            &[1u8, 2u8, 0u8, 1u8, 4u8, 97u8, 0xe7u8, 0x88u8, 0xb1u8]
+            &[17u8, 2u8, 0u8, 1u8, 4u8, 97u8, 0xe7u8, 0x88u8, 0xb1u8]
         );
         JsonToVariantTest {
             json,
