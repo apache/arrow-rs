@@ -1163,8 +1163,7 @@ mod tests {
                     let list_result = list_cmp(i, j);
                     assert_eq!(
                         map_result, list_result,
-                        "Map comparison and List comparison should be equal for indices ({}, {}) with opts {:?}. Map: {:?}, List: {:?}",
-                        i, j, opts, map_result, list_result
+                        "Map comparison and List comparison should be equal for indices ({i}, {j}) with opts {opts:?}. Map: {map_result:?}, List: {list_result:?}"
                     );
                 }
             }
