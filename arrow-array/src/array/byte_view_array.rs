@@ -486,9 +486,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                     None
                 } else {
                     // extract the ByteView metadata from the u128
-                    let raw_view: u128 = unsafe {
-                        *views.get_unchecked(i)
-                    };
+                    let raw_view: u128 = unsafe { *views.get_unchecked(i) };
                     let bv = ByteView::from(raw_view);
                     // if length exceeds inline limit, count it
                     (bv.length > MAX_INLINE_VIEW_LEN).then_some(bv.length as usize)
