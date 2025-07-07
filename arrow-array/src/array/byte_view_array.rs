@@ -473,28 +473,93 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Note: this function does not attempt to canonicalize / deduplicate values. For this
     /// feature see  [`GenericByteViewBuilder::with_deduplicate_strings`].
     pub fn gc(&self) -> Self {
+        // Get the number of elements in this array
         let len = self.len();
-        let mut builder = GenericByteViewBuilder::<T>::with_capacity(len);
+        // Get the raw view values (u128 representations) for each element
         let views = self.views();
 
-        for i in 0..len {
-            if self.is_null(i) {
-                builder.append_null();
-                continue;
-            }
+        // 1) Reuse the existing null bitmap from this array, to avoid rebuilding it,
+        //    Cloning the underlying buffer is less expensive than iterating and appending bits.
+        let nulls = self.nulls().cloned();
 
-            let native: &T::Native = unsafe { self.value_unchecked(i) };
-            let bytes: &[u8] = native.as_ref();
+        // 2) Pre-scan: compute the total number of bytes needed to store all non-inlined values
+        //    so we can reserve that capacity in one go.
+        let total_large_bytes: usize = (0..len)
+            .filter_map(|i| {
+                if self.is_null(i) {
+                    // Skip null entries
+                    None
+                } else {
+                    let l = views[i] as u32;
+                    // If this value’s length exceeds MAX_INLINE_VIEW_LEN, it must be stored out-of-line
+                    if l > MAX_INLINE_VIEW_LEN {
+                        Some(l as usize)
+                    } else {
+                        None
+                    }
+                }
+            })
+            .sum();
+        // Reserve exactly the amount of space needed for all non-inlined data
+        let mut data_buf = Vec::with_capacity(total_large_bytes);
 
-            let length = views[i] as u32;
-            if length <= MAX_INLINE_VIEW_LEN {
-                builder.append_inlined(bytes, length);
-            } else {
-                builder.append_bytes(bytes, length);
-            }
+        // 3) Build the new views buffer in a single pass using iterator + collect
+        //    This produces a Vec<u128> of the same length, zero-copy into ScalarBuffer later.
+        let views_buf: Vec<u128> = (0..len)
+            .map(|i| {
+                if self.is_null(i) {
+                    // Represent null entries as 0 in the views vector
+                    0
+                } else {
+                    // SAFETY: We know index i is in bounds and not null
+                    let native: &T::Native = unsafe { self.value_unchecked(i) };
+                    let v: &[u8] = native.as_ref();
+                    let length = v.len() as u32;
+
+                    if length <= MAX_INLINE_VIEW_LEN {
+                        // INLINE CASE:
+                        //   - Pack the length in the first 4 bytes (little-endian).
+                        //   - Copy payload bytes directly into the remaining 12 bytes.
+                        let mut bytes = [0u8; 16];
+                        bytes[0..4].copy_from_slice(&length.to_le_bytes());
+                        bytes[4..4 + v.len()].copy_from_slice(v);
+                        // Convert the 16-byte array into the u128 view
+                        u128::from_le_bytes(bytes)
+                    } else {
+                        // OUT-OF-LINE CASE:
+                        //   - Record the current offset in data_buf before appending.
+                        let offset = data_buf.len() as u32;
+                        //   - Append the full byte slice into data_buf
+                        data_buf.extend_from_slice(v);
+                        //   - Extract the first 4 bytes of v as the “prefix”
+                        let prefix = u32::from_le_bytes(v[0..4].try_into().unwrap());
+                        //   - Construct a ByteView struct (length, prefix, block index=0, offset)
+                        ByteView {
+                            length,
+                            prefix,
+                            buffer_index: 0,
+                            offset,
+                        }
+                        .into() // Convert ByteView into its u128 representation
+                    }
+                }
+            })
+            .collect();
+
+        // 4) Final assembly of the new array:
+        //    - Wrap the out-of-line data buffer into an Arrow Buffer
+        let data_block = Buffer::from_vec(data_buf);
+        //    - Convert our Vec<u128> into a ScalarBuffer<u128> without an extra copy
+        let views_scalar = ScalarBuffer::from(views_buf);
+
+        // SAFETY: We guarantee that views_scalar, data_block, and nulls are all consistent
+        unsafe {
+            GenericByteViewArray::new_unchecked(
+                views_scalar,     // the u128-encoded views for each slot
+                vec![data_block], // a single data block containing out-of-line bytes
+                nulls,            // the cloned null bitmap
+            )
         }
-
-        builder.finish()
     }
 
     /// Returns the total number of bytes used by all non inlined views in all
