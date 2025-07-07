@@ -55,8 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let view_duration = start.elapsed();
 
     println!("Read {} rows from {}", batch.num_rows(), file_path);
-    println!("Reading with StringArray: {:?}", regular_duration);
-    println!("Reading with StringViewArray: {:?}", view_duration);
+    println!("Reading with StringArray: {regular_duration:?}");
+    println!("Reading with StringViewArray: {view_duration:?}");
 
     if regular_duration > view_duration {
         println!(
@@ -117,5 +117,5 @@ fn read_avro_with_options(
     let int_array: ArrayRef = Arc::new(Int32Array::from(int_data));
 
     RecordBatch::try_new(Arc::new(mock_schema), vec![string_array, int_array])
-        .map_err(|e| ArrowError::ComputeError(format!("Failed to create record batch: {}", e)))
+        .map_err(|e| ArrowError::ComputeError(format!("Failed to create record batch: {e}")))
 }

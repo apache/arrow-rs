@@ -305,7 +305,7 @@ mod tests {
     fn get_test_reader() -> ParquetRecordBatchReader {
         let testdata = arrow::util::test_util::parquet_test_data();
         // This test file is large enough to generate multiple row groups.
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let original_data = Bytes::from(std::fs::read(path).unwrap());
         ParquetRecordBatchReaderBuilder::try_new(original_data)
             .unwrap()

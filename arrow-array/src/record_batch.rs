@@ -65,7 +65,7 @@ pub trait RecordBatchWriter {
 /// Support for limited data types is available. The macro will return a compile error if an unsupported data type is used.
 /// Presently supported data types are:
 /// - `Boolean`, `Null`
-/// - `Decimal128`, `Decimal256`
+/// - `Decimal32`, `Decimal64`, `Decimal128`, `Decimal256`
 /// - `Float16`, `Float32`, `Float64`
 /// - `Int8`, `Int16`, `Int32`, `Int64`
 /// - `UInt8`, `UInt16`, `UInt32`, `UInt64`
@@ -107,6 +107,8 @@ macro_rules! create_array {
     (@from DurationMillisecond) => { $crate::DurationMillisecondArray };
     (@from DurationMicrosecond) => { $crate::DurationMicrosecondArray };
     (@from DurationNanosecond) => { $crate::DurationNanosecondArray };
+    (@from Decimal32) => { $crate::Decimal32Array };
+    (@from Decimal64) => { $crate::Decimal64Array };
     (@from Decimal128) => { $crate::Decimal128Array };
     (@from Decimal256) => { $crate::Decimal256Array };
     (@from TimestampSecond) => { $crate::TimestampSecondArray };

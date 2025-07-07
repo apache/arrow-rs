@@ -113,6 +113,13 @@ jobs:
         run: cargo check -p parquet --all-targets --no-default-features --features json
       - name: Check compilation --no-default-features --features encryption --features async
         run: cargo check -p parquet --no-default-features --features encryption --features async
+      - name: Check compilation --no-default-features --features flate2, this is expected to fail
+        run: if `cargo check -p parquet --no-default-features --features flate2 2>/dev/null`; then false; else true; fi
+      - name: Check compilation --no-default-features --features flate2 --features flate2-rust_backened
+        run: cargo check -p parquet --no-default-features --features flate2 --features flate2-rust_backened
+      - name: Check compilation --no-default-features --features flate2 --features flate2-zlib-rs
+        run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
+        
 
   # test the parquet crate builds against wasm32 in stable rust
   wasm32-build:

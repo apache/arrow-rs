@@ -341,7 +341,7 @@ impl std::fmt::Display for FilterType {
             FilterType::Composite => "float64 > 99.0 AND ts >= 9000",
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

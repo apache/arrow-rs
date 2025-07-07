@@ -115,7 +115,7 @@ pub fn verify_column_indexes(metadata: &ParquetMetaData) {
                 .is_some_and(|max| (max - 53.9).abs() < 1e-6));
         }
         _ => {
-            panic!("Expected a float column index for column {}", float_col_idx);
+            panic!("Expected a float column index for column {float_col_idx}");
         }
     };
 }
@@ -145,14 +145,13 @@ impl TestKeyRetriever {
 impl KeyRetriever for TestKeyRetriever {
     fn retrieve_key(&self, key_metadata: &[u8]) -> Result<Vec<u8>> {
         let key_metadata = std::str::from_utf8(key_metadata).map_err(|e| {
-            ParquetError::General(format!("Could not convert key metadata to string: {}", e))
+            ParquetError::General(format!("Could not convert key metadata to string: {e}"))
         })?;
         let keys = self.keys.lock().unwrap();
         match keys.get(key_metadata) {
             Some(key) => Ok(key.clone()),
             None => Err(ParquetError::General(format!(
-                "Could not retrieve key for metadata {:?}",
-                key_metadata
+                "Could not retrieve key for metadata {key_metadata:?}"
             ))),
         }
     }

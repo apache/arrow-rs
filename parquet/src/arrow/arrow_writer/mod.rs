@@ -1340,8 +1340,11 @@ mod tests {
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
+    use crate::column::page::{Page, PageReader};
     use crate::file::page_encoding_stats::PageEncodingStats;
+    use crate::file::reader::SerializedPageReader;
     use crate::format::PageHeader;
+    use crate::schema::types::ColumnPath;
     use crate::thrift::TCompactSliceInputProtocol;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
@@ -1356,7 +1359,7 @@ mod tests {
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
-    use crate::file::metadata::ParquetMetaData;
+    use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::page_index::index::Index;
     use crate::file::properties::{
         BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
@@ -3786,6 +3789,78 @@ mod tests {
     }
 
     #[test]
+    fn test_page_stats_not_written_by_default() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let schema = Schema::new(vec![string_field]);
+        let raw_string_values = vec!["Blart Versenwald III"];
+        let string_values = StringArray::from(raw_string_values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(string_values)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+
+        assert!(stats.is_none());
+    }
+
+    #[test]
+    fn test_page_stats_when_enabled() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let schema = Schema::new(vec![string_field]);
+        let raw_string_values = vec!["Blart Versenwald III", "Andrew Lamb"];
+        let string_values = StringArray::from(raw_string_values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(string_values)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_write_page_header_statistics(true)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+
+        let stats = stats.unwrap();
+        // check that min/max were actually written to the page
+        assert!(stats.is_max_value_exact.unwrap());
+        assert!(stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Blart Versenwald III".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Andrew Lamb".as_bytes());
+    }
+
+    #[test]
     fn test_page_stats_truncation() {
         let string_field = Field::new("a", DataType::Utf8, false);
         let binary_field = Field::new("b", DataType::Binary, false);
@@ -3810,6 +3885,7 @@ mod tests {
             .set_statistics_truncate_length(Some(2))
             .set_dictionary_enabled(false)
             .set_encoding(Encoding::PLAIN)
+            .set_write_page_header_statistics(true)
             .set_compression(crate::basic::Compression::UNCOMPRESSED)
             .build();
 
@@ -3891,5 +3967,43 @@ mod tests {
             .map(|x| crate::file::page_encoding_stats::try_from_thrift(x).unwrap())
             .collect();
         assert_eq!(&chunk_stats, file_page_stats);
+    }
+
+    #[test]
+    fn test_different_dict_page_size_limit() {
+        let array = Arc::new(Int64Array::from_iter(0..1024 * 1024));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col0", arrow_schema::DataType::Int64, false),
+            Field::new("col1", arrow_schema::DataType::Int64, false),
+        ]));
+        let batch =
+            arrow_array::RecordBatch::try_new(schema.clone(), vec![array.clone(), array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(1024 * 1024)
+            .set_column_dictionary_page_size_limit(ColumnPath::from("col1"), 1024 * 1024 * 4)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let col0_meta = metadata.row_group(0).column(0);
+        let col1_meta = metadata.row_group(0).column(1);
+
+        let get_dict_page_size = move |meta: &ColumnChunkMetaData| {
+            let mut reader =
+                SerializedPageReader::new(Arc::new(data.clone()), meta, 0, None).unwrap();
+            let page = reader.get_next_page().unwrap().unwrap();
+            match page {
+                Page::DictionaryPage { buf, .. } => buf.len(),
+                _ => panic!("expected DictionaryPage"),
+            }
+        };
+
+        assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
+        assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
     }
 }

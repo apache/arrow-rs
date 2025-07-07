@@ -2517,7 +2517,7 @@ mod tests {
         let strings: Vec<_> = (0..8000)
             .map(|i| {
                 if i % 2 == 0 {
-                    Some(format!("value{}", i))
+                    Some(format!("value{i}"))
                 } else {
                     None
                 }
@@ -2951,7 +2951,7 @@ mod tests {
             let mut fields = Vec::new();
             let mut arrays = Vec::new();
             for i in 0..num_cols {
-                let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+                let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
                 let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
                 fields.push(field);
                 arrays.push(Arc::new(array) as Arc<dyn Array>);
@@ -3006,7 +3006,7 @@ mod tests {
         let mut fields = Vec::new();
         let mut arrays = Vec::new();
         for i in 0..num_cols {
-            let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
             let array = Decimal128Array::from(vec![num_cols as i128; num_rows]);
             fields.push(field);
             arrays.push(Arc::new(array) as Arc<dyn Array>);
@@ -3061,7 +3061,7 @@ mod tests {
         let mut fields = Vec::new();
         let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap();
         for i in 0..num_cols {
-            let field = Field::new(format!("col_{}", i), DataType::Decimal128(38, 10), true);
+            let field = Field::new(format!("col_{i}"), DataType::Decimal128(38, 10), true);
             fields.push(field);
         }
         let schema = Schema::new(fields);

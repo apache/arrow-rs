@@ -278,7 +278,7 @@ mod tests {
     impl Display for BinaryFormatter<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             for byte in self.0 {
-                write!(f, "{:08b} ", byte)?;
+                write!(f, "{byte:08b} ")?;
             }
             write!(f, " ")?;
             Ok(())
@@ -389,8 +389,8 @@ mod tests {
                 self.len,
             );
 
-            assert_eq!(actual, self.expected_data, "self: {}", self);
-            assert_eq!(null_count, self.expected_null_count, "self: {}", self);
+            assert_eq!(actual, self.expected_data, "self: {self}");
+            assert_eq!(null_count, self.expected_null_count, "self: {self}");
         }
     }
 
