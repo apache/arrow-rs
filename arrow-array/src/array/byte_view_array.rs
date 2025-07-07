@@ -473,90 +473,79 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Note: this function does not attempt to canonicalize / deduplicate values. For this
     /// feature see  [`GenericByteViewBuilder::with_deduplicate_strings`].
     pub fn gc(&self) -> Self {
-        // Get the number of elements in this array
-        let len = self.len();
-        // Get the raw view values (u128 representations) for each element
-        let views = self.views();
+        // 1) Read basic properties once
+        let len = self.len(); // number of elements
+        let views = self.views(); // raw u128 “view” values per slot
+        let nulls = self.nulls().cloned(); // reuse & clone existing null bitmap
 
-        // 1) Reuse the existing null bitmap from this array, to avoid rebuilding it,
-        //    Cloning the underlying buffer is less expensive than iterating and appending bits.
-        let nulls = self.nulls().cloned();
-
-        // 2) Pre-scan: compute the total number of bytes needed to store all non-inlined values
-        //    so we can reserve that capacity in one go.
-        let total_large_bytes: usize = (0..len)
+        // 2) Pre-scan to determine how many out‑of‑line bytes we must store
+        let total_large: usize = (0..len)
             .filter_map(|i| {
+                // skip null entries
                 if self.is_null(i) {
-                    // Skip null entries
                     None
                 } else {
-                    let l = views[i] as u32;
-                    // If this value’s length exceeds MAX_INLINE_VIEW_LEN, it must be stored out-of-line
-                    if l > MAX_INLINE_VIEW_LEN {
-                        Some(l as usize)
-                    } else {
-                        None
-                    }
+                    // extract the ByteView metadata from the u128
+                    let raw_view: u128 = views[i];
+                    let bv = ByteView::from(raw_view);
+                    // if length exceeds inline limit, count it
+                    (bv.length > MAX_INLINE_VIEW_LEN).then_some(bv.length as usize)
                 }
             })
             .sum();
-        // Reserve exactly the amount of space needed for all non-inlined data
-        let mut data_buf = Vec::with_capacity(total_large_bytes);
+        // allocate exactly the capacity needed for all non‑inline data
+        let mut data_buf = Vec::with_capacity(total_large);
 
-        // 3) Build the new views buffer in a single pass using iterator + collect
-        //    This produces a Vec<u128> of the same length, zero-copy into ScalarBuffer later.
+        // 3) Build new view array in one pass
+        //    map each index to a new u128, collecting into a Vec<u128>
         let views_buf: Vec<u128> = (0..len)
             .map(|i| {
+                // if null, represent as 0
                 if self.is_null(i) {
-                    // Represent null entries as 0 in the views vector
-                    0
+                    return 0;
+                }
+
+                // SAFETY: i < len and not null
+                let raw_view: u128 = unsafe { *views.get_unchecked(i) };
+                let mut bv = ByteView::from(raw_view);
+
+                // INLINE CASE: if data fits in 16 bytes, reuse raw_view
+                if bv.length <= MAX_INLINE_VIEW_LEN {
+                    raw_view
                 } else {
-                    // SAFETY: We know index i is in bounds and not null
-                    let v = unsafe { self.views().get_unchecked(i) };
+                    // OUT‑OF‑LINE CASE:
+                    //  a) fetch the original data slice from the appropriate buffer
+                    let buffer = unsafe { self.buffers.get_unchecked(bv.buffer_index as usize) };
+                    let start = bv.offset as usize;
+                    let end = start + bv.length as usize;
+                    let slice: &[u8] = unsafe { buffer.get_unchecked(start..end) };
 
-                    let byte_view = ByteView::from(*v);
-                    if byte_view.length <= MAX_INLINE_VIEW_LEN {
-                        *v
-                    } else {
-                        // SAFETY: We know index i is in bounds and not null
-                        let v: &[u8] = unsafe {
-                            let data = self.buffers.get_unchecked(byte_view.buffer_index as usize);
-                            data.get_unchecked(
-                                byte_view.offset as usize
-                                    ..byte_view.offset as usize + byte_view.length as usize,
-                            )
-                        };
+                    //  b) append that slice into our new single data_buf
+                    let new_offset = data_buf.len() as u32;
+                    data_buf.extend_from_slice(slice);
 
-                        // OUT-OF-LINE CASE:
-                        //   - Record the current offset in data_buf before appending.
-                        let offset = data_buf.len() as u32;
-                        //   - Append the full byte slice into data_buf
-                        data_buf.extend_from_slice(v);
-                        //   - Construct a ByteView struct (length, prefix, block index=0, offset)
-                        ByteView {
-                            length: byte_view.length,
-                            prefix: byte_view.prefix,
-                            buffer_index: 0,
-                            offset,
-                        }
-                        .into() // Convert ByteView into its u128 representation
-                    }
+                    //  c) update ByteView metadata to point into the new data_buf
+                    bv.buffer_index = 0;
+                    bv.offset = new_offset;
+                    // length and prefix remain unchanged
+
+                    //  d) convert updated ByteView back into its u128 representation
+                    bv.into()
                 }
             })
-            .collect();
+            .collect(); // collect into Vec<u128> with a single allocation
 
-        // 4) Final assembly of the new array:
-        //    - Wrap the out-of-line data buffer into an Arrow Buffer
+        // 4) Wrap up: zero‑copy turn Vec<u128> into ScalarBuffer<u128>,
+        //    and Vec<u8> into Buffer, then construct the final array
         let data_block = Buffer::from_vec(data_buf);
-        //    - Convert our Vec<u128> into a ScalarBuffer<u128> without an extra copy
         let views_scalar = ScalarBuffer::from(views_buf);
 
-        // SAFETY: We guarantee that views_scalar, data_block, and nulls are all consistent
+        // SAFETY: views_scalar, data_block, and nulls are correctly aligned and sized
         unsafe {
             GenericByteViewArray::new_unchecked(
-                views_scalar,     // the u128-encoded views for each slot
-                vec![data_block], // a single data block containing out-of-line bytes
-                nulls,            // the cloned null bitmap
+                views_scalar,     // per-element u128 “views”
+                vec![data_block], // single concatenated data buffer
+                nulls,            // cloned null bitmap
             )
         }
     }
