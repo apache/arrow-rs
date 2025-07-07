@@ -97,3 +97,6 @@ $RECYCLE.BIN/
 # Python virtual env in parquet crate
 parquet/pytest/venv/
 __pycache__/
+
+# Parquet file from arrow_reader_clickbench
+hits_1.parquet

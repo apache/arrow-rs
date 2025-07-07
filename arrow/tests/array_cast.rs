@@ -261,7 +261,7 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(DurationMillisecondArray::from(vec![1000, 2000])),
         Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
-        Arc::new(create_decimal_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
+        Arc::new(create_decimal128_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
         make_dictionary_primitive::<Int8Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int16Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int32Type, Decimal128Type>(vec![1, 2]),
@@ -411,7 +411,7 @@ fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
     Arc::new(b.finish())
 }
 
-fn create_decimal_array(
+fn create_decimal128_array(
     array: Vec<Option<i128>>,
     precision: u8,
     scale: i8,

@@ -162,8 +162,8 @@ impl RowSelection {
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
-    pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<usize>> {
-        let mut ranges = vec![];
+    pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<u64>> {
+        let mut ranges: Vec<Range<u64>> = vec![];
         let mut row_offset = 0;
 
         let mut pages = page_locations.iter().peekable();
@@ -175,8 +175,8 @@ impl RowSelection {
 
         while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
             if !(selector.skip || current_page_included) {
-                let start = page.offset as usize;
-                let end = start + page.compressed_page_size as usize;
+                let start = page.offset as u64;
+                let end = start + page.compressed_page_size as u64;
                 ranges.push(start..end);
                 current_page_included = true;
             }
@@ -200,8 +200,8 @@ impl RowSelection {
                 }
             } else {
                 if !(selector.skip || current_page_included) {
-                    let start = page.offset as usize;
-                    let end = start + page.compressed_page_size as usize;
+                    let start = page.offset as u64;
+                    let end = start + page.compressed_page_size as u64;
                     ranges.push(start..end);
                 }
                 current_selector = selectors.next()
@@ -641,7 +641,7 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 mod tests {
     use super::*;
     use crate::format::PageLocation;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
 
     #[test]
     fn test_from_filters() {
@@ -1013,14 +1013,14 @@ mod tests {
 
     #[test]
     fn test_and_fuzz() {
-        let mut rand = thread_rng();
+        let mut rand = rng();
         for _ in 0..100 {
-            let a_len = rand.gen_range(10..100);
-            let a_bools: Vec<_> = (0..a_len).map(|_| rand.gen_bool(0.2)).collect();
+            let a_len = rand.random_range(10..100);
+            let a_bools: Vec<_> = (0..a_len).map(|_| rand.random_bool(0.2)).collect();
             let a = RowSelection::from_filters(&[BooleanArray::from(a_bools.clone())]);
 
             let b_len: usize = a_bools.iter().map(|x| *x as usize).sum();
-            let b_bools: Vec<_> = (0..b_len).map(|_| rand.gen_bool(0.8)).collect();
+            let b_bools: Vec<_> = (0..b_len).map(|_| rand.random_bool(0.8)).collect();
             let b = RowSelection::from_filters(&[BooleanArray::from(b_bools.clone())]);
 
             let mut expected_bools = vec![false; a_len];

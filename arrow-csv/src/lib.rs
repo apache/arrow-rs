@@ -17,6 +17,11 @@
 
 //! Transfer data between the Arrow memory format and CSV (comma-separated values).
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
 
 pub mod reader;
@@ -46,8 +51,8 @@ fn map_csv_error(error: csv::Error) -> ArrowError {
         } => ArrowError::CsvError(format!(
             "Encountered unequal lengths between records on CSV file. Expected {} \
                  records, found {} records{}",
-            len,
             expected_len,
+            len,
             pos.as_ref()
                 .map(|pos| format!(" at line {}", pos.line()))
                 .unwrap_or_default(),

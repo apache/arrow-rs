@@ -18,6 +18,11 @@
 //! This crate provides a procedural macro to derive
 //! implementations of a RecordWriter and RecordReader
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
 #![recursion_limit = "128"]
 
@@ -44,43 +49,79 @@ mod parquet_field;
 ///
 /// Example:
 ///
-/// ```no_run
-/// use parquet_derive::ParquetRecordWriter;
-/// use std::io::{self, Write};
+/// ```rust
 /// use parquet::file::properties::WriterProperties;
 /// use parquet::file::writer::SerializedFileWriter;
 /// use parquet::record::RecordWriter;
+/// use parquet_derive::ParquetRecordWriter;
 /// use std::fs::File;
-///
 /// use std::sync::Arc;
 ///
-/// #[derive(ParquetRecordWriter)]
-/// struct ACompleteRecord<'a> {
-///   pub a_bool: bool,
-///   pub a_str: &'a str,
+/// // For reader
+/// use parquet::file::reader::{FileReader, SerializedFileReader};
+/// use parquet::record::RecordReader;
+/// use parquet_derive::ParquetRecordReader;
+///
+/// #[derive(Debug, ParquetRecordWriter, ParquetRecordReader)]
+/// struct ACompleteRecord {
+///     pub a_bool: bool,
+///     pub a_string: String,
 /// }
 ///
-/// pub fn write_some_records() {
-///   let samples = vec![
-///     ACompleteRecord {
-///       a_bool: true,
-///       a_str: "I'm true"
-///     },
-///     ACompleteRecord {
-///       a_bool: false,
-///       a_str: "I'm false"
-///     }
-///   ];
-///  let file = File::open("some_file.parquet").unwrap();
+/// fn write_some_records() {
+///     let samples = vec![
+///         ACompleteRecord {
+///             a_bool: true,
+///             a_string: "I'm true".into(),
+///         },
+///         ACompleteRecord {
+///             a_bool: false,
+///             a_string: "I'm false".into(),
+///         },
+///     ];
 ///
-///  let schema = samples.as_slice().schema().unwrap();
+///     let schema = samples.as_slice().schema().unwrap();
 ///
-///  let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
+///     let props = Arc::new(WriterProperties::builder().build());
 ///
-///  let mut row_group = writer.next_row_group().unwrap();
-///  samples.as_slice().write_to_row_group(&mut row_group).unwrap();
-///  row_group.close().unwrap();
-///  writer.close().unwrap();
+///     let file = File::create("example.parquet").unwrap();
+///
+///     let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+///
+///     let mut row_group = writer.next_row_group().unwrap();
+///
+///     samples
+///         .as_slice()
+///         .write_to_row_group(&mut row_group)
+///         .unwrap();
+///
+///     row_group.close().unwrap();
+///
+///     writer.close().unwrap();
+/// }
+///
+/// fn read_some_records() -> Vec<ACompleteRecord> {
+///     let mut samples: Vec<ACompleteRecord> = Vec::new();
+///     let file = File::open("example.parquet").unwrap();
+///
+///     let reader = SerializedFileReader::new(file).unwrap();
+///     let mut row_group = reader.get_row_group(0).unwrap();
+///     samples.read_from_row_group(&mut *row_group, 2).unwrap();
+///
+///     samples
+/// }
+///
+/// pub fn main() {
+///     write_some_records();
+///
+///     let records = read_some_records();
+///
+///     std::fs::remove_file("example.parquet").unwrap();
+///
+///     assert_eq!(
+///         format!("{:?}", records),
+///         "[ACompleteRecord { a_bool: true, a_string: \"I'm true\" }, ACompleteRecord { a_bool: false, a_string: \"I'm false\" }]"
+///     );
 /// }
 /// ```
 ///
@@ -109,7 +150,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
       fn write_to_row_group<W: ::std::io::Write + Send>(
         &self,
         row_group_writer: &mut ::parquet::file::writer::SerializedRowGroupWriter<'_, W>
-      ) -> Result<(), ::parquet::errors::ParquetError> {
+      ) -> ::std::result::Result<(), ::parquet::errors::ParquetError> {
         use ::parquet::column::writer::ColumnWriter;
 
         let mut row_group_writer = row_group_writer;
@@ -130,7 +171,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         Ok(())
       }
 
-      fn schema(&self) -> Result<::parquet::schema::types::TypePtr, ::parquet::errors::ParquetError> {
+      fn schema(&self) -> ::std::result::Result<::parquet::schema::types::TypePtr, ::parquet::errors::ParquetError> {
         use ::parquet::schema::types::Type as ParquetType;
         use ::parquet::schema::types::TypePtr;
         use ::parquet::basic::LogicalType;
@@ -159,7 +200,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
 ///
 /// Example:
 ///
-/// ```no_run
+/// ```rust
 /// use parquet::record::RecordReader;
 /// use parquet::file::{serialized_reader::SerializedFileReader, reader::FileReader};
 /// use parquet_derive::{ParquetRecordReader};
@@ -206,7 +247,7 @@ pub fn parquet_record_reader(input: proc_macro::TokenStream) -> proc_macro::Toke
         &mut self,
         row_group_reader: &mut dyn ::parquet::file::reader::RowGroupReader,
         num_records: usize,
-      ) -> Result<(), ::parquet::errors::ParquetError> {
+      ) -> ::std::result::Result<(), ::parquet::errors::ParquetError> {
         use ::parquet::column::reader::ColumnReader;
 
         let mut row_group_reader = row_group_reader;

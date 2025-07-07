@@ -26,10 +26,11 @@ use arrow_select::take::take;
 
 use std::sync::Arc;
 
+use crate::binary_like::binary_apply;
 pub use arrow_array::StringArrayType;
 
 #[derive(Debug)]
-enum Op {
+pub(crate) enum Op {
     Like(bool),
     ILike(bool),
     Contains,
@@ -53,16 +54,22 @@ impl std::fmt::Display for Op {
 
 /// Perform SQL `left LIKE right`
 ///
+/// # Supported DataTypes
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+///
 /// There are two wildcards supported with the LIKE operator:
 ///
 /// 1. `%` - The percent sign represents zero, one, or multiple characters
 /// 2. `_` - The underscore represents a single character
 ///
-/// For example:
+/// Example
 /// ```
 /// # use arrow_array::{StringArray, BooleanArray};
 /// # use arrow_string::like::like;
-/// #
 /// let strings = StringArray::from(vec!["Arrow", "Arrow", "Arrow", "Ar"]);
 /// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A_"]);
 ///
@@ -75,39 +82,107 @@ pub fn like(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowEr
 
 /// Perform SQL `left ILIKE right`
 ///
-/// This is a case-insensitive version of [`like`]
-///
-/// Note: this only implements loose matching as defined by the Unicode standard. For example,
-/// the `ﬀ` ligature is not equivalent to `FF` and `ß` is not equivalent to `SS`
+/// # Notes
+/// - This is a case-insensitive version of [`like`]
+/// - See the documentation on [`like`] for more details
+/// - Implements loose matching as defined by the Unicode standard. For example,
+///   the `ﬀ` ligature is not equivalent to `FF` and `ß` is not equivalent to `SS`
 pub fn ilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::ILike(false), left, right)
 }
 
 /// Perform SQL `left NOT LIKE right`
 ///
-/// See the documentation on [`like`] for more details
+/// # Notes
+/// - This is a negative of [`like`]
+/// - See the documentation on [`like`] for more details
 pub fn nlike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::Like(true), left, right)
 }
 
 /// Perform SQL `left NOT ILIKE right`
 ///
-/// See the documentation on [`ilike`] for more details
+/// # Notes
+/// - This is a negative of [`like`]
+/// - See the documentation on [`ilike`] for more details
 pub fn nilike(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::ILike(true), left, right)
 }
 
 /// Perform SQL `STARTSWITH(left, right)`
+///
+/// # Supported DataTypes
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+/// - Binary
+/// - LargeBinary
+/// - BinaryView
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::like::{like, starts_with};
+/// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs", "arrow-rs", "Parquet"]);
+/// let patterns = StringArray::from(vec!["arr", "arrow", "arrow-cpp", "p"]);
+///
+/// let result = starts_with(&strings, &patterns).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![true, true, false, false]));
+/// ```
 pub fn starts_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::StartsWith, left, right)
 }
 
 /// Perform SQL `ENDSWITH(left, right)`
+///
+/// # Supported DataTypes
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+/// - Binary
+/// - LargeBinary
+/// - BinaryView
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::like::{ends_with, like, starts_with};
+/// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs",  "Parquet"]);
+/// let patterns = StringArray::from(vec!["arr", "-rs", "t"]);
+///
+/// let result = ends_with(&strings, &patterns).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![false, true, true]));
+/// ```
 pub fn ends_with(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::EndsWith, left, right)
 }
 
 /// Perform SQL `CONTAINS(left, right)`
+///
+/// # Supported DataTypes
+///
+/// `left` and `right` must be the same type, and one of
+/// - Utf8
+/// - LargeUtf8
+/// - Utf8View
+/// - Binary
+/// - LargeBinary
+/// - BinaryView
+///
+/// # Example
+/// ```
+/// # use arrow_array::{StringArray, BooleanArray};
+/// # use arrow_string::like::{contains, like, starts_with};
+/// let strings = StringArray::from(vec!["arrow-rs", "arrow-rs", "arrow-rs", "Parquet"]);
+/// let patterns = StringArray::from(vec!["arr", "-rs", "arrow-cpp", "X"]);
+///
+/// let result = contains(&strings, &patterns).unwrap();
+/// assert_eq!(result, BooleanArray::from(vec![true, true, false, false]));
+/// ```
 pub fn contains(left: &dyn Datum, right: &dyn Datum) -> Result<BooleanArray, ArrowError> {
     like_op(Op::Contains, left, right)
 }
@@ -132,13 +207,25 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
     let r = r_v.map(|x| x.values().as_ref()).unwrap_or(r);
 
     match (l.data_type(), r.data_type()) {
-        (Utf8, Utf8) => {
-            apply::<&GenericStringArray<i32>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
-        }
-        (LargeUtf8, LargeUtf8) => {
-            apply::<&GenericStringArray<i64>>(op, l.as_string(), l_s, l_v, r.as_string(), r_s, r_v)
-        }
-        (Utf8View, Utf8View) => apply::<&StringViewArray>(
+        (Utf8, Utf8) => string_apply::<&GenericStringArray<i32>>(
+            op,
+            l.as_string(),
+            l_s,
+            l_v,
+            r.as_string(),
+            r_s,
+            r_v,
+        ),
+        (LargeUtf8, LargeUtf8) => string_apply::<&GenericStringArray<i64>>(
+            op,
+            l.as_string(),
+            l_s,
+            l_v,
+            r.as_string(),
+            r_s,
+            r_v,
+        ),
+        (Utf8View, Utf8View) => string_apply::<&StringViewArray>(
             op,
             l.as_string_view(),
             l_s,
@@ -147,13 +234,40 @@ fn like_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, Arr
             r_s,
             r_v,
         ),
+        (Binary, Binary) => binary_apply::<&GenericBinaryArray<i32>>(
+            op.try_into()?,
+            l.as_binary(),
+            l_s,
+            l_v,
+            r.as_binary(),
+            r_s,
+            r_v,
+        ),
+        (LargeBinary, LargeBinary) => binary_apply::<&GenericBinaryArray<i64>>(
+            op.try_into()?,
+            l.as_binary(),
+            l_s,
+            l_v,
+            r.as_binary(),
+            r_s,
+            r_v,
+        ),
+        (BinaryView, BinaryView) => binary_apply::<&BinaryViewArray>(
+            op.try_into()?,
+            l.as_binary_view(),
+            l_s,
+            l_v,
+            r.as_binary_view(),
+            r_s,
+            r_v,
+        ),
         (l_t, r_t) => Err(ArrowError::InvalidArgumentError(format!(
-            "Invalid string operation: {l_t} {op} {r_t}"
+            "Invalid string/binary operation: {l_t} {op} {r_t}"
         ))),
     }
 }
 
-fn apply<'a, T: StringArrayType<'a> + 'a>(
+fn string_apply<'a, T: StringArrayType<'a> + 'a>(
     op: Op,
     l: T,
     l_s: bool,
@@ -398,8 +512,28 @@ legacy_kernels!(
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use arrow_array::types::Int8Type;
+    use arrow_array::builder::BinaryDictionaryBuilder;
+    use arrow_array::types::{ArrowDictionaryKeyType, Int8Type};
     use std::iter::zip;
+
+    fn convert_binary_iterator_to_binary_dictionary<
+        'a,
+        K: ArrowDictionaryKeyType,
+        I: IntoIterator<Item = &'a [u8]>,
+    >(
+        iter: I,
+    ) -> DictionaryArray<K> {
+        let it = iter.into_iter();
+        let (lower, _) = it.size_hint();
+        let mut builder = BinaryDictionaryBuilder::with_capacity(lower, 256, 1024);
+        it.for_each(|i| {
+            builder
+                .append(i)
+                .expect("Unable to append a value to a dictionary array.");
+        });
+
+        builder.finish()
+    }
 
     /// Applying `op(left, right)`, both sides are arrays
     /// The macro tests four types of array implementations:
@@ -436,6 +570,61 @@ mod tests {
         };
     }
 
+    /// Applying `op(left, right)`, both sides are arrays
+    /// The macro tests four types of array implementations:
+    /// - `StringArray`
+    /// - `LargeStringArray`
+    /// - `StringViewArray`
+    /// - `DictionaryArray`
+    macro_rules! test_utf8_and_binary {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let expected = BooleanArray::from($expected);
+
+                let left = StringArray::from($left);
+                let right = StringArray::from($right);
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left = LargeStringArray::from($left);
+                let right = LargeStringArray::from($right);
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left = StringViewArray::from($left);
+                let right = StringViewArray::from($right);
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
+                let right: DictionaryArray<Int8Type> = $right.into_iter().collect();
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left_binary = $left.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+                let right_binary = $right.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+
+                let left = BinaryArray::from(left_binary.clone());
+                let right = BinaryArray::from(right_binary.clone());
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left = LargeBinaryArray::from(left_binary.clone());
+                let right = LargeBinaryArray::from(right_binary.clone());
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(left_binary);
+                let right: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(right_binary);
+                let res = $op(&left, &right).unwrap();
+                assert_eq!(res, expected);
+            }
+        };
+    }
+
     /// Applying `op(left, right)`, left side is array, right side is scalar
     /// The macro tests four types of array implementations:
     /// - `StringArray`
@@ -465,6 +654,61 @@ mod tests {
 
                 let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
                 let right: DictionaryArray<Int8Type> = [$right].into_iter().collect();
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+            }
+        };
+    }
+
+    /// Applying `op(left, right)`, left side is array, right side is scalar
+    /// The macro tests four types of array implementations:
+    /// - `StringArray`
+    /// - `LargeStringArray`
+    /// - `StringViewArray`
+    /// - `DictionaryArray`
+    macro_rules! test_utf8_and_binary_scalar {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let expected = BooleanArray::from($expected);
+
+                let left = StringArray::from($left);
+                let right = StringArray::from_iter_values([$right]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left = LargeStringArray::from($left);
+                let right = LargeStringArray::from_iter_values([$right]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left = StringViewArray::from($left);
+                let right = StringViewArray::from_iter_values([$right]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> = $left.into_iter().collect();
+                let right: DictionaryArray<Int8Type> = [$right].into_iter().collect();
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left_binary = $left.iter().map(|x| x.as_bytes()).collect::<Vec<&[u8]>>();
+                let right_binary = $right.as_bytes();
+
+                let left = BinaryArray::from(left_binary.clone());
+                let right = BinaryArray::from_iter_values([right_binary]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left = LargeBinaryArray::from(left_binary.clone());
+                let right = LargeBinaryArray::from_iter_values([right_binary]);
+                let res = $op(&left, &Scalar::new(&right)).unwrap();
+                assert_eq!(res, expected);
+
+                let left: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary(left_binary);
+                let right: DictionaryArray<Int8Type> =
+                    convert_binary_iterator_to_binary_dictionary([right_binary]);
                 let res = $op(&left, &Scalar::new(&right)).unwrap();
                 assert_eq!(res, expected);
             }
@@ -547,8 +791,8 @@ mod tests {
 
     // Replicates `test_utf8_array_like_scalar_start` `test_utf8_array_like_scalar_dyn_start` to
     // demonstrate that `SQL STARTSWITH` works as expected.
-    test_utf8_scalar!(
-        test_utf8_array_starts_with_scalar_start,
+    test_utf8_and_binary_scalar!(
+        test_utf8_and_binary_array_starts_with_scalar_start,
         vec![
             "arrow",
             "parrow",
@@ -559,6 +803,23 @@ mod tests {
         "arrow",
         starts_with,
         vec![true, false, true, false, true]
+    );
+
+    test_utf8_and_binary!(
+        test_utf8_and_binary_array_starts_with,
+        vec![
+            "arrow",
+            "arrow_long_string_more than 12 bytes",
+            "arrow",
+            "arrow",
+            "arrow",
+            "arrows",
+            "arrow",
+            "arrow"
+        ],
+        vec!["arrow", "ar%", "row", "foo", "arr", "arrow_", "arrow_", ".*"],
+        starts_with,
+        vec![true, false, false, false, true, false, false, false]
     );
 
     test_utf8_scalar!(
@@ -577,8 +838,8 @@ mod tests {
 
     // Replicates `test_utf8_array_like_scalar_end` `test_utf8_array_like_scalar_dyn_end` to
     // demonstrate that `SQL ENDSWITH` works as expected.
-    test_utf8_scalar!(
-        test_utf8_array_ends_with_scalar_end,
+    test_utf8_and_binary_scalar!(
+        test_utf8_and_binary_array_ends_with_scalar_end,
         vec![
             "arrow",
             "parrow",
@@ -589,6 +850,23 @@ mod tests {
         "arrow",
         ends_with,
         vec![true, true, false, false, false]
+    );
+
+    test_utf8_and_binary!(
+        test_utf8_and_binary_array_ends_with,
+        vec![
+            "arrow",
+            "arrow_long_string_more than 12 bytes",
+            "arrow",
+            "arrow",
+            "arrow",
+            "arrows",
+            "arrow",
+            "arrow"
+        ],
+        vec!["arrow", "ar%", "row", "foo", "arr", "arrow_", "arrow_", ".*"],
+        ends_with,
+        vec![true, false, true, false, false, false, false, false]
     );
 
     test_utf8_scalar!(
@@ -924,8 +1202,8 @@ mod tests {
     // demonstrate that `SQL CONTAINS` works as expected.
     //
     // NOTE: 5 of the values were changed because the original used a case insensitive `ilike`.
-    test_utf8_scalar!(
-        test_utf8_array_contains_unicode_contains,
+    test_utf8_and_binary_scalar!(
+        test_utf8_and_binary_array_contains_unicode_contains,
         vec![
             "sdlkdfFkoßsdfs",
             "sdlkdFFkoSSdggs", // Original was case insensitive "sdlkdfFkoSSdggs"

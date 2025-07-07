@@ -21,6 +21,11 @@
 //!
 //! This is not a canonical format, but provides a human-readable way of verifying language implementations
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
@@ -812,6 +817,42 @@ pub fn array_from_json(
                     "Unable to find dictionary for field {field:?}"
                 ))),
             }
+        }
+        DataType::Decimal32(precision, scale) => {
+            let mut b = Decimal32Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i32>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        DataType::Decimal64(precision, scale) => {
+            let mut b = Decimal64Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i64>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
         }
         DataType::Decimal128(precision, scale) => {
             let mut b = Decimal128Builder::with_capacity(json_col.count);

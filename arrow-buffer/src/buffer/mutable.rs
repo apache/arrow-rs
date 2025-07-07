@@ -288,7 +288,8 @@ impl MutableBuffer {
         self.len
     }
 
-    /// Returns the total capacity in this buffer.
+    /// Returns the total capacity in this buffer, in bytes.
+    ///
     /// The invariant `buffer.len() <= buffer.capacity()` is always upheld.
     #[inline]
     pub const fn capacity(&self) -> usize {

@@ -620,6 +620,29 @@ impl<'a> StringArrayType<'a> for &'a StringViewArray {
     }
 }
 
+/// A trait for Arrow String Arrays, currently three types are supported:
+/// - `BinaryArray`
+/// - `LargeBinaryArray`
+/// - `BinaryViewArray`
+///
+/// This trait helps to abstract over the different types of binary arrays
+/// so that we don't need to duplicate the implementation for each type.
+pub trait BinaryArrayType<'a>: ArrayAccessor<Item = &'a [u8]> + Sized {
+    /// Constructs a new iterator
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericBinaryArray::<O>::iter(self)
+    }
+}
+impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        BinaryViewArray::iter(self)
+    }
+}
+
 impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
@@ -705,6 +728,12 @@ impl PartialEq for StructArray {
 }
 
 impl<T: ByteViewType + ?Sized> PartialEq for GenericByteViewArray<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
+impl<R: RunEndIndexType> PartialEq for RunArray<R> {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
     }
@@ -804,6 +833,8 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             dt => panic!("Unexpected data type for run_ends array {dt:?}"),
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
+        DataType::Decimal32(_, _) => Arc::new(Decimal32Array::from(data)) as ArrayRef,
+        DataType::Decimal64(_, _) => Arc::new(Decimal64Array::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
         dt => panic!("Unexpected data type {dt:?}"),
