@@ -228,7 +228,7 @@ fn create_string_view_array_with_len_range_and_prefix(
 }
 
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
-fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
+pub fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
     max_str_len: usize,
