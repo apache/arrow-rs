@@ -623,9 +623,9 @@ impl RowConverter {
     fn supports_datatype(d: &DataType) -> bool {
         match d {
             _ if !d.is_nested() => true,
-            DataType::List(f)
-            | DataType::LargeList(f)
-            | DataType::FixedSizeList(f, _) => Self::supports_datatype(f.data_type()),
+            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+                Self::supports_datatype(f.data_type())
+            }
             DataType::Struct(f) => f.iter().all(|x| Self::supports_datatype(x.data_type())),
             DataType::RunEndEncoded(_, values) => Self::supports_datatype(values.data_type()),
             _ => false,
@@ -3134,7 +3134,7 @@ mod tests {
 
         let is_supported = RowConverter::supports_fields(&[SortField::new(map_data_type)]);
 
-        assert_eq!(is_supported, false, "Map should not be supported");
+        assert!(!is_supported, "Map should not be supported");
     }
 
     #[test]
@@ -3156,11 +3156,10 @@ mod tests {
             Err(ArrowError::NotYetImplemented(message)) => {
                 assert!(
                     message.contains("Row format support not yet implemented for"),
-                    "Expected NotYetImplemented error for map data type, got: {}",
-                    message
+                    "Expected NotYetImplemented error for map data type, got: {message}",
                 );
             }
-            Err(e) => panic!("Expected NotYetImplemented error, got: {}", e),
+            Err(e) => panic!("Expected NotYetImplemented error, got: {e}"),
             Ok(_) => panic!("Expected NotYetImplemented error for map data type"),
         }
     }
