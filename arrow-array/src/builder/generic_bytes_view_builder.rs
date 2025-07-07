@@ -297,65 +297,6 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         }
     }
 
-    /// Appends an inlined view into the builder
-    #[inline]
-    pub fn append_inlined(&mut self, v: &[u8], length: u32) {
-        let mut view_buffer = [0; 16];
-        view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
-        view_buffer[4..4 + v.len()].copy_from_slice(v);
-        self.views_buffer.push(u128::from_le_bytes(view_buffer));
-        self.null_buffer_builder.append_non_null();
-    }
-
-    /// Appends not inlined bytes into the builder
-    #[inline]
-    pub fn append_bytes(&mut self, v: &[u8], length: u32) {
-        if let Some((mut ht, hasher)) = self.string_tracker.take() {
-            let hash_val = hasher.hash_one(v);
-            let hasher_fn = |v: &_| hasher.hash_one(v);
-
-            match ht.entry(
-                hash_val,
-                |idx| {
-                    let stored = self.get_value(*idx);
-                    v == stored
-                },
-                hasher_fn,
-            ) {
-                Entry::Occupied(o) => {
-                    let idx = o.get();
-                    self.views_buffer.push(self.views_buffer[*idx]);
-                    self.null_buffer_builder.append_non_null();
-                    self.string_tracker = Some((ht, hasher));
-                    return;
-                }
-                Entry::Vacant(vacant) => {
-                    vacant.insert(self.views_buffer.len());
-                }
-            }
-            self.string_tracker = Some((ht, hasher));
-        }
-
-        // —— flush / in_progress / ByteView ——
-        let required = self.in_progress.len() + v.len();
-        if self.in_progress.capacity() < required {
-            self.flush_in_progress();
-            let reserve = v.len().max(self.block_size.next_size() as usize);
-            self.in_progress.reserve(reserve);
-        }
-        let offset = self.in_progress.len() as u32;
-        self.in_progress.extend_from_slice(v);
-
-        let view = ByteView {
-            length,
-            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
-            buffer_index: self.completed.len() as u32,
-            offset,
-        };
-        self.views_buffer.push(view.into());
-        self.null_buffer_builder.append_non_null();
-    }
-
     /// Appends a value into the builder
     ///
     /// # Panics
@@ -368,14 +309,64 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         let v: &[u8] = value.as_ref().as_ref();
         let length: u32 = v.len().try_into().unwrap();
         if length <= MAX_INLINE_VIEW_LEN {
-            self.append_inlined(v, length);
+            let mut view_buffer = [0; 16];
+            view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
+            view_buffer[4..4 + v.len()].copy_from_slice(v);
+            self.views_buffer.push(u128::from_le_bytes(view_buffer));
+            self.null_buffer_builder.append_non_null();
             return;
         }
 
         // Deduplication if:
         // (1) deduplication is enabled.
         // (2) len > 12
-        self.append_bytes(v, length);
+        if let Some((mut ht, hasher)) = self.string_tracker.take() {
+            let hash_val = hasher.hash_one(v);
+            let hasher_fn = |v: &_| hasher.hash_one(v);
+
+            let entry = ht.entry(
+                hash_val,
+                |idx| {
+                    let stored_value = self.get_value(*idx);
+                    v == stored_value
+                },
+                hasher_fn,
+            );
+            match entry {
+                Entry::Occupied(occupied) => {
+                    // If the string already exists, we will directly use the view
+                    let idx = occupied.get();
+                    self.views_buffer.push(self.views_buffer[*idx]);
+                    self.null_buffer_builder.append_non_null();
+                    self.string_tracker = Some((ht, hasher));
+                    return;
+                }
+                Entry::Vacant(vacant) => {
+                    // o.w. we insert the (string hash -> view index)
+                    // the idx is current length of views_builder, as we are inserting a new view
+                    vacant.insert(self.views_buffer.len());
+                }
+            }
+            self.string_tracker = Some((ht, hasher));
+        }
+
+        let required_cap = self.in_progress.len() + v.len();
+        if self.in_progress.capacity() < required_cap {
+            self.flush_in_progress();
+            let to_reserve = v.len().max(self.block_size.next_size() as usize);
+            self.in_progress.reserve(to_reserve);
+        };
+        let offset = self.in_progress.len() as u32;
+        self.in_progress.extend_from_slice(v);
+
+        let view = ByteView {
+            length,
+            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
+            buffer_index: self.completed.len() as u32,
+            offset,
+        };
+        self.views_buffer.push(view.into());
+        self.null_buffer_builder.append_non_null();
     }
 
     /// Append an `Option` value into the builder
