@@ -30,9 +30,9 @@ fn gen_view_array(size: usize) -> StringViewArray {
 fn gen_view_array_without_nulls(size: usize) -> StringViewArray {
     StringViewArray::from_iter((0..size).map(|v| {
         let s = match v % 3 {
-            0 => "small".to_string(),                                // < 12 bytes
-            1 => "larger than 12 bytes array".to_string(),          // >17 bytes
-            2 => "x".repeat(300),                                // 300 bytes (>256)
+            0 => "small".to_string(),                      // < 12 bytes
+            1 => "larger than 12 bytes array".to_string(), // >12 bytes
+            2 => "x".repeat(300),                          // 300 bytes (>256)
             _ => unreachable!(),
         };
         Some(s)
