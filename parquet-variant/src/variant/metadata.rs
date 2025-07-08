@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decoder::OffsetSizeBytes;
+use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
 
 use arrow_schema::ArrowError;
@@ -225,97 +225,45 @@ impl<'m> VariantMetadata<'m> {
     /// [validation]: Self#Validation
     pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
-            // Iterate over all string keys in this dictionary in order to prove that the offset
-            // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
+            let offset_bytes = slice_from_slice(
+                self.bytes,
+                self.header.first_offset_byte()..self.first_value_byte,
+            )?;
 
-            /*
-            As scovich pointed out, here are the things full validation must do:
+            let offsets =
+                map_bytes_to_offsets(offset_bytes, self.header.offset_size).collect::<Vec<_>>();
 
-            (1) all other offsets are in-bounds (*)
-            (2) all offsets are monotonically increasing (*)
-            (3) all values are valid utf-8 (*)
-
-            I propose we add another validation check
-            (4) if sorted dictionary, check if dictionary fields are sorted
-
-                Doing this check will help us in objects with sorted dictionaries,
-                since we can guarantee sortedness by checking if field ids are increasing.
-            */
-
-            // (1) (2)
-            // Since shallow validation already computes the first and last offset
-            // if we guarantee monotonicity for all offsets, then we know they are all in-bounds
-
-            // notice how we do this ceremony only once!
-            let offset_byte_range = self.header.first_offset_byte()..self.first_value_byte;
-            let offset_bytes = slice_from_slice(self.bytes, offset_byte_range)?;
-
-            let offsets = offset_bytes
-                .chunks_exact(self.header.offset_size())
-                .map(|chunk| {
-                    // at this point, we know for a _fact_ that chunk will have `offset_size` bytes
-
-                    match self.header.offset_size {
-                        OffsetSizeBytes::One => chunk[0].into(),
-                        OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]).into(),
-                        OffsetSizeBytes::Three => {
-                            u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
-                        }
-                        OffsetSizeBytes::Four => {
-                            u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
-                        }
-                    }
-                })
-                .collect::<Vec<usize>>();
-
-            let offsets_monotonically_increasing = offsets.is_sorted_by(|a, b| a < b);
-
-            if !offsets_monotonically_increasing {
+            // Validate offsets are in-bounds and monotonically increasing.
+            // Since shallow validation ensures the first and last offsets are in bounds, we can also verify all offsets
+            // are in-bounds by checking if offsets are monotonically increasing.
+            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
+            if !are_offsets_monotonic {
                 return Err(ArrowError::InvalidArgumentError(
                     "offsets not monotonically increasing".to_string(),
                 ));
             }
 
-            // (3)
-            // We don't take advantage of the values being packed side by side.
-            // For every value, we rerequest the entire value buffer and then slice into _just_ that value
-            // and parse into a str
-
-            // This looks like a great place to do vectorized utf8 validation
-            // plus, all subsequent attempts at parsing out values as a &str can be done using
-            // String::from_utf8_unchecked
-
-            let value_bytes = slice_from_slice(self.bytes, self.first_value_byte..)?;
-            let value_str = simdutf8::basic::from_utf8(value_bytes)
+            // Verify the string values in the dictionary are UTF-8 encoded strings.
+            let value_buffer = slice_from_slice(self.bytes, self.first_value_byte..)?;
+            let value_str = simdutf8::basic::from_utf8(value_buffer)
                 .map_err(|e| ArrowError::InvalidArgumentError(format!("{e:?}")))?;
 
-            // (4)
-            // if the metadata header marked this variant as having a sorted dictionary,
-            // we must check whether the fields are actually sorted
-
             if self.header.is_sorted {
-                let mut prev_field_name = None;
-                let mut is_sorted = true;
+                // Validate the dictionary values are unique and lexicographically sorted
+                let are_dictionary_values_unique_and_sorted = (1..offsets.len())
+                    .map(|i| {
+                        let field_range = offsets[i - 1]..offsets[i];
+                        value_str.get(field_range)
+                    })
+                    .is_sorted_by(|a, b| match (a, b) {
+                        (Some(a), Some(b)) => a < b,
+                        _ => false,
+                    });
 
-                for i in 0..offsets.len() - 1 {
-                    if !is_sorted {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "variant marked as having sorted dictionary but is unsorted"
-                                .to_string(),
-                        ));
-                    }
-
-                    let offset_range = offsets[i]..offsets[i + 1];
-
-                    let field_name = value_str
-                        .get(offset_range)
-                        .ok_or_else(|| overflow_error("overflowed"))?;
-
-                    if let Some(prev_field_name) = prev_field_name {
-                        is_sorted = is_sorted && prev_field_name < field_name;
-                    }
-
-                    prev_field_name = Some(field_name);
+                if !are_dictionary_values_unique_and_sorted {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "dictionary values are not unique and ordered".to_string(),
+                    ));
                 }
             }
 

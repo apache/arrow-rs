@@ -16,10 +16,12 @@
 // under the License.
 
 extern crate parquet_variant;
+extern crate parquet_variant_json;
 
 use criterion::*;
 
-use parquet_variant::{json_to_variant, Variant, VariantBuilder};
+use parquet_variant::{Variant, VariantBuilder};
+use parquet_variant_json::json_to_variant;
 
 fn generate_large_object() -> (Vec<u8>, Vec<u8>) {
     // 256 elements (keys: 000-255) - each element is an object of 256 elements (240-495) - each

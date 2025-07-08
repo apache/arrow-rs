@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::decoder::OffsetSizeBytes;
+use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
 };
@@ -205,56 +205,30 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// [validation]: Self#Validation
     pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
-            /*
-            (1) the associated variant metadata is [valid] (*)
-            (2) all field ids are valid metadata dictionary entries (*)
-            (3) field ids are lexically ordered according by their corresponding string values (*)
-            (4) all field offsets are in bounds (*)
-            (5) all field values are (recursively) _valid_ variant values (*)
-
-            */
-
-            // (1)
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
 
-            // (2)
-            // Field ids serve as indexes into the metadata buffer.
-            // As long as we guarantee the largest field id is < dictionary size,
-            // we can guarantee all field ids are valid metadata dictionaries
+            let field_id_buffer = slice_from_slice(
+                self.value,
+                self.header.field_ids_start_byte()..self.first_field_offset_byte,
+            )?;
 
-            // (2), (3)
-            let byte_range = self.header.field_ids_start_byte()..self.first_field_offset_byte;
-            let field_id_bytes = slice_from_slice(self.value, byte_range)?;
-            // let field_id = self.header.field_id_size.unpack_usize(field_id_bytes, i)?;
-
-            let field_id_chunks = field_id_bytes.chunks_exact(self.header.field_id_size());
-            assert!(field_id_chunks.remainder().is_empty()); // guaranteed to be none
-
-            let field_ids = field_id_chunks
-                .map(|chunk| match self.header.field_id_size {
-                    OffsetSizeBytes::One => chunk[0] as usize,
-                    OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]) as usize,
-                    OffsetSizeBytes::Three => {
-                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
-                    }
-                    OffsetSizeBytes::Four => {
-                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
-                    }
-                })
+            let field_ids = map_bytes_to_offsets(field_id_buffer, self.header.field_id_size)
                 .collect::<Vec<_>>();
 
+            // Validate all field ids exist in the metadata dictionary and the corresponding field names are lexicographically sorted
             if self.metadata.is_sorted() {
-                // (3) is really easy since we just need to check if the field ids are sorted
-                let lexically_ordered = field_ids.is_sorted_by(|a, b| a < b);
-                if !lexically_ordered {
+                // Since the metadata dictionary has unique and sorted field names, we can also guarantee this object's field names
+                // are lexicographically sorted by their field id ordering
+                if !field_ids.is_sorted() {
                     return Err(ArrowError::InvalidArgumentError(
                         "field names not sorted".to_string(),
                     ));
                 }
 
-                // (2) is easy because field ids is sorted so just get the last field id and check
+                // Since field ids are sorted, if the last field is smaller than the dictionary size,
+                // we also know all field ids are smaller than the dictionary size and in-bounds.
                 if let Some(&last_field_id) = field_ids.last() {
                     if last_field_id >= self.metadata.dictionary_size() {
                         return Err(ArrowError::InvalidArgumentError(
@@ -263,24 +237,24 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                     }
                 }
             } else {
-                // (3)
-                // we're going to have to read out all field names from metadata and then check sortedness by &str
-
-                let lexically_ordered = field_ids
+                // The metadata dictionary can't guarantee uniqueness or sortedness, so we have to parse out the corresponding field names
+                // to check lexicographical order
+                let are_field_names_sorted = field_ids
                     .iter()
                     .map(|&i| self.metadata.get(i))
                     .collect::<Result<Vec<_>, _>>()?
                     .is_sorted();
 
-                if !lexically_ordered {
+                if !are_field_names_sorted {
                     return Err(ArrowError::InvalidArgumentError(
                         "field names not sorted".to_string(),
                     ));
                 }
 
-                // (2) we have to scan to grab the max field id
-                if let Some(&max_field_id) = field_ids.iter().max() {
-                    if max_field_id >= self.metadata.dictionary_size() {
+                // Since field ids aren't guaranteed to be sorted, scan through the field ids and pick the largest field id in this object.
+                // If the largest field id is smaller than the dictionary size, we also know all field ids are smaller than the dictionary size and in-bounds.
+                if let Some(&largest_field_id) = field_ids.iter().max() {
+                    if largest_field_id >= self.metadata.dictionary_size() {
                         return Err(ArrowError::InvalidArgumentError(
                             "field id is not valid".to_string(),
                         ));
@@ -288,34 +262,23 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 }
             }
 
-            // (4) (5)
-            let byte_range = self.first_field_offset_byte..self.first_value_byte;
-            let field_offset_bytes = slice_from_slice(self.value, byte_range)?;
-
-            let field_offset_chunks =
-                field_offset_bytes.chunks_exact(self.header.field_offset_size());
-            assert!(field_offset_chunks.remainder().is_empty());
-
-            let field_offsets = field_offset_chunks
-                .map(|chunk| match self.header.field_offset_size {
-                    OffsetSizeBytes::One => chunk[0] as usize,
-                    OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]) as usize,
-                    OffsetSizeBytes::Three => {
-                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
-                    }
-                    OffsetSizeBytes::Four => {
-                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
-                    }
-                })
-                .collect::<Vec<_>>();
+            // Validate whether values are valid variant objects
+            let field_offset_buffer = slice_from_slice(
+                self.value,
+                self.first_field_offset_byte..self.first_value_byte,
+            )?;
+            let num_offsets = field_offset_buffer.len() / self.header.field_offset_size();
 
             let value_buffer = slice_from_slice(self.value, self.first_value_byte..)?;
 
-            for &offset in field_offsets.iter().take(field_offsets.len() - 1) {
-                let value_bytes = slice_from_slice(value_buffer, offset..)?;
+            map_bytes_to_offsets(field_offset_buffer, self.header.field_offset_size)
+                .take(num_offsets.saturating_sub(1))
+                .try_for_each(|offset| {
+                    let value_bytes = slice_from_slice(value_buffer, offset..)?;
+                    Variant::try_new_with_metadata(self.metadata, value_bytes)?;
 
-                Variant::try_new_with_metadata_and_shallow_validation(self.metadata, value_bytes)?;
-            }
+                    Ok::<_, ArrowError>(())
+                })?;
 
             self.validated = true;
         }

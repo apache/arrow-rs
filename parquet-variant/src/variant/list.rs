@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::decoder::OffsetSizeBytes;
+use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
 };
@@ -204,57 +204,34 @@ impl<'m, 'v> VariantList<'m, 'v> {
     /// [validation]: Self#Validation
     pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
-            /*
-            (1) the associated variant metadata is [valid] (*)
-            (2) all other offsets are in-bounds (*)
-            (3) all offsets are monotonically increasing (*)
-            (4) all values are (recursively) valid variant objects (*)
-            */
-
-            // (1)
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
 
-            // (2), (4)
-            // if we check all values are valid by using offset lookups,
-            // we know all offsets are in bounds if correct
+            let offset_buffer = slice_from_slice(
+                self.value,
+                self.header.first_offset_byte()..self.first_value_byte,
+            )?;
 
-            // note how we do this once!
-            let byte_range = self.header.first_offset_byte()..self.first_value_byte;
-            let offset_bytes = slice_from_slice(self.value, byte_range)?;
+            let offsets =
+                map_bytes_to_offsets(offset_buffer, self.header.offset_size).collect::<Vec<_>>();
 
-            let offset_chunks = offset_bytes.chunks_exact(self.header.offset_size());
-            assert!(offset_chunks.remainder().is_empty()); // guaranteed by shallow validation
-
-            let offsets = offset_chunks
-                .map(|chunk| match self.header.offset_size {
-                    OffsetSizeBytes::One => chunk[0] as usize,
-                    OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]) as usize,
-                    OffsetSizeBytes::Three => {
-                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
-                    }
-                    OffsetSizeBytes::Four => {
-                        u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            // (3)
-            let monotonic_offsets = offsets.is_sorted_by(|a, b| a < b);
-            if !monotonic_offsets {
+            // Validate offsets are in-bounds and monotonically increasing.
+            // Since shallow verification checks whether the first and last offsets are in-bounds,
+            // we can also verify all offsets are in-bounds by checking if offsets are monotonically increasing.
+            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
+            if !are_offsets_monotonic {
                 return Err(ArrowError::InvalidArgumentError(
                     "offsets are not monotonically increasing".to_string(),
                 ));
             }
 
-            // (4)
+            let value_buffer = slice_from_slice(self.value, self.first_value_byte..)?;
 
-            let value_buffer = &self.value[self.first_value_byte..];
-
-            for i in 0..offsets.len() - 1 {
-                let start_offset = offsets[i];
-                let end_offset = offsets[i + 1];
+            // Validate whether values are valid variant objects
+            for i in 1..offsets.len() {
+                let start_offset = offsets[i - 1];
+                let end_offset = offsets[i];
 
                 let value_bytes = slice_from_slice(value_buffer, start_offset..end_offset)?;
                 Variant::try_new_with_metadata(self.metadata, value_bytes)?;
