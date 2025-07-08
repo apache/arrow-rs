@@ -43,7 +43,9 @@ pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, Arr
         .ok_or_else(|| ArrowError::CastError("Expected BinaryArray for 'value'".into()))?;
 
     // Zero-copy builder
-    let mut json_buffer: Vec<u8> = Vec::with_capacity(1024);
+    // The size per JSON string is assumed to be 128 bytes. If this holds true, resizing could be
+    // minimized to improve performance.
+    let mut json_buffer: Vec<u8> = Vec::with_capacity(struct_array.len() * 128);
     let mut offsets: Vec<i32> = Vec::with_capacity(struct_array.len() + 1);
     let mut validity = BooleanBufferBuilder::new(struct_array.len());
     let mut current_offset: i32 = 0;
