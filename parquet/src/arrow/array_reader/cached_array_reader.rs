@@ -188,7 +188,7 @@ impl ArrayReader for CachedArrayReader {
             let cached = if let Some(array) = self.local_buffer.get(&batch_id) {
                 Some(array.clone())
             } else {
-                // If not in local cache, check shared cache
+                // If not in local cache, i.e., we are consumer, check shared cache
                 let shared_cached = self.cache.lock().unwrap().get(self.column_idx, batch_id);
                 if let Some(array) = shared_cached.as_ref() {
                     // Store in local cache for later use in consume_batch
@@ -200,12 +200,14 @@ impl ArrayReader for CachedArrayReader {
             match cached {
                 Some(array) => {
                     let array_len = array.len();
-                    if array_len + batch_id.val * self.batch_size - self.outer_position > 0 {
+                    if array_len + batch_id.val * self.batch_size - self.outer_position - read > 0 {
                         // the cache batch has some records that we can select
-                        let v = array_len + batch_id.val * self.batch_size - self.outer_position;
+                        let v =
+                            array_len + batch_id.val * self.batch_size - self.outer_position - read;
                         let select_cnt = std::cmp::min(num_records - read, v);
                         read += select_cnt;
                         self.selections.push_back(RowSelector::select(select_cnt));
+                        self.outer_position += select_cnt;
                     } else {
                         // this is last batch and we have used all records from it
                         break;
@@ -213,7 +215,6 @@ impl ArrayReader for CachedArrayReader {
                 }
                 None => {
                     let read_from_inner = self.fetch_batch(batch_id)?;
-
                     // Reached end-of-file, no more records to read
                     if read_from_inner == 0 {
                         break;
@@ -225,6 +226,7 @@ impl ArrayReader for CachedArrayReader {
                     read += select_from_this_batch;
                     self.selections
                         .push_back(RowSelector::select(select_from_this_batch));
+                    self.outer_position += select_from_this_batch;
                     if read_from_inner < self.batch_size {
                         // this is last batch from inner reader
                         break;
@@ -232,7 +234,6 @@ impl ArrayReader for CachedArrayReader {
                 }
             }
         }
-        self.outer_position += read;
         Ok(read)
     }
 
@@ -294,7 +295,12 @@ impl ArrayReader for CachedArrayReader {
         }
 
         self.selections.clear();
-        self.local_buffer.clear();
+
+        // Only remove batches from local buffer that are completely behind current position
+        // Keep the current batch and any future batches as they might still be needed
+        let current_batch_id = self.get_batch_id_from_position(self.outer_position);
+        self.local_buffer
+            .retain(|batch_id, _| batch_id.val >= current_batch_id.val);
 
         // For consumers, cleanup batches that have been completely consumed
         // This reduces the memory usage of the shared cache
@@ -633,5 +639,24 @@ mod tests {
 
         // Local cache should be cleared after consume_batch
         assert!(cached_reader.local_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_local_cache_is_cleared_properly() {
+        let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4]);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, Some(0)))); // Batch size 3, cache 0
+        let mut cached_reader =
+            CachedArrayReader::new(Box::new(mock_reader), cache.clone(), 0, CacheRole::Consumer);
+
+        // Read records which should populate both shared and local cache
+        let records_read = cached_reader.read_records(1).unwrap();
+        assert_eq!(records_read, 1);
+        let array = cached_reader.consume_batch().unwrap();
+        assert_eq!(array.len(), 1);
+
+        let records_read = cached_reader.read_records(3).unwrap();
+        assert_eq!(records_read, 3);
+        let array = cached_reader.consume_batch().unwrap();
+        assert_eq!(array.len(), 3);
     }
 }
