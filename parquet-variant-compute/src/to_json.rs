@@ -1,7 +1,8 @@
-use arrow::array::{Array, ArrayRef, BinaryArray, StringArray, StringBuilder, StructArray};
+use arrow::array::{Array, ArrayRef, BinaryArray, BooleanBufferBuilder, StringArray, StructArray};
+use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use arrow_schema::ArrowError;
-use parquet_variant::{variant_to_json_string, Variant};
+use parquet_variant::{variant_to_json, Variant};
 
 pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, ArrowError> {
     let struct_array = input
@@ -29,33 +30,51 @@ pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, Arr
         }
     }
 
-    let value_array = struct_array
-        .column(0)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .ok_or_else(|| ArrowError::CastError("Expected BinaryArray for 'value'".into()))?;
-
     let metadata_array = struct_array
-        .column(1)
+        .column(0)
         .as_any()
         .downcast_ref::<BinaryArray>()
         .ok_or_else(|| ArrowError::CastError("Expected BinaryArray for 'metadata'".into()))?;
 
-    let mut builder = StringBuilder::new();
+    let value_array = struct_array
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .ok_or_else(|| ArrowError::CastError("Expected BinaryArray for 'value'".into()))?;
+
+    // Zero-copy builder
+    let mut json_buffer: Vec<u8> = Vec::with_capacity(1024);
+    let mut offsets: Vec<i32> = Vec::with_capacity(struct_array.len() + 1);
+    let mut validity = BooleanBufferBuilder::new(struct_array.len());
+    let mut current_offset: i32 = 0;
+    offsets.push(current_offset);
 
     for i in 0..struct_array.len() {
         if struct_array.is_null(i) {
-            builder.append_null();
+            validity.append(false);
+            offsets.push(current_offset);
         } else {
             let metadata = metadata_array.value(i);
             let value = value_array.value(i);
             let variant = Variant::new(metadata, value);
-            let json_string = variant_to_json_string(&variant)?;
-            builder.append_value(&json_string);
+            let start_len = json_buffer.len();
+            variant_to_json(&mut json_buffer, &variant)?;
+            let written = (json_buffer.len() - start_len) as i32;
+            current_offset += written;
+            offsets.push(current_offset);
+            validity.append(true);
         }
     }
 
-    Ok(builder.finish())
+    let offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets));
+    let value_buffer = Buffer::from_vec(json_buffer);
+    let null_buffer = NullBuffer::new(validity.finish());
+
+    Ok(StringArray::new(
+        offsets_buffer,
+        value_buffer,
+        Some(null_buffer),
+    ))
 }
 
 #[cfg(test)]
@@ -97,8 +116,8 @@ mod test {
         let value_array = Arc::new(value_builder.finish()) as ArrayRef;
 
         let fields: Fields = vec![
-            Field::new("value", DataType::Binary, true),
             Field::new("metadata", DataType::Binary, true),
+            Field::new("value", DataType::Binary, true),
         ]
         .into();
 
@@ -111,7 +130,7 @@ mod test {
 
         let struct_array = StructArray::new(
             fields,
-            vec![value_array.clone(), metadata_array.clone()],
+            vec![metadata_array.clone(), value_array.clone()],
             Some(null_buffer), // Null bitmap (let Arrow infer from children)
         );
 
