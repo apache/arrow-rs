@@ -401,6 +401,7 @@ mod test {
     use crate::reader::vlq::VLQDecoder;
     use crate::reader::{read_header, Decoder, ReaderBuilder};
     use crate::test_util::arrow_test_data;
+    use arrow_array::types::Int32Type;
     use arrow_array::*;
     use arrow_schema::{ArrowError, DataType, Field, Schema};
     use bytes::{Buf, BufMut, Bytes};
@@ -617,5 +618,130 @@ mod test {
         let expected_batch = RecordBatch::try_new(expected_schema, vec![expected_array]).unwrap();
         assert_eq!(batch, expected_batch);
         assert_eq!(batch.schema().field(0).name(), "f2");
+    }
+
+    #[test]
+    fn test_decimal() {
+        let files = [
+            ("avro/fixed_length_decimal.avro", 25, 2),
+            ("avro/fixed_length_decimal_legacy.avro", 13, 2),
+            ("avro/int32_decimal.avro", 4, 2),
+            ("avro/int64_decimal.avro", 10, 2),
+        ];
+        let decimal_values: Vec<i128> = (1..=24).map(|n| n as i128 * 100).collect();
+        for (file, precision, scale) in files {
+            let file_path = arrow_test_data(file);
+            let actual_batch = read_file(&file_path, 8, false);
+            let expected_array = Decimal128Array::from_iter_values(decimal_values.clone())
+                .with_precision_and_scale(precision, scale)
+                .unwrap();
+            let mut meta = HashMap::new();
+            meta.insert("precision".to_string(), precision.to_string());
+            meta.insert("scale".to_string(), scale.to_string());
+            let field_with_meta = Field::new("value", DataType::Decimal128(precision, scale), true)
+                .with_metadata(meta);
+            let expected_schema = Arc::new(Schema::new(vec![field_with_meta]));
+            let expected_batch =
+                RecordBatch::try_new(expected_schema.clone(), vec![Arc::new(expected_array)])
+                    .expect("Failed to build expected RecordBatch");
+            assert_eq!(
+                actual_batch, expected_batch,
+                "Decoded RecordBatch does not match the expected Decimal128 data for file {file}"
+            );
+            let actual_batch_small = read_file(&file_path, 3, false);
+            assert_eq!(
+                actual_batch_small,
+                expected_batch,
+                "Decoded RecordBatch does not match the expected Decimal128 data for file {file} with batch size 3"
+            );
+        }
+    }
+
+    #[test]
+    fn test_simple() {
+        let tests = [
+            ("avro/simple_enum.avro", 4, build_expected_enum(), 2),
+            ("avro/simple_fixed.avro", 2, build_expected_fixed(), 1),
+        ];
+
+        fn build_expected_enum() -> RecordBatch {
+            // Build the DictionaryArrays for f1, f2, f3
+            let keys_f1 = Int32Array::from(vec![0, 1, 2, 3]);
+            let vals_f1 = StringArray::from(vec!["a", "b", "c", "d"]);
+            let f1_dict =
+                DictionaryArray::<Int32Type>::try_new(keys_f1, Arc::new(vals_f1)).unwrap();
+            let keys_f2 = Int32Array::from(vec![2, 3, 0, 1]);
+            let vals_f2 = StringArray::from(vec!["e", "f", "g", "h"]);
+            let f2_dict =
+                DictionaryArray::<Int32Type>::try_new(keys_f2, Arc::new(vals_f2)).unwrap();
+            let keys_f3 = Int32Array::from(vec![Some(1), Some(2), None, Some(0)]);
+            let vals_f3 = StringArray::from(vec!["i", "j", "k"]);
+            let f3_dict =
+                DictionaryArray::<Int32Type>::try_new(keys_f3, Arc::new(vals_f3)).unwrap();
+            let dict_type =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+            let mut md_f1 = HashMap::new();
+            md_f1.insert(
+                "avro.enum.symbols".to_string(),
+                r#"["a","b","c","d"]"#.to_string(),
+            );
+            let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
+            let mut md_f2 = HashMap::new();
+            md_f2.insert(
+                "avro.enum.symbols".to_string(),
+                r#"["e","f","g","h"]"#.to_string(),
+            );
+            let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
+            let mut md_f3 = HashMap::new();
+            md_f3.insert(
+                "avro.enum.symbols".to_string(),
+                r#"["i","j","k"]"#.to_string(),
+            );
+            let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
+            let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
+            RecordBatch::try_new(
+                expected_schema,
+                vec![
+                    Arc::new(f1_dict) as Arc<dyn Array>,
+                    Arc::new(f2_dict) as Arc<dyn Array>,
+                    Arc::new(f3_dict) as Arc<dyn Array>,
+                ],
+            )
+            .unwrap()
+        }
+
+        fn build_expected_fixed() -> RecordBatch {
+            let f1 =
+                FixedSizeBinaryArray::try_from_iter(vec![b"abcde", b"12345"].into_iter()).unwrap();
+            let f2 =
+                FixedSizeBinaryArray::try_from_iter(vec![b"fghijklmno", b"1234567890"].into_iter())
+                    .unwrap();
+            let f3 = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                vec![Some(b"ABCDEF" as &[u8]), None].into_iter(),
+                6,
+            )
+            .unwrap();
+            let expected_schema = Arc::new(Schema::new(vec![
+                Field::new("f1", DataType::FixedSizeBinary(5), false),
+                Field::new("f2", DataType::FixedSizeBinary(10), false),
+                Field::new("f3", DataType::FixedSizeBinary(6), true),
+            ]));
+            RecordBatch::try_new(
+                expected_schema,
+                vec![
+                    Arc::new(f1) as Arc<dyn Array>,
+                    Arc::new(f2) as Arc<dyn Array>,
+                    Arc::new(f3) as Arc<dyn Array>,
+                ],
+            )
+            .unwrap()
+        }
+        for (file_name, batch_size, expected, alt_batch_size) in tests {
+            let file = arrow_test_data(file_name);
+            let actual = read_file(&file, batch_size, false);
+            assert_eq!(actual, expected);
+            let actual2 = read_file(&file, alt_batch_size, false);
+            assert_eq!(actual2, expected);
+        }
     }
 }

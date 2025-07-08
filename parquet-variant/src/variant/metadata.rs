@@ -24,7 +24,7 @@ use crate::utils::{
 use arrow_schema::ArrowError;
 
 /// Header structure for [`VariantMetadata`]
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct VariantMetadataHeader {
     version: u8,
     is_sorted: bool,
@@ -93,14 +93,14 @@ impl VariantMetadataHeader {
 /// Every instance of variant metadata is either _valid_ or _invalid_. depending on whether the
 /// underlying bytes are a valid encoding of variant metadata (see below).
 ///
-/// Instances produced by [`Self::try_new`] or [`Self::validate`] are fully _validated_. They always
+/// Instances produced by [`Self::try_new`] or [`Self::with_full_validation`] are fully _validated_. They always
 /// contain _valid_ data, and infallible accesses such as iteration and indexing are panic-free. The
 /// validation cost is linear in the number of underlying bytes.
 ///
 /// Instances produced by [`Self::new`] are _unvalidated_ and so they may contain either _valid_ or
 /// _invalid_ data. Infallible accesses such as iteration and indexing will panic if the underlying
 /// bytes are _invalid_, and fallible alternatives such as [`Self::iter_try`] and [`Self::get`] are
-/// provided as panic-free alternatives. [`Self::validate`] can also be used to _validate_ an
+/// provided as panic-free alternatives. [`Self::with_full_validation`] can also be used to _validate_ an
 /// _unvalidated_ instance, if desired.
 ///
 /// _Unvalidated_ instances can be constructed in constant time. This can be useful if the caller
@@ -128,7 +128,7 @@ impl VariantMetadataHeader {
 ///
 /// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
     header: VariantMetadataHeader,
@@ -143,7 +143,7 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [validation]: Self#Validation
     pub fn try_new(bytes: &'m [u8]) -> Result<Self, ArrowError> {
-        Self::try_new_impl(bytes)?.validate()
+        Self::try_new_with_shallow_validation(bytes)?.with_full_validation()
     }
 
     /// Interprets `bytes` as a variant metadata instance, without attempting to [validate] dictionary
@@ -157,11 +157,11 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [validate]: Self#Validation
     pub fn new(bytes: &'m [u8]) -> Self {
-        Self::try_new_impl(bytes).expect("Invalid variant metadata")
+        Self::try_new_with_shallow_validation(bytes).expect("Invalid variant metadata")
     }
 
     // The actual constructor, which performs only basic (constant-const) validation.
-    pub(crate) fn try_new_impl(bytes: &'m [u8]) -> Result<Self, ArrowError> {
+    pub(crate) fn try_new_with_shallow_validation(bytes: &'m [u8]) -> Result<Self, ArrowError> {
         let header_byte = first_byte_from_slice(bytes)?;
         let header = VariantMetadataHeader::try_new(header_byte)?;
 
@@ -206,17 +206,27 @@ impl<'m> VariantMetadata<'m> {
         Ok(new_self)
     }
 
+    /// The number of metadata dictionary entries
+    pub fn len(&self) -> usize {
+        self.dictionary_size
+    }
+
+    /// True if this metadata dictionary contains no entries
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// True if this instance is fully [validated] for panic-free infallible accesses.
     ///
     /// [validated]: Self#Validation
-    pub fn is_validated(&self) -> bool {
+    pub fn is_fully_validated(&self) -> bool {
         self.validated
     }
 
     /// Performs a full [validation] of this metadata dictionary and returns the result.
     ///
     /// [validation]: Self#Validation
-    pub fn validate(mut self) -> Result<Self, ArrowError> {
+    pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
             // Iterate over all string keys in this dictionary in order to prove that the offset
             // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.

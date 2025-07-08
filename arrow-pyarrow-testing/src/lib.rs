@@ -15,26 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Implementation of [Variant Binary Encoding] from [Apache Parquet].
-//!
-//! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
-//! [Apache Parquet]: https://parquet.apache.org/
-//!
-//! ## 🚧 Work In Progress
-//!
-//! This crate is under active development and is not yet ready for production use.
-//! If you are interested in helping, you can find more information on the GitHub [Variant issue]
-//!
-//! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
-
-mod builder;
-mod decoder;
-mod from_json;
-mod to_json;
-mod utils;
-mod variant;
-
-pub use builder::*;
-pub use from_json::json_to_variant;
-pub use to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
-pub use variant::*;
+//! This crate exists to provide a test environment for the `arrow-pyarrow` crate.
+//! It is not intended to be used by itself. See comments in Cargo.toml for more
+//! details.

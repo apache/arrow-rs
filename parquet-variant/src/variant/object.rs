@@ -27,7 +27,7 @@ use arrow_schema::ArrowError;
 const NUM_HEADER_BYTES: usize = 1;
 
 /// Header structure for [`VariantObject`]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct VariantObjectHeader {
     num_elements_size: OffsetSizeBytes,
     field_id_size: OffsetSizeBytes,
@@ -78,14 +78,14 @@ impl VariantObjectHeader {
 /// Every instance of variant object is either _valid_ or _invalid_. depending on whether the
 /// underlying bytes are a valid encoding of a variant object subtype (see below).
 ///
-/// Instances produced by [`Self::try_new`] or [`Self::validate`] are fully (and recursively)
+/// Instances produced by [`Self::try_new`] or [`Self::with_full_validation`] are fully (and recursively)
 /// _validated_. They always contain _valid_ data, and infallible accesses such as iteration and
 /// indexing are panic-free. The validation cost is linear in the number of underlying bytes.
 ///
 /// Instances produced by [`Self::new`] are _unvalidated_ and so they may contain either _valid_ or
 /// _invalid_ data. Infallible accesses such as iteration and indexing will panic if the underlying
 /// bytes are _invalid_, and fallible alternatives such as [`Self::iter_try`] and [`Self::get`] are
-/// provided as panic-free alternatives. [`Self::validate`] can also be used to _validate_ an
+/// provided as panic-free alternatives. [`Self::with_full_validation`] can also be used to _validate_ an
 /// _unvalidated_ instance, if desired.
 ///
 /// _Unvalidated_ instances can be constructed in constant time. They can be useful if the caller
@@ -115,7 +115,7 @@ impl VariantObjectHeader {
 ///
 /// [valid]: VariantMetadata#Validation
 /// [Variant spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-data-for-object-basic_type2
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantObject<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
@@ -128,7 +128,7 @@ pub struct VariantObject<'m, 'v> {
 
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
-        Self::try_new_impl(metadata, value).expect("Invalid variant object")
+        Self::try_new_with_shallow_validation(metadata, value).expect("Invalid variant object")
     }
 
     /// Attempts to interpet `metadata` and `value` as a variant object.
@@ -139,14 +139,14 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// particular, that all field ids exist in `metadata`, and all offsets are in-bounds and point
     /// to valid objects.
     pub fn try_new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Result<Self, ArrowError> {
-        Self::try_new_impl(metadata, value)?.validate()
+        Self::try_new_with_shallow_validation(metadata, value)?.with_full_validation()
     }
 
     /// Attempts to interpet `metadata` and `value` as a variant object, performing only basic
     /// (constant-cost) [validation].
     ///
     /// [validation]: Self#Validation
-    pub(crate) fn try_new_impl(
+    pub(crate) fn try_new_with_shallow_validation(
         metadata: VariantMetadata<'m>,
         value: &'v [u8],
     ) -> Result<Self, ArrowError> {
@@ -197,22 +197,22 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// True if this instance is fully [validated] for panic-free infallible accesses.
     ///
     /// [validated]: Self#Validation
-    pub fn is_validated(&self) -> bool {
+    pub fn is_fully_validated(&self) -> bool {
         self.validated
     }
 
     /// Performs a full [validation] of this variant object.
     ///
     /// [validation]: Self#Validation
-    pub fn validate(mut self) -> Result<Self, ArrowError> {
+    pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
             // Validate the metadata dictionary first, if not already validated, because we pass it
             // by value to all the children (who would otherwise re-validate it repeatedly).
-            self.metadata = self.metadata.validate()?;
+            self.metadata = self.metadata.with_full_validation()?;
 
             // Iterate over all string keys in this dictionary in order to prove that the offset
             // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
-            validate_fallible_iterator(self.iter_try_impl())?;
+            validate_fallible_iterator(self.iter_try())?;
             self.validated = true;
         }
         Ok(self)
@@ -236,20 +236,24 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     /// field IDs). The latter can only happen when working with an unvalidated object produced by
     /// [`Self::new`].
     pub fn field(&self, i: usize) -> Option<Variant<'m, 'v>> {
-        (i < self.len()).then(|| self.try_field_impl(i).expect("Invalid object field value"))
+        (i < self.len()).then(|| {
+            self.try_field_with_shallow_validation(i)
+                .expect("Invalid object field value")
+        })
     }
 
     /// Fallible version of `field`. Returns field value by index, capturing validation errors
     pub fn try_field(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
-        self.try_field_impl(i)?.validate()
+        self.try_field_with_shallow_validation(i)?
+            .with_full_validation()
     }
 
     // Attempts to retrieve the ith field value from the value region of the byte buffer; it
     // performs only basic (constant-cost) validation.
-    fn try_field_impl(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
+    fn try_field_with_shallow_validation(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         let value_bytes = slice_from_slice(self.value, self.first_value_byte..)?;
         let value_bytes = slice_from_slice(value_bytes, self.get_offset(i)?..)?;
-        Variant::try_new_with_metadata(self.metadata, value_bytes)
+        Variant::try_new_with_metadata_and_shallow_validation(self.metadata, value_bytes)
     }
 
     // Attempts to retrieve the ith offset from the field offset region of the byte buffer.
@@ -281,7 +285,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Returns an iterator of (name, value) pairs over the fields of this object.
     pub fn iter(&self) -> impl Iterator<Item = (&'m str, Variant<'m, 'v>)> + '_ {
-        self.iter_try_impl()
+        self.iter_try_with_shallow_validation()
             .map(|result| result.expect("Invalid variant object field value"))
     }
 
@@ -289,18 +293,21 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn iter_try(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        self.iter_try_impl().map(|result| {
+        self.iter_try_with_shallow_validation().map(|result| {
             let (name, value) = result?;
-            Ok((name, value.validate()?))
+            Ok((name, value.with_full_validation()?))
         })
     }
 
     // Fallible iteration over the fields of this object that performs only shallow (constant-cost)
     // validation of field values.
-    fn iter_try_impl(
+    fn iter_try_with_shallow_validation(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        (0..self.num_elements).map(move |i| Ok((self.try_field_name(i)?, self.try_field(i)?)))
+        (0..self.num_elements).map(move |i| {
+            let field = self.try_field_with_shallow_validation(i)?;
+            Ok((self.try_field_name(i)?, field))
+        })
     }
 
     /// Returns the value of the field with the specified name, if any.
@@ -397,20 +404,17 @@ mod tests {
         let missing_field = variant_obj.get("missing");
         assert!(missing_field.is_none());
 
-        // https://github.com/apache/arrow-rs/issues/7784
-        // Fixme: The following assertion will panic! That is not good
-        // let missing_field_name = variant_obj.field_name(3);
-        // assert!(missing_field_name.is_none());
-        //
-        // Fixme: The `.field_name()` will panic! This is not good
-        // let missing_field_name = variant_obj.field_name(300);
-        // assert!(missing_field_name.is_none());
+        let missing_field_name = variant_obj.field_name(3);
+        assert!(missing_field_name.is_none());
 
-        // let missing_field_value = variant_obj.field(3);
-        // assert!(missing_field_value.is_none());
+        let missing_field_name = variant_obj.field_name(300);
+        assert!(missing_field_name.is_none());
 
-        // let missing_field_value = variant_obj.field(300);
-        // assert!(missing_field_value.is_none());
+        let missing_field_value = variant_obj.field(3);
+        assert!(missing_field_value.is_none());
+
+        let missing_field_value = variant_obj.field(300);
+        assert!(missing_field_value.is_none());
 
         // Test fields iterator
         let fields: Vec<_> = variant_obj.iter().collect();

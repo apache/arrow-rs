@@ -138,12 +138,6 @@ impl FlightRecordBatchStream {
         self.trailers.as_ref().and_then(|trailers| trailers.get())
     }
 
-    /// Has a message defining the schema been received yet?
-    #[deprecated = "use schema().is_some() instead"]
-    pub fn got_schema(&self) -> bool {
-        self.schema().is_some()
-    }
-
     /// Return schema for the stream, if it has been received
     pub fn schema(&self) -> Option<&SchemaRef> {
         self.inner.schema()

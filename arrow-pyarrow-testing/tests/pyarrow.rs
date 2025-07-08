@@ -15,6 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Tests pyarrow bindings
+//!
+//! This test requires installing the `pyarrow` python package. If you do not
+//! have this package installed, you will see an error such as the following:
+//!
+//! ```text
+//! PyErr { type: <class 'ModuleNotFoundError'>, value: ModuleNotFoundError("No module named 'pyarrow'"), traceback: None }
+//! ```
+//!
+//! # Notes
+//!
+//! You can not use a virtual environment to run these tests on MacOS, as it will
+//! fail to find the pyarrow module due to <https://github.com/PyO3/pyo3/issues/1741>
+//!
+//! One way to run them is to install the `pyarrow` package in the system Python,
+//! which might break other packages, so use with caution:
+//!
+//! ```shell
+//! brew install pipx
+//! pip3 install --break-system-packages pyarrow
+//! ```
+
 use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
 use arrow_array::{
     Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
