@@ -218,8 +218,10 @@ impl ArrayReader for CachedArrayReader {
                     if read_from_inner == 0 {
                         break;
                     }
-
-                    let select_from_this_batch = std::cmp::min(num_records - read, read_from_inner);
+                    let select_from_this_batch = std::cmp::min(
+                        num_records - read,
+                        self.inner_position - self.outer_position,
+                    );
                     read += select_from_this_batch;
                     self.selections
                         .push_back(RowSelector::select(select_from_this_batch));

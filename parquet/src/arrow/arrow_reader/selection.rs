@@ -441,6 +441,59 @@ impl RowSelection {
     pub fn skipped_row_count(&self) -> usize {
         self.iter().filter(|s| s.skip).map(|s| s.row_count).sum()
     }
+
+    /// Expands the selection to align with batch boundaries.
+    /// This is needed when using cached array readers to ensure that
+    /// the cached data covers full batches.
+    #[cfg(feature = "async")]
+    pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
+        if batch_size == 0 {
+            return self.clone();
+        }
+
+        let mut expanded_ranges = Vec::new();
+        let mut row_offset = 0;
+
+        for selector in &self.selectors {
+            if selector.skip {
+                row_offset += selector.row_count;
+            } else {
+                let start = row_offset;
+                let end = row_offset + selector.row_count;
+
+                // Expand start to batch boundary
+                let expanded_start = (start / batch_size) * batch_size;
+                // Expand end to batch boundary
+                let expanded_end = ((end + batch_size - 1) / batch_size) * batch_size;
+                let expanded_end = expanded_end.min(total_rows);
+
+                expanded_ranges.push(expanded_start..expanded_end);
+                row_offset += selector.row_count;
+            }
+        }
+
+        // Sort ranges by start position
+        expanded_ranges.sort_by_key(|range| range.start);
+
+        // Merge overlapping or consecutive ranges
+        let mut merged_ranges: Vec<Range<usize>> = Vec::new();
+        for range in expanded_ranges {
+            if let Some(last) = merged_ranges.last_mut() {
+                if range.start <= last.end {
+                    // Overlapping or consecutive - merge them
+                    last.end = last.end.max(range.end);
+                } else {
+                    // No overlap - add new range
+                    merged_ranges.push(range);
+                }
+            } else {
+                // First range
+                merged_ranges.push(range);
+            }
+        }
+
+        Self::from_consecutive_ranges(merged_ranges.into_iter(), total_rows)
+    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {
@@ -1377,5 +1430,54 @@ mod tests {
 
         assert_eq!(selection.row_count(), 0);
         assert_eq!(selection.skipped_row_count(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "async")]
+    fn test_expand_to_batch_boundaries() {
+        // Test case that reproduces the overlapping ranges bug
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(21),   // Skip first page
+            RowSelector::select(21), // Select page to boundary
+            RowSelector::skip(41),   // Skip multiple pages
+            RowSelector::select(41), // Select multiple pages
+            RowSelector::skip(25),   // Skip page across boundary
+            RowSelector::select(25), // Select across page boundary
+            RowSelector::skip(7116), // Skip to final page boundary
+            RowSelector::select(10), // Select final page
+        ]);
+
+        let total_rows = 7300;
+        let batch_size = 1024;
+
+        // This should not panic with "out of order"
+        let expanded = selection.expand_to_batch_boundaries(batch_size, total_rows);
+
+        // Verify that the expanded selection is valid
+        assert!(expanded.selects_any());
+        assert!(expanded.row_count() >= selection.row_count());
+
+        // Test with smaller batch size that would cause more overlaps
+        let batch_size = 32;
+        let expanded = selection.expand_to_batch_boundaries(batch_size, total_rows);
+        assert!(expanded.selects_any());
+
+        // Test edge case with batch_size = 0
+        let expanded = selection.expand_to_batch_boundaries(0, total_rows);
+        assert_eq!(expanded, selection);
+
+        // Test simple case with two adjacent selectors
+        let selection = RowSelection::from(vec![
+            RowSelector::select(10), // 0-10
+            RowSelector::skip(5),    // 10-15
+            RowSelector::select(10), // 15-25
+        ]);
+
+        let expanded = selection.expand_to_batch_boundaries(32, 100);
+        // Both selectors should expand to 0-32
+        assert_eq!(
+            expanded.selectors,
+            vec![RowSelector::select(32), RowSelector::skip(68)]
+        );
     }
 }
