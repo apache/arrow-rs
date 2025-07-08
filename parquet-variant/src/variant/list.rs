@@ -422,10 +422,14 @@ mod tests {
         let mut list_size: usize = 1;
         let mut single_child_item_len: usize = 500;
 
+        // offset size will be OffSizeBytes::Two as the total child length between 2^8 and 2^16
+        let expected_offset_size = OffsetSizeBytes::Two;
+
         test_large_variant_list_with_child_length(
             list_size,             // the elements in the list
             single_child_item_len, // this will control the total child size in the list
-            OffsetSizeBytes::Two,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
         );
 
         list_size = 255;
@@ -433,7 +437,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Two,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
         );
 
         list_size = 256;
@@ -441,7 +446,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Two,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
         );
 
         list_size = 300;
@@ -449,7 +455,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Two,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
         );
     }
 
@@ -461,10 +468,15 @@ mod tests {
 
         let mut list_size: usize = 1;
         let mut single_child_item_len: usize = 70000;
+
+        // offset size will be OffSizeBytes::Two as the total child length between 2^16 and 2^24
+        let expected_offset_size = OffsetSizeBytes::Three;
+
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Three,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
         );
 
         list_size = 255;
@@ -473,7 +485,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Three,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
         );
 
         list_size = 256;
@@ -482,7 +495,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Three,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
         );
 
         list_size = 300;
@@ -491,7 +505,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Three,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
         );
     }
 
@@ -504,10 +519,14 @@ mod tests {
         let mut list_size: usize = 1;
         let mut single_child_item_len: usize = 20000000;
 
+        // offset size will be OffSizeBytes::Two as the total child length between 2^24 and 2^32
+        let expected_offset_size = OffsetSizeBytes::Four;
+
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Four,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
         );
 
         list_size = 255;
@@ -516,7 +535,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Four,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
         );
 
         list_size = 256;
@@ -525,7 +545,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Four,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
         );
 
         list_size = 300;
@@ -534,7 +555,8 @@ mod tests {
         test_large_variant_list_with_child_length(
             list_size,
             single_child_item_len,
-            OffsetSizeBytes::Four,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
         );
     }
 
@@ -544,6 +566,7 @@ mod tests {
     fn test_large_variant_list_with_child_length(
         list_size: usize,
         single_child_item_len: usize,
+        expected_num_element_size: OffsetSizeBytes,
         expected_offset_size_bytes: OffsetSizeBytes,
     ) {
         let mut builder = VariantBuilder::new();
@@ -568,6 +591,10 @@ mod tests {
 
         // verify that the head is expected
         assert_eq!(expected_offset_size_bytes, variant_list.header.offset_size);
+        assert_eq!(
+            expected_num_element_size,
+            variant_list.header.num_elements_size
+        );
         assert_eq!(list_size, variant_list.num_elements);
 
         // verify the data in the variant
