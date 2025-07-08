@@ -42,14 +42,14 @@ fn gen_view_array_without_nulls(size: usize) -> StringViewArray {
 fn criterion_benchmark(c: &mut Criterion) {
     let array = gen_view_array(100_000);
 
-    c.bench_function("gc view types all", |b| {
+    c.bench_function("gc view types all[100000]", |b| {
         b.iter(|| {
             black_box(array.gc());
         });
     });
 
     let sliced = array.slice(0, 100_000 / 2);
-    c.bench_function("gc view types slice half", |b| {
+    c.bench_function("gc view types slice half[100000]", |b| {
         b.iter(|| {
             black_box(sliced.gc());
         });
@@ -57,14 +57,44 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let array = gen_view_array_without_nulls(100_000);
 
-    c.bench_function("gc view types all without nulls", |b| {
+    c.bench_function("gc view types all without nulls[100000]", |b| {
         b.iter(|| {
             black_box(array.gc());
         });
     });
 
     let sliced = array.slice(0, 100_000 / 2);
-    c.bench_function("gc view types slice half without nulls", |b| {
+    c.bench_function("gc view types slice half without nulls[100000]", |b| {
+        b.iter(|| {
+            black_box(sliced.gc());
+        });
+    });
+
+    let array = gen_view_array(8000);
+
+    c.bench_function("gc view types all[8000]", |b| {
+        b.iter(|| {
+            black_box(array.gc());
+        });
+    });
+
+    let sliced = array.slice(0, 8000 / 2);
+    c.bench_function("gc view types slice half[8000]", |b| {
+        b.iter(|| {
+            black_box(sliced.gc());
+        });
+    });
+
+    let array = gen_view_array_without_nulls(8000);
+
+    c.bench_function("gc view types all without nulls[8000]", |b| {
+        b.iter(|| {
+            black_box(array.gc());
+        });
+    });
+
+    let sliced = array.slice(0, 8000 / 2);
+    c.bench_function("gc view types slice half without nulls[8000]", |b| {
         b.iter(|| {
             black_box(sliced.gc());
         });
