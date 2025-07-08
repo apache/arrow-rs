@@ -18,10 +18,5 @@
 mod from_json;
 mod to_json;
 
-/// Parse a batch of JSON strings into a batch of Variants represented as
-/// STRUCT<metadata: BINARY, value: BINARY> where nulls are preserved. The JSON strings in the input
-/// must be valid.
 pub use from_json::batch_json_string_to_variant;
-/// Transform a batch of Variant represented as STRUCT<metadata: BINARY, value: BINARY> to a batch
-/// of JSON strings where nulls are preserved. The JSON strings in the input must be valid.
 pub use to_json::batch_variant_to_json_string;

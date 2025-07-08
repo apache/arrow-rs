@@ -20,10 +20,8 @@
 
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, BinaryBuilder, BooleanBufferBuilder, StringArray, StructArray,
-};
-use arrow::buffer::NullBuffer;
+use arrow::array::{Array, ArrayRef, BinaryArray, BooleanBufferBuilder, StringArray, StructArray};
+use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::ArrowError;
 use parquet_variant::{json_to_variant, VariantBuilder};
@@ -35,6 +33,9 @@ fn variant_arrow_repr() -> DataType {
     DataType::Struct(fields.into())
 }
 
+/// Parse a batch of JSON strings into a batch of Variants represented as
+/// STRUCT<metadata: BINARY, value: BINARY> where nulls are preserved. The JSON strings in the input
+/// must be valid.
 pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<StructArray, ArrowError> {
     let input_string_array = match input.as_any().downcast_ref::<StringArray>() {
         Some(string_array) => Ok(string_array),
@@ -43,27 +44,65 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<StructArray, Arr
         )),
     }?;
 
-    let mut metadata_builder = BinaryBuilder::new();
-    let mut value_builder = BinaryBuilder::new();
+    // Zero-copy builders
+    let mut metadata_buffer: Vec<u8> = Vec::with_capacity(input.len() * 128);
+    let mut metadata_offsets: Vec<i32> = Vec::with_capacity(input.len() + 1);
+    let mut metadata_validity = BooleanBufferBuilder::new(input.len());
+    let mut metadata_current_offset: i32 = 0;
+    metadata_offsets.push(metadata_current_offset);
+
+    let mut value_buffer: Vec<u8> = Vec::with_capacity(input.len() * 128);
+    let mut value_offsets: Vec<i32> = Vec::with_capacity(input.len() + 1);
+    let mut value_validity = BooleanBufferBuilder::new(input.len());
+    let mut value_current_offset: i32 = 0;
+    value_offsets.push(value_current_offset);
+
     let mut validity = BooleanBufferBuilder::new(input.len());
     for i in 0..input.len() {
         if input.is_null(i) {
-            metadata_builder.append_null();
-            value_builder.append_null();
+            metadata_validity.append(false);
+            value_validity.append(false);
+            metadata_offsets.push(metadata_current_offset);
+            value_offsets.push(value_current_offset);
             validity.append(false);
         } else {
             let mut vb = VariantBuilder::new();
             json_to_variant(input_string_array.value(i), &mut vb)?;
             let (metadata, value) = vb.finish();
-            metadata_builder.append_value(&metadata);
-            value_builder.append_value(&value);
             validity.append(true);
+
+            metadata_current_offset += metadata.len() as i32;
+            metadata_buffer.extend(metadata);
+            metadata_offsets.push(metadata_current_offset);
+            metadata_validity.append(true);
+
+            value_current_offset += value.len() as i32;
+            value_buffer.extend(value);
+            value_offsets.push(value_current_offset);
+            value_validity.append(true);
+            println!("{value_current_offset} {metadata_current_offset}");
         }
     }
-    let struct_fields: Vec<ArrayRef> = vec![
-        Arc::new(metadata_builder.finish()),
-        Arc::new(value_builder.finish()),
-    ];
+    let metadata_offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(metadata_offsets));
+    let metadata_data_buffer = Buffer::from_vec(metadata_buffer);
+    let metadata_null_buffer = NullBuffer::new(metadata_validity.finish());
+
+    let value_offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(value_offsets));
+    let value_data_buffer = Buffer::from_vec(value_buffer);
+    let value_null_buffer = NullBuffer::new(value_validity.finish());
+
+    let metadata_array = BinaryArray::new(
+        metadata_offsets_buffer,
+        metadata_data_buffer,
+        Some(metadata_null_buffer),
+    );
+    let value_array = BinaryArray::new(
+        value_offsets_buffer,
+        value_data_buffer,
+        Some(value_null_buffer),
+    );
+
+    let struct_fields: Vec<ArrayRef> = vec![Arc::new(metadata_array), Arc::new(value_array)];
     let variant_fields = match variant_arrow_repr() {
         DataType::Struct(fields) => fields,
         _ => unreachable!("variant_arrow_repr is hard-coded and must match the expected schema"),
