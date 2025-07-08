@@ -492,6 +492,15 @@ impl ArrowReaderMetadata {
         Self::try_new(Arc::new(metadata), options)
     }
 
+    pub fn load_with_columns<T: ChunkReader>(reader: &T, options: ArrowReaderOptions, columns_id: Option<&[usize]>) -> Result<Self> {
+        let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
+        #[cfg(feature = "encryption")]
+        let metadata =
+            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+        let metadata = metadata.parse_and_finish_with_columns(reader, columns_id)?;
+        Self::try_new(Arc::new(metadata), options)
+    }
+
     /// Create a new [`ArrowReaderMetadata`]
     ///
     /// # Notes
