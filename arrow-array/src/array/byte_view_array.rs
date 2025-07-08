@@ -489,8 +489,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 }
             }
         } else {
-            for i in 0..len {
-                let raw_view: u128 = unsafe { *views.get_unchecked(i) };
+            for &raw_view in views.iter() {
                 let bv = ByteView::from(raw_view);
                 if bv.length > MAX_INLINE_VIEW_LEN {
                     total_large += bv.length as usize;
@@ -501,18 +500,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         // allocate exactly the capacity needed for all non‑inline data
         let mut data_buf = Vec::with_capacity(total_large);
 
-        let mut views_buf: Vec<u128> = vec![0u128; len];
-
         // 3) Iterate over the views and process each view
-        if let Some(nbm) = &nulls {
+        let views_buf: Vec<u128> = if let Some(nbm) = &nulls {
+            let mut buf = vec![0u128; len];
             for i in nbm.valid_indices() {
-                views_buf[i] = self.process_view(i, views, &mut data_buf);
+                buf[i] = self.process_view(i, views, &mut data_buf);
             }
+            buf
         } else {
-            views_buf = (0..len)
+            (0..len)
                 .map(|i| self.process_view(i, views, &mut data_buf))
-                .collect();
-        }
+                .collect()
+        };
 
         // 4) Wrap up: zero‑copy turn Vec<u128> into ScalarBuffer<u128>,
         //    and Vec<u8> into Buffer, then construct the final array
