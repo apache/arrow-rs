@@ -430,27 +430,19 @@ mod test {
         mut decoder: Decoder,
         mut input: S,
     ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
-        let mut buffered = Bytes::new();
-        futures::stream::poll_fn(move |cx| {
-            loop {
-                if buffered.is_empty() {
-                    buffered = match ready!(input.poll_next_unpin(cx)) {
-                        Some(b) => b,
-                        None => break,
-                    };
-                }
-                let decoded = match decoder.decode(buffered.as_ref()) {
-                    Ok(decoded) => decoded,
-                    Err(e) => return Poll::Ready(Some(Err(e))),
-                };
-                let read = buffered.len();
-                buffered.advance(decoded);
-                if decoded != read {
-                    break;
+        async_stream::try_stream! {
+            if let Some(data) = input.next().await {
+                let consumed = decoder.decode(&data)?;
+                if consumed < data.len() {
+                    Err(ArrowError::ParseError(
+                        "did not consume all bytes".to_string(),
+                    ))?;
                 }
             }
-            Poll::Ready(decoder.flush().transpose())
-        })
+            if let Some(batch) = decoder.flush()? {
+                yield batch
+            }
+        }
     }
 
     #[test]
@@ -595,29 +587,91 @@ mod test {
 
     #[test]
     fn test_decode_stream_with_schema() {
-        const PROVIDED_SCHEMA: &str =
-            r#"{"type":"record","name":"test","fields":[{"name":"f2","type":"string"}]}"#;
-        let schema_s2: crate::schema::Schema = serde_json::from_str(PROVIDED_SCHEMA).unwrap();
-        let record_val = "some_string";
-        let mut body = vec![];
-        body.push((record_val.len() as u8) << 1);
-        body.extend_from_slice(record_val.as_bytes());
-        let mut reader_placeholder = Cursor::new(&[] as &[u8]);
-        let decoder = ReaderBuilder::new()
-            .with_batch_size(1)
-            .with_schema(schema_s2)
-            .build_decoder(&mut reader_placeholder)
-            .unwrap();
-        let stream = Box::pin(stream::once(async { Bytes::from(body) }));
-        let decoded_stream = decode_stream(decoder, stream);
-        let batches: Vec<RecordBatch> = block_on(decoded_stream.try_collect()).unwrap();
-        let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
-        let expected_field = Field::new("f2", DataType::Utf8, false);
-        let expected_schema = Arc::new(Schema::new(vec![expected_field]));
-        let expected_array = Arc::new(StringArray::from(vec![record_val]));
-        let expected_batch = RecordBatch::try_new(expected_schema, vec![expected_array]).unwrap();
-        assert_eq!(batch, expected_batch);
-        assert_eq!(batch.schema().field(0).name(), "f2");
+        struct TestCase<'a> {
+            name: &'a str,
+            schema: &'a str,
+            expected_error: Option<&'a str>,
+        }
+        let tests = vec![
+            TestCase {
+                name: "success",
+                schema: r#"{"type":"record","name":"test","fields":[{"name":"f2","type":"string"}]}"#,
+                expected_error: None,
+            },
+            TestCase {
+                name: "valid schema invalid data",
+                schema: r#"{"type":"record","name":"test","fields":[{"name":"f2","type":"long"}]}"#,
+                expected_error: Some("did not consume all bytes"),
+            },
+        ];
+        for test in tests {
+            let schema_s2: crate::schema::Schema = serde_json::from_str(test.schema).unwrap();
+            let record_val = "some_string";
+            let mut body = vec![];
+            body.push((record_val.len() as u8) << 1);
+            body.extend_from_slice(record_val.as_bytes());
+            let mut reader_placeholder = Cursor::new(&[] as &[u8]);
+            let builder = ReaderBuilder::new()
+                .with_batch_size(1)
+                .with_schema(schema_s2);
+            let decoder_result = builder.build_decoder(&mut reader_placeholder);
+            let decoder = match decoder_result {
+                Ok(decoder) => decoder,
+                Err(e) => {
+                    if let Some(expected) = test.expected_error {
+                        assert!(
+                            e.to_string().contains(expected),
+                            "Test '{}' failed: unexpected error message at build.\nExpected to contain: '{expected}'\nActual: '{e}'",
+                            test.name,
+                        );
+                        continue;
+                    } else {
+                        panic!("Test '{}' failed at decoder build: {e}", test.name);
+                    }
+                }
+            };
+            let stream = Box::pin(stream::once(async { Bytes::from(body) }));
+            let decoded_stream = decode_stream(decoder, stream);
+            let batches_result: Result<Vec<RecordBatch>, ArrowError> =
+                block_on(decoded_stream.try_collect());
+            match (batches_result, test.expected_error) {
+                (Ok(batches), None) => {
+                    let batch =
+                        arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
+                    let expected_field = Field::new("f2", DataType::Utf8, false);
+                    let expected_schema = Arc::new(Schema::new(vec![expected_field]));
+                    let expected_array = Arc::new(StringArray::from(vec![record_val]));
+                    let expected_batch =
+                        RecordBatch::try_new(expected_schema, vec![expected_array]).unwrap();
+                    assert_eq!(batch, expected_batch, "Test '{}' failed", test.name);
+                    assert_eq!(
+                        batch.schema().field(0).name(),
+                        "f2",
+                        "Test '{}' failed",
+                        test.name
+                    );
+                }
+                (Err(e), Some(expected)) => {
+                    assert!(
+                        e.to_string().contains(expected),
+                        "Test '{}' failed: unexpected error message at decode.\nExpected to contain: '{expected}'\nActual: '{e}'",
+                        test.name,
+                    );
+                }
+                (Ok(batches), Some(expected)) => {
+                    panic!(
+                        "Test '{}' was expected to fail with '{expected}', but it succeeded with: {:?}",
+                        test.name, batches
+                    );
+                }
+                (Err(e), None) => {
+                    panic!(
+                        "Test '{}' was not expected to fail, but it did with '{e}'",
+                        test.name
+                    );
+                }
+            }
+        }
     }
 
     #[test]

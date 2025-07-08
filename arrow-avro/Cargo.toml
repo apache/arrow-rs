@@ -58,6 +58,7 @@ tempfile = "3.3"
 arrow = { workspace = true }
 futures = "0.3.31"
 bytes = "1.10.1"
+async-stream = "0.3.6"
 
 [[bench]]
 name = "avro_reader"
