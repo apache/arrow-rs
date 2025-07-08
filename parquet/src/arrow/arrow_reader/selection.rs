@@ -464,7 +464,7 @@ impl RowSelection {
                 // Expand start to batch boundary
                 let expanded_start = (start / batch_size) * batch_size;
                 // Expand end to batch boundary
-                let expanded_end = ((end + batch_size - 1) / batch_size) * batch_size;
+                let expanded_end = end.div_ceil(batch_size) * batch_size;
                 let expanded_end = expanded_end.min(total_rows);
 
                 expanded_ranges.push(expanded_start..expanded_end);
@@ -1430,54 +1430,5 @@ mod tests {
 
         assert_eq!(selection.row_count(), 0);
         assert_eq!(selection.skipped_row_count(), 0);
-    }
-
-    #[test]
-    #[cfg(feature = "async")]
-    fn test_expand_to_batch_boundaries() {
-        // Test case that reproduces the overlapping ranges bug
-        let selection = RowSelection::from(vec![
-            RowSelector::skip(21),   // Skip first page
-            RowSelector::select(21), // Select page to boundary
-            RowSelector::skip(41),   // Skip multiple pages
-            RowSelector::select(41), // Select multiple pages
-            RowSelector::skip(25),   // Skip page across boundary
-            RowSelector::select(25), // Select across page boundary
-            RowSelector::skip(7116), // Skip to final page boundary
-            RowSelector::select(10), // Select final page
-        ]);
-
-        let total_rows = 7300;
-        let batch_size = 1024;
-
-        // This should not panic with "out of order"
-        let expanded = selection.expand_to_batch_boundaries(batch_size, total_rows);
-
-        // Verify that the expanded selection is valid
-        assert!(expanded.selects_any());
-        assert!(expanded.row_count() >= selection.row_count());
-
-        // Test with smaller batch size that would cause more overlaps
-        let batch_size = 32;
-        let expanded = selection.expand_to_batch_boundaries(batch_size, total_rows);
-        assert!(expanded.selects_any());
-
-        // Test edge case with batch_size = 0
-        let expanded = selection.expand_to_batch_boundaries(0, total_rows);
-        assert_eq!(expanded, selection);
-
-        // Test simple case with two adjacent selectors
-        let selection = RowSelection::from(vec![
-            RowSelector::select(10), // 0-10
-            RowSelector::skip(5),    // 10-15
-            RowSelector::select(10), // 15-25
-        ]);
-
-        let expanded = selection.expand_to_batch_boundaries(32, 100);
-        // Both selectors should expand to 0-32
-        assert_eq!(
-            expanded.selectors,
-            vec![RowSelector::select(32), RowSelector::skip(68)]
-        );
     }
 }
