@@ -27,12 +27,12 @@ use arrow::{
     datatypes::{Float64Type, UInt8Type},
 };
 use arrow_ord::partition::partition;
-use rand::distributions::{Distribution, Standard};
-use std::iter;
+use rand::distr::{Distribution, StandardUniform};
+use std::{hint, iter};
 
 fn create_array<T: ArrowPrimitiveType>(size: usize, with_nulls: bool) -> ArrayRef
 where
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let null_density = if with_nulls { 0.5 } else { 0.0 };
     let array = create_primitive_array::<T>(size, null_density);
@@ -40,7 +40,7 @@ where
 }
 
 fn bench_partition(sorted_columns: &[ArrayRef]) {
-    criterion::black_box(partition(sorted_columns).unwrap().ranges());
+    hint::black_box(partition(sorted_columns).unwrap().ranges());
 }
 
 fn create_sorted_low_cardinality_data(length: usize) -> Vec<ArrayRef> {

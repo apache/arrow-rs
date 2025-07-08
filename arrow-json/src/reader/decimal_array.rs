@@ -66,7 +66,7 @@ where
                 }
                 TapeElement::I64(high) => match tape.get(*p + 1) {
                     TapeElement::I32(low) => {
-                        let val = ((high as i64) << 32 | (low as u32) as i64).to_string();
+                        let val = (((high as i64) << 32) | (low as u32) as i64).to_string();
                         let value = parse_decimal::<D>(&val, self.precision, self.scale)?;
                         builder.append_value(value)
                     }
@@ -79,7 +79,7 @@ where
                 }
                 TapeElement::F64(high) => match tape.get(*p + 1) {
                     TapeElement::F32(low) => {
-                        let val = f64::from_bits((high as u64) << 32 | low as u64).to_string();
+                        let val = f64::from_bits(((high as u64) << 32) | low as u64).to_string();
                         let value = parse_decimal::<D>(&val, self.precision, self.scale)?;
                         builder.append_value(value)
                     }

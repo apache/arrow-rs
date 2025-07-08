@@ -132,7 +132,7 @@ where
                 }
                 TapeElement::F64(high) => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
-                        let v = f64::from_bits((high as u64) << 32 | low as u64);
+                        let v = f64::from_bits(((high as u64) << 32) | low as u64);
                         let value = NumCast::from(v).ok_or_else(|| {
                             ArrowError::JsonError(format!("failed to parse {v} as {d}",))
                         })?;
@@ -142,7 +142,7 @@ where
                 },
                 TapeElement::I64(high) => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
-                        let v = (high as i64) << 32 | (low as u32) as i64;
+                        let v = ((high as i64) << 32) | (low as u32) as i64;
                         let value = NumCast::from(v).ok_or_else(|| {
                             ArrowError::JsonError(format!("failed to parse {v} as {d}",))
                         })?;

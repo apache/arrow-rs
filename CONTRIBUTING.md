@@ -112,16 +112,16 @@ git submodule update --init
 
 This populates data in two git submodules:
 
-- `../parquet-testing/data` (sourced from https://github.com/apache/parquet-testing.git)
-- `../testing` (sourced from https://github.com/apache/arrow-testing)
+- `./parquet-testing/data` (sourced from https://github.com/apache/parquet-testing.git)
+- `./testing` (sourced from https://github.com/apache/arrow-testing)
 
 By default, `cargo test` will look for these directories at their
 standard location. The following environment variables can be used to override the location:
 
 ```bash
 # Optionally specify a different location for test data
-export PARQUET_TEST_DATA=$(cd ../parquet-testing/data; pwd)
-export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
+export PARQUET_TEST_DATA=$(cd ./parquet-testing/data; pwd)
+export ARROW_TEST_DATA=$(cd ./testing/data; pwd)
 ```
 
 From here on, this is a pure Rust project and `cargo` can be used to run tests, benchmarks, docs and examples as usual.

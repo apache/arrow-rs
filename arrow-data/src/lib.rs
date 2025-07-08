@@ -19,6 +19,11 @@
 //!
 //! For a higher-level, strongly-typed interface see [arrow_array](https://docs.rs/arrow_array)
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
 mod data;
 pub use data::*;

@@ -19,8 +19,8 @@ use arrow_array::types::Int32Type;
 use arrow_array::{DictionaryArray, Int32Array};
 use arrow_buffer::NullBuffer;
 use criterion::*;
-use rand::{thread_rng, Rng};
-use std::sync::Arc;
+use rand::{rng, Rng};
+use std::{hint, sync::Arc};
 
 fn gen_dict(
     len: usize,
@@ -28,11 +28,11 @@ fn gen_dict(
     occupancy: f64,
     null_percent: f64,
 ) -> DictionaryArray<Int32Type> {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let values = Int32Array::from(vec![0; values_len]);
     let max_key = (values_len as f64 * occupancy) as i32;
-    let keys = (0..len).map(|_| rng.gen_range(0..max_key)).collect();
-    let nulls = (0..len).map(|_| !rng.gen_bool(null_percent)).collect();
+    let keys = (0..len).map(|_| rng.random_range(0..max_key)).collect();
+    let nulls = (0..len).map(|_| !rng.random_bool(null_percent)).collect();
 
     let keys = Int32Array::new(keys, Some(NullBuffer::new(nulls)));
     DictionaryArray::new(keys, Arc::new(values))
@@ -45,7 +45,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let dict = gen_dict(1024, values, occupancy, null_percent);
                 c.bench_function(&format!("occupancy(values: {values}, occupancy: {occupancy}, null_percent: {null_percent})"), |b| {
                     b.iter(|| {
-                        black_box(&dict).occupancy()
+                        hint::black_box(&dict).occupancy()
                     });
                 });
             }

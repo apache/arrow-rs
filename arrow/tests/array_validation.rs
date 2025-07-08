@@ -432,7 +432,7 @@ fn test_validate_large_list_view_negative_sizes() {
 
 #[test]
 #[should_panic(
-    expected = "Values length 4 is less than the length (2) multiplied by the value size (2) for FixedSizeList"
+    expected = "Values length 4 is less than the length (3) multiplied by the value size (2) for FixedSizeList"
 )]
 fn test_validate_fixed_size_list() {
     // child has 4 elements,

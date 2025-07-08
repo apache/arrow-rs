@@ -228,6 +228,12 @@ pub enum LogicalType {
     Uuid,
     /// A 16-bit floating point number.
     Float16,
+    /// A Variant value.
+    Variant,
+    /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
+    Geometry,
+    /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
+    Geography,
 }
 
 // ----------------------------------------------------------------------
@@ -404,7 +410,7 @@ impl Compression {
     /// Returns the codec type of this compression setting as a string, without the compression
     /// level.
     pub(crate) fn codec_to_string(self) -> String {
-        format!("{:?}", self).split('(').next().unwrap().to_owned()
+        format!("{self:?}").split('(').next().unwrap().to_owned()
     }
 }
 
@@ -416,7 +422,7 @@ fn split_compression_string(str_setting: &str) -> Result<(&str, Option<u32>), Pa
             let level = &level_str[..level_str.len() - 1]
                 .parse::<u32>()
                 .map_err(|_| {
-                    ParquetError::General(format!("invalid compression level: {}", level_str))
+                    ParquetError::General(format!("invalid compression level: {level_str}"))
                 })?;
             Ok((codec, Some(*level)))
         }
@@ -436,8 +442,7 @@ fn check_level_is_none(level: &Option<u32>) -> Result<(), ParquetError> {
 
 fn require_level(codec: &str, level: Option<u32>) -> Result<u32, ParquetError> {
     level.ok_or(ParquetError::General(format!(
-        "{} requires a compression level",
-        codec
+        "{codec} requires a compression level",
     )))
 }
 
@@ -579,6 +584,9 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
+                LogicalType::Variant | LogicalType::Geometry | LogicalType::Geography => {
+                    SortOrder::UNDEFINED
+                }
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -841,6 +849,9 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::BSON(_) => LogicalType::Bson,
             parquet::LogicalType::UUID(_) => LogicalType::Uuid,
             parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
+            parquet::LogicalType::VARIANT(_) => LogicalType::Variant,
+            parquet::LogicalType::GEOMETRY(_) => LogicalType::Geometry,
+            parquet::LogicalType::GEOGRAPHY(_) => LogicalType::Geography,
         }
     }
 }
@@ -882,6 +893,9 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
+            LogicalType::Variant => parquet::LogicalType::VARIANT(Default::default()),
+            LogicalType::Geometry => parquet::LogicalType::GEOMETRY(Default::default()),
+            LogicalType::Geography => parquet::LogicalType::GEOGRAPHY(Default::default()),
         }
     }
 }
@@ -931,9 +945,12 @@ impl From<Option<LogicalType>> for ConvertedType {
                 },
                 LogicalType::Json => ConvertedType::JSON,
                 LogicalType::Bson => ConvertedType::BSON,
-                LogicalType::Uuid | LogicalType::Float16 | LogicalType::Unknown => {
-                    ConvertedType::NONE
-                }
+                LogicalType::Uuid
+                | LogicalType::Float16
+                | LogicalType::Variant
+                | LogicalType::Geometry
+                | LogicalType::Geography
+                | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
         }
@@ -2359,7 +2376,7 @@ mod tests {
         // test unknown string
         match "plain_xxx".parse::<Encoding>() {
             Ok(e) => {
-                panic!("Should not be able to parse {:?}", e);
+                panic!("Should not be able to parse {e:?}");
             }
             Err(e) => {
                 assert_eq!(e.to_string(), "Parquet error: unknown encoding: plain_xxx");

@@ -61,6 +61,7 @@ The `arrow` crate provides the following features which may be enabled in your `
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 - `ffi` - bindings for the Arrow C [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html)
 - `pyarrow` - bindings for pyo3 to call arrow-rs from python
+- `canonical_extension_types` - definitions for [canonical extension types](https://arrow.apache.org/docs/format/CanonicalExtensions.html#format-canonical-extensions)
 
 ## Arrow Feature Status
 

@@ -52,7 +52,7 @@ fn bench_typed<T: DataType>(
         0,
         ColumnPath::new(vec![]),
     ));
-    c.bench_function(&format!("encoding: {}", name), |b| {
+    c.bench_function(&format!("encoding: {name}"), |b| {
         b.iter(|| {
             let mut encoder = get_encoder::<T>(encoding, &column_desc_ptr).unwrap();
             encoder.put(values).unwrap();
@@ -66,7 +66,7 @@ fn bench_typed<T: DataType>(
     println!("{} encoded as {} bytes", name, encoded.len(),);
 
     let mut buffer = vec![T::T::default(); values.len()];
-    c.bench_function(&format!("decoding: {}", name), |b| {
+    c.bench_function(&format!("decoding: {name}"), |b| {
         b.iter(|| {
             let mut decoder: Box<dyn Decoder<T>> =
                 get_decoder(column_desc_ptr.clone(), encoding).unwrap();
@@ -86,12 +86,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut d128s = Vec::new();
     for _ in 0..n {
         f16s.push(FixedLenByteArray::from(
-            f16::from_f32(rng.gen::<f32>()).to_le_bytes().to_vec(),
+            f16::from_f32(rng.random::<f32>()).to_le_bytes().to_vec(),
         ));
-        f32s.push(rng.gen::<f32>());
-        f64s.push(rng.gen::<f64>());
+        f32s.push(rng.random::<f32>());
+        f64s.push(rng.random::<f64>());
         d128s.push(FixedLenByteArray::from(
-            rng.gen::<i128>().to_be_bytes().to_vec(),
+            rng.random::<i128>().to_be_bytes().to_vec(),
         ));
     }
 

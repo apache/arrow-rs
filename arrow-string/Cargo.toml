@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_string"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow-buffer = { workspace = true }

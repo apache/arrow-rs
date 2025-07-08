@@ -15,14 +15,48 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! High-level API for reading/writing Arrow
-//! [RecordBatch](arrow_array::RecordBatch)es and
-//! [Array](arrow_array::Array)s to/from Parquet Files.
+//! API for reading/writing Arrow [`RecordBatch`]es and [`Array`]s to/from
+//! Parquet Files.
 //!
-//! [Apache Arrow](http://arrow.apache.org/) is a cross-language development platform for
-//! in-memory data.
+//! See the [crate-level documentation](crate) for more details on other APIs
 //!
-//!# Example of writing Arrow record batch to Parquet file
+//! # Schema Conversion
+//!
+//! These APIs ensure that data in Arrow [`RecordBatch`]es written to Parquet are
+//! read back as [`RecordBatch`]es with the exact same types and values.
+//!
+//! Parquet and Arrow have different type systems, and there is not
+//! always a one to one mapping between the systems. For example, data
+//! stored as a Parquet [`BYTE_ARRAY`] can be read as either an Arrow
+//! [`BinaryViewArray`] or [`BinaryArray`].
+//!
+//! To recover the original Arrow types, the writers in this module add a "hint" to
+//! the metadata in the [`ARROW_SCHEMA_META_KEY`] key which records the original Arrow
+//! schema. The metadata hint follows the same convention as arrow-cpp based
+//! implementations such as `pyarrow`. The reader looks for the schema hint in the
+//! metadata to determine Arrow types, and if it is not present, infers the Arrow schema
+//! from the Parquet schema.
+//!
+//! In situations where the embedded Arrow schema is not compatible with the Parquet
+//! schema, the Parquet schema takes precedence and no error is raised.
+//! See [#1663](https://github.com/apache/arrow-rs/issues/1663)
+//!
+//! You can also control the type conversion process in more detail using:
+//!
+//! * [`ArrowSchemaConverter`] control the conversion of Arrow types to Parquet
+//!   types.
+//!
+//! * [`ArrowReaderOptions::with_schema`] to explicitly specify your own Arrow schema hint
+//!   to use when reading Parquet, overriding any metadata that may be present.
+//!
+//! [`RecordBatch`]: arrow_array::RecordBatch
+//! [`Array`]: arrow_array::Array
+//! [`BYTE_ARRAY`]: crate::basic::Type::BYTE_ARRAY
+//! [`BinaryViewArray`]: arrow_array::BinaryViewArray
+//! [`BinaryArray`]: arrow_array::BinaryArray
+//! [`ArrowReaderOptions::with_schema`]: arrow_reader::ArrowReaderOptions::with_schema
+//!
+//! # Example: Writing Arrow `RecordBatch` to Parquet file
 //!
 //!```rust
 //! # use arrow_array::{Int32Array, ArrayRef};
@@ -54,7 +88,7 @@
 //! writer.close().unwrap();
 //! ```
 //!
-//! # Example of reading parquet file into arrow record batch
+//! # Example: Reading Parquet file into Arrow `RecordBatch`
 //!
 //! ```rust
 //! # use std::fs::File;
@@ -93,6 +127,57 @@
 //!
 //! println!("Read {} records.", record_batch.num_rows());
 //! ```
+//!
+//! # Example: Reading non-uniformly encrypted parquet file into arrow record batch
+//!
+//! Note: This requires the experimental `encryption` feature to be enabled at compile time.
+//!
+#![cfg_attr(feature = "encryption", doc = "```rust")]
+#![cfg_attr(not(feature = "encryption"), doc = "```ignore")]
+//! # use arrow_array::{Int32Array, ArrayRef};
+//! # use arrow_array::{types, RecordBatch};
+//! # use parquet::arrow::arrow_reader::{
+//! #     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+//! # };
+//! # use arrow_array::cast::AsArray;
+//! # use parquet::file::metadata::ParquetMetaData;
+//! # use tempfile::tempfile;
+//! # use std::fs::File;
+//! # use parquet::encryption::decrypt::FileDecryptionProperties;
+//! # let test_data = arrow::util::test_util::parquet_test_data();
+//! # let path = format!("{test_data}/encrypt_columns_and_footer.parquet.encrypted");
+//! #
+//! let file = File::open(path).unwrap();
+//!
+//! // Define the AES encryption keys required required for decrypting the footer metadata
+//! // and column-specific data. If only a footer key is used then it is assumed that the
+//! // file uses uniform encryption and all columns are encrypted with the footer key.
+//! // If any column keys are specified, other columns without a key provided are assumed
+//! // to be unencrypted
+//! let footer_key = "0123456789012345".as_bytes(); // Keys are 128 bits (16 bytes)
+//! let column_1_key = "1234567890123450".as_bytes();
+//! let column_2_key = "1234567890123451".as_bytes();
+//!
+//! let decryption_properties = FileDecryptionProperties::builder(footer_key.to_vec())
+//!     .with_column_key("double_field", column_1_key.to_vec())
+//!     .with_column_key("float_field", column_2_key.to_vec())
+//!     .build()
+//!     .unwrap();
+//!
+//! let options = ArrowReaderOptions::default()
+//!  .with_file_decryption_properties(decryption_properties);
+//! let reader_metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+//! let file_metadata = reader_metadata.metadata().file_metadata();
+//! assert_eq!(50, file_metadata.num_rows());
+//!
+//! let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+//!   .unwrap()
+//!   .build()
+//!   .unwrap();
+//!
+//! let record_batch = reader.next().unwrap().unwrap();
+//! assert_eq!(50, record_batch.num_rows());
+//! ```
 
 experimental!(mod array_reader);
 pub mod arrow_reader;
@@ -118,16 +203,15 @@ pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::{SchemaDescriptor, Type};
 use arrow_schema::{FieldRef, Schema};
 
-// continue to export deprecated methods until they are removed
-#[allow(deprecated)]
-pub use self::schema::arrow_to_parquet_schema;
-
 pub use self::schema::{
     add_encoded_arrow_schema_to_metadata, encode_arrow_schema, parquet_to_arrow_field_levels,
     parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns, ArrowSchemaConverter, FieldLevels,
 };
 
-/// Schema metadata key used to store serialized Arrow IPC schema
+/// Schema metadata key used to store serialized Arrow schema
+///
+/// The Arrow schema is encoded using the Arrow IPC format, and then base64
+/// encoded. This is the same format used by arrow-cpp systems, such as pyarrow.
 pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
 
 /// The value of this metadata key, if present on [`Field::metadata`], will be used
@@ -164,10 +248,25 @@ pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionMask {
-    /// If present a leaf column should be included if the value at
+    /// If `Some`, a leaf column should be included if the value at
     /// the corresponding index is true
     ///
-    /// If `None`, include all columns
+    /// If `None`, all columns should be included
+    ///
+    /// # Examples
+    ///
+    /// Given the original parquet schema with leaf columns is `[a, b, c, d]`
+    ///
+    /// A mask of `[true, false, true, false]` will result in a schema 2
+    /// elements long:
+    /// * `fields[0]`: `a`
+    /// * `fields[1]`: `c`    
+    ///
+    /// A mask of `None` will result in a schema 4 elements long:
+    /// * `fields[0]`: `a`
+    /// * `fields[1]`: `b`
+    /// * `fields[2]`: `c`
+    /// * `fields[3]`: `d`
     mask: Option<Vec<bool>>,
 }
 
@@ -379,7 +478,7 @@ mod test {
             .unwrap();
         assert_eq!(
             err.to_string(),
-            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..341"
+            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..357"
         );
     }
 
@@ -467,6 +566,7 @@ mod test {
         let batch = RecordBatch::try_from_iter(vec![("id", array)]).unwrap();
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
+            .set_write_page_header_statistics(true)
             .build();
 
         let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();

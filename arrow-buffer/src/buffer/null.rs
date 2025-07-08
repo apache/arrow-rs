@@ -116,7 +116,7 @@ impl NullBuffer {
         }
     }
 
-    /// Returns the length of this [`NullBuffer`]
+    /// Returns the length of this [`NullBuffer`] in bits
     #[inline]
     pub fn len(&self) -> usize {
         self.buffer.len()

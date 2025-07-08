@@ -1,22 +1,22 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directory: "/"
+    directories:
+      - "/"
+      - "/arrow-pyarrow-integration-testing"
     schedule:
       interval: daily
     open-pull-requests-limit: 10
     target-branch: main
-    labels: [ auto-dependencies, arrow ]
-  - package-ecosystem: cargo
-    directory: "/object_store"
-    schedule:
-      interval: daily
-    open-pull-requests-limit: 10
-    target-branch: main
-    labels: [ auto-dependencies, object_store ]
+    labels: [auto-dependencies, arrow]
+    groups:
+      prost:
+        applies-to: version-updates
+        patterns:
+          - "prost*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
-    labels: [ auto-dependencies ]
+    labels: [auto-dependencies]

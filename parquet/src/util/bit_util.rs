@@ -283,9 +283,9 @@ impl BitWriter {
     /// The `num_bits` must not be greater than 64. This is bit packed.
     #[inline]
     pub fn put_value(&mut self, v: u64, num_bits: usize) {
-        assert!(num_bits <= 64);
+        debug_assert!(num_bits <= 64);
         let num_bits = num_bits as u8;
-        assert_eq!(v.checked_shr(num_bits as u32).unwrap_or(0), 0); // covers case v >> 64
+        debug_assert_eq!(v.checked_shr(num_bits as u32).unwrap_or(0), 0); // covers case v >> 64
 
         // Add value to buffered_values
         self.buffered_values |= v << self.bit_offset;
@@ -716,7 +716,7 @@ mod tests {
     use super::*;
 
     use crate::util::test_common::rand_gen::random_numbers;
-    use rand::distributions::{Distribution, Standard};
+    use rand::distr::{Distribution, StandardUniform};
     use std::fmt::Debug;
 
     #[test]
@@ -1066,7 +1066,7 @@ mod tests {
     fn test_put_aligned_rand_numbers<T>(total: usize, num_bits: usize)
     where
         T: Copy + FromBytes + AsBytes + Debug + PartialEq,
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
         assert!(num_bits <= 32);
         assert!(total % 2 == 0);
