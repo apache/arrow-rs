@@ -536,34 +536,31 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 views_buf[i] = new_view;
             }
         } else {
-            // We want to make the performance of this loop as fast as possible, so we use
-            // `get_unchecked` to avoid bounds checking.
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..len {
+            for (i, &raw_view) in views.iter().enumerate().take(len) {
                 // SAFETY: i < len
-                let raw_view: u128 = unsafe { *views.get_unchecked(i) };
                 let mut bv = ByteView::from(raw_view);
 
                 let new_view = if bv.length <= MAX_INLINE_VIEW_LEN {
                     raw_view
                 } else {
-                    // OUT‑OF‑LINE CASE:
-                    //  a) fetch the original data slice from the appropriate buffer
+                    // OUT-OF-LINE CASE:
+                    // a) fetch the original data slice from the appropriate buffer
                     let buffer = unsafe { self.buffers.get_unchecked(bv.buffer_index as usize) };
                     let start = bv.offset as usize;
                     let end = start + bv.length as usize;
+                    // SAFETY: start..end is within buffer bounds
                     let slice: &[u8] = unsafe { buffer.get_unchecked(start..end) };
 
-                    //  b) append that slice into our new single data_buf
+                    // b) append that slice into our new single data_buf
                     let new_offset = data_buf.len() as u32;
                     data_buf.extend_from_slice(slice);
 
-                    //  c) update ByteView metadata to point into the new data_buf
+                    // c) update ByteView metadata to point into the new data_buf
                     bv.buffer_index = 0;
                     bv.offset = new_offset;
                     // length and prefix remain unchanged
 
-                    //  d) convert updated ByteView back into its u128 representation
+                    // d) convert updated ByteView back into its u128 representation
                     bv.into()
                 };
 
