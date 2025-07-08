@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Module for transforming a batch of JSON strings into a batch of Variants represented as
+//! STRUCT<metadata: BINARY, value: BINARY>
+
 use std::sync::Arc;
 
 use arrow::array::{
