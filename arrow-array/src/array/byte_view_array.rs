@@ -1370,7 +1370,7 @@ mod tests {
             } else {
                 // random length between 0 and twice the inline limit
                 let len = rng.random_range(0..(MAX_INLINE_VIEW_LEN * 2));
-                let s: String ="A".repeat(len as usize);
+                let s: String = "A".repeat(len as usize);
                 builder.append_option(Some(&s));
                 original.push(Some(s));
             }
