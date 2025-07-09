@@ -8692,6 +8692,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal128_to_f32_overflow() {
+        // Test with a Decimal128 value that exceeds f32 range
+        // Using a large value that's within f64 range but exceeds f32::MAX
+        let large_value = 1_i128 << 100; // Much larger than f32::MAX (≈ 3.4 × 10^38)
+        let array = vec![Some(large_value)];
+        let array = create_decimal128_array(array, 38, 2).unwrap();
+        let array = Arc::new(array) as ArrayRef;
+
+        let result = cast(&array, &DataType::Float32);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to cast decimal to float at index"));
+        assert!(err.contains("input value"));
+    }
+
+    #[test]
+    fn test_cast_decimal256_to_f32_overflow() {
+        // Test with a Decimal256 value that exceeds f32 range
+        let array = vec![Some(i256::MAX)];
+        let array = create_decimal256_array(array, 76, 2).unwrap();
+        let array = Arc::new(array) as ArrayRef;
+
+        let result = cast(&array, &DataType::Float32);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to cast decimal to float at index"));
+        assert!(err.contains("input value"));
+    }
+
+    #[test]
     fn test_cast_decimal128_to_decimal128_negative_scale() {
         let input_type = DataType::Decimal128(20, 0);
         let output_type = DataType::Decimal128(20, -1);
