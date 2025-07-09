@@ -27,8 +27,9 @@ use arrow_schema::ArrowError;
 use parquet_variant::{json_to_variant, VariantBuilder};
 
 fn variant_arrow_repr() -> DataType {
-    let metadata_field = Field::new("metadata", DataType::Binary, true);
-    let value_field = Field::new("value", DataType::Binary, true);
+    // The subfields are expected to be non-nullable according to the parquet variant spec.
+    let metadata_field = Field::new("metadata", DataType::Binary, false);
+    let value_field = Field::new("value", DataType::Binary, false);
     let fields = vec![metadata_field, value_field];
     DataType::Struct(fields.into())
 }
@@ -60,8 +61,9 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<StructArray, Arr
     let mut validity = BooleanBufferBuilder::new(input.len());
     for i in 0..input.len() {
         if input.is_null(i) {
-            metadata_validity.append(false);
-            value_validity.append(false);
+            // The subfields are expected to be non-nullable according to the parquet variant spec.
+            metadata_validity.append(true);
+            value_validity.append(true);
             metadata_offsets.push(metadata_current_offset);
             value_offsets.push(value_current_offset);
             validity.append(false);
@@ -169,10 +171,11 @@ mod test {
         assert_eq!(metadata_array.value(3), &[1, 0, 0]);
         assert_eq!(value_array.value(3), &[0]);
 
-        assert!(metadata_array.is_null(1));
-        assert!(value_array.is_null(1));
-        assert!(metadata_array.is_null(4));
-        assert!(value_array.is_null(4));
+        // Ensure that the subfields are not actually nullable
+        assert!(!metadata_array.is_null(1));
+        assert!(!value_array.is_null(1));
+        assert!(!metadata_array.is_null(4));
+        assert!(!value_array.is_null(4));
         Ok(())
     }
 }
