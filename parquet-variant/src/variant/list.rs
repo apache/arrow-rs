@@ -24,7 +24,7 @@ use crate::variant::{Variant, VariantMetadata};
 use arrow_schema::ArrowError;
 
 // The value header occupies one byte; use a named constant for readability
-const NUM_HEADER_BYTES: usize = 1;
+const NUM_HEADER_BYTES: u32 = 1;
 
 /// A parsed version of the variant array value header byte.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,15 +35,15 @@ pub(crate) struct VariantListHeader {
 
 impl VariantListHeader {
     // Hide the ugly casting
-    const fn num_elements_size(&self) -> usize {
+    const fn num_elements_size(&self) -> u32 {
         self.num_elements_size as _
     }
-    const fn offset_size(&self) -> usize {
+    const fn offset_size(&self) -> u32 {
         self.offset_size as _
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn first_offset_byte(&self) -> usize {
+    const fn first_offset_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.num_elements_size()
     }
 
@@ -123,10 +123,15 @@ pub struct VariantList<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
     header: VariantListHeader,
-    num_elements: usize,
-    first_value_byte: usize,
+    num_elements: u32,
+    first_value_byte: u32,
     validated: bool,
 }
+
+#[cfg(test)]
+const _: () = if std::mem::size_of::<VariantList>() != 64 {
+    panic!("VariantList changed size");
+};
 
 impl<'m, 'v> VariantList<'m, 'v> {
     /// Attempts to interpret `value` as a variant array value.
@@ -158,7 +163,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let num_elements =
             header
                 .num_elements_size
-                .unpack_usize_at_offset(value, NUM_HEADER_BYTES, 0)?;
+                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
 
         // (num_elements + 1) * offset_size + first_offset_byte
         let first_value_byte = num_elements
@@ -186,10 +191,10 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
         // Use the last offset to upper-bound the value buffer
         let last_offset = new_self
-            .get_offset(num_elements)?
+            .get_offset(num_elements as _)?
             .checked_add(first_value_byte)
             .ok_or_else(|| overflow_error("variant array size"))?;
-        new_self.value = slice_from_slice(value, ..last_offset)?;
+        new_self.value = slice_from_slice(value, ..last_offset as _)?;
         Ok(new_self)
     }
 
@@ -219,7 +224,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
     /// Return the length of this array
     pub fn len(&self) -> usize {
-        self.num_elements
+        self.num_elements as _
     }
 
     /// Is the array of zero length
@@ -231,7 +236,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     ///
     /// [invalid]: Self#Validation
     pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
-        (index < self.num_elements).then(|| {
+        (index < self.len()).then(|| {
             self.try_get_with_shallow_validation(index)
                 .expect("Invalid variant array element")
         })
@@ -247,10 +252,10 @@ impl<'m, 'v> VariantList<'m, 'v> {
     fn try_get_with_shallow_validation(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         // Fetch the value bytes between the two offsets for this index, from the value array region
         // of the byte buffer
-        let byte_range = self.get_offset(index)?..self.get_offset(index + 1)?;
+        let byte_range = self.get_offset(index)? as _..self.get_offset(index + 1)? as _;
         let value_bytes =
-            slice_from_slice_at_offset(self.value, self.first_value_byte, byte_range)?;
-        Variant::try_new_with_metadata_and_shallow_validation(self.metadata, value_bytes)
+            slice_from_slice_at_offset(self.value, self.first_value_byte as _, byte_range)?;
+        Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
     }
 
     /// Iterates over the values of this list. When working with [unvalidated] input, consider
@@ -276,10 +281,10 @@ impl<'m, 'v> VariantList<'m, 'v> {
     }
 
     // Attempts to retrieve the ith offset from the offset array region of the byte buffer.
-    fn get_offset(&self, index: usize) -> Result<usize, ArrowError> {
-        let byte_range = self.header.first_offset_byte()..self.first_value_byte;
+    fn get_offset(&self, index: usize) -> Result<u32, ArrowError> {
+        let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
-        self.header.offset_size.unpack_usize(offset_bytes, index)
+        self.header.offset_size.unpack_u32(offset_bytes, index)
     }
 }
 

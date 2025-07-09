@@ -37,16 +37,16 @@ pub(crate) struct VariantMetadataHeader {
 const CORRECT_VERSION_VALUE: u8 = 1;
 
 // The metadata header occupies one byte; use a named constant for readability
-const NUM_HEADER_BYTES: usize = 1;
+const NUM_HEADER_BYTES: u32 = 1;
 
 impl VariantMetadataHeader {
     // Hide the cast
-    const fn offset_size(&self) -> usize {
-        self.offset_size as usize
+    const fn offset_size(&self) -> u32 {
+        self.offset_size as u32
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn first_offset_byte(&self) -> usize {
+    const fn first_offset_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.offset_size()
     }
 
@@ -128,14 +128,19 @@ impl VariantMetadataHeader {
 ///
 /// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
     header: VariantMetadataHeader,
-    dictionary_size: usize,
-    first_value_byte: usize,
+    dictionary_size: u32,
+    first_value_byte: u32,
     validated: bool,
 }
+
+#[cfg(test)]
+const _: () = if std::mem::size_of::<VariantMetadata>() != 32 {
+    panic!("VariantMetadata changed size, which will impact VariantList and VariantObject");
+};
 
 impl<'m> VariantMetadata<'m> {
     /// Attempts to interpret `bytes` as a variant metadata instance, with full [validation] of all
@@ -169,7 +174,7 @@ impl<'m> VariantMetadata<'m> {
         let dictionary_size =
             header
                 .offset_size
-                .unpack_usize_at_offset(bytes, NUM_HEADER_BYTES, 0)?;
+                .unpack_u32_at_offset(bytes, NUM_HEADER_BYTES as usize, 0)?;
 
         // Calculate the starting offset of the dictionary string bytes.
         //
@@ -199,16 +204,16 @@ impl<'m> VariantMetadata<'m> {
 
         // Use the last offset to upper-bound the byte slice
         let last_offset = new_self
-            .get_offset(dictionary_size)?
+            .get_offset(dictionary_size as _)?
             .checked_add(first_value_byte)
             .ok_or_else(|| overflow_error("variant metadata size"))?;
-        new_self.bytes = slice_from_slice(bytes, ..last_offset)?;
+        new_self.bytes = slice_from_slice(bytes, ..last_offset as _)?;
         Ok(new_self)
     }
 
     /// The number of metadata dictionary entries
     pub fn len(&self) -> usize {
-        self.dictionary_size
+        self.dictionary_size as _
     }
 
     /// True if this metadata dictionary contains no entries
@@ -243,7 +248,7 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the dictionary size
     pub const fn dictionary_size(&self) -> usize {
-        self.dictionary_size
+        self.dictionary_size as _
     }
 
     /// The variant protocol version
@@ -255,10 +260,10 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
     /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
-    fn get_offset(&self, i: usize) -> Result<usize, ArrowError> {
-        let offset_byte_range = self.header.first_offset_byte()..self.first_value_byte;
+    fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
+        let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let bytes = slice_from_slice(self.bytes, offset_byte_range)?;
-        self.header.offset_size.unpack_usize(bytes, i)
+        self.header.offset_size.unpack_u32(bytes, i)
     }
 
     /// Attempts to retrieve a dictionary entry by index, failing if out of bounds or if the
@@ -266,8 +271,8 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
-        let byte_range = self.get_offset(i)?..self.get_offset(i + 1)?;
-        string_from_slice(self.bytes, self.first_value_byte, byte_range)
+        let byte_range = self.get_offset(i)? as _..self.get_offset(i + 1)? as _;
+        string_from_slice(self.bytes, self.first_value_byte as _, byte_range)
     }
 
     /// Returns an iterator that attempts to visit all dictionary entries, producing `Err` if the
@@ -275,7 +280,7 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn iter_try(&self) -> impl Iterator<Item = Result<&'m str, ArrowError>> + '_ {
-        (0..self.dictionary_size).map(move |i| self.get(i))
+        (0..self.dictionary_size as usize).map(move |i| self.get(i))
     }
 
     /// Iterates over all dictionary entries. When working with [unvalidated] input, consider

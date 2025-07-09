@@ -1930,7 +1930,6 @@ mod tests {
         assert!(metadata.is_empty());
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
-        assert!(metadata.is_empty());
         assert_eq!(variant, Variant::Int8(42));
     }
 

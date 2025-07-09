@@ -24,7 +24,7 @@ use crate::variant::{Variant, VariantMetadata};
 use arrow_schema::ArrowError;
 
 // The value header occupies one byte; use a named constant for readability
-const NUM_HEADER_BYTES: usize = 1;
+const NUM_HEADER_BYTES: u32 = 1;
 
 /// Header structure for [`VariantObject`]
 #[derive(Debug, Clone, PartialEq)]
@@ -36,18 +36,18 @@ pub(crate) struct VariantObjectHeader {
 
 impl VariantObjectHeader {
     // Hide the ugly casting
-    const fn num_elements_size(&self) -> usize {
+    const fn num_elements_size(&self) -> u32 {
         self.num_elements_size as _
     }
-    const fn field_id_size(&self) -> usize {
+    const fn field_id_size(&self) -> u32 {
         self.field_id_size as _
     }
-    const fn field_offset_size(&self) -> usize {
+    const fn field_offset_size(&self) -> u32 {
         self.field_offset_size as _
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn field_ids_start_byte(&self) -> usize {
+    const fn field_ids_start_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.num_elements_size()
     }
 
@@ -120,11 +120,16 @@ pub struct VariantObject<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
     header: VariantObjectHeader,
-    num_elements: usize,
-    first_field_offset_byte: usize,
-    first_value_byte: usize,
+    num_elements: u32,
+    first_field_offset_byte: u32,
+    first_value_byte: u32,
     validated: bool,
 }
+
+#[cfg(test)]
+const _: () = if std::mem::size_of::<VariantObject>() != 64 {
+    panic!("VariantObject changed size");
+};
 
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {
@@ -157,7 +162,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let num_elements =
             header
                 .num_elements_size
-                .unpack_usize_at_offset(value, NUM_HEADER_BYTES, 0)?;
+                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
 
         // Calculate byte offsets for field offsets and values with overflow protection, and verify
         // they're in bounds
@@ -187,10 +192,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         // Use it to upper-bound the value bytes, which also verifies that the field id and field
         // offset arrays are in bounds.
         let last_offset = new_self
-            .get_offset(num_elements)?
+            .get_offset(num_elements as _)?
             .checked_add(first_value_byte)
             .ok_or_else(|| overflow_error("variant object size"))?;
-        new_self.value = slice_from_slice(value, ..last_offset)?;
+        new_self.value = slice_from_slice(value, ..last_offset as _)?;
         Ok(new_self)
     }
 
@@ -220,7 +225,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Returns the number of key-value pairs in this object
     pub fn len(&self) -> usize {
-        self.num_elements
+        self.num_elements as _
     }
 
     /// Returns true if the object contains no key-value pairs
@@ -251,16 +256,16 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     // Attempts to retrieve the ith field value from the value region of the byte buffer; it
     // performs only basic (constant-cost) validation.
     fn try_field_with_shallow_validation(&self, i: usize) -> Result<Variant<'m, 'v>, ArrowError> {
-        let value_bytes = slice_from_slice(self.value, self.first_value_byte..)?;
-        let value_bytes = slice_from_slice(value_bytes, self.get_offset(i)?..)?;
-        Variant::try_new_with_metadata_and_shallow_validation(self.metadata, value_bytes)
+        let value_bytes = slice_from_slice(self.value, self.first_value_byte as _..)?;
+        let value_bytes = slice_from_slice(value_bytes, self.get_offset(i)? as _..)?;
+        Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
     }
 
     // Attempts to retrieve the ith offset from the field offset region of the byte buffer.
-    fn get_offset(&self, i: usize) -> Result<usize, ArrowError> {
-        let byte_range = self.first_field_offset_byte..self.first_value_byte;
+    fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
+        let byte_range = self.first_field_offset_byte as _..self.first_value_byte as _;
         let field_offsets = slice_from_slice(self.value, byte_range)?;
-        self.header.field_offset_size.unpack_usize(field_offsets, i)
+        self.header.field_offset_size.unpack_u32(field_offsets, i)
     }
 
     /// Get a field's name by index in `0..self.len()`
@@ -277,10 +282,10 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
     /// Fallible version of `field_name`. Returns field name by index, capturing validation errors
     fn try_field_name(&self, i: usize) -> Result<&'m str, ArrowError> {
-        let byte_range = self.header.field_ids_start_byte()..self.first_field_offset_byte;
+        let byte_range = self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _;
         let field_id_bytes = slice_from_slice(self.value, byte_range)?;
-        let field_id = self.header.field_id_size.unpack_usize(field_id_bytes, i)?;
-        self.metadata.get(field_id)
+        let field_id = self.header.field_id_size.unpack_u32(field_id_bytes, i)?;
+        self.metadata.get(field_id as _)
     }
 
     /// Returns an iterator of (name, value) pairs over the fields of this object.
@@ -304,7 +309,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
     fn iter_try_with_shallow_validation(
         &self,
     ) -> impl Iterator<Item = Result<(&'m str, Variant<'m, 'v>), ArrowError>> + '_ {
-        (0..self.num_elements).map(move |i| {
+        (0..self.len()).map(move |i| {
             let field = self.try_field_with_shallow_validation(i)?;
             Ok((self.try_field_name(i)?, field))
         })
@@ -319,8 +324,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let i = try_binary_search_range_by(0..self.num_elements, &name, |i| self.field_name(i))?
-            .ok()?;
+        let i = try_binary_search_range_by(0..self.len(), &name, |i| self.field_name(i))?.ok()?;
 
         self.field(i)
     }

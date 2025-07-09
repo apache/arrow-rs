@@ -22,8 +22,6 @@ use crate::ShortString;
 use arrow_schema::ArrowError;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 
-use std::num::TryFromIntError;
-
 /// The basic type of a [`Variant`] value, encoded in the first two bits of the
 /// header byte.
 ///
@@ -150,8 +148,8 @@ impl OffsetSizeBytes {
     /// Each value is `self as usize` bytes wide (1, 2, 3 or 4).
     /// Three-byte values are zero-extended to 32 bits before the final
     /// fallible cast to `usize`.
-    pub(crate) fn unpack_usize(&self, bytes: &[u8], index: usize) -> Result<usize, ArrowError> {
-        self.unpack_usize_at_offset(bytes, 0, index)
+    pub(crate) fn unpack_u32(&self, bytes: &[u8], index: usize) -> Result<u32, ArrowError> {
+        self.unpack_u32_at_offset(bytes, 0, index)
     }
 
     /// Return one unsigned little-endian value from `bytes`.
@@ -165,12 +163,12 @@ impl OffsetSizeBytes {
     /// Each value is `self as usize` bytes wide (1, 2, 3 or 4).
     /// Three-byte values are zero-extended to 32 bits before the final
     /// fallible cast to `usize`.
-    pub(crate) fn unpack_usize_at_offset(
+    pub(crate) fn unpack_u32_at_offset(
         &self,
         bytes: &[u8],
         byte_offset: usize,  // how many bytes to skip
         offset_index: usize, // which offset in an array of offsets
-    ) -> Result<usize, ArrowError> {
+    ) -> Result<u32, ArrowError> {
         use OffsetSizeBytes::*;
 
         // Index into the byte array:
@@ -179,7 +177,7 @@ impl OffsetSizeBytes {
             .checked_mul(*self as usize)
             .and_then(|n| n.checked_add(byte_offset))
             .ok_or_else(|| overflow_error("unpacking offset array value"))?;
-        let result = match self {
+        let value = match self {
             One => u8::from_le_bytes(array_from_slice(bytes, offset)?).into(),
             Two => u16::from_le_bytes(array_from_slice(bytes, offset)?).into(),
             Three => {
@@ -192,11 +190,7 @@ impl OffsetSizeBytes {
             }
             Four => u32::from_le_bytes(array_from_slice(bytes, offset)?),
         };
-
-        // Convert the u32 we extracted to usize (should always succeed on 32- and 64-bit arch)
-        result
-            .try_into()
-            .map_err(|e: TryFromIntError| ArrowError::InvalidArgumentError(e.to_string()))
+        Ok(value)
     }
 }
 
@@ -499,57 +493,51 @@ mod tests {
     }
 
     #[test]
-    fn unpack_usize_all_widths() {
+    fn unpack_u32_all_widths() {
         // One-byte offsets
         let buf_one = [0x01u8, 0xAB, 0xCD];
-        assert_eq!(
-            OffsetSizeBytes::One.unpack_usize(&buf_one, 0).unwrap(),
-            0x01
-        );
-        assert_eq!(
-            OffsetSizeBytes::One.unpack_usize(&buf_one, 2).unwrap(),
-            0xCD
-        );
+        assert_eq!(OffsetSizeBytes::One.unpack_u32(&buf_one, 0).unwrap(), 0x01);
+        assert_eq!(OffsetSizeBytes::One.unpack_u32(&buf_one, 2).unwrap(), 0xCD);
 
         // Two-byte offsets (little-endian 0x1234, 0x5678)
         let buf_two = [0x34, 0x12, 0x78, 0x56];
         assert_eq!(
-            OffsetSizeBytes::Two.unpack_usize(&buf_two, 0).unwrap(),
+            OffsetSizeBytes::Two.unpack_u32(&buf_two, 0).unwrap(),
             0x1234
         );
         assert_eq!(
-            OffsetSizeBytes::Two.unpack_usize(&buf_two, 1).unwrap(),
+            OffsetSizeBytes::Two.unpack_u32(&buf_two, 1).unwrap(),
             0x5678
         );
 
         // Three-byte offsets (0x030201 and 0x0000FF)
         let buf_three = [0x01, 0x02, 0x03, 0xFF, 0x00, 0x00];
         assert_eq!(
-            OffsetSizeBytes::Three.unpack_usize(&buf_three, 0).unwrap(),
+            OffsetSizeBytes::Three.unpack_u32(&buf_three, 0).unwrap(),
             0x030201
         );
         assert_eq!(
-            OffsetSizeBytes::Three.unpack_usize(&buf_three, 1).unwrap(),
+            OffsetSizeBytes::Three.unpack_u32(&buf_three, 1).unwrap(),
             0x0000FF
         );
 
         // Four-byte offsets (0x12345678, 0x90ABCDEF)
         let buf_four = [0x78, 0x56, 0x34, 0x12, 0xEF, 0xCD, 0xAB, 0x90];
         assert_eq!(
-            OffsetSizeBytes::Four.unpack_usize(&buf_four, 0).unwrap(),
+            OffsetSizeBytes::Four.unpack_u32(&buf_four, 0).unwrap(),
             0x1234_5678
         );
         assert_eq!(
-            OffsetSizeBytes::Four.unpack_usize(&buf_four, 1).unwrap(),
+            OffsetSizeBytes::Four.unpack_u32(&buf_four, 1).unwrap(),
             0x90AB_CDEF
         );
     }
 
     #[test]
-    fn unpack_usize_out_of_bounds() {
+    fn unpack_u32_out_of_bounds() {
         let tiny = [0x00u8]; // deliberately too short
-        assert!(OffsetSizeBytes::Two.unpack_usize(&tiny, 0).is_err());
-        assert!(OffsetSizeBytes::Three.unpack_usize(&tiny, 0).is_err());
+        assert!(OffsetSizeBytes::Two.unpack_u32(&tiny, 0).is_err());
+        assert!(OffsetSizeBytes::Three.unpack_u32(&tiny, 0).is_err());
     }
 
     #[test]
@@ -565,20 +553,20 @@ mod tests {
         let width = OffsetSizeBytes::Two;
 
         // dictionary_size starts immediately after the header byte
-        let dict_size = width.unpack_usize_at_offset(&buf, 1, 0).unwrap();
+        let dict_size = width.unpack_u32_at_offset(&buf, 1, 0).unwrap();
         assert_eq!(dict_size, 2);
 
         // offset array immediately follows the dictionary size
-        let first = width.unpack_usize_at_offset(&buf, 1, 1).unwrap();
+        let first = width.unpack_u32_at_offset(&buf, 1, 1).unwrap();
         assert_eq!(first, 0);
 
-        let second = width.unpack_usize_at_offset(&buf, 1, 2).unwrap();
+        let second = width.unpack_u32_at_offset(&buf, 1, 2).unwrap();
         assert_eq!(second, 5);
 
-        let third = width.unpack_usize_at_offset(&buf, 1, 3).unwrap();
+        let third = width.unpack_u32_at_offset(&buf, 1, 3).unwrap();
         assert_eq!(third, 9);
 
-        let err = width.unpack_usize_at_offset(&buf, 1, 4);
+        let err = width.unpack_u32_at_offset(&buf, 1, 4);
         assert!(err.is_err())
     }
 }
