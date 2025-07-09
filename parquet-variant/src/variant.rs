@@ -275,8 +275,8 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// [validated]: Self#Validation
     pub fn try_new(metadata: &'m [u8], value: &'v [u8]) -> Result<Self, ArrowError> {
-        // let metadata = VariantMetadata::try_new(metadata)?;
-        Self::try_new_with_metadata(VariantMetadata::try_new(metadata)?, value)
+        let metadata = VariantMetadata::try_new(metadata)?;
+        Self::try_new_with_metadata(metadata, value)
     }
 
     /// Attempts to interpret a metadata and value buffer pair as a new `Variant`.
