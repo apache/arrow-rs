@@ -614,33 +614,16 @@ where
     Ok(Arc::new(value_builder.finish()))
 }
 
-/// Cast the decimal array to floating-point array.
-///
-/// This function applies a conversion operation to each element in the decimal array
-/// to produce a floating-point array. The operation function may fail with an
-/// `ArrowError` for cases such as overflow, underflow, or other conversion errors.
-///
-/// # Parameters
-/// - `array`: The input decimal array to convert
-/// - `op`: A conversion function that transforms each decimal value to a floating-point value.
-///         This function returns `Result<T::Native, ArrowError>` to handle conversion failures.
-///
-/// # Returns
-/// Returns `Ok(ArrayRef)` on successful conversion of all elements, or `Err(ArrowError)`
-/// if any element conversion fails.
-///
-/// # Notes
-/// Uses `try_unary` internally to handle the fallible conversion operation, ensuring
-/// that any conversion errors are properly propagated rather than panicking.
+// Cast the decimal array to floating-point array
 pub(crate) fn cast_decimal_to_float<D: DecimalType, T: ArrowPrimitiveType, F>(
     array: &dyn Array,
     op: F,
 ) -> Result<ArrayRef, ArrowError>
 where
-    F: Fn(D::Native) -> Result<T::Native, ArrowError>,
+    F: Fn(D::Native) -> T::Native,
 {
     let array = array.as_primitive::<D>();
-    let array = array.try_unary::<_, T, _>(op)?;
+    let array = array.unary::<_, T>(op);
     Ok(Arc::new(array))
 }
 

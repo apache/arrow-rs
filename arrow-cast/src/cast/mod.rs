@@ -880,7 +880,7 @@ pub fn cast_with_options(
                 scale,
                 from_type,
                 to_type,
-                |x: i128| Ok(x as f64),
+                |x: i128| x as f64,
                 cast_options,
             )
         }
@@ -891,11 +891,7 @@ pub fn cast_with_options(
                 scale,
                 from_type,
                 to_type,
-                |x: i256| {
-                    x.to_f64().ok_or_else(|| {
-                        ArrowError::CastError("Failed to convert Decimal256 to f64".to_string())
-                    })
-                },
+                |x: i256| x.to_f64().unwrap(),
                 cast_options,
             )
         }
@@ -1968,7 +1964,7 @@ fn cast_from_decimal<D, F>(
 where
     D: DecimalType + ArrowPrimitiveType,
     <D as ArrowPrimitiveType>::Native: ArrowNativeTypeOp + ToPrimitive,
-    F: Fn(D::Native) -> Result<f64, ArrowError>,
+    F: Fn(D::Native) -> f64,
 {
     use DataType::*;
     // cast decimal to other type
@@ -1982,10 +1978,10 @@ where
         Int32 => cast_decimal_to_integer::<D, Int32Type>(array, base, *scale, cast_options),
         Int64 => cast_decimal_to_integer::<D, Int64Type>(array, base, *scale, cast_options),
         Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
-            as_float(x).map(|v| (v / 10_f64.powi(*scale as i32)) as f32)
+            (as_float(x) / 10_f64.powi(*scale as i32)) as f32
         }),
         Float64 => cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
-            as_float(x).map(|v| v / 10_f64.powi(*scale as i32))
+            as_float(x) / 10_f64.powi(*scale as i32)
         }),
         Utf8View => value_to_string_view(array, cast_options),
         Utf8 => value_to_string::<i32>(array, cast_options),
@@ -8663,62 +8659,6 @@ mod tests {
             err.contains(expected_error),
             "did not find expected error '{expected_error}' in actual error '{err}'"
         );
-    }
-    #[test]
-    fn test_cast_decimal256_to_f64_overflow() {
-        let array = vec![Some(i256::MAX)];
-        let array = create_decimal256_array(array, 76, 2).unwrap();
-        let array = Arc::new(array) as ArrayRef;
-
-        let result = cast(&array, &DataType::Float64);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Failed to convert Decimal256 to f64"));
-    }
-
-    #[test]
-    fn test_cast_decimal128_to_f64_overflow() {
-        // Test with a very large Decimal128 value that exceeds f64 range
-        // Using i128::MAX which is much larger than f64::MAX
-        let array = vec![Some(i128::MAX)];
-        let array = create_decimal128_array(array, 38, 2).unwrap();
-        let array = Arc::new(array) as ArrayRef;
-
-        let result = cast(&array, &DataType::Float64);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Failed to cast decimal to float at index"));
-        assert!(err.contains("input value"));
-    }
-
-    #[test]
-    fn test_cast_decimal128_to_f32_overflow() {
-        // Test with a Decimal128 value that exceeds f32 range
-        // Using a large value that's within f64 range but exceeds f32::MAX
-        let large_value = 1_i128 << 100; // Much larger than f32::MAX (≈ 3.4 × 10^38)
-        let array = vec![Some(large_value)];
-        let array = create_decimal128_array(array, 38, 2).unwrap();
-        let array = Arc::new(array) as ArrayRef;
-
-        let result = cast(&array, &DataType::Float32);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Failed to cast decimal to float at index"));
-        assert!(err.contains("input value"));
-    }
-
-    #[test]
-    fn test_cast_decimal256_to_f32_overflow() {
-        // Test with a Decimal256 value that exceeds f32 range
-        let array = vec![Some(i256::MAX)];
-        let array = create_decimal256_array(array, 76, 2).unwrap();
-        let array = Arc::new(array) as ArrayRef;
-
-        let result = cast(&array, &DataType::Float32);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Failed to cast decimal to float at index"));
-        assert!(err.contains("input value"));
     }
 
     #[test]
