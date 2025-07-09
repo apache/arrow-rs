@@ -474,4 +474,78 @@ mod tests {
         let fields: Vec<_> = variant_obj.iter().collect();
         assert_eq!(fields.len(), 0);
     }
+
+    #[test]
+    fn test_variant_object_invalid_metadata_end_offset() {
+        // Create metadata with field names: "age", "name" (sorted)
+        let metadata_bytes = vec![
+            0b0001_0001, // header: version=1, sorted=1, offset_size_minus_one=0
+            2,           // dictionary size
+            0,           // "age"
+            3,           // "name"
+            8,           // Invalid end offset (should be 7)
+            b'a',
+            b'g',
+            b'e',
+            b'n',
+            b'a',
+            b'm',
+            b'e',
+        ];
+        let err = VariantMetadata::try_new(&metadata_bytes);
+        assert!(err.is_err());
+        let err = err.unwrap_err();
+        assert!(matches!(
+            err,
+            ArrowError::InvalidArgumentError(ref msg) if msg.contains("Tried to extract byte(s) ..13 from 12-byte buffer")
+        ));
+    }
+
+    #[test]
+    fn test_variant_object_invalid_end_offset() {
+        // Create metadata with field names: "age", "name" (sorted)
+        let metadata_bytes = vec![
+            0b0001_0001, // header: version=1, sorted=1, offset_size_minus_one=0
+            2,           // dictionary size
+            0,           // "age"
+            3,           // "name"
+            7,
+            b'a',
+            b'g',
+            b'e',
+            b'n',
+            b'a',
+            b'm',
+            b'e',
+        ];
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Create object value data for: {"age": 42, "name": "hello"}
+        // Field IDs in sorted order: [0, 1] (age, name)
+        // Header: basic_type=2, field_offset_size_minus_one=0, field_id_size_minus_one=0, is_large=0
+        // value_header = 0000_00_00 = 0x00
+        let object_value = vec![
+            0x02, // header: basic_type=2, value_header=0x00
+            2,    // num_elements = 2
+            // Field IDs (1 byte each): age=0, name=1
+            0, 1,
+            // Field offsets (1 byte each): 3 offsets total
+            0, // offset to first value (int8)
+            2, // offset to second value (short string)
+            9, // invalid end offset (correct would be 8)
+            // Values:
+            0x0C,
+            42, // int8: primitive_header=3, basic_type=0 -> (3 << 2) | 0 = 0x0C, then value 42
+            0x15, b'h', b'e', b'l', b'l',
+            b'o', // short string: length=5, basic_type=1 -> (5 << 2) | 1 = 0x15
+        ];
+
+        let err = VariantObject::try_new(metadata, &object_value);
+        assert!(err.is_err());
+        let err = err.unwrap_err();
+        assert!(matches!(
+            err,
+            ArrowError::InvalidArgumentError(ref msg) if msg.contains("Tried to extract byte(s) ..16 from 15-byte buffer")
+        ));
+    }
 }
