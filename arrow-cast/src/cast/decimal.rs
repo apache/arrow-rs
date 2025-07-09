@@ -627,17 +627,11 @@ where
 ///
 /// # Returns
 /// Returns `Ok(ArrayRef)` on successful conversion of all elements, or `Err(ArrowError)`
-/// if any element conversion fails. Error messages include the failing element's index
-/// and input value for easier debugging.
+/// if any element conversion fails.
 ///
-/// # Error Handling
-/// When a conversion fails, the error message will include:
-/// - The index of the failing element
-/// - The original error from the conversion operation
-/// - The input decimal value that caused the failure
-///
-/// This provides fine-grained error context to help identify exactly which element
-/// and value caused the casting operation to fail.
+/// # Notes
+/// Uses `try_unary` internally to handle the fallible conversion operation, ensuring
+/// that any conversion errors are properly propagated rather than panicking.
 pub(crate) fn cast_decimal_to_float<D: DecimalType, T: ArrowPrimitiveType, F>(
     array: &dyn Array,
     op: F,
@@ -646,28 +640,8 @@ where
     F: Fn(D::Native) -> Result<T::Native, ArrowError>,
 {
     let array = array.as_primitive::<D>();
-
-    // Use manual iteration to provide better error context with element indices
-    let mut builder = PrimitiveBuilder::<T>::with_capacity(array.len());
-
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            builder.append_null();
-        } else {
-            let value = array.value(i);
-            match op(value) {
-                Ok(converted) => builder.append_value(converted),
-                Err(e) => {
-                    return Err(ArrowError::CastError(format!(
-                        "Failed to cast decimal to float at index {}: {} (input value: {:?})",
-                        i, e, value
-                    )));
-                }
-            }
-        }
-    }
-
-    Ok(Arc::new(builder.finish()))
+    let array = array.try_unary::<_, T, _>(op)?;
+    Ok(Arc::new(array))
 }
 
 #[cfg(test)]
