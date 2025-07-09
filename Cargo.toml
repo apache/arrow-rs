@@ -40,6 +40,7 @@ members = [
     "arrow-string",
     "parquet",
     "parquet-variant",
+    "parquet-variant-compute",
     "parquet_derive",
     "parquet_derive_test",
 ]
@@ -95,6 +96,7 @@ arrow-schema = { version = "55.2.0", path = "./arrow-schema" }
 arrow-select = { version = "55.2.0", path = "./arrow-select" }
 arrow-string = { version = "55.2.0", path = "./arrow-string" }
 parquet = { version = "55.2.0", path = "./parquet", default-features = false }
+parquet-variant = { path = "./parquet-variant" }
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 
