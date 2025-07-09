@@ -620,10 +620,10 @@ pub(crate) fn cast_decimal_to_float<D: DecimalType, T: ArrowPrimitiveType, F>(
     op: F,
 ) -> Result<ArrayRef, ArrowError>
 where
-    F: Fn(D::Native) -> T::Native,
+    F: Fn(D::Native) -> Result<T::Native, ArrowError>,
 {
     let array = array.as_primitive::<D>();
-    let array = array.unary::<_, T>(op);
+    let array = array.try_unary::<_, T, _>(op)?;
     Ok(Arc::new(array))
 }
 
