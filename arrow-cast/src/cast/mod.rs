@@ -1982,7 +1982,7 @@ where
         Int32 => cast_decimal_to_integer::<D, Int32Type>(array, base, *scale, cast_options),
         Int64 => cast_decimal_to_integer::<D, Int64Type>(array, base, *scale, cast_options),
         Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
-            Ok((as_float(x)? / 10_f64.powi(*scale as i32)) as f32)
+            as_float(x).map(|v| (v / 10_f64.powi(*scale as i32)) as f32)
         }),
         Float64 => cast_decimal_to_float::<D, Float64Type, _>(array, |x| {
             as_float(x).map(|v| v / 10_f64.powi(*scale as i32))
