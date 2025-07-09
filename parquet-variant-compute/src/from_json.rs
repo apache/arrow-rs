@@ -82,7 +82,6 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<StructArray, Arr
             value_buffer.extend(value);
             value_offsets.push(value_current_offset);
             value_validity.append(true);
-            println!("{value_current_offset} {metadata_current_offset}");
         }
     }
     let metadata_offsets_buffer = OffsetBuffer::new(ScalarBuffer::from(metadata_offsets));
