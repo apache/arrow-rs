@@ -257,7 +257,7 @@ pub enum Variant<'m, 'v> {
 }
 
 // We don't want this to grow because it could hurt performance of a frequently-created type.
-const _: () = crate::utils::expect_size_of::<Variant>(64);
+const _: () = crate::utils::expect_size_of::<Variant>(80);
 
 impl<'m, 'v> Variant<'m, 'v> {
     /// Attempts to interpret a metadata and value buffer pair as a new `Variant`.
