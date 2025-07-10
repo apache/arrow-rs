@@ -132,7 +132,7 @@ enum Decoder {
     Fixed(i32, Vec<u8>),
     Enum(Vec<i32>, Arc<[String]>),
     Duration(IntervalMonthDayNanoBuilder),
-    Uuid(OffsetBufferBuilder<i32>, Vec<u8>),
+    Uuid(Vec<u8>),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
@@ -249,10 +249,7 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
-            Codec::Uuid => Self::Uuid(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
+            Codec::Uuid => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
@@ -276,11 +273,11 @@ impl Decoder {
             | Self::TimestampMicros(_, v) => v.push(0),
             Self::Float32(v) => v.push(0.),
             Self::Float64(v) => v.push(0.),
-            Self::Binary(offsets, _)
-            | Self::String(offsets, _)
-            | Self::StringView(offsets, _)
-            | Self::Uuid(offsets, _) => {
+            Self::Binary(offsets, _) | Self::String(offsets, _) | Self::StringView(offsets, _) => {
                 offsets.push_length(0);
+            }
+            Self::Uuid(v) => {
+                v.push(0);
             }
             Self::Array(_, offsets, e) => {
                 offsets.push_length(0);
@@ -317,11 +314,15 @@ impl Decoder {
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Binary(offsets, values)
             | Self::String(offsets, values)
-            | Self::StringView(offsets, values)
-            | Self::Uuid(offsets, values) => {
+            | Self::StringView(offsets, values) => {
                 let data = buf.get_bytes()?;
                 offsets.push_length(data.len());
                 values.extend_from_slice(data);
+            }
+            Self::Uuid(values) => {
+                let s_bytes = buf.get_bytes()?;
+                let uuid_bytes = parse_uuid_bytes(s_bytes)?;
+                values.extend_from_slice(&uuid_bytes);
             }
             Self::Array(_, off, encoding) => {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
@@ -418,7 +419,7 @@ impl Decoder {
                 let values = flush_values(values).into();
                 Arc::new(BinaryArray::new(offsets, values, nulls))
             }
-            Self::String(offsets, values) | Self::Uuid(offsets, values) => {
+            Self::String(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Arc::new(StringArray::new(offsets, values, nulls))
@@ -489,6 +490,11 @@ impl Decoder {
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(arr)
             }
+            Self::Uuid(values) => {
+                let arr = FixedSizeBinaryArray::try_new(16, std::mem::take(values).into(), nulls)
+                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                Arc::new(arr)
+            }
             Self::Decimal128(precision, scale, _, builder) => {
                 let (_, vals, _) = builder.finish().into_parts();
                 let scl = scale.unwrap_or(0);
@@ -522,6 +528,7 @@ impl Decoder {
     }
 }
 
+#[inline]
 fn read_blocks(
     buf: &mut AvroCursor,
     decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
@@ -529,6 +536,7 @@ fn read_blocks(
     read_blockwise_items(buf, true, decode_entry)
 }
 
+#[inline]
 fn read_blockwise_items(
     buf: &mut AvroCursor,
     read_size_after_negative: bool,
@@ -609,6 +617,46 @@ fn sign_extend_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
     arr[..pad_len].fill(extension_byte);
     arr[pad_len..].copy_from_slice(raw);
     Ok(arr)
+}
+
+#[inline]
+fn hex_char_to_u8(c: u8) -> Result<u8, ArrowError> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => Err(ArrowError::ParseError(format!(
+            "Invalid hex character '{c}' in UUID string",
+        ))),
+    }
+}
+
+#[inline]
+fn parse_uuid_bytes(s_bytes: &[u8]) -> Result<[u8; 16], ArrowError> {
+    if s_bytes.len() != 36 {
+        return Err(ArrowError::ParseError(format!(
+            "Invalid UUID string length: expected 36, got {}",
+            s_bytes.len()
+        )));
+    }
+    let mut bytes = [0u8; 16];
+    let mut str_idx = 0;
+    for byte_chunk in bytes.iter_mut() {
+        if str_idx == 8 || str_idx == 13 || str_idx == 18 || str_idx == 23 {
+            if s_bytes[str_idx] != b'-' {
+                return Err(ArrowError::ParseError(format!(
+                    "Invalid UUID format: expected hyphen at index {str_idx}"
+                )));
+            }
+            str_idx += 1;
+        }
+        let high_nibble = hex_char_to_u8(s_bytes[str_idx])?;
+        str_idx += 1;
+        let low_nibble = hex_char_to_u8(s_bytes[str_idx])?;
+        str_idx += 1;
+        *byte_chunk = (high_nibble << 4) | low_nibble;
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -766,17 +814,27 @@ mod tests {
     fn test_uuid_decoding() {
         let avro_type = avro_from_codec(Codec::Uuid);
         let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
-        let uuid_bytes = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let data1 = encode_avro_bytes(&uuid_bytes);
-        let mut cursor1 = AvroCursor::new(&data1);
-        decoder
-            .decode(&mut cursor1)
-            .expect("Failed to decode data1");
+        let uuid_str = "f81d4fae-7dec-11d0-a765-00a0c91e6bf6";
+        let data = encode_avro_bytes(uuid_str.as_bytes());
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).expect("Failed to decode data");
         assert_eq!(
-            cursor1.position(),
-            17,
+            cursor.position(),
+            data.len(),
             "Cursor should advance by varint size + data size"
         );
+        let array = decoder.flush(None).expect("Failed to flush decoder");
+        let fixed_size_binary_array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .expect("Array should be a FixedSizeBinaryArray");
+        assert_eq!(fixed_size_binary_array.len(), 1);
+        assert_eq!(fixed_size_binary_array.value_length(), 16);
+        let expected_bytes = [
+            0xf8, 0x1d, 0x4f, 0xae, 0x7d, 0xec, 0x11, 0xd0, 0xa7, 0x65, 0x00, 0xa0, 0xc9, 0x1e,
+            0x6b, 0xf6,
+        ];
+        assert_eq!(fixed_size_binary_array.value(0), &expected_bytes);
     }
 
     #[test]

@@ -201,7 +201,7 @@ pub enum Codec {
     /// - `scale` (`Option<usize>`): Number of fractional digits.
     /// - `fixed_size` (`Option<usize>`): Size in bytes if backed by a `fixed` type, otherwise `None`.
     Decimal(usize, Option<usize>, Option<usize>),
-    /// Represents Avro Uuid type, a logicalType of String data represented as UTF-8 encoded bytes.
+    /// Represents Avro Uuid type, a FixedSizeBinary with a length of 16.
     Uuid,
     /// Represents an Avro enum, maps to Arrow's Dictionary(Int32, Utf8) type.
     ///
@@ -256,7 +256,7 @@ impl Codec {
                     Decimal128(p, s)
                 }
             }
-            Self::Uuid => DataType::Utf8,
+            Self::Uuid => DataType::FixedSizeBinary(16),
             Self::Enum(_) => {
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
             }

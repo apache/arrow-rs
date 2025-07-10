@@ -56,7 +56,6 @@ rand = { version = "0.9", default-features = false, features = ["std", "std_rng"
 criterion = { version = "0.6.0", default-features = false }
 tempfile = "3.3"
 arrow = { workspace = true }
-uuid = "1.17.0"
 
 [[bench]]
 name = "avro_reader"
