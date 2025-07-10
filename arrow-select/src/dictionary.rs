@@ -37,9 +37,9 @@ use arrow_schema::{ArrowError, DataType};
 
 /// Garbage collects a [DictionaryArray] by removing unreferenced values.
 ///
-/// Returns a new [DictionaryArray] such that there are no values 
-/// that are not referenced by at least one key. There may still be duplicate 
-/// values. 
+/// Returns a new [DictionaryArray] such that there are no values
+/// that are not referenced by at least one key. There may still be duplicate
+/// values.
 ///
 /// See also [`garbage_collect_any_dictionary`] if you need to handle multiple dictionary types
 pub fn garbage_collect_dictionary<K: ArrowDictionaryKeyType>(
