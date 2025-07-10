@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Implementation of [Variant Binary Encoding] from [Apache Parquet].
+//! Conversion between [JSON] and the [Variant Binary Encoding] from [Apache Parquet].
 //!
+//! [JSON]: https://www.json.org/json-en.html
 //! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 //! [Apache Parquet]: https://parquet.apache.org/
+//!
+//! * See [`json_to_variant`] for converting a JSON string to a Variant.
+//! * See [`variant_to_json`] for converting a Variant to a JSON string.
 //!
 //! ## 🚧 Work In Progress
 //!
@@ -27,10 +31,8 @@
 //!
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
-mod builder;
-mod decoder;
-mod utils;
-mod variant;
+mod from_json;
+mod to_json;
 
-pub use builder::*;
-pub use variant::*;
+pub use from_json::json_to_variant;
+pub use to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
