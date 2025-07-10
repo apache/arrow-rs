@@ -244,16 +244,15 @@ impl<'m> VariantMetadata<'m> {
             }
 
             // Verify the string values in the dictionary are UTF-8 encoded strings.
-            let value_buffer = slice_from_slice(self.bytes, self.first_value_byte..)?;
-            let value_str = simdutf8::basic::from_utf8(value_buffer)
-                .map_err(|e| ArrowError::InvalidArgumentError(format!("{e:?}")))?;
+            let value_buffer =
+                string_from_slice(self.bytes, 0, self.first_value_byte..self.bytes.len())?;
 
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted
                 let are_dictionary_values_unique_and_sorted = (1..offsets.len())
                     .map(|i| {
                         let field_range = offsets[i - 1]..offsets[i];
-                        value_str.get(field_range)
+                        value_buffer.get(field_range)
                     })
                     .is_sorted_by(|a, b| match (a, b) {
                         (Some(a), Some(b)) => a < b,

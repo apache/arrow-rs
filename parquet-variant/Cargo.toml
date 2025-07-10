@@ -36,7 +36,6 @@ rust-version = "1.83"
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 indexmap = "2.10.0"
-simdutf8 = "0.1.5"
 
 
 [lib]
