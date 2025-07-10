@@ -47,7 +47,3 @@ bench = false
 
 [dev-dependencies]
 criterion = { version = "0.6", default-features = false }
-
-[[bench]]
-name = "variant_validation"
-harness = false
