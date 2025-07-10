@@ -478,6 +478,17 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let views = self.views(); // raw u128 "view" values per slot
         let nulls = self.nulls().cloned(); // reuse & clone existing null bitmap
 
+        // 1.5) Fast path: if there are buffers, just reuse original views and no data blocks
+        if self.data_buffers().is_empty() {
+            return unsafe {
+                GenericByteViewArray::new_unchecked(
+                    self.views().clone(),
+                    vec![], // empty data blocks
+                    nulls,
+                )
+            };
+        }
+
         // 2) Calculate total size of all non-inline data and detect if any exists
         let total_large = self.total_buffer_bytes_used();
 
