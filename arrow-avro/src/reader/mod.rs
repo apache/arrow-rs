@@ -222,6 +222,8 @@ mod test {
             "avro/alltypes_plain.avro",
             "avro/alltypes_plain.snappy.avro",
             "avro/alltypes_plain.zstandard.avro",
+            "avro/alltypes_plain.bzip2.avro",
+            "avro/alltypes_plain.xz.avro",
         ];
 
         let expected = RecordBatch::try_from_iter_with_nullable([
