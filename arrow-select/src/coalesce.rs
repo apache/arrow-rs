@@ -47,10 +47,17 @@ use primitive::InProgressPrimitiveArray;
 /// smaller batches, and we want to coalesce them into larger batches for
 /// further processing.
 ///
+/// # Motivation
+///
+/// If we use [`concat_batches`] to implement the same functionality, there are 2 potential issues:
+/// 1. At least 2x peak memory (holding the input and output of concat)
+/// 2. 2 copies of the data (to create the output of filter and then create the output of concat)
+/// See: <https://github.com/apache/arrow-rs/issues/6692> for more discussions
+/// about the motivation.
+///
 /// [`filter`]: crate::filter::filter
 /// [`take`]: crate::take::take
-///
-/// See: <https://github.com/apache/arrow-rs/issues/6692>
+/// [`concat_batches`]: crate::concat::concat_batches
 ///
 /// # Example
 /// ```
