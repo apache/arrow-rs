@@ -1135,34 +1135,23 @@ async fn test_multi_threaded_encrypted_writing() {
         .collect();
     let schema = metadata.schema().clone();
 
-    let props = Arc::new(
-        WriterPropertiesBuilder::with_defaults()
-            .with_file_encryption_properties(file_encryption_properties)
-            .build(),
-    );
-    let parquet_schema = ArrowSchemaConverter::new()
-        .with_coerce_types(props.coerce_types())
-        .convert(&schema)
-        .unwrap();
-    let root_schema = parquet_schema.root_schema_ptr();
+    let props = Some(WriterPropertiesBuilder::with_defaults()
+        .with_file_encryption_properties(file_encryption_properties)
+        .build());
 
     // Create a temporary file to write the encrypted data
     let temp_file = tempfile::NamedTempFile::new().unwrap();
-    let mut file_writer =
-        SerializedFileWriter::new(&temp_file, root_schema.clone(), props.clone()).unwrap();
+    let mut writer = ArrowWriter::try_new(
+        temp_file.into_file(),
+        metadata.schema().clone(),
+        props,
+    ).unwrap();
 
-    let arrow_row_group_writer_factory = ArrowRowGroupWriterFactory::new(
-        &file_writer,
-        parquet_schema,
-        schema.clone(),
-        props.clone(),
-    );
-    let arrow_row_group_writer = arrow_row_group_writer_factory
-        .create_row_group_writer(0)
-        .unwrap();
-
-    // Get column writers with encryptor from ArrowRowGroupWriter
-    let col_writers = arrow_row_group_writer.into_column_writers();
+    // Get column writers with encryptor
+    let col_writers = writer
+        .get_column_writers()
+        .unwrap()
+        .get_column_writers();
     let num_columns = col_writers.len();
 
     // Create a channel for each column writer to send ArrowLeafColumn data to
@@ -1173,9 +1162,9 @@ async fn test_multi_threaded_encrypted_writing() {
         col_array_channels.push(send_array);
         let handle = tokio::spawn(async move {
             while let Some(col) = receive_array.recv().await {
-                let _ = writer.write(&col);
+                writer.write(&col);
             }
-            writer.close().unwrap()
+            &writer.close().unwrap()
         });
         col_writer_tasks.push(handle);
     }
@@ -1195,23 +1184,13 @@ async fn test_multi_threaded_encrypted_writing() {
         finalized_rg.push(task.await.unwrap());
     }
 
-    // Wait for the workers to complete writing then append
-    // the resulting column chunks to the row group (and the file)
-    let mut row_group_writer = file_writer.next_row_group().unwrap();
-    for chunk in finalized_rg {
-        chunk.append_to_row_group(&mut row_group_writer).unwrap();
-    }
-
-    // Close the row group which writes to the underlying file
-    row_group_writer.close().unwrap();
-
     // Close the file writer which writes the footer
-    let metadata = file_writer.close().unwrap();
+    let metadata = writer.finish().unwrap();
     assert_eq!(metadata.num_rows, 50);
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) = read_encrypted_file(
-        temp_file.path().to_str().unwrap(),
+        &path,
         decryption_properties.clone(),
     )
     .unwrap();

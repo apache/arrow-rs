@@ -402,6 +402,17 @@ impl<W: Write + Send> ArrowWriter<W> {
     pub fn close(mut self) -> Result<crate::format::FileMetaData> {
         self.finish()
     }
+
+    pub fn get_column_writers(&mut self) -> Result<&ArrowRowGroupWriter> {
+        let in_progress = match &mut self.in_progress {
+            Some(in_progress) => in_progress,
+            x => x.insert(
+                self.row_group_writer_factory
+                    .create_row_group_writer(self.writer.flushed_row_groups().len())?,
+            ),
+        };
+        Ok(in_progress)
+    }
 }
 
 impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
@@ -827,8 +838,8 @@ impl ArrowRowGroupWriter {
     }
 
     /// Get [`ArrowColumnWriter`]s for all columns in a row group
-    pub fn into_column_writers(self) -> Vec<ArrowColumnWriter> {
-        self.writers
+    pub fn get_column_writers(&self) -> &Vec<ArrowColumnWriter> {
+        &self.writers
     }
 }
 
