@@ -251,14 +251,17 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                     ));
                 }
 
-                // Since field ids aren't guaranteed to be sorted, scan through the field ids and pick the largest field id in this object.
-                // If the largest field id is smaller than the dictionary size, we also know all field ids are smaller than the dictionary size and in-bounds.
-                if let Some(&largest_field_id) = field_ids.iter().max() {
-                    if largest_field_id >= self.metadata.dictionary_size() {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "field id is not valid".to_string(),
-                        ));
-                    }
+                // Since field ids are not guaranteed to be sorted, scan over all field ids
+                // and check that field ids are less than dictionary size
+
+                let are_field_ids_in_bounds = field_ids
+                    .iter()
+                    .all(|&id| id < self.metadata.dictionary_size());
+
+                if !are_field_ids_in_bounds {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "field id is not valid".to_string(),
+                    ));
                 }
             }
 
