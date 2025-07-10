@@ -42,6 +42,12 @@ fn gen_view_array_without_nulls(size: usize) -> StringViewArray {
 fn criterion_benchmark(c: &mut Criterion) {
     let array = gen_view_array(100_000);
 
+    c.bench_function("view types slice", |b| {
+        b.iter(|| {
+            black_box(array.slice(0, 100_000 / 2));
+        });
+    });
+
     c.bench_function("gc view types all[100000]", |b| {
         b.iter(|| {
             black_box(array.gc());
@@ -97,12 +103,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("gc view types slice half without nulls[8000]", |b| {
         b.iter(|| {
             black_box(sliced.gc());
-        });
-    });
-
-    c.bench_function("view types slice", |b| {
-        b.iter(|| {
-            black_box(array.slice(0, 100_000 / 2));
         });
     });
 }
