@@ -379,11 +379,7 @@ impl<R: BufRead> Iterator for Reader<R> {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.read() {
-            Ok(Some(batch)) => Some(Ok(batch)),
-            Ok(None) => None,
-            Err(e) => Some(Err(e)),
-        }
+       self.read().transpose()
     }
 }
 
