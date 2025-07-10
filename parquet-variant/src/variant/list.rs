@@ -128,10 +128,8 @@ pub struct VariantList<'m, 'v> {
     validated: bool,
 }
 
-#[cfg(test)]
-const _: () = if std::mem::size_of::<VariantList>() != 64 {
-    panic!("VariantList changed size");
-};
+// We don't want this to grow because it could increase the size of `Variant` and hurt performance.
+const _: () = crate::utils::expect_size_of::<VariantList>(64);
 
 impl<'m, 'v> VariantList<'m, 'v> {
     /// Attempts to interpret `value` as a variant array value.

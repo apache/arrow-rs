@@ -126,10 +126,8 @@ pub struct VariantObject<'m, 'v> {
     validated: bool,
 }
 
-#[cfg(test)]
-const _: () = if std::mem::size_of::<VariantObject>() != 64 {
-    panic!("VariantObject changed size");
-};
+// We don't want this to grow because it could increase the size of `Variant` and hurt performance.
+const _: () = crate::utils::expect_size_of::<VariantObject>(64);
 
 impl<'m, 'v> VariantObject<'m, 'v> {
     pub fn new(metadata: VariantMetadata<'m>, value: &'v [u8]) -> Self {

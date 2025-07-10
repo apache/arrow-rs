@@ -130,3 +130,12 @@ pub(crate) fn validate_fallible_iterator<T, E>(
 ) -> Result<(), E> {
     it.find(Result::is_err).transpose().map(|_| ())
 }
+
+/// Verifies the expected size of type T, for a type that should only grow if absolutely necessary.
+#[allow(unused)]
+pub(crate) const fn expect_size_of<T>(expected: usize) {
+    let size = std::mem::size_of::<T>();
+    if size != expected {
+        let _ = ["";0][size];
+    }
+}

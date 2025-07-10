@@ -137,10 +137,9 @@ pub struct VariantMetadata<'m> {
     validated: bool,
 }
 
-#[cfg(test)]
-const _: () = if std::mem::size_of::<VariantMetadata>() != 32 {
-    panic!("VariantMetadata changed size, which will impact VariantList and VariantObject");
-};
+// We don't want this to grow because it increases the size of VariantList and VariantObject, which
+// could increase the size of Variant. All those size increases could hurt performance.
+const _: () = crate::utils::expect_size_of::<VariantMetadata>(32);
 
 impl<'m> VariantMetadata<'m> {
     /// Attempts to interpret `bytes` as a variant metadata instance, with full [validation] of all
