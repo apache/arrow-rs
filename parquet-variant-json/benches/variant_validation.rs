@@ -93,10 +93,10 @@ fn generate_large_nested_list() -> (Vec<u8>, Vec<u8>) {
 // Generates a large object and performs full validation
 fn bench_validate_large_object(c: &mut Criterion) {
     c.bench_function("bench_validate_large_object", |b| {
-        b.iter_batched(
+        b.iter_batched_ref(
             generate_large_object,
             |(m, v)| {
-                std::hint::black_box(Variant::try_new(&m, &v).unwrap());
+                std::hint::black_box(Variant::try_new(m, v).unwrap());
             },
             BatchSize::SmallInput,
         )
@@ -105,10 +105,10 @@ fn bench_validate_large_object(c: &mut Criterion) {
 
 fn bench_validate_complex_object(c: &mut Criterion) {
     c.bench_function("bench_validate_complex_object", |b| {
-        b.iter_batched(
+        b.iter_batched_ref(
             generate_complex_object,
             |(m, v)| {
-                std::hint::black_box(Variant::try_new(&m, &v).unwrap());
+                std::hint::black_box(Variant::try_new(m, v).unwrap());
             },
             BatchSize::SmallInput,
         )
@@ -117,10 +117,10 @@ fn bench_validate_complex_object(c: &mut Criterion) {
 
 fn bench_validate_large_nested_list(c: &mut Criterion) {
     c.bench_function("bench_validate_large_nested_list", |b| {
-        b.iter_batched(
+        b.iter_batched_ref(
             generate_large_nested_list,
             |(m, v)| {
-                std::hint::black_box(Variant::try_new(&m, &v).unwrap());
+                std::hint::black_box(Variant::try_new(m, v).unwrap());
             },
             BatchSize::SmallInput,
         )
