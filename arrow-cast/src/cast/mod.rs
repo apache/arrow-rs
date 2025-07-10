@@ -8675,6 +8675,7 @@ mod tests {
     }
     #[test]
     fn test_cast_decimal256_to_f64_overflow() {
+        // Test positive overflow (positive infinity)
         let array = vec![Some(i256::MAX)];
         let array = create_decimal256_array(array, 76, 2).unwrap();
         let array = Arc::new(array) as ArrayRef;
@@ -8682,6 +8683,17 @@ mod tests {
         let result = cast(&array, &DataType::Float64).unwrap();
         let result = result.as_primitive::<Float64Type>();
         assert!(result.value(0).is_infinite());
+        assert!(result.value(0) > 0.0); // Positive infinity
+
+        // Test negative overflow (negative infinity)
+        let array = vec![Some(i256::MIN)];
+        let array = create_decimal256_array(array, 76, 2).unwrap();
+        let array = Arc::new(array) as ArrayRef;
+
+        let result = cast(&array, &DataType::Float64).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert!(result.value(0).is_infinite());
+        assert!(result.value(0) < 0.0); // Negative infinity
     }
 
     #[test]
