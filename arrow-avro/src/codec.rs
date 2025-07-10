@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
-use arrow_schema::DataType::{Decimal128, Decimal256};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
     TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -90,7 +89,7 @@ impl AvroDataType {
 #[derive(Debug, Clone)]
 pub struct AvroField {
     name: String,
-    pub(crate) data_type: AvroDataType,
+    data_type: AvroDataType,
 }
 
 impl AvroField {
@@ -251,9 +250,9 @@ impl Codec {
                     }
                 };
                 if too_large_for_128 {
-                    Decimal256(p, s)
+                    DataType::Decimal256(p, s)
                 } else {
-                    Decimal128(p, s)
+                    DataType::Decimal128(p, s)
                 }
             }
             Self::Uuid => DataType::FixedSizeBinary(16),

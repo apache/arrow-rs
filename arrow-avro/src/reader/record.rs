@@ -37,7 +37,7 @@ const DEFAULT_CAPACITY: usize = 1024;
 
 /// Decodes avro encoded data into [`RecordBatch`]
 #[derive(Debug)]
-pub struct RecordDecoder {
+pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     use_utf8view: bool,
@@ -46,7 +46,7 @@ pub struct RecordDecoder {
 
 impl RecordDecoder {
     /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
-    pub fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
+    pub(crate) fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         Self::try_new_with_options(data_type, false, false)
     }
 
@@ -62,7 +62,7 @@ impl RecordDecoder {
     ///
     /// # Errors
     /// This function will return an error if the provided `data_type` is not a `Record`.
-    pub fn try_new_with_options(
+    pub(crate) fn try_new_with_options(
         data_type: &AvroDataType,
         use_utf8view: bool,
         strict_mode: bool,
@@ -80,12 +80,13 @@ impl RecordDecoder {
         }
     }
 
-    pub fn schema(&self) -> &SchemaRef {
+    /// Returns the decoder's `SchemaRef`
+    pub(crate) fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
     /// Decode `count` records from `buf`
-    pub fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
+    pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
         let mut cursor = AvroCursor::new(buf);
         for _ in 0..count {
             for field in &mut self.fields {
@@ -96,7 +97,7 @@ impl RecordDecoder {
     }
 
     /// Flush the decoded records into a [`RecordBatch`]
-    pub fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
+    pub(crate) fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
         let arrays = self
             .fields
             .iter_mut()
