@@ -499,10 +499,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         // 2.5) Fast path: if there is no non-inline data, avoid buffer allocation & processing
         if total_large == 0 {
             // Views are inline-only or all null; just reuse original views and no data blocks
-            let views_scalar = ScalarBuffer::from(views.to_vec());
             return unsafe {
                 GenericByteViewArray::new_unchecked(
-                    views_scalar,
+                    self.views().clone(),
                     vec![], // empty data blocks
                     nulls,
                 )
