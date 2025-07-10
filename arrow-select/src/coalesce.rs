@@ -211,11 +211,11 @@ impl BatchCoalescer {
 
     /// Push all the rows from `batch` into the Coalescer
     ///
-    /// When buffered data plus incoming rows reach [`Self::target_batch_size`]
-    /// , completed batches are generated eagerly and can be retrieved via
+    /// When buffered data plus incoming rows reach `target_batch_size` ,
+    /// completed batches are generated eagerly and can be retrieved via
     /// [`Self::next_completed_batch()`].
-    /// Output batches contain exactly [`Self::target_batch_size`] rows, so the
-    /// tail of the input batch may remain buffered.
+    /// Output batches contain exactly `target_batch_size` rows, so the tail of
+    /// the input batch may remain buffered.
     /// Remaining partial data either waits for future input batches or can be
     /// materialized immediately by calling [`Self::finish_buffered_batch()`].
     ///
