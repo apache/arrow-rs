@@ -47,7 +47,9 @@ pub(crate) struct RecordDecoder {
 impl RecordDecoder {
     /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
     pub(crate) fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        Self::try_new_with_options(data_type, false, false)
+        Self::new(data_type)
+          .with_utf8_view(true), 
+          ...
     }
 
     /// Creates a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options.
