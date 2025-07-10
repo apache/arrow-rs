@@ -27,17 +27,14 @@ fn generate_large_object() -> (Vec<u8>, Vec<u8>) {
     let mut variant_builder = VariantBuilder::new();
     let mut outer_object = variant_builder.new_object();
 
-    // Create 256 outer keys (000-255)
-    for i in 0..=255 {
+    for i in 0..=125 {
         let key = format!("{i:03}");
         let mut inner_object = outer_object.new_object(&key);
 
-        // Create 256 inner keys (240-495)
-        for j in 240..=495 {
+        for j in 125..=250 {
             let inner_key = format!("{j}");
             let mut list_builder = inner_object.new_list(&inner_key);
 
-            // Add numbers 0-127 to the list
             for k in 0..=127 {
                 list_builder.append_value(Variant::Int8(k));
             }
@@ -54,15 +51,29 @@ fn generate_complex_object() -> (Vec<u8>, Vec<u8>) {
     let mut variant_builder = VariantBuilder::new();
     let mut object_builder = variant_builder.new_object();
     let mut inner_list_builder = object_builder.new_list("booleans");
-    inner_list_builder.append_value(Variant::BooleanTrue);
-    inner_list_builder.append_value(Variant::BooleanFalse);
+
+    for _ in 0..1024 {
+        inner_list_builder.append_value(Variant::BooleanTrue);
+    }
+
     inner_list_builder.finish();
     object_builder.insert("null", Variant::Null);
     let mut inner_list_builder = object_builder.new_list("numbers");
-    inner_list_builder.append_value(Variant::Int8(4));
-    inner_list_builder.append_value(Variant::Double(-3e0));
-    inner_list_builder.append_value(Variant::Double(1001e-3));
+    for _ in 0..1024 {
+        inner_list_builder.append_value(Variant::Int8(4));
+        inner_list_builder.append_value(Variant::Double(-3e0));
+        inner_list_builder.append_value(Variant::Double(1001e-3));
+    }
     inner_list_builder.finish();
+
+    let mut inner_object_builder = object_builder.new_object("nested");
+
+    for i in 0..2048 {
+        let key = format!("{}", 1024 - i);
+        inner_object_builder.insert(&key, i);
+    }
+    inner_object_builder.finish().unwrap();
+
     object_builder.finish().unwrap();
 
     variant_builder.finish()
@@ -71,10 +82,17 @@ fn generate_complex_object() -> (Vec<u8>, Vec<u8>) {
 fn generate_large_nested_list() -> (Vec<u8>, Vec<u8>) {
     let mut variant_builder = VariantBuilder::new();
     let mut list_builder = variant_builder.new_list();
-    for _ in 0..256 {
+    for _ in 0..255 {
         let mut list_builder_inner = list_builder.new_list();
-        for _ in 0..255 {
+        for _ in 0..120 {
             list_builder_inner.append_value(Variant::Null);
+
+            let mut list_builder_inner_inner = list_builder_inner.new_list();
+            for _ in 0..20 {
+                list_builder_inner_inner.append_value(Variant::Double(-3e0));
+            }
+
+            list_builder_inner_inner.finish();
         }
         list_builder_inner.finish();
     }
