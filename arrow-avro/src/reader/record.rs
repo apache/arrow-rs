@@ -35,6 +35,32 @@ use std::sync::Arc;
 
 const DEFAULT_CAPACITY: usize = 1024;
 
+#[derive(Debug)]
+pub(crate) struct RecordDecoderBuilder<'a> {
+    data_type: &'a AvroDataType,
+    use_utf8view: bool,
+    strict_mode: bool,
+}
+
+impl<'a> RecordDecoderBuilder<'a> {
+    /// Sets whether to use `StringView` for string types.
+    pub(crate) fn with_utf8_view(mut self, use_utf8view: bool) -> Self {
+        self.use_utf8view = use_utf8view;
+        self
+    }
+
+    /// Sets the strict mode for decoding.
+    pub(crate) fn with_strict_mode(mut self, strict_mode: bool) -> Self {
+        self.strict_mode = strict_mode;
+        self
+    }
+
+    /// Builds the `RecordDecoder`.
+    pub(crate) fn build(self) -> Result<RecordDecoder, ArrowError> {
+        RecordDecoder::try_new_with_options(self.data_type, self.use_utf8view, self.strict_mode)
+    }
+}
+
 /// Decodes avro encoded data into [`RecordBatch`]
 #[derive(Debug)]
 pub(crate) struct RecordDecoder {
@@ -45,11 +71,23 @@ pub(crate) struct RecordDecoder {
 }
 
 impl RecordDecoder {
+    /// Creates a new `RecordDecoderBuilder` for configuring a `RecordDecoder`.
+    pub(crate) fn new(data_type: &'_ AvroDataType) -> RecordDecoderBuilder<'_> {
+        RecordDecoderBuilder {
+            data_type,
+            // default to false for utf8_view as per convention
+            use_utf8view: false,
+            // default to false for strict_mode as per ReaderBuilder
+            strict_mode: false,
+        }
+    }
+
     /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
     pub(crate) fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         Self::new(data_type)
-          .with_utf8_view(true), 
-          ...
+            .with_utf8_view(true)
+            .with_strict_mode(true)
+            .build()
     }
 
     /// Creates a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options.
