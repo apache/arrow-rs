@@ -277,7 +277,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     fn iter_try_with_shallow_validation(
         &self,
     ) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        (0..self.len()).map(move |i| self.try_get_with_shallow_validation(i))
+        (0..self.len()).map(|i| self.try_get_with_shallow_validation(i))
     }
 
     // Attempts to retrieve the ith offset from the offset array region of the byte buffer.

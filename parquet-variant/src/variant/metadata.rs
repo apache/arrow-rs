@@ -280,7 +280,7 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn iter_try(&self) -> impl Iterator<Item = Result<&'m str, ArrowError>> + '_ {
-        (0..self.len()).map(move |i| self.get(i))
+        (0..self.len()).map(|i| self.get(i))
     }
 
     /// Iterates over all dictionary entries. When working with [unvalidated] input, consider
