@@ -213,7 +213,7 @@ impl<'m> VariantMetadata<'m> {
 
     /// The number of metadata dictionary entries
     pub fn len(&self) -> usize {
-        self.dictionary_size as _
+        self.dictionary_size()
     }
 
     /// True if this metadata dictionary contains no entries
@@ -280,7 +280,7 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn iter_try(&self) -> impl Iterator<Item = Result<&'m str, ArrowError>> + '_ {
-        (0..self.dictionary_size as usize).map(move |i| self.get(i))
+        (0..self.len()).map(move |i| self.get(i))
     }
 
     /// Iterates over all dictionary entries. When working with [unvalidated] input, consider

@@ -145,9 +145,7 @@ impl OffsetSizeBytes {
     /// * `bytes` – the byte buffer to index
     /// * `index` – 0-based index into the buffer
     ///
-    /// Each value is `self as usize` bytes wide (1, 2, 3 or 4).
-    /// Three-byte values are zero-extended to 32 bits before the final
-    /// fallible cast to `usize`.
+    /// Each value is `self as u32` bytes wide (1, 2, 3 or 4), zero-extended to 32 bits as needed.
     pub(crate) fn unpack_u32(&self, bytes: &[u8], index: usize) -> Result<u32, ArrowError> {
         self.unpack_u32_at_offset(bytes, 0, index)
     }
@@ -160,9 +158,7 @@ impl OffsetSizeBytes {
     /// * `offset_index` – 0-based index **after** the skipped bytes
     ///   (`0` is the first value, `1` the next, …).
     ///
-    /// Each value is `self as usize` bytes wide (1, 2, 3 or 4).
-    /// Three-byte values are zero-extended to 32 bits before the final
-    /// fallible cast to `usize`.
+    /// Each value is `self as u32` bytes wide (1, 2, 3 or 4), zero-extended to 32 bits as needed.
     pub(crate) fn unpack_u32_at_offset(
         &self,
         bytes: &[u8],
