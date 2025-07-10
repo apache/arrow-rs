@@ -655,8 +655,7 @@ mod tests {
         let bigger_than_i64_max = (i64::MAX as i128) + 1;
         let smaller_than_i64_min = (i64::MIN as i128) - 1;
         let json = format!(
-            "{{ \"bigger_than_i64_max\": {}, \"smaller_than_i64_min\": {} }}",
-            bigger_than_i64_max, smaller_than_i64_min
+            "{{ \"bigger_than_i64_max\": {bigger_than_i64_max}, \"smaller_than_i64_min\": {smaller_than_i64_min} }}",
         );
         let mut buf_reader = BufReader::new(json.as_bytes());
         let (inferred_schema, _) = infer_json_schema(&mut buf_reader, Some(1)).unwrap();

@@ -275,10 +275,11 @@ fn concat_structs(arrays: &[&dyn Array], fields: &Fields) -> Result<ArrayRef, Ar
         })
         .collect::<Result<Vec<_>, ArrowError>>()?;
 
-    Ok(Arc::new(StructArray::try_new(
+    Ok(Arc::new(StructArray::try_new_with_length(
         fields.clone(),
         column_concat_result,
         nulls,
+        len,
     )?))
 }
 
@@ -990,6 +991,23 @@ mod tests {
 
         assert_eq!(struct_result, &expected_output);
         assert_eq!(arr.null_count(), 0);
+    }
+
+    #[test]
+    fn test_concat_struct_no_fields() {
+        let input_1 = StructArray::new_empty_fields(10, None);
+        let input_2 = StructArray::new_empty_fields(10, None);
+        let arr = concat(&[&input_1, &input_2]).unwrap();
+
+        assert_eq!(arr.len(), 20);
+        assert_eq!(arr.null_count(), 0);
+
+        let input1_valid = StructArray::new_empty_fields(10, Some(NullBuffer::new_valid(10)));
+        let input2_null = StructArray::new_empty_fields(10, Some(NullBuffer::new_null(10)));
+        let arr = concat(&[&input1_valid, &input2_null]).unwrap();
+
+        assert_eq!(arr.len(), 20);
+        assert_eq!(arr.null_count(), 10);
     }
 
     #[test]

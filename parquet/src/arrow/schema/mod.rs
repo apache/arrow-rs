@@ -358,15 +358,6 @@ impl<'a> ArrowSchemaConverter<'a> {
     }
 }
 
-/// Convert arrow schema to parquet schema
-///
-/// The name of the root schema element defaults to `"arrow_schema"`, this can be
-/// overridden with [`ArrowSchemaConverter`]
-#[deprecated(since = "54.0.0", note = "Use `ArrowSchemaConverter` instead")]
-pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    ArrowSchemaConverter::new().convert(schema)
-}
-
 fn parse_key_value_metadata(
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Option<HashMap<String, String>> {
@@ -640,7 +631,10 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
             let (physical_type, length) = if *precision > 1 && *precision <= 9 {

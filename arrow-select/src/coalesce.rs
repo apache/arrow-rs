@@ -22,7 +22,7 @@
 //! [`take`]: crate::take::take
 use crate::filter::filter_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{downcast_primitive, Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -31,9 +31,11 @@ use std::sync::Arc;
 
 mod byte_view;
 mod generic;
+mod primitive;
 
 use byte_view::InProgressByteViewArray;
 use generic::GenericInProgressArray;
+use primitive::InProgressPrimitiveArray;
 
 /// Concatenate multiple [`RecordBatch`]es
 ///
@@ -45,10 +47,18 @@ use generic::GenericInProgressArray;
 /// smaller batches, and we want to coalesce them into larger batches for
 /// further processing.
 ///
+/// # Motivation
+///
+/// If we use [`concat_batches`] to implement the same functionality, there are 2 potential issues:
+/// 1. At least 2x peak memory (holding the input and output of concat)
+/// 2. 2 copies of the data (to create the output of filter and then create the output of concat)
+///
+/// See: <https://github.com/apache/arrow-rs/issues/6692> for more discussions
+/// about the motivation.
+///
 /// [`filter`]: crate::filter::filter
 /// [`take`]: crate::take::take
-///
-/// See: <https://github.com/apache/arrow-rs/issues/6692>
+/// [`concat_batches`]: crate::concat::concat_batches
 ///
 /// # Example
 /// ```
@@ -122,8 +132,10 @@ use generic::GenericInProgressArray;
 pub struct BatchCoalescer {
     /// The input schema
     schema: SchemaRef,
-    /// output batch size
-    batch_size: usize,
+    /// The target batch size (and thus size for views allocation). This is a
+    /// hard limit: the output batch will be exactly `target_batch_size`,
+    /// rather than possibly being slightly above.
+    target_batch_size: usize,
     /// In-progress arrays
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// Buffered row count. Always less than `batch_size`
@@ -137,19 +149,19 @@ impl BatchCoalescer {
     ///
     /// # Arguments
     /// - `schema` - the schema of the output batches
-    /// - `batch_size` - the number of rows in each output batch.
+    /// - `target_batch_size` - the number of rows in each output batch.
     ///   Typical values are `4096` or `8192` rows.
     ///
-    pub fn new(schema: SchemaRef, batch_size: usize) -> Self {
+    pub fn new(schema: SchemaRef, target_batch_size: usize) -> Self {
         let in_progress_arrays = schema
             .fields()
             .iter()
-            .map(|field| create_in_progress_array(field.data_type(), batch_size))
+            .map(|field| create_in_progress_array(field.data_type(), target_batch_size))
             .collect::<Vec<_>>();
 
         Self {
             schema,
-            batch_size,
+            target_batch_size,
             in_progress_arrays,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
@@ -199,7 +211,13 @@ impl BatchCoalescer {
 
     /// Push all the rows from `batch` into the Coalescer
     ///
-    /// See [`Self::next_completed_batch()`] to retrieve any completed batches.
+    /// When buffered data plus incoming rows reach `target_batch_size` ,
+    /// completed batches are generated eagerly and can be retrieved via
+    /// [`Self::next_completed_batch()`].
+    /// Output batches contain exactly `target_batch_size` rows, so the tail of
+    /// the input batch may remain buffered.
+    /// Remaining partial data either waits for future input batches or can be
+    /// materialized immediately by calling [`Self::finish_buffered_batch()`].
     ///
     /// # Example
     /// ```
@@ -235,8 +253,8 @@ impl BatchCoalescer {
         // If pushing this batch would exceed the target batch size,
         // finish the current batch and start a new one
         let mut offset = 0;
-        while num_rows > (self.batch_size - self.buffered_rows) {
-            let remaining_rows = self.batch_size - self.buffered_rows;
+        while num_rows > (self.target_batch_size - self.buffered_rows) {
+            let remaining_rows = self.target_batch_size - self.buffered_rows;
             debug_assert!(remaining_rows > 0);
 
             // Copy remaining_rows from each array
@@ -260,7 +278,7 @@ impl BatchCoalescer {
         }
 
         // If we have reached the target batch size, finalize the buffered batch
-        if self.buffered_rows >= self.batch_size {
+        if self.buffered_rows >= self.target_batch_size {
             self.finish_buffered_batch()?;
         }
 
@@ -314,7 +332,7 @@ impl BatchCoalescer {
         !self.completed.is_empty()
     }
 
-    /// Returns the next completed batch, if any
+    /// Removes and returns the next completed batch, if any.
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.completed.pop_front()
     }
@@ -322,7 +340,18 @@ impl BatchCoalescer {
 
 /// Return a new `InProgressArray` for the given data type
 fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
-    match data_type {
+    macro_rules! instantiate_primitive {
+        ($t:ty) => {
+            Box::new(InProgressPrimitiveArray::<$t>::new(
+                batch_size,
+                data_type.clone(),
+            ))
+        };
+    }
+
+    downcast_primitive! {
+        // Instantiate InProgressPrimitiveArray for each primitive type
+        data_type => (instantiate_primitive),
         DataType::Utf8View => Box::new(InProgressByteViewArray::<StringViewType>::new(batch_size)),
         DataType::BinaryView => {
             Box::new(InProgressByteViewArray::<BinaryViewType>::new(batch_size))
@@ -549,6 +578,27 @@ mod tests {
         }
         test.with_batch_size(1024)
             .with_expected_output_sizes(vec![1024, 1024, 1024, 1024, 1024, 1024, 1024, 13])
+            .run();
+    }
+
+    #[test]
+    fn test_coalesce_non_null() {
+        Test::new()
+            // 4040 rows of unit32
+            .with_batch(uint32_batch_non_null(0..3000))
+            .with_batch(uint32_batch_non_null(0..1040))
+            .with_batch_size(1024)
+            .with_expected_output_sizes(vec![1024, 1024, 1024, 968])
+            .run();
+    }
+    #[test]
+    fn test_utf8_split() {
+        Test::new()
+            // 4040 rows of utf8 strings in total, split into batches of 1024
+            .with_batch(utf8_batch(0..3000))
+            .with_batch(utf8_batch(0..1040))
+            .with_batch_size(1024)
+            .with_expected_output_sizes(vec![1024, 1024, 1024, 968])
             .run();
     }
 
@@ -1085,15 +1135,37 @@ mod tests {
         }
     }
 
-    /// Return a RecordBatch with a UInt32Array with the specified range
+    /// Return a RecordBatch with a UInt32Array with the specified range and
+    /// every third value is null.
     fn uint32_batch(range: Range<u32>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, true)]));
+
+        let array = UInt32Array::from_iter(range.map(|i| if i % 3 == 0 { None } else { Some(i) }));
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
+    }
+
+    /// Return a RecordBatch with a UInt32Array with no nulls specified range
+    fn uint32_batch_non_null(range: Range<u32>) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
 
-        RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(UInt32Array::from_iter_values(range))],
-        )
-        .unwrap()
+        let array = UInt32Array::from_iter_values(range);
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
+    }
+
+    /// Return a RecordBatch with a StringArrary with values `value0`, `value1`, ...
+    /// and every third value is `None`.
+    fn utf8_batch(range: Range<u32>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Utf8, true)]));
+
+        let array = StringArray::from_iter(range.map(|i| {
+            if i % 3 == 0 {
+                None
+            } else {
+                Some(format!("value{i}"))
+            }
+        }));
+
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
     /// Return a RecordBatch with a StringViewArray with (only) the specified values
@@ -1104,14 +1176,11 @@ mod tests {
             false,
         )]));
 
-        RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(StringViewArray::from_iter(values))],
-        )
-        .unwrap()
+        let array = StringViewArray::from_iter(values);
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
     }
 
-    /// Return a RecordBatch with a StringViewArray with num_rows by repating
+    /// Return a RecordBatch with a StringViewArray with num_rows by repeating
     /// values over and over.
     fn stringview_batch_repeated<'a>(
         num_rows: usize,

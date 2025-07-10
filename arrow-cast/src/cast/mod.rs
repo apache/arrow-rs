@@ -7695,13 +7695,11 @@ mod tests {
             );
 
             let list_array = cast(&array, expected.data_type())
-                .unwrap_or_else(|_| panic!("Failed to cast {:?} to {:?}", array, expected));
+                .unwrap_or_else(|_| panic!("Failed to cast {array:?} to {expected:?}"));
             assert_eq!(
                 list_array.as_ref(),
                 &expected,
-                "Incorrect result from casting {:?} to {:?}",
-                array,
-                expected
+                "Incorrect result from casting {array:?} to {expected:?}",
             );
         }
     }
@@ -7935,7 +7933,7 @@ mod tests {
             },
         );
         assert!(res.is_err());
-        assert!(format!("{:?}", res)
+        assert!(format!("{res:?}")
             .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2"));
 
         // When safe=true (default), the cast will fill nulls for lists that are
@@ -8026,7 +8024,7 @@ mod tests {
             },
         );
         assert!(res.is_err());
-        assert!(format!("{:?}", res).contains("Can't cast value 2147483647 to type Int16"));
+        assert!(format!("{res:?}").contains("Can't cast value 2147483647 to type Int16"));
     }
 
     #[test]
@@ -9090,7 +9088,7 @@ mod tests {
                 Some(array.value_as_string(i))
             };
             let actual = actual.as_ref().map(|s| s.as_ref());
-            assert_eq!(*expected, actual, "Expected at position {}", i);
+            assert_eq!(*expected, actual, "Expected at position {i}");
         }
     }
 

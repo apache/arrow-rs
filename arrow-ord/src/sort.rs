@@ -24,7 +24,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -310,11 +310,92 @@ fn sort_byte_view<T: ByteViewType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let mut valids = value_indices
-        .into_iter()
-        .map(|index| (index, values.value(index as usize).as_ref()))
-        .collect::<Vec<(u32, &[u8])>>();
-    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+    // 1. Build a list of (index, raw_view, length)
+    let mut valids: Vec<_>;
+    // 2. Compute the number of non-null entries to partially sort
+    let vlimit: usize = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(value_indices.len()),
+        _ => value_indices.len(),
+    };
+    // 3.a Check if all views are inline (no data buffers)
+    if values.data_buffers().is_empty() {
+        valids = value_indices
+            .into_iter()
+            .map(|idx| {
+                // SAFETY: we know idx < values.len()
+                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+                let inline_key = GenericByteViewArray::<T>::inline_key_fast(raw);
+                (idx, inline_key)
+            })
+            .collect();
+        let cmp_inline = |a: &(u32, u128), b: &(u32, u128)| a.1.cmp(&b.1);
+
+        // Partially sort according to ascending/descending
+        if !options.descending {
+            sort_unstable_by(&mut valids, vlimit, cmp_inline);
+        } else {
+            sort_unstable_by(&mut valids, vlimit, |x, y| cmp_inline(x, y).reverse());
+        }
+    } else {
+        valids = value_indices
+            .into_iter()
+            .map(|idx| {
+                // SAFETY: we know idx < values.len()
+                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+                (idx, raw)
+            })
+            .collect();
+        // 3.b Mixed comparator: first prefix, then inline vs full comparison
+        let cmp_mixed = |a: &(u32, u128), b: &(u32, u128)| {
+            let (_, raw_a) = *a;
+            let (_, raw_b) = *b;
+            let len_a = raw_a as u32;
+            let len_b = raw_b as u32;
+            // 3.b.1 Both inline (≤12 bytes): compare full 128-bit key including length
+            if len_a <= MAX_INLINE_VIEW_LEN && len_b <= MAX_INLINE_VIEW_LEN {
+                return GenericByteViewArray::<T>::inline_key_fast(raw_a)
+                    .cmp(&GenericByteViewArray::<T>::inline_key_fast(raw_b));
+            }
+
+            // 3.b.2 Compare 4-byte prefix in big-endian order
+            let pref_a = ByteView::from(raw_a).prefix.swap_bytes();
+            let pref_b = ByteView::from(raw_b).prefix.swap_bytes();
+            if pref_a != pref_b {
+                return pref_a.cmp(&pref_b);
+            }
+
+            // 3.b.3 Fallback to full byte-slice comparison
+            let full_a: &[u8] = unsafe { values.value_unchecked(a.0 as usize).as_ref() };
+            let full_b: &[u8] = unsafe { values.value_unchecked(b.0 as usize).as_ref() };
+            full_a.cmp(full_b)
+        };
+
+        // 3.b.4 Partially sort according to ascending/descending
+        if !options.descending {
+            sort_unstable_by(&mut valids, vlimit, cmp_mixed);
+        } else {
+            sort_unstable_by(&mut valids, vlimit, |x, y| cmp_mixed(x, y).reverse());
+        }
+    }
+
+    // 5. Assemble nulls and sorted indices into final output
+    let total = valids.len() + nulls.len();
+    let out_limit = limit.unwrap_or(total).min(total);
+    let mut out = Vec::with_capacity(total);
+
+    if options.nulls_first {
+        // Place null indices first
+        out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+        let rem = out_limit - out.len();
+        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
+    } else {
+        // Place non-null indices first
+        out.extend(valids.iter().map(|&(i, _)| i).take(out_limit));
+        let rem = out_limit - out.len();
+        out.extend_from_slice(&nulls[..rem]);
+    }
+
+    out.into()
 }
 
 fn sort_fixed_size_binary(

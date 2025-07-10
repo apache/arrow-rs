@@ -228,7 +228,7 @@ fn create_string_view_array_with_len_range_and_prefix(
 }
 
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
-fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
+pub fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
     max_str_len: usize,
@@ -289,6 +289,26 @@ pub fn create_string_view_array_with_max_len(
                 None
             } else {
                 let str_len = rng.random_range(0..max_str_len);
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+/// Creates a random (but fixed-seeded) array of a given size, null density and length
+pub fn create_string_view_array_with_fixed_len(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
+) -> StringViewArray {
+    let rng = &mut seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
                 let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
