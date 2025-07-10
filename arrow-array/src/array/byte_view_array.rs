@@ -479,22 +479,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let nulls = self.nulls().cloned(); // reuse & clone existing null bitmap
 
         // 2) Calculate total size of all non-inline data and detect if any exists
-        let mut total_large = 0;
-        if let Some(nbm) = &nulls {
-            for i in nbm.valid_indices() {
-                let bv = ByteView::from(unsafe { *views.get_unchecked(i) });
-                if bv.length > MAX_INLINE_VIEW_LEN {
-                    total_large += bv.length as usize;
-                }
-            }
-        } else {
-            for &raw in views.iter() {
-                let bv = ByteView::from(raw);
-                if bv.length > MAX_INLINE_VIEW_LEN {
-                    total_large += bv.length as usize;
-                }
-            }
-        }
+        let total_large = self.total_buffer_bytes_used();
 
         // 2.5) Fast path: if there is no non-inline data, avoid buffer allocation & processing
         if total_large == 0 {
@@ -512,18 +497,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let mut data_buf = Vec::with_capacity(total_large);
 
         // 4) Iterate over views and process each inline/non-inline view
-        let views_buf: Vec<u128> = match &nulls {
-            Some(nbm) => {
-                let mut buf = vec![0u128; len];
-                for i in nbm.valid_indices() {
-                    buf[i] = self.process_view(i, views, &mut data_buf);
-                }
-                buf
-            }
-            None => (0..len)
-                .map(|i| self.process_view(i, views, &mut data_buf))
-                .collect(),
-        };
+        let views_buf: Vec<u128> = (0..len)
+            .map(|i| self.process_view(i, views, &mut data_buf))
+            .collect();
 
         // 5) Wrap up buffers
         let data_block = Buffer::from_vec(data_buf);
