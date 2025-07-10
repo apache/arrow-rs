@@ -35,6 +35,7 @@ mod fixed_size_list;
 mod list;
 mod null;
 mod primitive;
+mod run;
 mod structure;
 mod union;
 mod utils;
@@ -256,6 +257,8 @@ fn build_extend(array: &ArrayData) -> Extend {
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
         DataType::Interval(IntervalUnit::MonthDayNano) => primitive::build_extend::<i128>(array),
+        DataType::Decimal32(_, _) => primitive::build_extend::<i32>(array),
+        DataType::Decimal64(_, _) => primitive::build_extend::<i64>(array),
         DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
         DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
@@ -275,7 +278,7 @@ fn build_extend(array: &ArrayData) -> Extend {
             UnionMode::Sparse => union::build_extend_sparse(array),
             UnionMode::Dense => union::build_extend_dense(array),
         },
-        DataType::RunEndEncoded(_, _) => todo!(),
+        DataType::RunEndEncoded(_, _) => run::build_extend(array),
     }
 }
 
@@ -302,6 +305,8 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
         DataType::Interval(IntervalUnit::MonthDayNano) => primitive::extend_nulls::<i128>,
+        DataType::Decimal32(_, _) => primitive::extend_nulls::<i32>,
+        DataType::Decimal64(_, _) => primitive::extend_nulls::<i64>,
         DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
         DataType::Decimal256(_, _) => primitive::extend_nulls::<i256>,
         DataType::Utf8 | DataType::Binary => variable_size::extend_nulls::<i32>,
@@ -331,7 +336,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
             UnionMode::Sparse => union::extend_nulls_sparse,
             UnionMode::Dense => union::extend_nulls_dense,
         },
-        DataType::RunEndEncoded(_, _) => todo!(),
+        DataType::RunEndEncoded(_, _) => run::extend_nulls,
     })
 }
 
@@ -455,7 +460,9 @@ impl<'a> MutableArrayData<'a> {
         };
 
         let child_data = match &data_type {
-            DataType::Decimal128(_, _)
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Null
             | DataType::Boolean
@@ -767,7 +774,10 @@ impl<'a> MutableArrayData<'a> {
         let data = self.data;
 
         let buffers = match data.data_type {
-            DataType::Null | DataType::Struct(_) | DataType::FixedSizeList(_, _) => {
+            DataType::Null
+            | DataType::Struct(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::RunEndEncoded(_, _) => {
                 vec![]
             }
             DataType::BinaryView | DataType::Utf8View => {
@@ -793,13 +803,17 @@ impl<'a> MutableArrayData<'a> {
             _ => data.child_data.into_iter().map(|x| x.freeze()).collect(),
         };
 
-        let nulls = data
-            .null_buffer
-            .map(|nulls| {
-                let bools = BooleanBuffer::new(nulls.into(), 0, data.len);
-                unsafe { NullBuffer::new_unchecked(bools, data.null_count) }
-            })
-            .filter(|n| n.null_count() > 0);
+        let nulls = match data.data_type {
+            // RunEndEncoded and Null arrays cannot have top-level null bitmasks
+            DataType::RunEndEncoded(_, _) | DataType::Null => None,
+            _ => data
+                .null_buffer
+                .map(|nulls| {
+                    let bools = BooleanBuffer::new(nulls.into(), 0, data.len);
+                    unsafe { NullBuffer::new_unchecked(bools, data.null_count) }
+                })
+                .filter(|n| n.null_count() > 0),
+        };
 
         ArrayDataBuilder::new(data.data_type)
             .offset(0)

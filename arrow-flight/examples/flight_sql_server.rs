@@ -189,7 +189,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
 
-        let token = format!("Bearer {}", FAKE_TOKEN);
+        let token = format!("Bearer {FAKE_TOKEN}");
         let mut response: Response<Pin<Box<dyn Stream<Item = _> + Send>>> =
             Response::new(Box::pin(output));
         response.metadata_mut().append(
@@ -745,7 +745,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr_str = "0.0.0.0:50051";
     let addr = addr_str.parse()?;
 
-    println!("Listening on {:?}", addr);
+    println!("Listening on {addr:?}");
 
     if std::env::var("USE_TLS").ok().is_some() {
         let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;

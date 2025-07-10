@@ -15,11 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::pyarrow::{FromPyArrow, ToPyArrow};
-use arrow::record_batch::RecordBatch;
+//! Tests pyarrow bindings
+//!
+//! This test requires installing the `pyarrow` python package. If you do not
+//! have this package installed, you will see an error such as the following:
+//!
+//! ```text
+//! PyErr { type: <class 'ModuleNotFoundError'>, value: ModuleNotFoundError("No module named 'pyarrow'"), traceback: None }
+//! ```
+//!
+//! # Notes
+//!
+//! You can not use a virtual environment to run these tests on MacOS, as it will
+//! fail to find the pyarrow module due to <https://github.com/PyO3/pyo3/issues/1741>
+//!
+//! One way to run them is to install the `pyarrow` package in the system Python,
+//! which might break other packages, so use with caution:
+//!
+//! ```shell
+//! brew install pipx
+//! pip3 install --break-system-packages pyarrow
+//! ```
+
 use arrow_array::builder::{BinaryViewBuilder, StringViewBuilder};
-use arrow_array::{Array, BinaryViewArray, StringViewArray};
+use arrow_array::{
+    Array, ArrayRef, BinaryViewArray, Int32Array, RecordBatch, StringArray, StringViewArray,
+};
+use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use pyo3::Python;
 use std::sync::Arc;
 
@@ -32,7 +54,7 @@ fn test_to_pyarrow() {
     // The "very long string" will not be inlined, and force the creation of a data buffer.
     let c: ArrayRef = Arc::new(StringViewArray::from(vec!["short", "a very long string"]));
     let input = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
-    println!("input: {:?}", input);
+    println!("input: {input:?}");
 
     let res = Python::with_gil(|py| {
         let py_input = input.to_pyarrow(py)?;
@@ -59,7 +81,7 @@ fn test_to_pyarrow_byte_view() {
         ])
         .unwrap();
 
-        println!("input: {:?}", input);
+        println!("input: {input:?}");
         let res = Python::with_gil(|py| {
             let py_input = input.to_pyarrow(py)?;
             let records = RecordBatch::from_pyarrow_bound(py_input.bind(py))?;

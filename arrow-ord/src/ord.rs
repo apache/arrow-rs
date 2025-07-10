@@ -265,12 +265,6 @@ fn compare_struct(
     Ok(f)
 }
 
-#[deprecated(since = "52.0.0", note = "Use make_comparator")]
-#[doc(hidden)]
-pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator, ArrowError> {
-    make_comparator(left, right, SortOptions::default())
-}
-
 /// Returns a comparison function that compares two values at two different positions
 /// between the two arrays.
 ///

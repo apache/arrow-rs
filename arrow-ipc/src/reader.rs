@@ -544,8 +544,7 @@ impl<'a> RecordBatchDecoder<'a> {
     fn next_node(&mut self, field: &Field) -> Result<&'a FieldNode, ArrowError> {
         self.nodes.next().ok_or_else(|| {
             ArrowError::SchemaError(format!(
-                "Invalid data for schema. {} refers to node not found in schema",
-                field
+                "Invalid data for schema. {field} refers to node not found in schema",
             ))
         })
     }

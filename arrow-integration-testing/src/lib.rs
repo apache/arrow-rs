@@ -207,8 +207,7 @@ fn cdata_integration_import_schema_and_compare_to_json(
     // compare schemas
     if canonicalize_schema(&json_schema) != canonicalize_schema(&imported_schema) {
         return Err(ArrowError::ComputeError(format!(
-            "Schemas do not match.\n- JSON: {:?}\n- Imported: {:?}",
-            json_schema, imported_schema
+            "Schemas do not match.\n- JSON: {json_schema:?}\n- Imported: {imported_schema:?}",
         )));
     }
     Ok(())
@@ -253,7 +252,7 @@ fn cdata_integration_import_batch_and_compare_to_json(
 fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>) -> *mut c_char {
     match result {
         Ok(_) => ptr::null_mut(),
-        Err(e) => CString::new(format!("{}", e)).unwrap().into_raw(),
+        Err(e) => CString::new(format!("{e}")).unwrap().into_raw(),
     }
 }
 
