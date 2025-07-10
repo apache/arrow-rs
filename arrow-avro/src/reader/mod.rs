@@ -121,13 +121,14 @@ mod test {
     use crate::reader::record::RecordDecoder;
     use crate::reader::{read_blocks, read_header};
     use crate::test_util::arrow_test_data;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_schema::{DataType, Field, IntervalUnit, Schema};
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
+    use uuid::Uuid;
 
     fn read_file(file: &str, batch_size: usize) -> RecordBatch {
         read_file_with_options(file, batch_size, &crate::ReadOptions::default())
@@ -438,6 +439,47 @@ mod test {
             assert_eq!(actual, expected);
             let actual2 = read_file(&file, alt_batch_size);
             assert_eq!(actual2, expected);
+        }
+    }
+
+    #[test]
+    fn test_duration_uuid() {
+        let batch = read_file("test/data/duration_uuid.avro", 4);
+        let schema = batch.schema();
+        let fields = schema.fields();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name(), "duration_field");
+        assert_eq!(
+            fields[0].data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(fields[1].name(), "uuid_field");
+        assert_eq!(fields[1].data_type(), &DataType::Utf8);
+        assert_eq!(batch.num_rows(), 4);
+        assert_eq!(batch.num_columns(), 2);
+        let duration_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+        let expected_duration_array: IntervalMonthDayNanoArray = [
+            Some(IntervalMonthDayNanoType::make_value(1, 15, 500_000_000)),
+            Some(IntervalMonthDayNanoType::make_value(0, 5, 2_500_000_000)),
+            Some(IntervalMonthDayNanoType::make_value(2, 0, 0)),
+            Some(IntervalMonthDayNanoType::make_value(12, 31, 999_000_000)),
+        ]
+        .iter()
+        .copied()
+        .collect();
+        assert_eq!(&expected_duration_array, duration_array);
+        let uuid_array = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        for i in 0..uuid_array.len() {
+            assert!(uuid_array.is_valid(i));
+            assert!(Uuid::parse_str(uuid_array.value(i)).is_ok());
         }
     }
 }

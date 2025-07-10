@@ -21,13 +21,16 @@ use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
 use crate::reader::ReadOptions;
 use crate::schema::*;
-use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
+use arrow_array::builder::{
+    ArrayBuilder, Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder,
+    PrimitiveBuilder,
+};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
+    Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -128,6 +131,8 @@ enum Decoder {
     ),
     Fixed(i32, Vec<u8>),
     Enum(Vec<i32>, Arc<[String]>),
+    Duration(IntervalMonthDayNanoBuilder),
+    Uuid(OffsetBufferBuilder<i32>, Vec<u8>),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
@@ -135,8 +140,6 @@ enum Decoder {
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        let nyi = |s: &str| Err(ArrowError::NotYetImplemented(s.to_string()));
-
         let decoder = match data_type.codec() {
             Codec::Null => Self::Null(0),
             Codec::Boolean => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
@@ -205,7 +208,7 @@ impl Decoder {
                     }
                 }
             }
-            Codec::Interval => return nyi("decoding interval"),
+            Codec::Interval => Self::Duration(IntervalMonthDayNanoBuilder::new()),
             Codec::List(item) => {
                 let decoder = Self::try_new(item)?;
                 Self::Array(
@@ -246,7 +249,10 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
-            Codec::Uuid => Self::Fixed(16, Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Uuid => Self::Uuid(
+                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                Vec::with_capacity(DEFAULT_CAPACITY),
+            ),
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
@@ -270,7 +276,10 @@ impl Decoder {
             | Self::TimestampMicros(_, v) => v.push(0),
             Self::Float32(v) => v.push(0.),
             Self::Float64(v) => v.push(0.),
-            Self::Binary(offsets, _) | Self::String(offsets, _) | Self::StringView(offsets, _) => {
+            Self::Binary(offsets, _)
+            | Self::String(offsets, _)
+            | Self::StringView(offsets, _)
+            | Self::Uuid(offsets, _) => {
                 offsets.push_length(0);
             }
             Self::Array(_, offsets, e) => {
@@ -287,6 +296,7 @@ impl Decoder {
             Self::Decimal128(_, _, _, builder) => builder.append_value(0),
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
             Self::Enum(indices, _) => indices.push(0),
+            Self::Duration(builder) => builder.append_null(),
             Self::Nullable(_, _, _) => unreachable!("Nulls cannot be nested"),
         }
     }
@@ -307,7 +317,8 @@ impl Decoder {
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Binary(offsets, values)
             | Self::String(offsets, values)
-            | Self::StringView(offsets, values) => {
+            | Self::StringView(offsets, values)
+            | Self::Uuid(offsets, values) => {
                 let data = buf.get_bytes()?;
                 offsets.push_length(data.len());
                 values.extend_from_slice(data);
@@ -357,6 +368,14 @@ impl Decoder {
             Self::Enum(indices, _) => {
                 indices.push(buf.get_int()?);
             }
+            Self::Duration(builder) => {
+                let b = buf.get_fixed(12)?;
+                let months = u32::from_le_bytes(b[0..4].try_into().unwrap());
+                let days = u32::from_le_bytes(b[4..8].try_into().unwrap());
+                let millis = u32::from_le_bytes(b[8..12].try_into().unwrap());
+                let nanos = (millis as i64) * 1_000_000;
+                builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
+            }
             Self::Nullable(nullability, nulls, e) => {
                 let is_valid = buf.get_bool()? == matches!(nullability, Nullability::NullFirst);
                 nulls.append(is_valid);
@@ -399,7 +418,7 @@ impl Decoder {
                 let values = flush_values(values).into();
                 Arc::new(BinaryArray::new(offsets, values, nulls))
             }
-            Self::String(offsets, values) => {
+            Self::String(offsets, values) | Self::Uuid(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Arc::new(StringArray::new(offsets, values, nulls))
@@ -417,7 +436,6 @@ impl Decoder {
                         }
                     })
                     .collect();
-
                 Arc::new(StringViewArray::from(values))
             }
             Self::Array(field, offsets, values) => {
@@ -472,8 +490,7 @@ impl Decoder {
                 Arc::new(arr)
             }
             Self::Decimal128(precision, scale, _, builder) => {
-                let mut b = std::mem::take(builder);
-                let (_, vals, _) = b.finish().into_parts();
+                let (_, vals, _) = builder.finish().into_parts();
                 let scl = scale.unwrap_or(0);
                 let dec = Decimal128Array::new(vals, nulls)
                     .with_precision_and_scale(*precision as u8, scl as i8)
@@ -481,8 +498,7 @@ impl Decoder {
                 Arc::new(dec)
             }
             Self::Decimal256(precision, scale, _, builder) => {
-                let mut b = std::mem::take(builder);
-                let (_, vals, _) = b.finish().into_parts();
+                let (_, vals, _) = builder.finish().into_parts();
                 let scl = scale.unwrap_or(0);
                 let dec = Decimal256Array::new(vals, nulls)
                     .with_precision_and_scale(*precision as u8, scl as i8)
@@ -495,6 +511,12 @@ impl Decoder {
                     symbols.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
                 ));
                 Arc::new(DictionaryArray::try_new(keys, values)?)
+            }
+            Self::Duration(builder) => {
+                let (_, vals, _) = builder.finish().into_parts();
+                let vals = IntervalMonthDayNanoArray::try_new(vals, nulls)
+                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                Arc::new(vals)
             }
         })
     }
@@ -744,16 +766,16 @@ mod tests {
     fn test_uuid_decoding() {
         let avro_type = avro_from_codec(Codec::Uuid);
         let mut decoder = Decoder::try_new(&avro_type).expect("Failed to create decoder");
-
-        let data1 = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let uuid_bytes = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let data1 = encode_avro_bytes(&uuid_bytes);
         let mut cursor1 = AvroCursor::new(&data1);
         decoder
             .decode(&mut cursor1)
             .expect("Failed to decode data1");
         assert_eq!(
             cursor1.position(),
-            16,
-            "Cursor should advance by fixed size"
+            17,
+            "Cursor should advance by varint size + data size"
         );
     }
 
@@ -1034,5 +1056,68 @@ mod tests {
             .unwrap();
         assert_eq!(values.value(0), "X");
         assert_eq!(values.value(1), "Y");
+    }
+
+    #[test]
+    fn test_duration_decoding_with_nulls() {
+        let duration_codec = Codec::Interval;
+        let avro_type = AvroDataType::new(
+            duration_codec,
+            Default::default(),
+            Some(Nullability::NullFirst),
+        );
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        // First value: 1 month, 2 days, 3 millis
+        data.extend_from_slice(&encode_avro_long(1)); // not null
+        let mut duration1 = Vec::new();
+        duration1.extend_from_slice(&1u32.to_le_bytes());
+        duration1.extend_from_slice(&2u32.to_le_bytes());
+        duration1.extend_from_slice(&3u32.to_le_bytes());
+        data.extend_from_slice(&duration1);
+        // Second value: null
+        data.extend_from_slice(&encode_avro_long(0)); // null
+        data.extend_from_slice(&encode_avro_long(1)); // not null
+        let mut duration2 = Vec::new();
+        duration2.extend_from_slice(&4u32.to_le_bytes());
+        duration2.extend_from_slice(&5u32.to_le_bytes());
+        duration2.extend_from_slice(&6u32.to_le_bytes());
+        data.extend_from_slice(&duration2);
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let interval_array = array
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+        assert_eq!(interval_array.len(), 3);
+        assert!(interval_array.is_valid(0));
+        assert!(interval_array.is_null(1));
+        assert!(interval_array.is_valid(2));
+        let expected = IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano {
+                months: 1,
+                days: 2,
+                nanoseconds: 3_000_000,
+            }),
+            None,
+            Some(IntervalMonthDayNano {
+                months: 4,
+                days: 5,
+                nanoseconds: 6_000_000,
+            }),
+        ]);
+        assert_eq!(interval_array, &expected);
+    }
+
+    #[test]
+    fn test_duration_decoding_empty() {
+        let duration_codec = Codec::Interval;
+        let avro_type = AvroDataType::new(duration_codec, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let array = decoder.flush(None).unwrap();
+        assert_eq!(array.len(), 0);
     }
 }

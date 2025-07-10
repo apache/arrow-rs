@@ -201,7 +201,7 @@ pub enum Codec {
     /// - `scale` (`Option<usize>`): Number of fractional digits.
     /// - `fixed_size` (`Option<usize>`): Size in bytes if backed by a `fixed` type, otherwise `None`.
     Decimal(usize, Option<usize>, Option<usize>),
-    /// Represents Avro Uuid type, a FixedSizeBinary with a length of 16
+    /// Represents Avro Uuid type, a logicalType of String data represented as UTF-8 encoded bytes.
     Uuid,
     /// Represents an Avro enum, maps to Arrow's Dictionary(Int32, Utf8) type.
     ///
@@ -256,7 +256,7 @@ impl Codec {
                     Decimal128(p, s)
                 }
             }
-            Self::Uuid => DataType::FixedSizeBinary(16),
+            Self::Uuid => DataType::Utf8,
             Self::Enum(_) => {
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
             }
@@ -480,6 +480,18 @@ fn make_data_type<'a>(
                             codec: Codec::Decimal(precision, Some(scale), Some(size as usize)),
                         }
                     }
+                    Some("duration") => {
+                        if size != 12 {
+                            return Err(ArrowError::ParseError(format!(
+                                "Invalid fixed size for Duration: {size}, must be 12"
+                            )));
+                        };
+                        AvroDataType {
+                            nullability: None,
+                            metadata: md,
+                            codec: Codec::Interval,
+                        }
+                    }
                     _ => AvroDataType {
                         nullability: None,
                         metadata: md,
@@ -544,7 +556,6 @@ fn make_data_type<'a>(
                 (Some("local-timestamp-micros"), c @ Codec::Int64) => {
                     *c = Codec::TimestampMicros(false)
                 }
-                (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Interval,
                 (Some("uuid"), c @ Codec::Utf8) => *c = Codec::Uuid,
                 (Some(logical), _) => {
                     // Insert unrecognized logical type into metadata map
