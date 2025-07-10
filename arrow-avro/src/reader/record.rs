@@ -43,13 +43,19 @@ pub(crate) struct RecordDecoderBuilder<'a> {
 }
 
 impl<'a> RecordDecoderBuilder<'a> {
-    /// Sets whether to use `StringView` for string types.
+    pub(crate) fn new(data_type: &'a AvroDataType) -> Self {
+        Self {
+            data_type,
+            use_utf8view: false,
+            strict_mode: false,
+        }
+    }
+
     pub(crate) fn with_utf8_view(mut self, use_utf8view: bool) -> Self {
         self.use_utf8view = use_utf8view;
         self
     }
 
-    /// Sets the strict mode for decoding.
     pub(crate) fn with_strict_mode(mut self, strict_mode: bool) -> Self {
         self.strict_mode = strict_mode;
         self
@@ -72,19 +78,13 @@ pub(crate) struct RecordDecoder {
 
 impl RecordDecoder {
     /// Creates a new `RecordDecoderBuilder` for configuring a `RecordDecoder`.
-    pub(crate) fn new(data_type: &'_ AvroDataType) -> RecordDecoderBuilder<'_> {
-        RecordDecoderBuilder {
-            data_type,
-            // default to false for utf8_view as per convention
-            use_utf8view: false,
-            // default to false for strict_mode as per ReaderBuilder
-            strict_mode: false,
-        }
+    pub(crate) fn new(data_type: &'_ AvroDataType) -> Self {
+        RecordDecoderBuilder::new(data_type).build().unwrap()
     }
 
     /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
     pub(crate) fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        Self::new(data_type)
+        RecordDecoderBuilder::new(data_type)
             .with_utf8_view(true)
             .with_strict_mode(true)
             .build()
