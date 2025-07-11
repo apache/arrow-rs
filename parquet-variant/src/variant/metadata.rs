@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
-use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
+use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice, try_binary_search_range_by};
 
 use arrow_schema::ArrowError;
 
@@ -309,6 +309,32 @@ impl<'m> VariantMetadata<'m> {
         string_from_slice(self.bytes, self.first_value_byte as _, byte_range)
     }
 
+    // Helper method used by our `impl Index` and also by `get_entry`. Panics if the underlying
+    // bytes are invalid. Needed because the `Index` trait forces the returned result to have the
+    // lifetime of `self` instead of the string's own (longer) lifetime.
+    fn get_infallible(&self, i: usize) -> &'m str {
+        self.get(i).expect("Invalid metadata dictionary entry")
+    }
+
+    /// Attempts to retrieve a dictionary entry and its field id, returning None if the requested field
+    /// name is not present. The search cost is logarithmic if [`Self::is_sorted`] and linear
+    /// otherwise.
+    ///
+    /// WARNING: This method panics if the underlying bytes are [invalid].
+    ///
+    /// [invalid]: Self#Validation
+    pub fn get_entry(&self, field_name: &str) -> Option<(u32, &'m str)> {
+        let field_id = if self.is_sorted() && self.len() > 10 {
+            // Binary search is faster for a not-tiny sorted metadata dictionary
+            let cmp = |i| Some(self.get_infallible(i).cmp(field_name));
+            try_binary_search_range_by(0..self.len(), cmp)?.ok()?
+        } else {
+            // Fall back to Linear search for tiny or unsorted dictionary
+            (0..self.len()).find(|i| self.get_infallible(*i) == field_name)?
+        };
+        Some((field_id as u32, self.get_infallible(field_id)))
+    }
+
     /// Returns an iterator that attempts to visit all dictionary entries, producing `Err` if the
     /// iterator encounters [invalid] data.
     ///
@@ -325,6 +351,11 @@ impl<'m> VariantMetadata<'m> {
         self.iter_try()
             .map(|result| result.expect("Invalid metadata dictionary entry"))
     }
+
+    /// Returns the underlying metadata bytes
+    pub fn as_bytes(&self) -> &'m [u8] {
+        self.bytes
+    }
 }
 
 /// Retrieves the ith dictionary entry, panicking if the index is out of bounds. Accessing
@@ -335,7 +366,7 @@ impl std::ops::Index<usize> for VariantMetadata<'_> {
     type Output = str;
 
     fn index(&self, i: usize) -> &str {
-        self.get(i).expect("Invalid metadata dictionary entry")
+        self.get_infallible(i)
     }
 }
 

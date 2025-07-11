@@ -392,8 +392,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let i = try_binary_search_range_by(0..self.len(), &name, |i| self.field_name(i))?.ok()?;
-
+        let cmp = |i| Some(self.field_name(i)?.cmp(name));
+        let i = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
         self.field(i)
     }
 }

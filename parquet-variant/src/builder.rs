@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
-use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use crate::{
+    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantMetadata,
+};
 use arrow_schema::ArrowError;
 use indexmap::{IndexMap, IndexSet};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -384,6 +386,52 @@ impl<S: AsRef<str>> Extend<S> for DefaultMetadataBuilder {
     }
 }
 
+/// Read-only metadata builder that validates field names against an existing metadata dictionary
+pub struct ReadOnlyMetadataBuilder<'m> {
+    metadata: VariantMetadata<'m>,
+    field_cache: HashMap<&'m str, u32>,
+}
+
+impl<'m> ReadOnlyMetadataBuilder<'m> {
+    /// Attempts to create a new [`MetadataBuilder`] from an existing [`VariantMetadata`]
+    /// dictionary, returning an error if full validation fails.
+    pub fn try_new(metadata: VariantMetadata<'m>) -> Result<Self, ArrowError> {
+        Ok(Self {
+            metadata: metadata.with_full_validation()?,
+            field_cache: HashMap::new(),
+        })
+    }
+}
+
+impl<'m> MetadataBuilder for ReadOnlyMetadataBuilder<'m> {
+    type MetadataOutput = &'m [u8];
+
+    fn upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        // Check cache first
+        if let Some(field_id) = self.field_cache.get(field_name) {
+            return Ok(*field_id);
+        }
+
+        let (field_id, field_name) = self.metadata.get_entry(field_name).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Field name '{}' not found in metadata dictionary",
+                field_name
+            ))
+        })?;
+
+        self.field_cache.insert(field_name, field_id);
+        Ok(field_id)
+    }
+
+    fn field_name(&self, id: usize) -> &str {
+        &self.metadata[id]
+    }
+
+    fn finish(self) -> &'m [u8] {
+        self.metadata.as_bytes() // return the original metadata bytes
+    }
+}
+
 /// Tracks information needed to correctly finalize a nested builder, for each parent builder type.
 ///
 /// A child builder has no effect on its parent unless/until its `finalize` method is called, at
@@ -660,7 +708,7 @@ pub struct GenericVariantBuilder<M: MetadataBuilder> {
     validate_unique_fields: bool,
 }
 
-/// TODO
+/// A variant builder that builds up a new metadata dictionary from scratch
 pub type VariantBuilder = GenericVariantBuilder<DefaultMetadataBuilder>;
 
 impl<M: MetadataBuilder> GenericVariantBuilder<M> {
@@ -719,14 +767,6 @@ impl<M: MetadataBuilder> GenericVariantBuilder<M> {
 }
 
 impl GenericVariantBuilder<DefaultMetadataBuilder> {
-    pub fn new() -> Self {
-        Self {
-            buffer: ValueBuffer::default(),
-            metadata_builder: DefaultMetadataBuilder::default(),
-            validate_unique_fields: false,
-        }
-    }
-
     /// This method pre-populates the field name directory in the Variant metadata with
     /// the specific field names, in order.
     ///
@@ -746,9 +786,35 @@ impl GenericVariantBuilder<DefaultMetadataBuilder> {
     }
 }
 
-impl Default for GenericVariantBuilder<DefaultMetadataBuilder> {
+impl<M: MetadataBuilder> From<M> for GenericVariantBuilder<M> {
+    fn from(metadata_builder: M) -> Self {
+        Self {
+            buffer: ValueBuffer::default(),
+            metadata_builder,
+            validate_unique_fields: false,
+        }
+    }
+}
+
+impl<M: MetadataBuilder + Default> Default for GenericVariantBuilder<M> {
     fn default() -> Self {
-        Self::new()
+        M::default().into()
+    }
+}
+
+impl<M: MetadataBuilder + Default> GenericVariantBuilder<M> {
+    /// Creates a new instance from the provided [`MetadataBuilder`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<'m> GenericVariantBuilder<ReadOnlyMetadataBuilder<'m>> {
+    /// Creates a variant builder that validates field names against an existing [`VariantMetadata`]
+    /// dictionary instead of creating a new one. [`ObjectBuilder`] operations that attempt to
+    /// insert a new object field with an unrecognized name will fail.
+    pub fn try_from_metadata(metadata: VariantMetadata<'m>) -> Result<Self, ArrowError> {
+        Ok(ReadOnlyMetadataBuilder::try_new(metadata)?.into())
     }
 }
 
@@ -2213,5 +2279,68 @@ mod tests {
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         assert_eq!(variant, Variant::Int8(2));
+    }
+
+    #[test]
+    fn test_read_only_metadata_builder() {
+        // First create some metadata with a few field names
+        let mut default_builder = VariantBuilder::new();
+        default_builder.add_field_name("name");
+        default_builder.add_field_name("age");
+        default_builder.add_field_name("active");
+        let (metadata_bytes, _) = default_builder.finish();
+
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Now create a read-only builder with this metadata
+        let mut readonly_builder = GenericVariantBuilder::try_from_metadata(metadata).unwrap();
+
+        {
+            let mut obj = readonly_builder.new_object();
+            // These should succeed because the fields exist in the metadata
+            obj.insert("name", "Alice").unwrap();
+            obj.insert("age", 30i8).unwrap();
+            obj.insert("active", true).unwrap();
+            obj.finish().unwrap();
+        }
+
+        let (reused_metadata, value) = readonly_builder.finish();
+
+        // The metadata should be the same bytes we started with (zero copy)
+        assert_eq!(reused_metadata, metadata_bytes.as_slice());
+
+        // Verify the variant was built correctly
+        let variant = Variant::try_new(reused_metadata, &value).unwrap();
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.get("name"), Some(Variant::from("Alice")));
+        assert_eq!(obj.get("age"), Some(Variant::Int8(30)));
+        assert_eq!(obj.get("active"), Some(Variant::from(true)));
+    }
+
+    #[test]
+    fn test_read_only_metadata_builder_fails_on_unknown_field() {
+        // Create metadata with only one field
+        let mut default_builder = VariantBuilder::new();
+        default_builder.add_field_name("known_field");
+        let (metadata_bytes, _) = default_builder.finish();
+
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Create a read-only builder
+        let mut readonly_builder = GenericVariantBuilder::try_from_metadata(metadata).unwrap();
+
+        {
+            let mut obj = readonly_builder.new_object();
+            // This should succeed
+            obj.insert("known_field", "value").unwrap();
+
+            // This should fail because "unknown_field" is not in the metadata
+            let result = obj.insert("unknown_field", "value");
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Field name 'unknown_field' not found"));
+        }
     }
 }

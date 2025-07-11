@@ -18,6 +18,7 @@ use std::{array::TryFromSliceError, ops::Range, str};
 
 use arrow_schema::ArrowError;
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::slice::SliceIndex;
 
@@ -100,23 +101,20 @@ pub(crate) fn string_from_slice(
 /// * `Some(Ok(index))` - Element found at the given index
 /// * `Some(Err(index))` - Element not found, but would be inserted at the given index
 /// * `None` - Key extraction failed
-pub(crate) fn try_binary_search_range_by<K, F>(
+pub(crate) fn try_binary_search_range_by<F>(
     range: Range<usize>,
-    target: &K,
-    key_extractor: F,
+    cmp: F,
 ) -> Option<Result<usize, usize>>
 where
-    K: Ord,
-    F: Fn(usize) -> Option<K>,
+    F: Fn(usize) -> Option<Ordering>,
 {
     let Range { mut start, mut end } = range;
     while start < end {
         let mid = start + (end - start) / 2;
-        let key = key_extractor(mid)?;
-        match key.cmp(target) {
-            std::cmp::Ordering::Equal => return Some(Ok(mid)),
-            std::cmp::Ordering::Greater => end = mid,
-            std::cmp::Ordering::Less => start = mid + 1,
+        match cmp(mid)? {
+            Ordering::Equal => return Some(Ok(mid)),
+            Ordering::Greater => end = mid,
+            Ordering::Less => start = mid + 1,
         }
     }
 
