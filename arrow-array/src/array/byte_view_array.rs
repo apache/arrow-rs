@@ -508,9 +508,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
         // 4) Iterate over views and process each inline/non-inline view
         let views_buf: Vec<u128> = (0..len)
-            .map(|i| unsafe {
-                self.copy_view_to_buffer(i, &mut data_buf)
-            })
+            .map(|i| unsafe { self.copy_view_to_buffer(i, &mut data_buf) })
             .collect();
 
         // 5) Wrap up buffers
