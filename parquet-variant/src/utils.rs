@@ -84,6 +84,7 @@ pub(crate) fn string_from_slice(
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
 
+/// Extracts a byte slice from the given range and validates it as UTF-8.
 pub(crate) fn extract_and_validate_utf8_slice(
     bytes: &[u8],
     range: Range<usize>,
