@@ -14,17 +14,16 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::decoder::OffsetSizeBytes;
+use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-    validate_fallible_iterator,
 };
 use crate::variant::{Variant, VariantMetadata};
 
 use arrow_schema::ArrowError;
 
 // The value header occupies one byte; use a named constant for readability
-const NUM_HEADER_BYTES: usize = 1;
+const NUM_HEADER_BYTES: u32 = 1;
 
 /// A parsed version of the variant array value header byte.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,15 +34,15 @@ pub(crate) struct VariantListHeader {
 
 impl VariantListHeader {
     // Hide the ugly casting
-    const fn num_elements_size(&self) -> usize {
+    const fn num_elements_size(&self) -> u32 {
         self.num_elements_size as _
     }
-    const fn offset_size(&self) -> usize {
+    const fn offset_size(&self) -> u32 {
         self.offset_size as _
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn first_offset_byte(&self) -> usize {
+    const fn first_offset_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.num_elements_size()
     }
 
@@ -123,10 +122,13 @@ pub struct VariantList<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
     header: VariantListHeader,
-    num_elements: usize,
-    first_value_byte: usize,
+    num_elements: u32,
+    first_value_byte: u32,
     validated: bool,
 }
+
+// We don't want this to grow because it could increase the size of `Variant` and hurt performance.
+const _: () = crate::utils::expect_size_of::<VariantList>(64);
 
 impl<'m, 'v> VariantList<'m, 'v> {
     /// Attempts to interpret `value` as a variant array value.
@@ -158,7 +160,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let num_elements =
             header
                 .num_elements_size
-                .unpack_usize_at_offset(value, NUM_HEADER_BYTES, 0)?;
+                .unpack_u32_at_offset(value, NUM_HEADER_BYTES as _, 0)?;
 
         // (num_elements + 1) * offset_size + first_offset_byte
         let first_value_byte = num_elements
@@ -186,10 +188,10 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
         // Use the last offset to upper-bound the value buffer
         let last_offset = new_self
-            .get_offset(num_elements)?
+            .get_offset(num_elements as _)?
             .checked_add(first_value_byte)
             .ok_or_else(|| overflow_error("variant array size"))?;
-        new_self.value = slice_from_slice(value, ..last_offset)?;
+        new_self.value = slice_from_slice(value, ..last_offset as _)?;
         Ok(new_self)
     }
 
@@ -209,9 +211,35 @@ impl<'m, 'v> VariantList<'m, 'v> {
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
 
-            // Iterate over all string keys in this dictionary in order to prove that the offset
-            // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
-            validate_fallible_iterator(self.iter_try())?;
+            let offset_buffer = slice_from_slice(
+                self.value,
+                self.header.first_offset_byte() as _..self.first_value_byte as _,
+            )?;
+
+            let offsets =
+                map_bytes_to_offsets(offset_buffer, self.header.offset_size).collect::<Vec<_>>();
+
+            // Validate offsets are in-bounds and monotonically increasing.
+            // Since shallow verification checks whether the first and last offsets are in-bounds,
+            // we can also verify all offsets are in-bounds by checking if offsets are monotonically increasing.
+            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
+            if !are_offsets_monotonic {
+                return Err(ArrowError::InvalidArgumentError(
+                    "offsets are not monotonically increasing".to_string(),
+                ));
+            }
+
+            let value_buffer = slice_from_slice(self.value, self.first_value_byte as _..)?;
+
+            // Validate whether values are valid variant objects
+            for i in 1..offsets.len() {
+                let start_offset = offsets[i - 1];
+                let end_offset = offsets[i];
+
+                let value_bytes = slice_from_slice(value_buffer, start_offset..end_offset)?;
+                Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
+            }
+
             self.validated = true;
         }
         Ok(self)
@@ -219,7 +247,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
     /// Return the length of this array
     pub fn len(&self) -> usize {
-        self.num_elements
+        self.num_elements as _
     }
 
     /// Is the array of zero length
@@ -231,7 +259,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     ///
     /// [invalid]: Self#Validation
     pub fn get(&self, index: usize) -> Option<Variant<'m, 'v>> {
-        (index < self.num_elements).then(|| {
+        (index < self.len()).then(|| {
             self.try_get_with_shallow_validation(index)
                 .expect("Invalid variant array element")
         })
@@ -247,10 +275,10 @@ impl<'m, 'v> VariantList<'m, 'v> {
     fn try_get_with_shallow_validation(&self, index: usize) -> Result<Variant<'m, 'v>, ArrowError> {
         // Fetch the value bytes between the two offsets for this index, from the value array region
         // of the byte buffer
-        let byte_range = self.get_offset(index)?..self.get_offset(index + 1)?;
+        let byte_range = self.get_offset(index)? as _..self.get_offset(index + 1)? as _;
         let value_bytes =
-            slice_from_slice_at_offset(self.value, self.first_value_byte, byte_range)?;
-        Variant::try_new_with_metadata_and_shallow_validation(self.metadata, value_bytes)
+            slice_from_slice_at_offset(self.value, self.first_value_byte as _, byte_range)?;
+        Variant::try_new_with_metadata_and_shallow_validation(self.metadata.clone(), value_bytes)
     }
 
     /// Iterates over the values of this list. When working with [unvalidated] input, consider
@@ -272,20 +300,22 @@ impl<'m, 'v> VariantList<'m, 'v> {
     fn iter_try_with_shallow_validation(
         &self,
     ) -> impl Iterator<Item = Result<Variant<'m, 'v>, ArrowError>> + '_ {
-        (0..self.len()).map(move |i| self.try_get_with_shallow_validation(i))
+        (0..self.len()).map(|i| self.try_get_with_shallow_validation(i))
     }
 
     // Attempts to retrieve the ith offset from the offset array region of the byte buffer.
-    fn get_offset(&self, index: usize) -> Result<usize, ArrowError> {
-        let byte_range = self.header.first_offset_byte()..self.first_value_byte;
+    fn get_offset(&self, index: usize) -> Result<u32, ArrowError> {
+        let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
-        self.header.offset_size.unpack_usize(offset_bytes, index)
+        self.header.offset_size.unpack_u32(offset_bytes, index)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VariantBuilder;
+    use std::iter::repeat_n;
 
     #[test]
     fn test_variant_list_simple() {
@@ -412,5 +442,198 @@ mod tests {
 
         let elem1 = variant_list.get(1).unwrap();
         assert_eq!(elem1.as_boolean(), Some(false));
+    }
+
+    #[test]
+    fn test_large_variant_list_with_total_child_length_between_2_pow_8_and_2_pow_16() {
+        // all the tests below will set the total child size to ~500,
+        // which is larger than 2^8 but less than 2^16.
+        // total child size = list_size * single_child_item_len
+
+        let mut list_size: usize = 1;
+        let mut single_child_item_len: usize = 500;
+
+        // offset size will be OffSizeBytes::Two as the total child length between 2^8 and 2^16
+        let expected_offset_size = OffsetSizeBytes::Two;
+
+        test_large_variant_list_with_child_length(
+            list_size,             // the elements in the list
+            single_child_item_len, // this will control the total child size in the list
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
+        );
+
+        list_size = 255;
+        single_child_item_len = 2;
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
+        );
+
+        list_size = 256;
+        single_child_item_len = 2;
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
+        );
+
+        list_size = 300;
+        single_child_item_len = 2;
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
+        );
+    }
+
+    #[test]
+    fn test_large_variant_list_with_total_child_length_between_2_pow_16_and_2_pow_24() {
+        // all the tests below will set the total child size to ~70,000,
+        // which is larger than 2^16 but less than 2^24.
+        // total child size = list_size * single_child_item_len
+
+        let mut list_size: usize = 1;
+        let mut single_child_item_len: usize = 70000;
+
+        // offset size will be OffSizeBytes::Two as the total child length between 2^16 and 2^24
+        let expected_offset_size = OffsetSizeBytes::Three;
+
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
+        );
+
+        list_size = 255;
+        single_child_item_len = 275;
+        // total child size = 255 * 275 = 70,125
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
+        );
+
+        list_size = 256;
+        single_child_item_len = 274;
+        // total child size = 256 * 274 = 70,144
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
+        );
+
+        list_size = 300;
+        single_child_item_len = 234;
+        // total child size = 300 * 234 = 70,200
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
+        );
+    }
+
+    #[test]
+    fn test_large_variant_list_with_total_child_length_between_2_pow_24_and_2_pow_32() {
+        // all the tests below will set the total child size to ~20,000,000,
+        // which is larger than 2^24 but less than 2^32.
+        // total child size = list_size * single_child_item_len
+
+        let mut list_size: usize = 1;
+        let mut single_child_item_len: usize = 20000000;
+
+        // offset size will be OffSizeBytes::Two as the total child length between 2^24 and 2^32
+        let expected_offset_size = OffsetSizeBytes::Four;
+
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
+        );
+
+        list_size = 255;
+        single_child_item_len = 78432;
+        // total child size = 255 * 78,432 = 20,000,160
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::One, // will be OffsetSizeBytes::One as the size of the list is less than 256
+            expected_offset_size,
+        );
+
+        list_size = 256;
+        single_child_item_len = 78125;
+        // total child size = 256 * 78,125 = 20,000,000
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
+        );
+
+        list_size = 300;
+        single_child_item_len = 66667;
+        // total child size = 300 * 66,667 = 20,000,100
+        test_large_variant_list_with_child_length(
+            list_size,
+            single_child_item_len,
+            OffsetSizeBytes::Four, // will be OffsetSizeBytes::Four as the size of the list is bigger than 255
+            expected_offset_size,
+        );
+    }
+
+    // this function will create a large variant list from VariantBuilder
+    // with specified size and each child item with the given length.
+    // and verify the content and some meta for the variant list in the final.
+    fn test_large_variant_list_with_child_length(
+        list_size: usize,
+        single_child_item_len: usize,
+        expected_num_element_size: OffsetSizeBytes,
+        expected_offset_size_bytes: OffsetSizeBytes,
+    ) {
+        let mut builder = VariantBuilder::new();
+        let mut list_builder = builder.new_list();
+
+        let mut expected_list = vec![];
+        for i in 0..list_size {
+            let random_string: String =
+                repeat_n(char::from((i % 256) as u8), single_child_item_len).collect();
+
+            list_builder.append_value(Variant::String(random_string.as_str()));
+            expected_list.push(random_string);
+        }
+
+        list_builder.finish();
+        // Finish the builder to get the metadata and value
+        let (metadata, value) = builder.finish();
+        // use the Variant API to verify the result
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+
+        let variant_list = variant.as_list().unwrap();
+
+        // verify that the head is expected
+        assert_eq!(expected_offset_size_bytes, variant_list.header.offset_size);
+        assert_eq!(
+            expected_num_element_size,
+            variant_list.header.num_elements_size
+        );
+        assert_eq!(list_size, variant_list.num_elements as usize);
+
+        // verify the data in the variant
+        assert_eq!(list_size, variant_list.len());
+        for i in 0..list_size {
+            let item = variant_list.get(i).unwrap();
+            let item_str = item.as_string().unwrap();
+            assert_eq!(expected_list.get(i).unwrap(), item_str);
+        }
     }
 }

@@ -77,12 +77,13 @@ impl Header {
     /// Returns the [`CompressionCodec`] if any
     pub fn compression(&self) -> Result<Option<CompressionCodec>, ArrowError> {
         let v = self.get(CODEC_METADATA_KEY);
-
         match v {
             None | Some(b"null") => Ok(None),
             Some(b"deflate") => Ok(Some(CompressionCodec::Deflate)),
             Some(b"snappy") => Ok(Some(CompressionCodec::Snappy)),
             Some(b"zstandard") => Ok(Some(CompressionCodec::ZStandard)),
+            Some(b"bzip2") => Ok(Some(CompressionCodec::Bzip2)),
+            Some(b"xz") => Ok(Some(CompressionCodec::Xz)),
             Some(v) => Err(ArrowError::ParseError(format!(
                 "Unrecognized compression codec \'{}\'",
                 String::from_utf8_lossy(v)

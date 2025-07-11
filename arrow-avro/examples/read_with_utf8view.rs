@@ -22,13 +22,11 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
-use std::sync::Arc;
+use std::io::BufReader;
 use std::time::Instant;
 
-use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
-use arrow_avro::reader::ReadOptions;
-use arrow_schema::{ArrowError, DataType, Field, Schema};
+use arrow_array::{RecordBatch, StringArray, StringViewArray};
+use arrow_avro::reader::ReaderBuilder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -41,20 +39,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let file = File::open(file_path)?;
-    let mut reader = BufReader::new(file);
+    let file_for_view = file.try_clone()?;
 
     let start = Instant::now();
-    let batch = read_avro_with_options(&mut reader, &ReadOptions::default())?;
+    let reader = BufReader::new(file);
+    let avro_reader = ReaderBuilder::new().build(reader)?;
+    let schema = avro_reader.schema();
+    let batches: Vec<RecordBatch> = avro_reader.collect::<Result<_, _>>()?;
     let regular_duration = start.elapsed();
 
-    reader.seek(SeekFrom::Start(0))?;
-
     let start = Instant::now();
-    let options = ReadOptions::default().with_utf8view(true);
-    let batch_view = read_avro_with_options(&mut reader, &options)?;
+    let reader_view = BufReader::new(file_for_view);
+    let avro_reader_view = ReaderBuilder::new()
+        .with_utf8_view(true)
+        .build(reader_view)?;
+    let batches_view: Vec<RecordBatch> = avro_reader_view.collect::<Result<_, _>>()?;
     let view_duration = start.elapsed();
 
-    println!("Read {} rows from {}", batch.num_rows(), file_path);
+    let num_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+
+    println!("Read {num_rows} rows from {file_path}");
     println!("Reading with StringArray: {regular_duration:?}");
     println!("Reading with StringViewArray: {view_duration:?}");
 
@@ -70,7 +74,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    for (i, field) in batch.schema().fields().iter().enumerate() {
+    if batches.is_empty() {
+        println!("No data read from file.");
+        return Ok(());
+    }
+
+    // Inspect the first batch from each run to show the array types
+    let batch = &batches[0];
+    let batch_view = &batches_view[0];
+
+    for (i, field) in schema.fields().iter().enumerate() {
         let col = batch.column(i);
         let col_view = batch_view.column(i);
 
@@ -92,30 +105,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn read_avro_with_options(
-    reader: &mut BufReader<File>,
-    options: &ReadOptions,
-) -> Result<RecordBatch, ArrowError> {
-    reader.get_mut().seek(SeekFrom::Start(0))?;
-
-    let mock_schema = Schema::new(vec![
-        Field::new("string_field", DataType::Utf8, false),
-        Field::new("int_field", DataType::Int32, false),
-    ]);
-
-    let string_data = vec!["avro1", "avro2", "avro3", "avro4", "avro5"];
-    let int_data = vec![1, 2, 3, 4, 5];
-
-    let string_array: ArrayRef = if options.use_utf8view() {
-        Arc::new(StringViewArray::from(string_data))
-    } else {
-        Arc::new(StringArray::from(string_data))
-    };
-
-    let int_array: ArrayRef = Arc::new(Int32Array::from(int_data));
-
-    RecordBatch::try_new(Arc::new(mock_schema), vec![string_array, int_array])
-        .map_err(|e| ArrowError::ComputeError(format!("Failed to create record batch: {e}")))
 }

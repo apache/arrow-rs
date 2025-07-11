@@ -16,45 +16,29 @@
 # under the License.
 
 [package]
-name = "arrow-buffer"
-version = { workspace = true }
-description = "Buffer abstractions for Apache Arrow"
+name = "parquet-variant-compute"
+# This package is still in development and thus the version does
+# not follow the versions of the rest of the crates in this repo.
+version = "0.1.0"
+license = { workspace = true }
+description = "Apache Parquet Variant Batch Processing"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
-license = { workspace = true }
-keywords = { workspace = true }
-include = { workspace = true }
+keywords = ["arrow", "parquet", "variant"]
 edition = { workspace = true }
-rust-version = { workspace = true }
+# parquet-variant needs newer version than workspace
+rust-version = "1.83"
 
-[lib]
-name = "arrow_buffer"
-bench = false
-
-[package.metadata.docs.rs]
-all-features = true
-
-[features]
-pool = []
 
 [dependencies]
-bytes = { version = "1.4" }
-num = { version = "0.4", default-features = false, features = ["std"] }
-half = { version = "2.1", default-features = false }
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+parquet-variant = { workspace = true }
+parquet-variant-json = { workspace = true }
+
+[lib]
+name = "parquet_variant_compute"
+bench = false
 
 [dev-dependencies]
-criterion = { version = "0.5", default-features = false }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-
-[[bench]]
-name = "bit_mask"
-harness = false
-
-[[bench]]
-name = "i256"
-harness = false
-
-[[bench]]
-name = "offset"
-harness = false

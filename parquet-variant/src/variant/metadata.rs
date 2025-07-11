@@ -15,11 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decoder::OffsetSizeBytes;
-use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice,
-    validate_fallible_iterator,
-};
+use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
+use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
 
 use arrow_schema::ArrowError;
 
@@ -37,16 +34,16 @@ pub(crate) struct VariantMetadataHeader {
 const CORRECT_VERSION_VALUE: u8 = 1;
 
 // The metadata header occupies one byte; use a named constant for readability
-const NUM_HEADER_BYTES: usize = 1;
+const NUM_HEADER_BYTES: u32 = 1;
 
 impl VariantMetadataHeader {
     // Hide the cast
-    const fn offset_size(&self) -> usize {
-        self.offset_size as usize
+    const fn offset_size(&self) -> u32 {
+        self.offset_size as u32
     }
 
     // Avoid materializing this offset, since it's cheaply and safely computable
-    const fn first_offset_byte(&self) -> usize {
+    const fn first_offset_byte(&self) -> u32 {
         NUM_HEADER_BYTES + self.offset_size()
     }
 
@@ -128,14 +125,18 @@ impl VariantMetadataHeader {
 ///
 /// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantMetadata<'m> {
     bytes: &'m [u8],
     header: VariantMetadataHeader,
-    dictionary_size: usize,
-    first_value_byte: usize,
+    dictionary_size: u32,
+    first_value_byte: u32,
     validated: bool,
 }
+
+// We don't want this to grow because it increases the size of VariantList and VariantObject, which
+// could increase the size of Variant. All those size increases could hurt performance.
+const _: () = crate::utils::expect_size_of::<VariantMetadata>(32);
 
 impl<'m> VariantMetadata<'m> {
     /// Attempts to interpret `bytes` as a variant metadata instance, with full [validation] of all
@@ -169,7 +170,7 @@ impl<'m> VariantMetadata<'m> {
         let dictionary_size =
             header
                 .offset_size
-                .unpack_usize_at_offset(bytes, NUM_HEADER_BYTES, 0)?;
+                .unpack_u32_at_offset(bytes, NUM_HEADER_BYTES as usize, 0)?;
 
         // Calculate the starting offset of the dictionary string bytes.
         //
@@ -199,16 +200,16 @@ impl<'m> VariantMetadata<'m> {
 
         // Use the last offset to upper-bound the byte slice
         let last_offset = new_self
-            .get_offset(dictionary_size)?
+            .get_offset(dictionary_size as _)?
             .checked_add(first_value_byte)
             .ok_or_else(|| overflow_error("variant metadata size"))?;
-        new_self.bytes = slice_from_slice(bytes, ..last_offset)?;
+        new_self.bytes = slice_from_slice(bytes, ..last_offset as _)?;
         Ok(new_self)
     }
 
     /// The number of metadata dictionary entries
     pub fn len(&self) -> usize {
-        self.dictionary_size
+        self.dictionary_size()
     }
 
     /// True if this metadata dictionary contains no entries
@@ -228,9 +229,47 @@ impl<'m> VariantMetadata<'m> {
     /// [validation]: Self#Validation
     pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
-            // Iterate over all string keys in this dictionary in order to prove that the offset
-            // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
-            validate_fallible_iterator(self.iter_try())?;
+            let offset_bytes = slice_from_slice(
+                self.bytes,
+                self.header.first_offset_byte() as _..self.first_value_byte as _,
+            )?;
+
+            let offsets =
+                map_bytes_to_offsets(offset_bytes, self.header.offset_size).collect::<Vec<_>>();
+
+            // Validate offsets are in-bounds and monotonically increasing.
+            // Since shallow validation ensures the first and last offsets are in bounds, we can also verify all offsets
+            // are in-bounds by checking if offsets are monotonically increasing.
+            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
+            if !are_offsets_monotonic {
+                return Err(ArrowError::InvalidArgumentError(
+                    "offsets not monotonically increasing".to_string(),
+                ));
+            }
+
+            // Verify the string values in the dictionary are UTF-8 encoded strings.
+            let value_buffer =
+                string_from_slice(self.bytes, 0, self.first_value_byte as _..self.bytes.len())?;
+
+            if self.header.is_sorted {
+                // Validate the dictionary values are unique and lexicographically sorted
+                let are_dictionary_values_unique_and_sorted = (1..offsets.len())
+                    .map(|i| {
+                        let field_range = offsets[i - 1]..offsets[i];
+                        value_buffer.get(field_range)
+                    })
+                    .is_sorted_by(|a, b| match (a, b) {
+                        (Some(a), Some(b)) => a < b,
+                        _ => false,
+                    });
+
+                if !are_dictionary_values_unique_and_sorted {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "dictionary values are not unique and ordered".to_string(),
+                    ));
+                }
+            }
+
             self.validated = true;
         }
         Ok(self)
@@ -243,7 +282,7 @@ impl<'m> VariantMetadata<'m> {
 
     /// Get the dictionary size
     pub const fn dictionary_size(&self) -> usize {
-        self.dictionary_size
+        self.dictionary_size as _
     }
 
     /// The variant protocol version
@@ -255,10 +294,10 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
     /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
-    fn get_offset(&self, i: usize) -> Result<usize, ArrowError> {
-        let offset_byte_range = self.header.first_offset_byte()..self.first_value_byte;
+    fn get_offset(&self, i: usize) -> Result<u32, ArrowError> {
+        let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let bytes = slice_from_slice(self.bytes, offset_byte_range)?;
-        self.header.offset_size.unpack_usize(bytes, i)
+        self.header.offset_size.unpack_u32(bytes, i)
     }
 
     /// Attempts to retrieve a dictionary entry by index, failing if out of bounds or if the
@@ -266,8 +305,8 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn get(&self, i: usize) -> Result<&'m str, ArrowError> {
-        let byte_range = self.get_offset(i)?..self.get_offset(i + 1)?;
-        string_from_slice(self.bytes, self.first_value_byte, byte_range)
+        let byte_range = self.get_offset(i)? as _..self.get_offset(i + 1)? as _;
+        string_from_slice(self.bytes, self.first_value_byte as _, byte_range)
     }
 
     /// Returns an iterator that attempts to visit all dictionary entries, producing `Err` if the
@@ -275,7 +314,7 @@ impl<'m> VariantMetadata<'m> {
     ///
     /// [invalid]: Self#Validation
     pub fn iter_try(&self) -> impl Iterator<Item = Result<&'m str, ArrowError>> + '_ {
-        (0..self.dictionary_size).map(move |i| self.get(i))
+        (0..self.len()).map(|i| self.get(i))
     }
 
     /// Iterates over all dictionary entries. When working with [unvalidated] input, consider
@@ -393,6 +432,42 @@ mod tests {
         ];
 
         let err = VariantMetadata::try_new(bytes).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn try_new_fails_non_monotonic2() {
+        // this test case checks whether offsets are monotonic in the full validation logic.
+
+        // 'cat', 'dog', 'lamb', "eel"
+        let bytes = &[
+            0b0000_0001, // header, offset_size_minus_one=0 and version=1
+            4,           // dictionary_size
+            0x00,
+            0x02,
+            0x01, // Doesn't increase monotonically
+            0x10,
+            13,
+            b'c',
+            b'a',
+            b't',
+            b'd',
+            b'o',
+            b'g',
+            b'l',
+            b'a',
+            b'm',
+            b'b',
+            b'e',
+            b'e',
+            b'l',
+        ];
+
+        let err = VariantMetadata::try_new(bytes).unwrap_err();
+
         assert!(
             matches!(err, ArrowError::InvalidArgumentError(_)),
             "unexpected error: {err:?}"

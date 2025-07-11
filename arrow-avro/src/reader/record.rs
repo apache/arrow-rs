@@ -19,7 +19,6 @@ use crate::codec::{AvroDataType, Codec, Nullability};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
-use crate::reader::ReadOptions;
 use crate::schema::*;
 use arrow_array::builder::{
     ArrayBuilder, Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder,
@@ -40,35 +39,84 @@ use uuid::Uuid;
 
 const DEFAULT_CAPACITY: usize = 1024;
 
+#[derive(Debug)]
+pub(crate) struct RecordDecoderBuilder<'a> {
+    data_type: &'a AvroDataType,
+    use_utf8view: bool,
+    strict_mode: bool,
+}
+
+impl<'a> RecordDecoderBuilder<'a> {
+    pub(crate) fn new(data_type: &'a AvroDataType) -> Self {
+        Self {
+            data_type,
+            use_utf8view: false,
+            strict_mode: false,
+        }
+    }
+
+    pub(crate) fn with_utf8_view(mut self, use_utf8view: bool) -> Self {
+        self.use_utf8view = use_utf8view;
+        self
+    }
+
+    pub(crate) fn with_strict_mode(mut self, strict_mode: bool) -> Self {
+        self.strict_mode = strict_mode;
+        self
+    }
+
+    /// Builds the `RecordDecoder`.
+    pub(crate) fn build(self) -> Result<RecordDecoder, ArrowError> {
+        RecordDecoder::try_new_with_options(self.data_type, self.use_utf8view, self.strict_mode)
+    }
+}
+
 /// Decodes avro encoded data into [`RecordBatch`]
-pub struct RecordDecoder {
+#[derive(Debug)]
+pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     use_utf8view: bool,
+    strict_mode: bool,
 }
 
 impl RecordDecoder {
-    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
-    pub fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        Self::try_new_with_options(data_type, ReadOptions::default())
+    /// Creates a new `RecordDecoderBuilder` for configuring a `RecordDecoder`.
+    pub(crate) fn new(data_type: &'_ AvroDataType) -> Self {
+        RecordDecoderBuilder::new(data_type).build().unwrap()
     }
 
-    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options
+    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
+    pub(crate) fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
+        RecordDecoderBuilder::new(data_type)
+            .with_utf8_view(true)
+            .with_strict_mode(true)
+            .build()
+    }
+
+    /// Creates a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options.
     ///
     /// This method allows you to customize how the Avro data is decoded into Arrow arrays.
     ///
-    /// # Parameters
-    /// * `data_type` - The Avro data type to decode
-    /// * `options` - Configuration options for decoding
-    pub fn try_new_with_options(
+    /// # Arguments
+    /// * `data_type` - The Avro data type to decode.
+    /// * `use_utf8view` - A flag indicating whether to use `Utf8View` for string types.
+    /// * `strict_mode` - A flag to enable strict decoding, returning an error if the data
+    ///   does not conform to the schema.
+    ///
+    /// # Errors
+    /// This function will return an error if the provided `data_type` is not a `Record`.
+    pub(crate) fn try_new_with_options(
         data_type: &AvroDataType,
-        options: ReadOptions,
+        use_utf8view: bool,
+        strict_mode: bool,
     ) -> Result<Self, ArrowError> {
         match Decoder::try_new(data_type)? {
             Decoder::Record(fields, encodings) => Ok(Self {
                 schema: Arc::new(ArrowSchema::new(fields)),
                 fields: encodings,
-                use_utf8view: options.use_utf8view(),
+                use_utf8view,
+                strict_mode,
             }),
             encoding => Err(ArrowError::ParseError(format!(
                 "Expected record got {encoding:?}"
@@ -76,12 +124,13 @@ impl RecordDecoder {
         }
     }
 
-    pub fn schema(&self) -> &SchemaRef {
+    /// Returns the decoder's `SchemaRef`
+    pub(crate) fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
     /// Decode `count` records from `buf`
-    pub fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
+    pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
         let mut cursor = AvroCursor::new(buf);
         for _ in 0..count {
             for field in &mut self.fields {
@@ -92,7 +141,7 @@ impl RecordDecoder {
     }
 
     /// Flush the decoded records into a [`RecordBatch`]
-    pub fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
+    pub(crate) fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
         let arrays = self
             .fields
             .iter_mut()

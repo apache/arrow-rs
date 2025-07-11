@@ -55,3 +55,7 @@ rand = { version = "0.9", default-features = false, features = [
 [[bench]]
 name = "variant_builder"
 harness = false
+
+[[bench]]
+name = "variant_validation"
+harness = false
