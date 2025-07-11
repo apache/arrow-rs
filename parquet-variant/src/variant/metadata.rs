@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
-use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice, try_binary_search_range_by};
+use crate::utils::{
+    first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice,
+    try_binary_search_range_by,
+};
 
 use arrow_schema::ArrowError;
 

@@ -414,8 +414,7 @@ impl<'m> MetadataBuilder for ReadOnlyMetadataBuilder<'m> {
 
         let (field_id, field_name) = self.metadata.get_entry(field_name).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
-                "Field name '{}' not found in metadata dictionary",
-                field_name
+                "Field name '{field_name}' not found in metadata dictionary"
             ))
         })?;
 
