@@ -469,7 +469,7 @@ pub(crate) fn decode_page(
 enum SerializedPageReaderState {
     Values {
         /// The current byte offset in the reader
-        offset: usize,
+        offset: u64,
 
         /// The length of the chunk in bytes
         remaining_bytes: usize,
@@ -601,7 +601,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 }
             }
             None => SerializedPageReaderState::Values {
-                offset: usize::try_from(start)?,
+                offset: start,
                 remaining_bytes: usize::try_from(len)?,
                 next_page_header: None,
                 page_index: 0,
@@ -623,7 +623,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     /// This is used when we need to read parquet with row-filter, and we don't want to decompress the page twice.
     /// This function allows us to check if the next page is being cached or read previously.
     #[cfg(test)]
-    fn peek_next_page_offset(&mut self) -> Result<Option<usize>> {
+    fn peek_next_page_offset(&mut self) -> Result<Option<u64>> {
         match &mut self.state {
             SerializedPageReaderState::Values {
                 offset,
@@ -645,14 +645,14 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                             continue;
                         }
                     } else {
-                        let mut read = self.reader.get_read(*offset as u64)?;
+                        let mut read = self.reader.get_read(*offset)?;
                         let (header_len, header) = Self::read_page_header_len(
                             &self.context,
                             &mut read,
                             *page_index,
                             *require_dictionary,
                         )?;
-                        *offset += header_len;
+                        *offset += header_len as u64;
                         *remaining_bytes -= header_len;
                         let page_meta = if let Ok(_page_meta) = PageMetadata::try_from(&header) {
                             Ok(Some(*offset))
@@ -671,9 +671,9 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 ..
             } => {
                 if let Some(page) = dictionary_page {
-                    Ok(Some(usize::try_from(page.offset)?))
+                    Ok(Some(page.offset as u64))
                 } else if let Some(page) = page_locations.front() {
-                    Ok(Some(usize::try_from(page.offset)?))
+                    Ok(Some(page.offset as u64))
                 } else {
                     Ok(None)
                 }
@@ -860,7 +860,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                             *require_dictionary,
                         )?;
                         verify_page_header_len(header_len, *remaining)?;
-                        *offset += header_len;
+                        *offset += header_len as u64;
                         *remaining -= header_len;
                         header
                     };
@@ -870,7 +870,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *remaining,
                     )?;
                     let data_len = header.compressed_page_size as usize;
-                    *offset += data_len;
+                    *offset += data_len as u64;
                     *remaining -= data_len;
 
                     if header.type_ == PageType::INDEX_PAGE {
@@ -979,7 +979,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                             *require_dictionary,
                         )?;
                         verify_page_header_len(header_len, *remaining_bytes)?;
-                        *offset += header_len;
+                        *offset += header_len as u64;
                         *remaining_bytes -= header_len;
                         let page_meta = if let Ok(page_meta) = (&header).try_into() {
                             Ok(Some(page_meta))
@@ -1038,7 +1038,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *remaining_bytes,
                     )?;
                     // The next page header has already been peeked, so just advance the offset
-                    *offset += buffered_header.compressed_page_size as usize;
+                    *offset += buffered_header.compressed_page_size as u64;
                     *remaining_bytes -= buffered_header.compressed_page_size as usize;
                 } else {
                     let mut read = self.reader.get_read(*offset as u64)?;
@@ -1055,7 +1055,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *remaining_bytes,
                     )?;
                     let data_page_size = header.compressed_page_size as usize;
-                    *offset += header_len + data_page_size;
+                    *offset += header_len as u64 + data_page_size as u64;
                     *remaining_bytes -= header_len + data_page_size;
                 }
                 if *require_dictionary {
@@ -1652,9 +1652,9 @@ mod tests {
                             ..
                         } => {
                             if let Some(page) = dictionary_page {
-                                assert_eq!(page.offset as usize, page_offset);
+                                assert_eq!(page.offset as u64, page_offset);
                             } else if let Some(page) = page_locations.front() {
-                                assert_eq!(page.offset as usize, page_offset);
+                                assert_eq!(page.offset as u64, page_offset);
                             } else {
                                 unreachable!()
                             }
