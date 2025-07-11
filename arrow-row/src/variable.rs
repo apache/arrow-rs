@@ -246,6 +246,73 @@ pub fn decode_binary<I: OffsetSizeTrait>(
     unsafe { GenericBinaryArray::from(builder.build_unchecked()) }
 }
 
+fn decode_binary_view_inner_utf8_unchecked(
+    rows: &mut [&[u8]],
+    options: SortOptions,
+) -> BinaryViewArray {
+    let len = rows.len();
+    let inline_str_max_len = 12;
+
+    let mut null_count = 0;
+
+    let nulls = MutableBuffer::collect_bool(len, |x| {
+        let valid = rows[x][0] != null_sentinel(options);
+        null_count += !valid as usize;
+        valid
+    });
+
+    // sum up len for all large (> 12) strings
+    let values_capacity: usize = rows.iter().fold(0, |acc, row| {
+        let len = decoded_len(row, options);
+        if len > inline_str_max_len {
+            acc + len
+        } else {
+            acc
+        }
+    });
+
+    // max bytes for large strings + room for storing 1 inline string
+    let mut values = MutableBuffer::new(values_capacity + inline_str_max_len);
+    let mut views = BufferBuilder::<u128>::new(len);
+    for row in rows {
+        let start_offset = values.len();
+        let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
+
+        if row[0] == null_sentinel(options) {
+            debug_assert_eq!(offset, 1);
+            debug_assert_eq!(start_offset, values.len());
+            views.append(0);
+        } else {
+            // Safety: we just appended the data to the end of the buffer
+            let val = unsafe { values.get_unchecked_mut(start_offset..) };
+
+            if options.descending {
+                val.iter_mut().for_each(|o| *o = !*o);
+            }
+
+            let view = make_view(val, 0, start_offset as u32);
+            views.append(view);
+
+            // truncate inline string in values buffer
+            if offset <= inline_str_max_len {
+                values.truncate(start_offset);
+            }
+        }
+        *row = &row[offset..];
+    }
+
+    let builder = ArrayDataBuilder::new(DataType::BinaryView)
+        .len(len)
+        .null_count(null_count)
+        .null_bit_buffer(Some(nulls.into()))
+        .add_buffer(views.finish())
+        .add_buffer(values.into());
+
+    // SAFETY:
+    // Valid by construction above
+    unsafe { BinaryViewArray::from(builder.build_unchecked()) }
+}
+
 fn decode_binary_view_inner(
     rows: &mut [&[u8]],
     options: SortOptions,
@@ -306,7 +373,7 @@ fn decode_binary_view_inner(
 
 /// Decodes a binary view array from `rows` with the provided `options`
 pub fn decode_binary_view(rows: &mut [&[u8]], options: SortOptions) -> BinaryViewArray {
-    decode_binary_view_inner(rows, options, false)
+    decode_binary_view_inner_utf8_unchecked(rows, options)
 }
 
 /// Decodes a string array from `rows` with the provided `options`
@@ -345,6 +412,10 @@ pub unsafe fn decode_string_view(
     options: SortOptions,
     validate_utf8: bool,
 ) -> StringViewArray {
-    let view = decode_binary_view_inner(rows, options, validate_utf8);
+    let view = if !validate_utf8 {
+        decode_binary_view_inner_utf8_unchecked(rows, options)
+    } else {
+        decode_binary_view_inner(rows, options, validate_utf8)
+    };
     view.to_string_view_unchecked()
 }
