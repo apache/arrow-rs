@@ -563,7 +563,6 @@ mod tests {
             b'e',
         ];
         let err = VariantMetadata::try_new(&metadata_bytes);
-        assert!(err.is_err());
         let err = err.unwrap_err();
         assert!(matches!(
             err,
@@ -611,7 +610,6 @@ mod tests {
         ];
 
         let err = VariantObject::try_new(metadata, &object_value);
-        assert!(err.is_err());
         let err = err.unwrap_err();
         assert!(matches!(
             err,
