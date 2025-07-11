@@ -277,7 +277,7 @@ impl Decoder {
                 offsets.push_length(0);
             }
             Self::Uuid(v) => {
-                v.push(0);
+                v.extend([0; 16]);
             }
             Self::Array(_, offsets, e) => {
                 offsets.push_length(0);
