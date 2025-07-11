@@ -36,6 +36,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
+use uuid::Uuid;
 
 const DEFAULT_CAPACITY: usize = 1024;
 
@@ -321,8 +322,12 @@ impl Decoder {
             }
             Self::Uuid(values) => {
                 let s_bytes = buf.get_bytes()?;
-                let uuid_bytes = parse_uuid_bytes(s_bytes)?;
-                values.extend_from_slice(&uuid_bytes);
+                let s = std::str::from_utf8(s_bytes).map_err(|e| {
+                    ArrowError::ParseError(format!("UUID bytes are not valid UTF-8: {e}"))
+                })?;
+                let uuid = Uuid::try_parse(s)
+                    .map_err(|e| ArrowError::ParseError(format!("Failed to parse uuid: {e}")))?;
+                values.extend_from_slice(uuid.as_bytes());
             }
             Self::Array(_, off, encoding) => {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
@@ -617,46 +622,6 @@ fn sign_extend_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
     arr[..pad_len].fill(extension_byte);
     arr[pad_len..].copy_from_slice(raw);
     Ok(arr)
-}
-
-#[inline]
-fn hex_char_to_u8(c: u8) -> Result<u8, ArrowError> {
-    match c {
-        b'0'..=b'9' => Ok(c - b'0'),
-        b'a'..=b'f' => Ok(c - b'a' + 10),
-        b'A'..=b'F' => Ok(c - b'A' + 10),
-        _ => Err(ArrowError::ParseError(format!(
-            "Invalid hex character '{c}' in UUID string",
-        ))),
-    }
-}
-
-#[inline]
-fn parse_uuid_bytes(s_bytes: &[u8]) -> Result<[u8; 16], ArrowError> {
-    if s_bytes.len() != 36 {
-        return Err(ArrowError::ParseError(format!(
-            "Invalid UUID string length: expected 36, got {}",
-            s_bytes.len()
-        )));
-    }
-    let mut bytes = [0u8; 16];
-    let mut str_idx = 0;
-    for byte_chunk in bytes.iter_mut() {
-        if str_idx == 8 || str_idx == 13 || str_idx == 18 || str_idx == 23 {
-            if s_bytes[str_idx] != b'-' {
-                return Err(ArrowError::ParseError(format!(
-                    "Invalid UUID format: expected hyphen at index {str_idx}"
-                )));
-            }
-            str_idx += 1;
-        }
-        let high_nibble = hex_char_to_u8(s_bytes[str_idx])?;
-        str_idx += 1;
-        let low_nibble = hex_char_to_u8(s_bytes[str_idx])?;
-        str_idx += 1;
-        *byte_chunk = (high_nibble << 4) | low_nibble;
-    }
-    Ok(bytes)
 }
 
 #[cfg(test)]

@@ -38,6 +38,14 @@ pub enum Nullability {
     NullSecond,
 }
 
+#[cfg(feature = "canonical_extension_types")]
+fn with_extension_type(codec: &Codec, field: Field) -> Field {
+    match codec {
+        Codec::Uuid => field.with_extension_type(arrow_schema::extension::Uuid),
+        _ => field,
+    }
+}
+
 /// An Avro datatype mapped to the arrow data model
 #[derive(Debug, Clone)]
 pub struct AvroDataType {
@@ -62,8 +70,13 @@ impl AvroDataType {
 
     /// Returns an arrow [`Field`] with the given name
     pub fn field_with_name(&self, name: &str) -> Field {
-        let d = self.codec.data_type();
-        Field::new(name, d, self.nullability.is_some()).with_metadata(self.metadata.clone())
+        let nullable = self.nullability.is_some();
+        let data_type = self.codec.data_type();
+        let field = Field::new(name, data_type, nullable).with_metadata(self.metadata.clone());
+        #[cfg(feature = "canonical_extension_types")]
+        return with_extension_type(&self.codec, field);
+        #[cfg(not(feature = "canonical_extension_types"))]
+        field
     }
 
     /// Returns a reference to the codec used by this data type
