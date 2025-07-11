@@ -165,7 +165,7 @@ mod test {
         expected: Variant<'a, 'a>,
     }
 
-    impl<'a> JsonToVariantTest<'a> {
+    impl JsonToVariantTest<'_> {
         fn run(self) -> Result<(), ArrowError> {
             let mut variant_builder = VariantBuilder::new();
             json_to_variant(self.json, &mut variant_builder)?;
