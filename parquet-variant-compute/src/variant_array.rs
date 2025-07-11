@@ -32,6 +32,8 @@ use std::sync::Arc;
 ///
 /// See [`VariantArrayBuilder`] for constructing a `VariantArray`.
 ///
+/// [`VariantArrayBuilder`]: crate::VariantArrayBuilder
+///
 /// # Specification
 /// 1. This code follows the conventions for storing variants in Arrow Struct Array
 ///    defined by [Extension Type for Parquet Variant arrow] and this [document].
