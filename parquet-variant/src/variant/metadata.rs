@@ -262,9 +262,11 @@ impl<'m> VariantMetadata<'m> {
                     ));
                 }
             } else {
-                // Validate offsets are in-bounds and monotonically increasing.
-                // Since shallow validation ensures the first and last offsets are in bounds, we can also verify all offsets
-                // are in-bounds by checking if offsets are monotonically increasing.
+                // Validate offsets are in-bounds and monotonically increasing
+                //
+                // Since shallow validation ensures the first and last offsets are in bounds,
+                // we can also verify all offsets are in-bounds by checking if
+                // offsets are monotonically increasing
                 let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
                 if !are_offsets_monotonic {
                     return Err(ArrowError::InvalidArgumentError(
