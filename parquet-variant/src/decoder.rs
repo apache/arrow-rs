@@ -200,6 +200,7 @@ impl OffsetSizeBytes {
     }
 }
 
+/// Converts a byte buffer to offset values based on the specific offset size
 pub(crate) fn map_bytes_to_offsets(
     buffer: &[u8],
     offset_size: OffsetSizeBytes,
