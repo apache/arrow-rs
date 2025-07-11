@@ -200,6 +200,25 @@ impl OffsetSizeBytes {
     }
 }
 
+/// Converts a byte buffer to offset values based on the specific offset size
+pub(crate) fn map_bytes_to_offsets(
+    buffer: &[u8],
+    offset_size: OffsetSizeBytes,
+) -> impl Iterator<Item = usize> + use<'_> {
+    buffer
+        .chunks_exact(offset_size as usize)
+        .map(move |chunk| match offset_size {
+            OffsetSizeBytes::One => chunk[0] as usize,
+            OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]) as usize,
+            OffsetSizeBytes::Three => {
+                u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
+            }
+            OffsetSizeBytes::Four => {
+                u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
+            }
+        })
+}
+
 /// Extract the primitive type from a Variant value-metadata byte
 pub(crate) fn get_primitive_type(metadata: u8) -> Result<VariantPrimitiveType, ArrowError> {
     // last 6 bits contain the primitive-type, see spec
