@@ -601,7 +601,7 @@ mod tests {
             expected_num_element_size,
             variant_list.header.num_elements_size
         );
-        assert_eq!(list_size, variant_list.num_elements);
+        assert_eq!(list_size, variant_list.num_elements as usize);
 
         // verify the data in the variant
         assert_eq!(list_size, variant_list.len());
