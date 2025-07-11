@@ -43,7 +43,7 @@ where
 fn criterion_benchmark(c: &mut Criterion) {
     use arrow_array::types::Int32Type;
 
-    let v1: Vec<i32> = (0..80586 as i32).collect();
+    let v1: Vec<i32> = (0..80586_i32).collect();
 
     c.bench_function("primitive_array_into_no_null", |b| {
         b.iter(|| hint::black_box(generic_from::<Int32Type, i32>(v1.clone())));
