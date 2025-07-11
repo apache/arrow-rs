@@ -16,29 +16,33 @@
 # under the License.
 
 [package]
-name = "parquet-variant-compute"
+name = "parquet-variant-json"
 # This package is still in development and thus the version does
 # not follow the versions of the rest of the crates in this repo.
 version = "0.1.0"
 license = { workspace = true }
-description = "Apache Parquet Variant Batch Processing"
+description = "Apache Parquet Variant to/from JSON"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
+readme = "README.md"
 edition = { workspace = true }
 # needs a newer version than workspace due to
 # rror: `Option::<T>::unwrap` is not yet stable as a const fn
+rust-version = "1.83"
 
 
 [dependencies]
-arrow = { workspace = true }
 arrow-schema = { workspace = true }
-parquet-variant = { workspace = true }
-parquet-variant-json = { workspace = true }
+parquet-variant = { path = "../parquet-variant" }
+chrono = { workspace = true }
+serde_json = "1.0"
+base64 = "0.22"
+
 
 [lib]
-name = "parquet_variant_compute"
+name = "parquet_variant_json"
 bench = false
 
 [dev-dependencies]

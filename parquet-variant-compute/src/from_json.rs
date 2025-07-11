@@ -24,7 +24,8 @@ use arrow::array::{Array, ArrayRef, BinaryArray, BooleanBufferBuilder, StringArr
 use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::ArrowError;
-use parquet_variant::{json_to_variant, VariantBuilder};
+use parquet_variant::VariantBuilder;
+use parquet_variant_json::json_to_variant;
 
 fn variant_arrow_repr() -> DataType {
     // The subfields are expected to be non-nullable according to the parquet variant spec.
@@ -148,11 +149,11 @@ mod test {
             .downcast_ref::<BinaryArray>()
             .unwrap();
 
-        assert_eq!(struct_array.is_null(0), false);
-        assert_eq!(struct_array.is_null(1), true);
-        assert_eq!(struct_array.is_null(2), false);
-        assert_eq!(struct_array.is_null(3), false);
-        assert_eq!(struct_array.is_null(4), true);
+        assert!(!struct_array.is_null(0));
+        assert!(struct_array.is_null(1));
+        assert!(!struct_array.is_null(2));
+        assert!(!struct_array.is_null(3));
+        assert!(struct_array.is_null(4));
 
         assert_eq!(metadata_array.value(0), &[1, 0, 0]);
         assert_eq!(value_array.value(0), &[12, 1]);

@@ -22,7 +22,8 @@ use arrow::array::{Array, ArrayRef, BinaryArray, BooleanBufferBuilder, StringArr
 use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use arrow_schema::ArrowError;
-use parquet_variant::{variant_to_json, Variant};
+use parquet_variant::Variant;
+use parquet_variant_json::variant_to_json;
 
 /// Transform a batch of Variant represented as STRUCT<metadata: BINARY, value: BINARY> to a batch
 /// of JSON strings where nulls are preserved. The JSON strings in the input must be valid.
@@ -117,20 +118,20 @@ mod test {
         let mut value_builder = BinaryBuilder::new();
 
         // Row 0: [1, 0, 0], [12, 0]
-        metadata_builder.append_value(&[1, 0, 0]);
-        value_builder.append_value(&[12, 0]);
+        metadata_builder.append_value([1, 0, 0]);
+        value_builder.append_value([12, 0]);
 
         // Row 1: null
         metadata_builder.append_null();
         value_builder.append_null();
 
         // Row 2: [1, 1, 0, 1, 97], [2, 1, 0, 0, 1, 32]
-        metadata_builder.append_value(&[1, 1, 0, 1, 97]);
-        value_builder.append_value(&[2, 1, 0, 0, 2, 12, 32]);
+        metadata_builder.append_value([1, 1, 0, 1, 97]);
+        value_builder.append_value([2, 1, 0, 0, 2, 12, 32]);
 
         // Row 3: [1, 0, 0], [0]
-        metadata_builder.append_value(&[1, 0, 0]);
-        value_builder.append_value(&[0]);
+        metadata_builder.append_value([1, 0, 0]);
+        value_builder.append_value([0]);
 
         // Row 4: null
         metadata_builder.append_null();
