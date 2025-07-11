@@ -600,7 +600,7 @@ impl ParentState<'_> {
 /// ```
 /// # Example: Reusing Buffers
 ///
-/// You can use the [`VariantBuffer`] to write into existing buffers (for
+/// You can use the [`VariantBuilder`] to write into existing buffers (for
 /// example to write multiple variants back to back in the same buffer)
 ///
 /// ```
