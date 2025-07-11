@@ -612,7 +612,7 @@ mod tests {
             expected_list.push(random_string);
         }
 
-        list_builder.finish();
+        list_builder.finish().unwrap();
         // Finish the builder to get the metadata and value
         let (metadata, value) = builder.finish();
         // use the Variant API to verify the result

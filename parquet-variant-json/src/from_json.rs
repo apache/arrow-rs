@@ -18,7 +18,9 @@
 //! Module for parsing JSON strings as Variant
 
 use arrow_schema::ArrowError;
-use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
+use parquet_variant::{
+    ListBuilder, MetadataBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt,
+};
 use serde_json::{Number, Value};
 
 /// Converts a JSON string to Variant using [`VariantBuilder`]. The resulting `value` and `metadata`
@@ -99,23 +101,23 @@ fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError
     }
 }
 
-fn append_json<'m, 'v>(
+fn append_json<'m, 'v, M: MetadataBuilder>(
     json: &'v Value,
-    builder: &mut impl VariantBuilderExt<'m, 'v>,
+    builder: &mut impl VariantBuilderExt<'m, 'v, M>,
 ) -> Result<(), ArrowError> {
     match json {
-        Value::Null => builder.append_value(Variant::Null),
-        Value::Bool(b) => builder.append_value(*b),
+        Value::Null => builder.append_value(Variant::Null)?,
+        Value::Bool(b) => builder.append_value(*b)?,
         Value::Number(n) => {
-            builder.append_value(variant_from_number(n)?);
+            builder.append_value(variant_from_number(n)?)?;
         }
-        Value::String(s) => builder.append_value(s.as_str()),
+        Value::String(s) => builder.append_value(s.as_str())?,
         Value::Array(arr) => {
             let mut list_builder = builder.new_list();
             for val in arr {
                 append_json(val, &mut list_builder)?;
             }
-            list_builder.finish();
+            list_builder.finish()?;
         }
         Value::Object(obj) => {
             let mut obj_builder = builder.new_object();
@@ -132,21 +134,23 @@ fn append_json<'m, 'v>(
     Ok(())
 }
 
-struct ObjectFieldBuilder<'o, 'v, 's> {
+struct ObjectFieldBuilder<'o, 'v, 's, M: MetadataBuilder> {
     key: &'s str,
-    builder: &'o mut ObjectBuilder<'v>,
+    builder: &'o mut ObjectBuilder<'v, M>,
 }
 
-impl<'m, 'v> VariantBuilderExt<'m, 'v> for ObjectFieldBuilder<'_, '_, '_> {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        self.builder.insert(self.key, value);
+impl<'m, 'v, M: MetadataBuilder> VariantBuilderExt<'m, 'v, M>
+    for ObjectFieldBuilder<'_, 'v, '_, M>
+{
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) -> Result<(), ArrowError> {
+        self.builder.insert(self.key, value)
     }
 
-    fn new_list(&mut self) -> ListBuilder {
+    fn new_list(&mut self) -> ListBuilder<M> {
         self.builder.new_list(self.key)
     }
 
-    fn new_object(&mut self) -> ObjectBuilder {
+    fn new_object(&mut self) -> ObjectBuilder<M> {
         self.builder.new_object(self.key)
     }
 }
@@ -472,7 +476,7 @@ mod test {
         list_builder.append_value(Variant::Int8(127));
         list_builder.append_value(Variant::Int16(128));
         list_builder.append_value(Variant::Int32(-32767431));
-        list_builder.finish();
+        list_builder.finish()?;
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
@@ -488,11 +492,11 @@ mod test {
         let mut variant_builder = VariantBuilder::new();
         let mut list_builder = variant_builder.new_list();
         let mut object_builder_inner = list_builder.new_object();
-        object_builder_inner.insert("age", Variant::Int8(32));
+        object_builder_inner.insert("age", Variant::Int8(32))?;
         object_builder_inner.finish().unwrap();
         list_builder.append_value(Variant::Int16(128));
         list_builder.append_value(Variant::BooleanFalse);
-        list_builder.finish();
+        list_builder.finish()?;
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
@@ -512,7 +516,7 @@ mod test {
             list_builder.append_value(Variant::Int8(1));
         }
         list_builder.append_value(Variant::BooleanTrue);
-        list_builder.finish();
+        list_builder.finish()?;
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
@@ -533,9 +537,9 @@ mod test {
             for _ in 0..255 {
                 list_builder_inner.append_value(Variant::Null);
             }
-            list_builder_inner.finish();
+            list_builder_inner.finish()?;
         }
-        list_builder.finish();
+        list_builder.finish()?;
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         let intermediate = format!("[{}]", vec!["null"; 255].join(", "));
@@ -551,8 +555,8 @@ mod test {
     fn test_json_to_variant_object_simple() -> Result<(), ArrowError> {
         let mut variant_builder = VariantBuilder::new();
         let mut object_builder = variant_builder.new_object();
-        object_builder.insert("a", Variant::Int8(3));
-        object_builder.insert("b", Variant::Int8(2));
+        object_builder.insert("a", Variant::Int8(3))?;
+        object_builder.insert("b", Variant::Int8(2))?;
         object_builder.finish().unwrap();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -570,14 +574,14 @@ mod test {
         let mut inner_list_builder = object_builder.new_list("booleans");
         inner_list_builder.append_value(Variant::BooleanTrue);
         inner_list_builder.append_value(Variant::BooleanFalse);
-        inner_list_builder.finish();
-        object_builder.insert("null", Variant::Null);
+        inner_list_builder.finish()?;
+        object_builder.insert("null", Variant::Null)?;
         let mut inner_list_builder = object_builder.new_list("numbers");
         inner_list_builder.append_value(Variant::Int8(4));
         inner_list_builder.append_value(Variant::Double(-3e0));
         inner_list_builder.append_value(Variant::Double(1001e-3));
-        inner_list_builder.finish();
-        object_builder.finish().unwrap();
+        inner_list_builder.finish()?;
+        object_builder.finish()?;
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         JsonToVariantTest {
@@ -641,7 +645,7 @@ mod test {
                 for i in 0..=127 {
                     list_builder.append_value(Variant::Int8(i));
                 }
-                list_builder.finish();
+                list_builder.finish().unwrap();
             });
             inner_object_builder.finish().unwrap();
         });
@@ -667,9 +671,9 @@ mod test {
         assert_eq!(output_string, "{\"a\":1,\"爱\":\"अ\"}");
         let mut variant_builder = VariantBuilder::new();
         let mut object_builder = variant_builder.new_object();
-        object_builder.insert("a", Variant::Int8(1));
-        object_builder.insert("爱", Variant::ShortString(ShortString::try_new("अ")?));
-        object_builder.finish().unwrap();
+        object_builder.insert("a", Variant::Int8(1))?;
+        object_builder.insert("爱", Variant::ShortString(ShortString::try_new("अ")?))?;
+        object_builder.finish()?;
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 

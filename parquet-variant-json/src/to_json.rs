@@ -860,11 +860,11 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.insert("name", "Alice");
-            obj.insert("age", 30i32);
-            obj.insert("active", true);
-            obj.insert("score", 95.5f64);
-            obj.finish().unwrap();
+            obj.insert("name", "Alice")?;
+            obj.insert("age", 30i32)?;
+            obj.insert("active", true)?;
+            obj.insert("score", 95.5f64)?;
+            obj.finish()?;
         }
 
         let (metadata, value) = builder.finish();
@@ -917,10 +917,10 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.insert("message", "Hello \"World\"\nWith\tTabs");
-            obj.insert("path", "C:\\Users\\Alice\\Documents");
-            obj.insert("unicode", "😀 Smiley");
-            obj.finish().unwrap();
+            obj.insert("message", "Hello \"World\"\nWith\tTabs")?;
+            obj.insert("path", "C:\\Users\\Alice\\Documents")?;
+            obj.insert("unicode", "😀 Smiley")?;
+            obj.finish()?;
         }
 
         let (metadata, value) = builder.finish();
@@ -952,7 +952,7 @@ mod tests {
             list.append_value(3i32);
             list.append_value(4i32);
             list.append_value(5i32);
-            list.finish();
+            list.finish()?;
         }
 
         let (metadata, value) = builder.finish();
@@ -977,7 +977,7 @@ mod tests {
 
         {
             let list = builder.new_list();
-            list.finish();
+            list.finish()?;
         }
 
         let (metadata, value) = builder.finish();
@@ -1004,7 +1004,7 @@ mod tests {
             list.append_value(true);
             list.append_value(()); // null
             list.append_value(std::f64::consts::PI);
-            list.finish();
+            list.finish()?;
         }
 
         let (metadata, value) = builder.finish();
@@ -1032,10 +1032,10 @@ mod tests {
         {
             let mut obj = builder.new_object();
             // Add fields in non-alphabetical order
-            obj.insert("zebra", "last");
-            obj.insert("alpha", "first");
-            obj.insert("beta", "second");
-            obj.finish().unwrap();
+            obj.insert("zebra", "last")?;
+            obj.insert("alpha", "first")?;
+            obj.insert("beta", "second")?;
+            obj.finish()?;
         }
 
         let (metadata, value) = builder.finish();
@@ -1068,7 +1068,7 @@ mod tests {
             list.append_value(false);
             list.append_value(()); // null
             list.append_value(100i64);
-            list.finish();
+            list.finish()?;
         }
 
         let (metadata, value) = builder.finish();
@@ -1097,13 +1097,13 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.insert("string_field", "test_string");
-            obj.insert("int_field", 123i32);
-            obj.insert("bool_field", true);
-            obj.insert("float_field", 2.71f64);
-            obj.insert("null_field", ());
-            obj.insert("long_field", 999i64);
-            obj.finish().unwrap();
+            obj.insert("string_field", "test_string")?;
+            obj.insert("int_field", 123i32)?;
+            obj.insert("bool_field", true)?;
+            obj.insert("float_field", 2.71f64)?;
+            obj.insert("null_field", ())?;
+            obj.insert("long_field", 999i64)?;
+            obj.finish()?;
         }
 
         let (metadata, value) = builder.finish();
