@@ -84,6 +84,16 @@ pub(crate) fn string_from_slice(
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
 
+pub(crate) fn extract_and_validate_utf8_slice(
+    bytes: &[u8],
+    range: Range<usize>,
+) -> Result<&str, ArrowError>
+{
+    let offset_buffer = slice_from_slice(bytes, range)?;
+    simdutf8::basic::from_utf8(offset_buffer)
+        .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
+}
+
 /// Performs a binary search over a range using a fallible key extraction function; a failed key
 /// extraction immediately terminats the search.
 ///

@@ -37,6 +37,7 @@ arrow-schema = { workspace = true }
 chrono = { workspace = true }
 indexmap = "2.10.0"
 
+simdutf8 = { version = "0.1.5", default-features = false }
 
 [lib]
 name = "parquet_variant"
