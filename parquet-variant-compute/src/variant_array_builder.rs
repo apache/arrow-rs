@@ -147,11 +147,9 @@ impl VariantArrayBuilder {
 
     /// Append the [`Variant`] to the builder as the next row
     pub fn append_variant(&mut self, variant: Variant) {
-        // TODO make this more efficient by avoiding the intermediate buffers
-        let mut variant_builder = VariantBuilder::new();
-        variant_builder.append_value(variant);
-        let (metadata, value) = variant_builder.finish();
-        self.append_variant_buffers(&metadata, &value);
+        let mut direct_builder = self.variant_builder();
+        direct_builder.variant_builder.append_value(variant);
+        direct_builder.finish()
     }
 
     /// Append a metadata and values buffer to the builder
@@ -168,7 +166,105 @@ impl VariantArrayBuilder {
         self.value_buffer.extend_from_slice(value);
     }
 
-    // TODO: Return a Variant builder that will write to the underlying buffers (TODO)
+    /// Return a DirectVariantBuilder that writes directly to the buffers of this builder.
+    pub fn variant_builder(&mut self) -> DirectVariantBuilder {
+        // append directly into the metadata and value buffers
+        let metadata_buffer = std::mem::take(&mut self.metadata_buffer);
+        let value_buffer = std::mem::take(&mut self.value_buffer);
+        let metadata_offset = metadata_buffer.len();
+        let value_offset = value_buffer.len();
+        DirectVariantBuilder {
+            finished: false,
+            metadata_offset,
+            value_offset,
+            variant_builder: VariantBuilder::new_with_buffers(metadata_buffer, value_buffer),
+            array_builder: self,
+        }
+    }
+}
+
+/// A `VariantBuilder` that writes directly to the buffers of a `VariantArrayBuilder`.
+///
+/// See [`VariantArray::variant_builder`] for an example
+pub struct DirectVariantBuilder<'a> {
+    /// was finish called?
+    finished: bool,
+    /// starting metadata offset
+    metadata_offset: usize,
+    /// starting value offset
+    value_offset: usize,
+    array_builder: &'a mut VariantArrayBuilder,
+    variant_builder: VariantBuilder,
+}
+
+impl DirectVariantBuilder<'_> {
+    /// Return a reference to the underlying `VariantBuilder`
+    pub fn inner(&self) -> &VariantBuilder {
+        &self.variant_builder
+    }
+
+    /// Return a mutable reference to the underlying `VariantBuilder`
+    pub fn inner_mut(&mut self) -> &mut VariantBuilder {
+        &mut self.variant_builder
+    }
+
+    /// Called to finalize the variant and write it to the underlying buffers
+    ///
+    /// Note if you do not call finish, the struct will be reset and the buffers
+    /// will not be updated.
+    ///
+    pub fn finish(mut self) {
+        let metadata_offset = self.metadata_offset;
+        let value_offset = self.value_offset;
+
+        // get the buffers back
+        let (metadata_buffer, value_buffer) = std::mem::take(&mut self.variant_builder).finish();
+        let metadata_len = metadata_buffer
+            .len()
+            .checked_sub(metadata_offset)
+            .expect("metadata length decreased unexpectedly");
+        let value_len = value_buffer
+            .len()
+            .checked_sub(value_offset)
+            .expect("value length decreased unexpectedly");
+
+        // put the buffers back
+        self.array_builder.metadata_buffer = metadata_buffer;
+        self.array_builder.value_buffer = value_buffer;
+
+        // Append offsets and lengths for new nulls into the array builder
+        self.array_builder
+            .metadata_locations
+            .push((metadata_offset, metadata_len));
+        self.array_builder
+            .value_locations
+            .push((value_offset, value_len));
+        self.array_builder.nulls.append_non_null();
+        self.finished = true;
+    }
+}
+
+impl<'a> Drop for DirectVariantBuilder<'a> {
+    fn drop(&mut self) {
+        if self.finished {
+            // if the object was finished, we do not need to do anything
+            return;
+        }
+        // if the object was not finished, we need to reset any partial state put the buffers back
+        println!("DirectVariantBuilder::drop");
+        let variant_builder = std::mem::take(&mut self.variant_builder);
+        let (mut metadata_buffer, mut value_buffer) = variant_builder.finish();
+        assert!(
+            metadata_buffer.len() >= self.metadata_offset,
+            "metadata got smaller"
+        );
+        assert!(value_buffer.len() >= self.value_offset, "value got smaller");
+        metadata_buffer.truncate(self.metadata_offset);
+        value_buffer.truncate(self.value_offset);
+        // put the buffers back
+        self.array_builder.metadata_buffer = metadata_buffer;
+        self.array_builder.value_buffer = value_buffer;
+    }
 }
 
 fn binary_view_array_from_buffers(
