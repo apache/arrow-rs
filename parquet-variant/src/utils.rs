@@ -123,14 +123,6 @@ where
     Some(Err(start))
 }
 
-/// Attempts to prove a fallible iterator is actually infallible in practice, by consuming every
-/// element and returning the first error (if any).
-pub(crate) fn validate_fallible_iterator<T, E>(
-    mut it: impl Iterator<Item = Result<T, E>>,
-) -> Result<(), E> {
-    it.find(Result::is_err).transpose().map(|_| ())
-}
-
 /// Verifies the expected size of type T, for a type that should only grow if absolutely necessary.
 #[allow(unused)]
 pub(crate) const fn expect_size_of<T>(expected: usize) {

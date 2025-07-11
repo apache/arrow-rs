@@ -15,11 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decoder::OffsetSizeBytes;
-use crate::utils::{
-    first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice,
-    validate_fallible_iterator,
-};
+use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
+use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
 
 use arrow_schema::ArrowError;
 
@@ -232,9 +229,47 @@ impl<'m> VariantMetadata<'m> {
     /// [validation]: Self#Validation
     pub fn with_full_validation(mut self) -> Result<Self, ArrowError> {
         if !self.validated {
-            // Iterate over all string keys in this dictionary in order to prove that the offset
-            // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
-            validate_fallible_iterator(self.iter_try())?;
+            let offset_bytes = slice_from_slice(
+                self.bytes,
+                self.header.first_offset_byte()..self.first_value_byte,
+            )?;
+
+            let offsets =
+                map_bytes_to_offsets(offset_bytes, self.header.offset_size).collect::<Vec<_>>();
+
+            // Validate offsets are in-bounds and monotonically increasing.
+            // Since shallow validation ensures the first and last offsets are in bounds, we can also verify all offsets
+            // are in-bounds by checking if offsets are monotonically increasing.
+            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
+            if !are_offsets_monotonic {
+                return Err(ArrowError::InvalidArgumentError(
+                    "offsets not monotonically increasing".to_string(),
+                ));
+            }
+
+            // Verify the string values in the dictionary are UTF-8 encoded strings.
+            let value_buffer =
+                string_from_slice(self.bytes, 0, self.first_value_byte..self.bytes.len())?;
+
+            if self.header.is_sorted {
+                // Validate the dictionary values are unique and lexicographically sorted
+                let are_dictionary_values_unique_and_sorted = (1..offsets.len())
+                    .map(|i| {
+                        let field_range = offsets[i - 1]..offsets[i];
+                        value_buffer.get(field_range)
+                    })
+                    .is_sorted_by(|a, b| match (a, b) {
+                        (Some(a), Some(b)) => a < b,
+                        _ => false,
+                    });
+
+                if !are_dictionary_values_unique_and_sorted {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "dictionary values are not unique and ordered".to_string(),
+                    ));
+                }
+            }
+
             self.validated = true;
         }
         Ok(self)
@@ -397,6 +432,42 @@ mod tests {
         ];
 
         let err = VariantMetadata::try_new(bytes).unwrap_err();
+        assert!(
+            matches!(err, ArrowError::InvalidArgumentError(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn try_new_fails_non_monotonic2() {
+        // this test case checks whether offsets are monotonic in the full validation logic.
+
+        // 'cat', 'dog', 'lamb', "eel"
+        let bytes = &[
+            0b0000_0001, // header, offset_size_minus_one=0 and version=1
+            4,           // dictionary_size
+            0x00,
+            0x02,
+            0x01, // Doesn't increase monotonically
+            0x10,
+            13,
+            b'c',
+            b'a',
+            b't',
+            b'd',
+            b'o',
+            b'g',
+            b'l',
+            b'a',
+            b'm',
+            b'b',
+            b'e',
+            b'e',
+            b'l',
+        ];
+
+        let err = VariantMetadata::try_new(bytes).unwrap_err();
+
         assert!(
             matches!(err, ArrowError::InvalidArgumentError(_)),
             "unexpected error: {err:?}"

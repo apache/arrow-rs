@@ -14,10 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::decoder::OffsetSizeBytes;
+use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
-    validate_fallible_iterator,
 };
 use crate::variant::{Variant, VariantMetadata};
 
@@ -212,9 +211,35 @@ impl<'m, 'v> VariantList<'m, 'v> {
             // by value to all the children (who would otherwise re-validate it repeatedly).
             self.metadata = self.metadata.with_full_validation()?;
 
-            // Iterate over all string keys in this dictionary in order to prove that the offset
-            // array is valid, all offsets are in bounds, and all string bytes are valid utf-8.
-            validate_fallible_iterator(self.iter_try())?;
+            let offset_buffer = slice_from_slice(
+                self.value,
+                self.header.first_offset_byte()..self.first_value_byte,
+            )?;
+
+            let offsets =
+                map_bytes_to_offsets(offset_buffer, self.header.offset_size).collect::<Vec<_>>();
+
+            // Validate offsets are in-bounds and monotonically increasing.
+            // Since shallow verification checks whether the first and last offsets are in-bounds,
+            // we can also verify all offsets are in-bounds by checking if offsets are monotonically increasing.
+            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
+            if !are_offsets_monotonic {
+                return Err(ArrowError::InvalidArgumentError(
+                    "offsets are not monotonically increasing".to_string(),
+                ));
+            }
+
+            let value_buffer = slice_from_slice(self.value, self.first_value_byte..)?;
+
+            // Validate whether values are valid variant objects
+            for i in 1..offsets.len() {
+                let start_offset = offsets[i - 1];
+                let end_offset = offsets[i];
+
+                let value_bytes = slice_from_slice(value_buffer, start_offset..end_offset)?;
+                Variant::try_new_with_metadata(self.metadata, value_bytes)?;
+            }
+
             self.validated = true;
         }
         Ok(self)
