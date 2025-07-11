@@ -525,7 +525,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     // extracting the data from the buffers if necessary.
     // It used by `gc` function to process each view.
     #[inline(always)]
-    fn process_view(&self, i: usize, views: &[u128], data_buf: &mut Vec<u8>) -> u128 {
+    fn copy_view_to_buffer(&self, i: usize, views: &[u128], data_buf: &mut Vec<u8>) -> u128 {
         let raw_view = unsafe { *views.get_unchecked(i) };
         let mut bv = ByteView::from(raw_view);
 
