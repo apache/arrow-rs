@@ -237,22 +237,15 @@ impl<'m> VariantMetadata<'m> {
             let offsets =
                 map_bytes_to_offsets(offset_bytes, self.header.offset_size).collect::<Vec<_>>();
 
-            // Validate offsets are in-bounds and monotonically increasing.
-            // Since shallow validation ensures the first and last offsets are in bounds, we can also verify all offsets
-            // are in-bounds by checking if offsets are monotonically increasing.
-            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
-            if !are_offsets_monotonic {
-                return Err(ArrowError::InvalidArgumentError(
-                    "offsets not monotonically increasing".to_string(),
-                ));
-            }
-
             // Verify the string values in the dictionary are UTF-8 encoded strings.
             let value_buffer =
                 string_from_slice(self.bytes, 0, self.first_value_byte as _..self.bytes.len())?;
 
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted
+                //
+                // Since we use the offsets to access dictionary values, we can also validate
+                // offsets are in-bounds and monotonically increasing
                 let are_dictionary_values_unique_and_sorted = (1..offsets.len())
                     .map(|i| {
                         let field_range = offsets[i - 1]..offsets[i];
@@ -266,6 +259,16 @@ impl<'m> VariantMetadata<'m> {
                 if !are_dictionary_values_unique_and_sorted {
                     return Err(ArrowError::InvalidArgumentError(
                         "dictionary values are not unique and ordered".to_string(),
+                    ));
+                }
+            } else {
+                // Validate offsets are in-bounds and monotonically increasing.
+                // Since shallow validation ensures the first and last offsets are in bounds, we can also verify all offsets
+                // are in-bounds by checking if offsets are monotonically increasing.
+                let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
+                if !are_offsets_monotonic {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "offsets not monotonically increasing".to_string(),
                     ));
                 }
             }
