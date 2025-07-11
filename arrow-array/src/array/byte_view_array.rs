@@ -475,7 +475,6 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     pub fn gc(&self) -> Self {
         // 1) Read basic properties once
         let len = self.len(); // number of elements
-        let views = self.views(); // raw u128 "view" values per slot
         let nulls = self.nulls().cloned(); // reuse & clone existing null bitmap
 
         // 1.5) Fast path: if there are no buffers, just reuse original views and no data blocks
@@ -509,7 +508,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
         // 4) Iterate over views and process each inline/non-inline view
         let views_buf: Vec<u128> = (0..len)
-            .map(|i| self.process_view(i, views, &mut data_buf))
+            .map(|i| unsafe {
+                self.copy_view_to_buffer(i, &mut data_buf)
+            })
             .collect();
 
         // 5) Wrap up buffers
@@ -521,28 +522,40 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         unsafe { GenericByteViewArray::new_unchecked(views_scalar, data_blocks, nulls) }
     }
 
-    // This is the helper function that processes a view at index `i`,
-    // extracting the data from the buffers if necessary.
-    // It used by `gc` function to process each view.
+    /// Copy the i‑th view into `data_buf` if it refers to an out‑of‑line buffer.
+    ///
+    /// # Safety
+    ///
+    /// - `i < self.len()`.
+    /// - Every element in `self.views()` must currently refer to a valid slice
+    ///   inside one of `self.buffers`.
+    /// - `data_buf` must be ready to have additional bytes appended.
+    /// - After this call, the returned view will have its
+    ///   `buffer_index` reset to `0` and its `offset` updated so that it points
+    ///   into the bytes just appended at the end of `data_buf`.
     #[inline(always)]
-    fn copy_view_to_buffer(&self, i: usize, views: &[u128], data_buf: &mut Vec<u8>) -> u128 {
-        let raw_view = unsafe { *views.get_unchecked(i) };
+    unsafe fn copy_view_to_buffer(&self, i: usize, data_buf: &mut Vec<u8>) -> u128 {
+        // SAFETY: `i < self.len()` ensures this is in‑bounds.
+        let raw_view = *self.views().get_unchecked(i);
         let mut bv = ByteView::from(raw_view);
 
+        // Inline‑small views stay as‑is.
         if bv.length <= MAX_INLINE_VIEW_LEN {
             raw_view
         } else {
-            let buffer = unsafe { self.buffers.get_unchecked(bv.buffer_index as usize) };
+            // SAFETY: `bv.buffer_index` and `bv.offset..bv.offset+bv.length`
+            // must both lie within valid ranges for `self.buffers`.
+            let buffer = self.buffers.get_unchecked(bv.buffer_index as usize);
             let start = bv.offset as usize;
             let end = start + bv.length as usize;
-            let slice = unsafe { buffer.get_unchecked(start..end) };
+            let slice = buffer.get_unchecked(start..end);
 
+            // Copy out‑of‑line data into our single “0” buffer.
             let new_offset = data_buf.len() as u32;
             data_buf.extend_from_slice(slice);
 
             bv.buffer_index = 0;
             bv.offset = new_offset;
-
             bv.into()
         }
     }
