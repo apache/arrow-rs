@@ -231,7 +231,7 @@ impl<'m> VariantMetadata<'m> {
         if !self.validated {
             let offset_bytes = slice_from_slice(
                 self.bytes,
-                self.header.first_offset_byte()..self.first_value_byte,
+                self.header.first_offset_byte() as _..self.first_value_byte as _,
             )?;
 
             let offsets =
@@ -249,7 +249,7 @@ impl<'m> VariantMetadata<'m> {
 
             // Verify the string values in the dictionary are UTF-8 encoded strings.
             let value_buffer =
-                string_from_slice(self.bytes, 0, self.first_value_byte..self.bytes.len())?;
+                string_from_slice(self.bytes, 0, self.first_value_byte as _..self.bytes.len())?;
 
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted

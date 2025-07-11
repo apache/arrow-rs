@@ -213,7 +213,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
             let offset_buffer = slice_from_slice(
                 self.value,
-                self.header.first_offset_byte()..self.first_value_byte,
+                self.header.first_offset_byte() as _..self.first_value_byte as _,
             )?;
 
             let offsets =
@@ -229,7 +229,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
                 ));
             }
 
-            let value_buffer = slice_from_slice(self.value, self.first_value_byte..)?;
+            let value_buffer = slice_from_slice(self.value, self.first_value_byte as _..)?;
 
             // Validate whether values are valid variant objects
             for i in 1..offsets.len() {
@@ -237,7 +237,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
                 let end_offset = offsets[i];
 
                 let value_bytes = slice_from_slice(value_buffer, start_offset..end_offset)?;
-                Variant::try_new_with_metadata(self.metadata, value_bytes)?;
+                Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
             }
 
             self.validated = true;

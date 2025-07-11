@@ -214,7 +214,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
             let field_id_buffer = slice_from_slice(
                 self.value,
-                self.header.field_ids_start_byte()..self.first_field_offset_byte,
+                self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _,
             )?;
 
             let field_ids = map_bytes_to_offsets(field_id_buffer, self.header.field_id_size)
@@ -271,17 +271,17 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             // Validate whether values are valid variant objects
             let field_offset_buffer = slice_from_slice(
                 self.value,
-                self.first_field_offset_byte..self.first_value_byte,
+                self.first_field_offset_byte as _..self.first_value_byte as _,
             )?;
-            let num_offsets = field_offset_buffer.len() / self.header.field_offset_size();
+            let num_offsets = field_offset_buffer.len() / self.header.field_offset_size() as usize;
 
-            let value_buffer = slice_from_slice(self.value, self.first_value_byte..)?;
+            let value_buffer = slice_from_slice(self.value, self.first_value_byte as _..)?;
 
             map_bytes_to_offsets(field_offset_buffer, self.header.field_offset_size)
                 .take(num_offsets.saturating_sub(1))
                 .try_for_each(|offset| {
                     let value_bytes = slice_from_slice(value_buffer, offset..)?;
-                    Variant::try_new_with_metadata(self.metadata, value_bytes)?;
+                    Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
 
                     Ok::<_, ArrowError>(())
                 })?;
