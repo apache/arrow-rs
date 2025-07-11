@@ -220,7 +220,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
             // Validate whether values are valid variant objects
             //
-            // Since we use offsets to slice into the value buffer, we can also verify all offsets are in-bounds
+            // Since we use offsets to slice into the value buffer, this also verifies all offsets are in-bounds
             // and monotonically increasing
             let mut offset_iter = map_bytes_to_offsets(offset_buffer, self.header.offset_size);
             let mut current_offset = offset_iter.next().unwrap_or(0);

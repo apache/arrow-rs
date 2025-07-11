@@ -244,7 +244,7 @@ impl<'m> VariantMetadata<'m> {
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted
                 //
-                // Since we use the offsets to access dictionary values, we can also validate
+                // Since we use the offsets to access dictionary values, this also validates
                 // offsets are in-bounds and monotonically increasing
                 let are_dictionary_values_unique_and_sorted = (1..offsets.len())
                     .map(|i| {

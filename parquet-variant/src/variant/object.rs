@@ -243,7 +243,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 // The metadata dictionary can't guarantee uniqueness or sortedness, so we have to parse out the corresponding field names
                 // to check lexicographical order
                 //
-                // Since we are probing the metadata dictionary by field id, we can also verify field ids are in-bounds
+                // Since we are probing the metadata dictionary by field id, this also verifies field ids are in-bounds
                 let are_field_names_sorted = field_ids
                     .iter()
                     .map(|&i| self.metadata.get(i))
