@@ -216,28 +216,39 @@ impl<'m, 'v> VariantList<'m, 'v> {
                 self.header.first_offset_byte() as _..self.first_value_byte as _,
             )?;
 
-            let offsets =
-                map_bytes_to_offsets(offset_buffer, self.header.offset_size).collect::<Vec<_>>();
-
-            // Validate offsets are in-bounds and monotonically increasing.
-            // Since shallow verification checks whether the first and last offsets are in-bounds,
-            // we can also verify all offsets are in-bounds by checking if offsets are monotonically increasing.
-            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
-            if !are_offsets_monotonic {
-                return Err(ArrowError::InvalidArgumentError(
-                    "offsets are not monotonically increasing".to_string(),
-                ));
-            }
-
             let value_buffer = slice_from_slice(self.value, self.first_value_byte as _..)?;
 
-            // Validate whether values are valid variant objects
-            for i in 1..offsets.len() {
-                let start_offset = offsets[i - 1];
-                let end_offset = offsets[i];
+            let mut offsets_iter = map_bytes_to_offsets(offset_buffer, self.header.offset_size);
+            
+            // Get first offset and validate it's zero
+            let mut prev_offset = match offsets_iter.next() {
+                Some(0) => 0,
+                Some(offset) => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        format!("First offset is not zero: {offset}"),
+                    ));
+                }
+                None => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Empty offset array".to_string(),
+                    ));
+                }
+            };
 
-                let value_bytes = slice_from_slice(value_buffer, start_offset..end_offset)?;
+            // Validate offsets and values in a single pass
+            for (i, curr_offset) in offsets_iter.enumerate() {
+                // Check offsets are monotonically increasing
+                if curr_offset < prev_offset {
+                    return Err(ArrowError::InvalidArgumentError(
+                        format!("Offsets are not monotonically increasing at index {i}: {prev_offset} > {curr_offset}"),
+                    ));
+                }
+
+                // Validate the value between offsets
+                let value_bytes = slice_from_slice(value_buffer, prev_offset..curr_offset)?;
                 Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
+                
+                prev_offset = curr_offset;
             }
 
             self.validated = true;
