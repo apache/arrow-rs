@@ -849,7 +849,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         return Ok(None);
                     }
 
-                    let mut read = self.reader.get_read(*offset as u64)?;
+                    let mut read = self.reader.get_read(*offset)?;
                     let header = if let Some(header) = next_page_header.take() {
                         *header
                     } else {
@@ -971,7 +971,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                             continue;
                         }
                     } else {
-                        let mut read = self.reader.get_read(*offset as u64)?;
+                        let mut read = self.reader.get_read(*offset)?;
                         let (header_len, header) = Self::read_page_header_len(
                             &self.context,
                             &mut read,
@@ -1041,7 +1041,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *offset += buffered_header.compressed_page_size as u64;
                     *remaining_bytes -= buffered_header.compressed_page_size as u64;
                 } else {
-                    let mut read = self.reader.get_read(*offset as u64)?;
+                    let mut read = self.reader.get_read(*offset)?;
                     let (header_len, header) = Self::read_page_header_len(
                         &self.context,
                         &mut read,
