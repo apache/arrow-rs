@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_BLOCK_SIZE","STARTING_BLOCK_SIZE"],"enum":["BlockSizeGrowthStrategy"],"fn":["make_inlined_view","make_view"],"struct":["GenericByteViewBuilder"],"type":["BinaryViewBuilder","StringViewBuilder"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CAPACITY"],"enum":["Decoder"],"fn":["flush_offsets","flush_primitive","flush_values","read_blocks","read_blockwise_items","sign_extend_to"],"struct":["RecordDecoder","RecordDecoderBuilder"]};

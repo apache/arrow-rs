@@ -1,0 +1,1 @@
+searchState.loadedDescShard("parquet_concat", 0, "Binary that concatenates the column data of one or more …\nConcatenates one or more parquet files\nReturns the argument unchanged.\nPath to input files\nCalls <code>U::from(self)</code>.\nPath to output")

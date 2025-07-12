@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Variant"],"mod":["builder","decoder","utils","variant"],"struct":["ListBuilder","ObjectBuilder","ShortString","VariantBuilder","VariantDecimal16","VariantDecimal4","VariantDecimal8","VariantList","VariantMetadata","VariantObject"],"trait":["VariantBuilderExt"]};

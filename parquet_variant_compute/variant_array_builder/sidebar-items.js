@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["binary_view_array_from_buffers"],"struct":["VariantArrayBuilder"]};
