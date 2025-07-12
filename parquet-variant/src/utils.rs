@@ -85,13 +85,18 @@ pub(crate) fn string_from_slice(
 }
 
 /// Extracts a byte slice from the given range and validates it as UTF-8.
+#[inline]
 pub(crate) fn extract_and_validate_utf8_slice(
     bytes: &[u8],
     range: Range<usize>,
 ) -> Result<&str, ArrowError> {
     let offset_buffer = slice_from_slice(bytes, range)?;
-    simdutf8::basic::from_utf8(offset_buffer)
-        .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
+
+    simdutf8::basic::from_utf8(offset_buffer).map_err(|_| {
+        // Use simdutf8::compat to return details about the decoding error
+        let e = simdutf8::compat::from_utf8(offset_buffer).unwrap_err();
+        ArrowError::InvalidArgumentError(format!("encountered non UTF-8 data: {}", e))
+    })
 }
 
 /// Performs a binary search over a range using a fallible key extraction function; a failed key
