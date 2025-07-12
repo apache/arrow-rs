@@ -80,6 +80,7 @@ impl VariantArray {
     /// [`BinaryViewArray`] are supported. Shredded values are not currently supported
     /// nor are using types other than `BinaryViewArray`
     ///
+    /// [`BinaryViewArray`]: arrow::array::BinaryViewArray
     pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
         let Some(inner) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
