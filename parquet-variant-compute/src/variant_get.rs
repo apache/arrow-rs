@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{Array, ArrayRef, BinaryArray, PrimitiveBuilder, StructArray},
+    array::{
+        Array, ArrayRef, ArrowPrimitiveType, BinaryArray, PrimitiveArray, PrimitiveBuilder,
+        StructArray,
+    },
     compute::CastOptions,
     datatypes::UInt64Type,
     error::Result,
@@ -24,7 +27,12 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
         vec![true; struct_array.len()]
     };
 
-    for path in options.path.0.iter().take(options.path.0.len() - 1) {
+    for path in options
+        .path
+        .0
+        .iter()
+        .take(options.path.0.len().saturating_sub(1))
+    {
         match path {
             VariantPathElement::Field { name } => {
                 go_to_object_field(
@@ -56,7 +64,22 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
     })?;
     match as_type.data_type() {
         DataType::UInt64 => {
-            get_top_level_as_u64(struct_array, metadata_array, value_array, &offsets, &nulls)
+            Ok(Arc::new(get_top_level_primitive::<UInt64Type, _>(
+                struct_array,
+                metadata_array,
+                value_array,
+                |variant, builder| {
+                    match variant {
+                        // TODO: narrowing?
+                        Variant::Int64(i) => builder.append_value(i as u64),
+                        Variant::Null => builder.append_null(),
+                        // TODO: throw error based on CastOptions
+                        _ => builder.append_null(),
+                    }
+                },
+                &offsets,
+                &nulls,
+            )?))
         }
         other_type => Err(ArrowError::NotYetImplemented(format!(
             "getting variant as {} is not yet implemented",
@@ -65,14 +88,15 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
     }
 }
 
-fn get_top_level_as_u64(
+fn get_top_level_primitive<T: ArrowPrimitiveType, F: Fn(Variant, &mut PrimitiveBuilder<T>)>(
     struct_array: &StructArray,
     metadata_array: &BinaryArray,
     value_array: &BinaryArray,
+    extractor: F,
     offsets: &[i32],
     nulls: &[bool],
-) -> Result<ArrayRef> {
-    let mut builder = PrimitiveBuilder::<UInt64Type>::with_capacity(struct_array.len());
+) -> Result<PrimitiveArray<T>> {
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(struct_array.len());
     for i in 0..struct_array.len() {
         if !nulls[i] {
             builder.append_null();
@@ -88,15 +112,10 @@ fn get_top_level_as_u64(
         })?;
         let variant = Variant::new(metadata, value);
 
-        match variant {
-            // TODO: narrowing?
-            Variant::Int64(i) => builder.append_value(i as u64),
-            Variant::Null => builder.append_null(),
-            _ => builder.append_null(),
-        }
+        extractor(variant, &mut builder);
     }
 
-    Ok(Arc::new(builder.finish()))
+    Ok(builder.finish())
 }
 
 fn go_to_object_field(
@@ -185,4 +204,62 @@ enum VariantPathElement {
     Field { name: String },
     /// Access the list element offset
     Index { offset: usize },
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use arrow::{
+        array::{
+            ArrayRef, ArrowPrimitiveType, BinaryBuilder, NullBufferBuilder, PrimitiveArray,
+            StructArray,
+        },
+        datatypes::UInt64Type,
+    };
+    use arrow_schema::{DataType, Field};
+    use parquet_variant::VariantBuilder;
+
+    use super::{variant_get, GetOptions, VariantPath};
+
+    #[test]
+    fn primitive_u64() {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(1234i64);
+        let (metadata, value) = builder.finish();
+
+        let mut builder = BinaryBuilder::new();
+        builder.append_value(metadata);
+        let metadata = builder.finish();
+
+        let mut builder = BinaryBuilder::new();
+        builder.append_value(value);
+        let value = builder.finish();
+
+        let variant_array = StructArray::new(
+            vec![
+                Field::new("metadata", DataType::Binary, true),
+                Field::new("value", DataType::Binary, true),
+            ]
+            .into(),
+            vec![Arc::new(metadata), Arc::new(value)],
+            NullBufferBuilder::new(1).finish(),
+        );
+
+        let input = Arc::new(variant_array) as ArrayRef;
+
+        let result = variant_get(
+            &input,
+            GetOptions {
+                path: VariantPath(vec![]),
+                as_type: Some(Field::new("", UInt64Type::DATA_TYPE, true)),
+                cast_options: Default::default(),
+            },
+        )
+        .unwrap();
+
+        let result: &PrimitiveArray<UInt64Type> = result.as_any().downcast_ref().unwrap();
+        let result = result.values().to_vec();
+        assert_eq!(result, vec![1234]);
+    }
 }
