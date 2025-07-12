@@ -16,10 +16,7 @@
 // under the License.
 
 use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
-use crate::utils::{
-    extract_and_validate_utf8_slice, first_byte_from_slice, overflow_error, slice_from_slice,
-    string_from_slice,
-};
+use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
 
 use arrow_schema::ArrowError;
 
@@ -251,10 +248,8 @@ impl<'m> VariantMetadata<'m> {
             }
 
             // Verify the string values in the dictionary are UTF-8 encoded strings.
-            let value_buffer = extract_and_validate_utf8_slice(
-                self.bytes,
-                self.first_value_byte as _..self.bytes.len(),
-            )?;
+            let value_buffer =
+                string_from_slice(self.bytes, 0, self.first_value_byte as _..self.bytes.len())?;
 
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted

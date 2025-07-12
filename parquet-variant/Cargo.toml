@@ -37,7 +37,7 @@ arrow-schema = { workspace = true }
 chrono = { workspace = true }
 indexmap = "2.10.0"
 
-simdutf8 = { workspace = true }
+simdutf8 = { workspace = true , optional = true }
 
 [lib]
 name = "parquet_variant"
@@ -52,6 +52,10 @@ rand = { version = "0.9", default-features = false, features = [
     "thread_rng",
 ] }
 
+[features]
+default = ["simdutf8"]
+# Enable SIMD UTF-8 validation
+simdutf8 = ["dep:simdutf8"]
 
 [[bench]]
 name = "variant_builder"
