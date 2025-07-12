@@ -95,7 +95,7 @@ pub(crate) fn extract_and_validate_utf8_slice(
     simdutf8::basic::from_utf8(offset_buffer).map_err(|_| {
         // Use simdutf8::compat to return details about the decoding error
         let e = simdutf8::compat::from_utf8(offset_buffer).unwrap_err();
-        ArrowError::InvalidArgumentError(format!("encountered non UTF-8 data: {}", e))
+        ArrowError::InvalidArgumentError(format!("encountered non UTF-8 data: {e}"))
     })
 }
 
