@@ -74,8 +74,8 @@ pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
         .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 
-/// Helper to get a &str from a slice at the given offset and range, or an error if invalid.
 
+/// Helper to get a &str from a slice at the given offset and range, or an error if invalid.
 #[inline]
 pub(crate) fn string_from_slice(
     slice: &[u8],
