@@ -70,7 +70,7 @@ twox-hash = { version = "2.0", default-features = false, features = ["xxhash64"]
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
-simdutf8 = { version = "0.1.5", optional = true, default-features = false }
+simdutf8 = { workspace = true , optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
