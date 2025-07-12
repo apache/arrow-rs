@@ -20,7 +20,7 @@
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{DataType, Field, Fields};
-use parquet_variant::{Variant, VariantBuilder};
+use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use std::sync::Arc;
 
 /// A builder for [`VariantArray`]
@@ -147,11 +147,9 @@ impl VariantArrayBuilder {
 
     /// Append the [`Variant`] to the builder as the next row
     pub fn append_variant(&mut self, variant: Variant) {
-        // TODO make this more efficient by avoiding the intermediate buffers
-        let mut variant_builder = VariantBuilder::new();
-        variant_builder.append_value(variant);
-        let (metadata, value) = variant_builder.finish();
-        self.append_variant_buffers(&metadata, &value);
+        let mut direct_builder = self.variant_builder();
+        direct_builder.variant_builder.append_value(variant);
+        direct_builder.finish()
     }
 
     /// Append a metadata and values buffer to the builder
@@ -168,7 +166,149 @@ impl VariantArrayBuilder {
         self.value_buffer.extend_from_slice(value);
     }
 
-    // TODO: Return a Variant builder that will write to the underlying buffers (TODO)
+    /// Return a VariantArrayVariantBuilder that writes directly to the buffers of this builder.
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
+    /// # use parquet_variant_compute::{VariantArray, VariantArrayBuilder};
+    /// let mut array_builder = VariantArrayBuilder::new(10);
+    ///
+    /// // First row has a string
+    /// let mut variant_builder = array_builder.variant_builder();
+    /// variant_builder.append_value("Hello, World!");
+    /// // must call finish to write the variant to the buffers
+    /// variant_builder.finish();
+    ///
+    /// // Second row is an object
+    /// let mut variant_builder = array_builder.variant_builder();
+    /// let mut obj = variant_builder.new_object();
+    /// obj.insert("my_field", 42i64);
+    /// obj.finish().unwrap();
+    /// variant_builder.finish();
+    ///
+    /// // finalize the array
+    /// let variant_array: VariantArray = array_builder.build();
+    ///
+    /// // verify what we wrote is still there
+    /// assert_eq!(variant_array.value(0), Variant::from("Hello, World!"));
+    /// assert!(variant_array.value(1).as_object().is_some());
+    ///  ```
+    pub fn variant_builder(&mut self) -> VariantArrayVariantBuilder {
+        // append directly into the metadata and value buffers
+        let metadata_buffer = std::mem::take(&mut self.metadata_buffer);
+        let value_buffer = std::mem::take(&mut self.value_buffer);
+        let metadata_offset = metadata_buffer.len();
+        let value_offset = value_buffer.len();
+        VariantArrayVariantBuilder {
+            finished: false,
+            metadata_offset,
+            value_offset,
+            variant_builder: VariantBuilder::new_with_buffers(metadata_buffer, value_buffer),
+            array_builder: self,
+        }
+    }
+}
+
+/// A `VariantBuilder` that writes directly to the buffers of a `VariantArrayBuilder`.
+///
+/// Note this struct implements [`VariantBuilderExt`], so it can be used
+/// as a drop-in replacement for [`VariantBuilder`] in most cases.
+///
+/// See [`VariantArrayBuilder::variant_builder`] for an example
+pub struct VariantArrayVariantBuilder<'a> {
+    /// was finish called?
+    finished: bool,
+    /// starting metadata offset in the underlying buffers
+    metadata_offset: usize,
+    /// starting value offset
+    value_offset: usize,
+    array_builder: &'a mut VariantArrayBuilder,
+    variant_builder: VariantBuilder,
+}
+
+impl<'a, 'm, 'v> VariantBuilderExt<'m, 'v> for VariantArrayVariantBuilder<'a> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.variant_builder.append_value(value);
+    }
+
+    fn new_list(&mut self) -> ListBuilder {
+        self.variant_builder.new_list()
+    }
+
+    fn new_object(&mut self) -> ObjectBuilder {
+        self.variant_builder.new_object()
+    }
+}
+
+impl VariantArrayVariantBuilder<'_> {
+    /// Return a reference to the underlying `VariantBuilder`
+    pub fn inner(&self) -> &VariantBuilder {
+        &self.variant_builder
+    }
+
+    /// Return a mutable reference to the underlying `VariantBuilder`
+    pub fn inner_mut(&mut self) -> &mut VariantBuilder {
+        &mut self.variant_builder
+    }
+
+    /// Called to finalize the variant and write it to the underlying buffers
+    ///
+    /// Note if you do not call finish, the struct will be reset and the buffers
+    /// will not be updated.
+    ///
+    pub fn finish(mut self) {
+        let metadata_offset = self.metadata_offset;
+        let value_offset = self.value_offset;
+
+        // get the buffers back
+        let (metadata_buffer, value_buffer) = std::mem::take(&mut self.variant_builder).finish();
+        let metadata_len = metadata_buffer
+            .len()
+            .checked_sub(metadata_offset)
+            .expect("metadata length decreased unexpectedly");
+        let value_len = value_buffer
+            .len()
+            .checked_sub(value_offset)
+            .expect("value length decreased unexpectedly");
+
+        // put the buffers back
+        self.array_builder.metadata_buffer = metadata_buffer;
+        self.array_builder.value_buffer = value_buffer;
+
+        // Append offsets and lengths for new nulls into the array builder
+        self.array_builder
+            .metadata_locations
+            .push((metadata_offset, metadata_len));
+        self.array_builder
+            .value_locations
+            .push((value_offset, value_len));
+        self.array_builder.nulls.append_non_null();
+        self.finished = true;
+    }
+}
+
+impl<'a> Drop for VariantArrayVariantBuilder<'a> {
+    fn drop(&mut self) {
+        if self.finished {
+            // if the object was finished, we do not need to do anything
+            return;
+        }
+        // if the object was not finished, we need to reset any partial state put the buffers back
+        println!("VariantArrayVariantBuilder::drop");
+        let variant_builder = std::mem::take(&mut self.variant_builder);
+        let (mut metadata_buffer, mut value_buffer) = variant_builder.finish();
+        assert!(
+            metadata_buffer.len() >= self.metadata_offset,
+            "metadata got smaller"
+        );
+        assert!(value_buffer.len() >= self.value_offset, "value got smaller");
+        metadata_buffer.truncate(self.metadata_offset);
+        value_buffer.truncate(self.value_offset);
+        // put the buffers back
+        self.array_builder.metadata_buffer = metadata_buffer;
+        self.array_builder.value_buffer = value_buffer;
+    }
 }
 
 fn binary_view_array_from_buffers(
