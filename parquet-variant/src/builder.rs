@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
-use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use crate::{
+    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantMetadata,
+};
 use arrow_schema::ArrowError;
 use indexmap::{IndexMap, IndexSet};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -252,8 +254,22 @@ impl ValueBuffer {
     }
 }
 
+/// Trait for metadata builders that can manage field names and produce metadata bytes
+pub trait MetadataBuilder {
+    type MetadataOutput: AsRef<[u8]>;
+
+    /// Attempt to get/register a field name, returning its ID or an error
+    fn upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError>;
+
+    /// Get field name by ID (for error reporting)
+    fn field_name(&self, id: usize) -> &str;
+
+    /// Convert to final metadata bytes
+    fn finish(self) -> Self::MetadataOutput;
+}
+
 #[derive(Default)]
-struct MetadataBuilder {
+pub struct DefaultMetadataBuilder {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 
@@ -261,8 +277,24 @@ struct MetadataBuilder {
     is_sorted: bool,
 }
 
-impl MetadataBuilder {
-    /// Upsert field name to dictionary, return its ID
+impl MetadataBuilder for DefaultMetadataBuilder {
+    type MetadataOutput = Vec<u8>;
+
+    fn upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        Ok(self.upsert_field_name(field_name))
+    }
+
+    fn field_name(&self, id: usize) -> &str {
+        &self.field_names[id]
+    }
+
+    fn finish(self) -> Vec<u8> {
+        self.finish()
+    }
+}
+
+impl DefaultMetadataBuilder {
+    /// Internal upsert method that can't fail (for convenience methods)
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
 
@@ -291,10 +323,6 @@ impl MetadataBuilder {
         assert!(n <= u32::MAX as usize);
 
         n
-    }
-
-    fn field_name(&self, i: usize) -> &str {
-        &self.field_names[i]
     }
 
     fn metadata_size(&self) -> usize {
@@ -341,7 +369,7 @@ impl MetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
+impl<S: AsRef<str>> FromIterator<S> for DefaultMetadataBuilder {
     fn from_iter<T: IntoIterator<Item = S>>(iter: T) -> Self {
         let mut this = Self::default();
         this.extend(iter);
@@ -350,11 +378,56 @@ impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
+impl<S: AsRef<str>> Extend<S> for DefaultMetadataBuilder {
     fn extend<T: IntoIterator<Item = S>>(&mut self, iter: T) {
         for field_name in iter {
             self.upsert_field_name(field_name.as_ref());
         }
+    }
+}
+
+/// Read-only metadata builder that validates field names against an existing metadata dictionary
+pub struct ReadOnlyMetadataBuilder<'m> {
+    metadata: VariantMetadata<'m>,
+    field_cache: HashMap<&'m str, u32>,
+}
+
+impl<'m> ReadOnlyMetadataBuilder<'m> {
+    /// Attempts to create a new [`MetadataBuilder`] from an existing [`VariantMetadata`]
+    /// dictionary, returning an error if full validation fails.
+    pub fn try_new(metadata: VariantMetadata<'m>) -> Result<Self, ArrowError> {
+        Ok(Self {
+            metadata: metadata.with_full_validation()?,
+            field_cache: HashMap::new(),
+        })
+    }
+}
+
+impl<'m> MetadataBuilder for ReadOnlyMetadataBuilder<'m> {
+    type MetadataOutput = &'m [u8];
+
+    fn upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        // Check cache first
+        if let Some(field_id) = self.field_cache.get(field_name) {
+            return Ok(*field_id);
+        }
+
+        let (field_id, field_name) = self.metadata.get_entry(field_name).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Field name '{field_name}' not found in metadata dictionary"
+            ))
+        })?;
+
+        self.field_cache.insert(field_name, field_id);
+        Ok(field_id)
+    }
+
+    fn field_name(&self, id: usize) -> &str {
+        &self.metadata[id]
+    }
+
+    fn finish(self) -> &'m [u8] {
+        self.metadata.as_bytes() // return the original metadata bytes
     }
 }
 
@@ -370,25 +443,25 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// parent, and we cannot "split" a mutable reference across two objects (parent state and the child
 /// builder that uses it). So everything has to be here. Rust layout optimizations should treat the
 /// variants as a union, so that accessing a `buffer` or `metadata_builder` is branch-free.
-enum ParentState<'a> {
+enum ParentState<'a, M: MetadataBuilder> {
     Variant {
         buffer: &'a mut ValueBuffer,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut M,
     },
     List {
         buffer: &'a mut ValueBuffer,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut M,
         offsets: &'a mut Vec<usize>,
     },
     Object {
         buffer: &'a mut ValueBuffer,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut M,
         fields: &'a mut IndexMap<u32, usize>,
         field_name: &'a str,
     },
 }
 
-impl ParentState<'_> {
+impl<M: MetadataBuilder> ParentState<'_, M> {
     fn buffer(&mut self) -> &mut ValueBuffer {
         match self {
             ParentState::Variant { buffer, .. } => buffer,
@@ -397,7 +470,7 @@ impl ParentState<'_> {
         }
     }
 
-    fn metadata_builder(&mut self) -> &mut MetadataBuilder {
+    fn metadata_builder(&mut self) -> &mut M {
         match self {
             ParentState::Variant {
                 metadata_builder, ..
@@ -415,7 +488,7 @@ impl ParentState<'_> {
     // bytes to the parent's value buffer. ListBuilder records the new value's starting offset;
     // ObjectBuilder associates the new value's starting offset with its field id; VariantBuilder
     // doesn't need anything special.
-    fn finish(&mut self, starting_offset: usize) {
+    fn finish(&mut self, starting_offset: usize) -> Result<(), ArrowError> {
         match self {
             ParentState::Variant { .. } => (),
             ParentState::List { offsets, .. } => offsets.push(starting_offset),
@@ -425,10 +498,11 @@ impl ParentState<'_> {
                 field_name,
                 ..
             } => {
-                let field_id = metadata_builder.upsert_field_name(field_name);
+                let field_id = metadata_builder.upsert_field_name(field_name)?;
                 fields.insert(field_id, starting_offset);
             }
         }
+        Ok(())
     }
 }
 
@@ -627,22 +701,16 @@ impl ParentState<'_> {
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
 /// ```
 ///
-#[derive(Default)]
-pub struct VariantBuilder {
+pub struct GenericVariantBuilder<M: MetadataBuilder> {
     buffer: ValueBuffer,
-    metadata_builder: MetadataBuilder,
+    metadata_builder: M,
     validate_unique_fields: bool,
 }
 
-impl VariantBuilder {
-    pub fn new() -> Self {
-        Self {
-            buffer: ValueBuffer::default(),
-            metadata_builder: MetadataBuilder::default(),
-            validate_unique_fields: false,
-        }
-    }
+/// A variant builder that builds up a new metadata dictionary from scratch
+pub type VariantBuilder = GenericVariantBuilder<DefaultMetadataBuilder>;
 
+impl<M: MetadataBuilder> GenericVariantBuilder<M> {
     /// Enables validation of unique field keys in nested objects.
     ///
     /// This setting is propagated to all [`ObjectBuilder`]s created through this [`VariantBuilder`]
@@ -653,27 +721,8 @@ impl VariantBuilder {
         self
     }
 
-    /// This method pre-populates the field name directory in the Variant metadata with
-    /// the specific field names, in order.
-    ///
-    /// You can use this to pre-populate a [`VariantBuilder`] with a sorted dictionary if you
-    /// know the field names beforehand. Sorted dictionaries can accelerate field access when
-    /// reading [`Variant`]s.
-    pub fn with_field_names<'a>(mut self, field_names: impl Iterator<Item = &'a str>) -> Self {
-        self.metadata_builder.extend(field_names);
-
-        self
-    }
-
-    /// Adds a single field name to the field name directory in the Variant metadata.
-    ///
-    /// This method does the same thing as [`VariantBuilder::with_field_names`] but adds one field name at a time.
-    pub fn add_field_name(&mut self, field_name: &str) {
-        self.metadata_builder.upsert_field_name(field_name);
-    }
-
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state(&mut self) -> (ParentState, bool) {
+    fn parent_state(&mut self) -> (ParentState<M>, bool) {
         let state = ParentState::Variant {
             buffer: &mut self.buffer,
             metadata_builder: &mut self.metadata_builder,
@@ -684,7 +733,7 @@ impl VariantBuilder {
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
-    pub fn new_list(&mut self) -> ListBuilder {
+    pub fn new_list(&mut self) -> ListBuilder<M> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ListBuilder::new(parent_state, validate_unique_fields)
     }
@@ -692,7 +741,7 @@ impl VariantBuilder {
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
-    pub fn new_object(&mut self) -> ObjectBuilder {
+    pub fn new_object(&mut self) -> ObjectBuilder<M> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
@@ -711,23 +760,75 @@ impl VariantBuilder {
     }
 
     /// Finish the builder and return the metadata and value buffers.
-    pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
+    pub fn finish(self) -> (M::MetadataOutput, Vec<u8>) {
         (self.metadata_builder.finish(), self.buffer.into_inner())
+    }
+}
+
+impl GenericVariantBuilder<DefaultMetadataBuilder> {
+    /// This method pre-populates the field name directory in the Variant metadata with
+    /// the specific field names, in order.
+    ///
+    /// You can use this to pre-populate a [`VariantBuilder`] with a sorted dictionary if you
+    /// know the field names beforehand. Sorted dictionaries can accelerate field access when
+    /// reading [`Variant`]s.
+    pub fn with_field_names<'a>(mut self, field_names: impl Iterator<Item = &'a str>) -> Self {
+        self.metadata_builder.extend(field_names);
+        self
+    }
+
+    /// Adds a single field name to the field name directory in the Variant metadata.
+    ///
+    /// This method does the same thing as [`VariantBuilder::with_field_names`] but adds one field name at a time.
+    pub fn add_field_name(&mut self, field_name: &str) {
+        self.metadata_builder.upsert_field_name(field_name);
+    }
+}
+
+impl<M: MetadataBuilder> From<M> for GenericVariantBuilder<M> {
+    fn from(metadata_builder: M) -> Self {
+        Self {
+            buffer: ValueBuffer::default(),
+            metadata_builder,
+            validate_unique_fields: false,
+        }
+    }
+}
+
+impl<M: MetadataBuilder + Default> Default for GenericVariantBuilder<M> {
+    fn default() -> Self {
+        M::default().into()
+    }
+}
+
+impl<M: MetadataBuilder + Default> GenericVariantBuilder<M> {
+    /// Creates a new instance from the provided [`MetadataBuilder`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<'m> GenericVariantBuilder<ReadOnlyMetadataBuilder<'m>> {
+    /// Creates a variant builder that validates field names against an existing [`VariantMetadata`]
+    /// dictionary instead of creating a new one. [`ObjectBuilder`] operations that attempt to
+    /// insert a new object field with an unrecognized name will fail.
+    pub fn try_from_metadata(metadata: VariantMetadata<'m>) -> Result<Self, ArrowError> {
+        Ok(ReadOnlyMetadataBuilder::try_new(metadata)?.into())
     }
 }
 
 /// A builder for creating [`Variant::List`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
-pub struct ListBuilder<'a> {
-    parent_state: ParentState<'a>,
+pub struct ListBuilder<'a, M: MetadataBuilder> {
+    parent_state: ParentState<'a, M>,
     offsets: Vec<usize>,
     buffer: ValueBuffer,
     validate_unique_fields: bool,
 }
 
-impl<'a> ListBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+impl<'a, M: MetadataBuilder> ListBuilder<'a, M> {
+    fn new(parent_state: ParentState<'a, M>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             offsets: vec![],
@@ -746,7 +847,7 @@ impl<'a> ListBuilder<'a> {
     }
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state(&mut self) -> (ParentState, bool) {
+    fn parent_state(&mut self) -> (ParentState<M>, bool) {
         let state = ParentState::List {
             buffer: &mut self.buffer,
             metadata_builder: self.parent_state.metadata_builder(),
@@ -758,7 +859,7 @@ impl<'a> ListBuilder<'a> {
     /// Returns an object builder that can be used to append a new (nested) object to this list.
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
-    pub fn new_object(&mut self) -> ObjectBuilder {
+    pub fn new_object(&mut self) -> ObjectBuilder<M> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
@@ -766,7 +867,7 @@ impl<'a> ListBuilder<'a> {
     /// Returns a list builder that can be used to append a new (nested) list to this list.
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
-    pub fn new_list(&mut self) -> ListBuilder {
+    pub fn new_list(&mut self) -> ListBuilder<M> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ListBuilder::new(parent_state, validate_unique_fields)
     }
@@ -778,7 +879,7 @@ impl<'a> ListBuilder<'a> {
     }
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
-    pub fn finish(mut self) {
+    pub fn finish(mut self) -> Result<(), ArrowError> {
         let data_size = self.buffer.offset();
         let num_elements = self.offsets.len();
         let is_large = num_elements > u8::MAX as usize;
@@ -796,7 +897,7 @@ impl<'a> ListBuilder<'a> {
         let offsets = std::mem::take(&mut self.offsets);
         parent_buffer.append_offset_array(offsets, Some(data_size), offset_size);
         parent_buffer.append_slice(self.buffer.inner());
-        self.parent_state.finish(starting_offset);
+        self.parent_state.finish(starting_offset)
     }
 }
 
@@ -804,15 +905,15 @@ impl<'a> ListBuilder<'a> {
 /// as the `finish` method must be called to finalize the list.
 /// This is to ensure that the list is always finalized before its parent builder
 /// is finalized.
-impl Drop for ListBuilder<'_> {
+impl<M: MetadataBuilder> Drop for ListBuilder<'_, M> {
     fn drop(&mut self) {}
 }
 
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
-pub struct ObjectBuilder<'a> {
-    parent_state: ParentState<'a>,
+pub struct ObjectBuilder<'a, M: MetadataBuilder> {
+    parent_state: ParentState<'a, M>,
     fields: IndexMap<u32, usize>, // (field_id, offset)
     buffer: ValueBuffer,
     validate_unique_fields: bool,
@@ -820,8 +921,8 @@ pub struct ObjectBuilder<'a> {
     duplicate_fields: HashSet<u32>,
 }
 
-impl<'a> ObjectBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+impl<'a, M: MetadataBuilder> ObjectBuilder<'a, M> {
+    fn new(parent_state: ParentState<'a, M>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             fields: IndexMap::new(),
@@ -835,11 +936,15 @@ impl<'a> ObjectBuilder<'a> {
     ///
     /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
     /// but the old value remains in the buffer, resulting in a larger variant
-    pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
+    pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(
+        &mut self,
+        key: &str,
+        value: T,
+    ) -> Result<(), ArrowError> {
         // Get metadata_builder from parent state
         let metadata_builder = self.parent_state.metadata_builder();
 
-        let field_id = metadata_builder.upsert_field_name(key);
+        let field_id = metadata_builder.upsert_field_name(key)?;
         let field_start = self.buffer.offset();
 
         if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
@@ -847,6 +952,7 @@ impl<'a> ObjectBuilder<'a> {
         }
 
         self.buffer.append_non_nested_value(value);
+        Ok(())
     }
 
     /// Enables validation for unique field keys when inserting into this object.
@@ -859,7 +965,7 @@ impl<'a> ObjectBuilder<'a> {
     }
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state<'b>(&'b mut self, key: &'b str) -> (ParentState<'b>, bool) {
+    fn parent_state<'b>(&'b mut self, key: &'b str) -> (ParentState<'b, M>, bool) {
         let state = ParentState::Object {
             buffer: &mut self.buffer,
             metadata_builder: self.parent_state.metadata_builder(),
@@ -872,7 +978,7 @@ impl<'a> ObjectBuilder<'a> {
     /// Returns an object builder that can be used to append a new (nested) object to this object.
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
-    pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b> {
+    pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b, M> {
         let (parent_state, validate_unique_fields) = self.parent_state(key);
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
@@ -880,7 +986,7 @@ impl<'a> ObjectBuilder<'a> {
     /// Returns a list builder that can be used to append a new (nested) list to this object.
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
-    pub fn new_list<'b>(&'b mut self, key: &'b str) -> ListBuilder<'b> {
+    pub fn new_list<'b>(&'b mut self, key: &'b str) -> ListBuilder<'b, M> {
         let (parent_state, validate_unique_fields) = self.parent_state(key);
         ListBuilder::new(parent_state, validate_unique_fields)
     }
@@ -934,9 +1040,7 @@ impl<'a> ObjectBuilder<'a> {
         let offsets = std::mem::take(&mut self.fields).into_values();
         parent_buffer.append_offset_array(offsets, Some(data_size), offset_size);
         parent_buffer.append_slice(self.buffer.inner());
-        self.parent_state.finish(starting_offset);
-
-        Ok(())
+        self.parent_state.finish(starting_offset)
     }
 }
 
@@ -944,7 +1048,7 @@ impl<'a> ObjectBuilder<'a> {
 /// as the `finish` method must be called to finalize the object.
 /// This is to ensure that the object is always finalized before its parent builder
 /// is finalized.
-impl Drop for ObjectBuilder<'_> {
+impl<M: MetadataBuilder> Drop for ObjectBuilder<'_, M> {
     fn drop(&mut self) {}
 }
 
@@ -952,38 +1056,40 @@ impl Drop for ObjectBuilder<'_> {
 ///
 /// Allows users to append values to a [`VariantBuilder`], [`ListBuilder`] or
 /// [`ObjectBuilder`]. using the same interface.
-pub trait VariantBuilderExt<'m, 'v> {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>);
+pub trait VariantBuilderExt<'m, 'v, M: MetadataBuilder> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) -> Result<(), ArrowError>;
 
-    fn new_list(&mut self) -> ListBuilder;
+    fn new_list(&mut self) -> ListBuilder<M>;
 
-    fn new_object(&mut self) -> ObjectBuilder;
+    fn new_object(&mut self) -> ObjectBuilder<M>;
 }
 
-impl<'m, 'v> VariantBuilderExt<'m, 'v> for ListBuilder<'_> {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+impl<'m, 'v, M: MetadataBuilder> VariantBuilderExt<'m, 'v, M> for ListBuilder<'_, M> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) -> Result<(), ArrowError> {
         self.append_value(value);
+        Ok(())
     }
 
-    fn new_list(&mut self) -> ListBuilder {
+    fn new_list(&mut self) -> ListBuilder<M> {
         self.new_list()
     }
 
-    fn new_object(&mut self) -> ObjectBuilder {
+    fn new_object(&mut self) -> ObjectBuilder<M> {
         self.new_object()
     }
 }
 
-impl<'m, 'v> VariantBuilderExt<'m, 'v> for VariantBuilder {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+impl<'m, 'v, M: MetadataBuilder> VariantBuilderExt<'m, 'v, M> for GenericVariantBuilder<M> {
+    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) -> Result<(), ArrowError> {
         self.append_value(value);
+        Ok(())
     }
 
-    fn new_list(&mut self) -> ListBuilder {
+    fn new_list(&mut self) -> ListBuilder<M> {
         self.new_list()
     }
 
-    fn new_object(&mut self) -> ObjectBuilder {
+    fn new_object(&mut self) -> ObjectBuilder<M> {
         self.new_object()
     }
 }
@@ -1104,7 +1210,7 @@ mod tests {
             list.append_value(1i8);
             list.append_value(2i8);
             list.append_value("test");
-            list.finish();
+            list.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();
@@ -1134,8 +1240,8 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.insert("name", "John");
-            obj.insert("age", 42i8);
+            obj.insert("name", "John").unwrap();
+            obj.insert("age", 42i8).unwrap();
             let _ = obj.finish();
         }
 
@@ -1150,9 +1256,9 @@ mod tests {
 
         {
             let mut obj = builder.new_object();
-            obj.insert("zebra", "stripes"); // ID = 0
-            obj.insert("apple", "red"); // ID = 1
-            obj.insert("banana", "yellow"); // ID = 2
+            obj.insert("zebra", "stripes").unwrap(); // ID = 0
+            obj.insert("apple", "red").unwrap(); // ID = 1
+            obj.insert("banana", "yellow").unwrap(); // ID = 2
             let _ = obj.finish();
         }
 
@@ -1175,8 +1281,8 @@ mod tests {
     fn test_duplicate_fields_in_object() {
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
-        object_builder.insert("name", "Ron Artest");
-        object_builder.insert("name", "Metta World Peace");
+        object_builder.insert("name", "Ron Artest").unwrap();
+        object_builder.insert("name", "Metta World Peace").unwrap();
         let _ = object_builder.finish();
 
         let (metadata, value) = builder.finish();
@@ -1206,10 +1312,10 @@ mod tests {
             inner_list_builder.append_value("c");
             inner_list_builder.append_value("d");
 
-            inner_list_builder.finish();
+            inner_list_builder.finish().unwrap();
         }
 
-        outer_list_builder.finish();
+        outer_list_builder.finish().unwrap();
 
         let (metadata, value) = builder.finish();
 
@@ -1250,15 +1356,15 @@ mod tests {
                         {
                             let mut list_builder5 = list_builder4.new_list();
                             list_builder5.append_value(1);
-                            list_builder5.finish();
+                            list_builder5.finish().unwrap();
                         }
-                        list_builder4.finish();
+                        list_builder4.finish().unwrap();
                     }
-                    list_builder3.finish();
+                    list_builder3.finish().unwrap();
                 }
-                list_builder2.finish();
+                list_builder2.finish().unwrap();
             }
-            list_builder1.finish();
+            list_builder1.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();
@@ -1296,19 +1402,19 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.insert("id", 1);
-            object_builder.insert("type", "Cauliflower");
+            object_builder.insert("id", 1).unwrap();
+            object_builder.insert("type", "Cauliflower").unwrap();
             let _ = object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.insert("id", 2);
-            object_builder.insert("type", "Beets");
+            object_builder.insert("id", 2).unwrap();
+            object_builder.insert("type", "Beets").unwrap();
             let _ = object_builder.finish();
         }
 
-        list_builder.finish();
+        list_builder.finish().unwrap();
 
         let (metadata, value) = builder.finish();
 
@@ -1345,17 +1451,17 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.insert("a", 1);
+            object_builder.insert("a", 1).unwrap();
             let _ = object_builder.finish();
         }
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.insert("b", 2);
+            object_builder.insert("b", 2).unwrap();
             let _ = object_builder.finish();
         }
 
-        list_builder.finish();
+        list_builder.finish().unwrap();
 
         let (metadata, value) = builder.finish();
 
@@ -1398,7 +1504,7 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.insert("a", 1);
+            object_builder.insert("a", 1).unwrap();
             let _ = object_builder.finish();
         }
 
@@ -1406,13 +1512,13 @@ mod tests {
 
         {
             let mut object_builder = list_builder.new_object();
-            object_builder.insert("b", 2);
+            object_builder.insert("b", 2).unwrap();
             let _ = object_builder.finish();
         }
 
         list_builder.append_value(3);
 
-        list_builder.finish();
+        list_builder.finish().unwrap();
 
         let (metadata, value) = builder.finish();
 
@@ -1456,7 +1562,7 @@ mod tests {
             let mut outer_object_builder = builder.new_object();
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
-                inner_object_builder.insert("b", "a");
+                inner_object_builder.insert("b", "a").unwrap();
                 let _ = inner_object_builder.finish();
             }
 
@@ -1496,13 +1602,13 @@ mod tests {
             let mut outer_object_builder = builder.new_object();
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
-                inner_object_builder.insert("b", false);
-                inner_object_builder.insert("c", "a");
+                inner_object_builder.insert("b", false).unwrap();
+                inner_object_builder.insert("c", "a").unwrap();
 
                 let _ = inner_object_builder.finish();
             }
 
-            outer_object_builder.insert("b", false);
+            outer_object_builder.insert("b", false).unwrap();
             let _ = outer_object_builder.finish();
         }
 
@@ -1544,7 +1650,7 @@ mod tests {
                     let mut inner_object_list_builder = inner_object_builder.new_list("items");
                     inner_object_list_builder.append_value("apple");
                     inner_object_list_builder.append_value(false);
-                    inner_object_list_builder.finish();
+                    inner_object_list_builder.finish().unwrap();
                 }
 
                 let _ = inner_object_builder.finish();
@@ -1590,15 +1696,15 @@ mod tests {
         {
             let mut outer_object_builder = builder.new_object();
 
-            outer_object_builder.insert("a", false);
+            outer_object_builder.insert("a", false).unwrap();
 
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
-                inner_object_builder.insert("b", "a");
+                inner_object_builder.insert("b", "a").unwrap();
                 let _ = inner_object_builder.finish();
             }
 
-            outer_object_builder.insert("b", true);
+            outer_object_builder.insert("b", true).unwrap();
 
             let _ = outer_object_builder.finish();
         }
@@ -1643,16 +1749,16 @@ mod tests {
 
         // Root object with duplicates
         let mut obj = builder.new_object();
-        obj.insert("a", 1);
-        obj.insert("a", 2);
+        obj.insert("a", 1).unwrap();
+        obj.insert("a", 2).unwrap();
         assert!(obj.finish().is_ok());
 
         // Deeply nested list structure with duplicates
         let mut outer_list = builder.new_list();
         let mut inner_list = outer_list.new_list();
         let mut nested_obj = inner_list.new_object();
-        nested_obj.insert("x", 1);
-        nested_obj.insert("x", 2);
+        nested_obj.insert("x", 1).unwrap();
+        nested_obj.insert("x", 2).unwrap();
         assert!(nested_obj.finish().is_ok());
     }
 
@@ -1662,10 +1768,10 @@ mod tests {
 
         // Root-level object with duplicates
         let mut root_obj = builder.new_object();
-        root_obj.insert("a", 1);
-        root_obj.insert("b", 2);
-        root_obj.insert("a", 3);
-        root_obj.insert("b", 4);
+        root_obj.insert("a", 1).unwrap();
+        root_obj.insert("b", 2).unwrap();
+        root_obj.insert("a", 3).unwrap();
+        root_obj.insert("b", 4).unwrap();
 
         let result = root_obj.finish();
         assert_eq!(
@@ -1677,8 +1783,8 @@ mod tests {
         let mut outer_list = builder.new_list();
         let mut inner_list = outer_list.new_list();
         let mut nested_obj = inner_list.new_object();
-        nested_obj.insert("x", 1);
-        nested_obj.insert("x", 2);
+        nested_obj.insert("x", 1).unwrap();
+        nested_obj.insert("x", 2).unwrap();
 
         let nested_result = nested_obj.finish();
         assert_eq!(
@@ -1686,14 +1792,14 @@ mod tests {
             "Invalid argument error: Duplicate field keys detected: [x]"
         );
 
-        inner_list.finish();
-        outer_list.finish();
+        inner_list.finish().unwrap();
+        outer_list.finish().unwrap();
 
         // Valid object should succeed
         let mut list = builder.new_list();
         let mut valid_obj = list.new_object();
-        valid_obj.insert("m", 1);
-        valid_obj.insert("n", 2);
+        valid_obj.insert("m", 1).unwrap();
+        valid_obj.insert("n", 2).unwrap();
 
         let valid_result = valid_obj.finish();
         assert!(valid_result.is_ok());
@@ -1755,16 +1861,16 @@ mod tests {
         let mut variant1 = VariantBuilder::new().with_field_names(["a", "b", "c"].into_iter());
         let mut obj = variant1.new_object();
 
-        obj.insert("c", true);
-        obj.insert("a", false);
-        obj.insert("b", ());
+        obj.insert("c", true).unwrap();
+        obj.insert("a", false).unwrap();
+        obj.insert("b", ()).unwrap();
 
         // verify the field ids are correctly
         let field_ids_by_insert_order = obj.fields.iter().map(|(&id, _)| id).collect::<Vec<_>>();
         assert_eq!(field_ids_by_insert_order, vec![2, 0, 1]);
 
         // add a field name that wasn't pre-defined but doesn't break the sort order
-        obj.insert("d", 2);
+        obj.insert("d", 2).unwrap();
         obj.finish().unwrap();
 
         let (metadata, value) = variant1.finish();
@@ -1789,16 +1895,16 @@ mod tests {
         let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"].into_iter());
         let mut obj = variant1.new_object();
 
-        obj.insert("c", true);
-        obj.insert("d", false);
-        obj.insert("b", ());
+        obj.insert("c", true).unwrap();
+        obj.insert("d", false).unwrap();
+        obj.insert("b", ()).unwrap();
 
         // verify the field ids are correctly
         let field_ids_by_insert_order = obj.fields.iter().map(|(&id, _)| id).collect::<Vec<_>>();
         assert_eq!(field_ids_by_insert_order, vec![1, 2, 0]);
 
         // add a field name that wasn't pre-defined but breaks the sort order
-        obj.insert("a", 2);
+        obj.insert("a", 2).unwrap();
         obj.finish().unwrap();
 
         let (metadata, value) = variant1.finish();
@@ -1840,28 +1946,28 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_from_iter() {
-        let metadata = MetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
+        let metadata = DefaultMetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "apple");
         assert_eq!(metadata.field_name(1), "banana");
         assert_eq!(metadata.field_name(2), "cherry");
         assert!(metadata.is_sorted);
 
-        let metadata = MetadataBuilder::from_iter(["zebra", "apple", "banana"]);
+        let metadata = DefaultMetadataBuilder::from_iter(["zebra", "apple", "banana"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "zebra");
         assert_eq!(metadata.field_name(1), "apple");
         assert_eq!(metadata.field_name(2), "banana");
         assert!(!metadata.is_sorted);
 
-        let metadata = MetadataBuilder::from_iter(Vec::<&str>::new());
+        let metadata = DefaultMetadataBuilder::from_iter(Vec::<&str>::new());
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
     }
 
     #[test]
     fn test_metadata_builder_extend() {
-        let mut metadata = MetadataBuilder::default();
+        let mut metadata = DefaultMetadataBuilder::default();
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
 
@@ -1886,7 +1992,7 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_extend_sort_order() {
-        let mut metadata = MetadataBuilder::default();
+        let mut metadata = DefaultMetadataBuilder::default();
 
         metadata.extend(["middle"]);
         assert!(metadata.is_sorted);
@@ -1902,17 +2008,20 @@ mod tests {
     #[test]
     fn test_metadata_builder_from_iter_with_string_types() {
         // &str
-        let metadata = MetadataBuilder::from_iter(["a", "b", "c"]);
+        let metadata = DefaultMetadataBuilder::from_iter(["a", "b", "c"]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // string
-        let metadata =
-            MetadataBuilder::from_iter(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        let metadata = DefaultMetadataBuilder::from_iter(vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+        ]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // mixed types (anything that implements AsRef<str>)
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
-        let metadata = MetadataBuilder::from_iter(field_names);
+        let metadata = DefaultMetadataBuilder::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
     }
 
@@ -1940,7 +2049,7 @@ mod tests {
         // Create an object builder but never finish it
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
-        object_builder.insert("name", "unknown");
+        object_builder.insert("name", "unknown").unwrap();
         drop(object_builder);
 
         builder.append_value(42i8);
@@ -1969,7 +2078,7 @@ mod tests {
         list_builder.append_value(2i8);
 
         // The parent list should only contain the original values
-        list_builder.finish();
+        list_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert!(metadata.is_empty());
@@ -1990,7 +2099,7 @@ mod tests {
         // Create a nested list builder and finish it
         let mut nested_list_builder = list_builder.new_list();
         nested_list_builder.append_value("hi");
-        nested_list_builder.finish();
+        nested_list_builder.finish().unwrap();
 
         // Drop the outer list builder without finishing it
         drop(list_builder);
@@ -2014,13 +2123,13 @@ mod tests {
 
         // Create a nested object builder but never finish it
         let mut nested_object_builder = list_builder.new_object();
-        nested_object_builder.insert("name", "unknown");
+        nested_object_builder.insert("name", "unknown").unwrap();
         drop(nested_object_builder);
 
         list_builder.append_value(2i8);
 
         // The parent list should only contain the original values
-        list_builder.finish();
+        list_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert_eq!(metadata.len(), 1);
@@ -2041,7 +2150,7 @@ mod tests {
 
         // Create a nested object builder and finish it
         let mut nested_object_builder = list_builder.new_object();
-        nested_object_builder.insert("name", "unknown");
+        nested_object_builder.insert("name", "unknown").unwrap();
         nested_object_builder.finish().unwrap();
 
         // Drop the outer list builder without finishing it
@@ -2063,14 +2172,14 @@ mod tests {
     fn test_object_builder_to_list_builder_inner_no_finish() {
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
-        object_builder.insert("first", 1i8);
+        object_builder.insert("first", 1i8).unwrap();
 
         // Create a nested list builder but never finish it
         let mut nested_list_builder = object_builder.new_list("nested");
         nested_list_builder.append_value("hi");
         drop(nested_list_builder);
 
-        object_builder.insert("second", 2i8);
+        object_builder.insert("second", 2i8).unwrap();
 
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
@@ -2091,12 +2200,12 @@ mod tests {
     fn test_object_builder_to_list_builder_outer_no_finish() {
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
-        object_builder.insert("first", 1i8);
+        object_builder.insert("first", 1i8).unwrap();
 
         // Create a nested list builder and finish it
         let mut nested_list_builder = object_builder.new_list("nested");
         nested_list_builder.append_value("hi");
-        nested_list_builder.finish();
+        nested_list_builder.finish().unwrap();
 
         // Drop the outer object builder without finishing it
         drop(object_builder);
@@ -2118,14 +2227,14 @@ mod tests {
     fn test_object_builder_to_object_builder_inner_no_finish() {
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
-        object_builder.insert("first", 1i8);
+        object_builder.insert("first", 1i8).unwrap();
 
         // Create a nested object builder but never finish it
         let mut nested_object_builder = object_builder.new_object("nested");
-        nested_object_builder.insert("name", "unknown");
+        nested_object_builder.insert("name", "unknown").unwrap();
         drop(nested_object_builder);
 
-        object_builder.insert("second", 2i8);
+        object_builder.insert("second", 2i8).unwrap();
 
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
@@ -2147,11 +2256,11 @@ mod tests {
     fn test_object_builder_to_object_builder_outer_no_finish() {
         let mut builder = VariantBuilder::new();
         let mut object_builder = builder.new_object();
-        object_builder.insert("first", 1i8);
+        object_builder.insert("first", 1i8).unwrap();
 
         // Create a nested object builder and finish it
         let mut nested_object_builder = object_builder.new_object("nested");
-        nested_object_builder.insert("name", "unknown");
+        nested_object_builder.insert("name", "unknown").unwrap();
         nested_object_builder.finish().unwrap();
 
         // Drop the outer object builder without finishing it
@@ -2169,5 +2278,68 @@ mod tests {
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         assert_eq!(variant, Variant::Int8(2));
+    }
+
+    #[test]
+    fn test_read_only_metadata_builder() {
+        // First create some metadata with a few field names
+        let mut default_builder = VariantBuilder::new();
+        default_builder.add_field_name("name");
+        default_builder.add_field_name("age");
+        default_builder.add_field_name("active");
+        let (metadata_bytes, _) = default_builder.finish();
+
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Now create a read-only builder with this metadata
+        let mut readonly_builder = GenericVariantBuilder::try_from_metadata(metadata).unwrap();
+
+        {
+            let mut obj = readonly_builder.new_object();
+            // These should succeed because the fields exist in the metadata
+            obj.insert("name", "Alice").unwrap();
+            obj.insert("age", 30i8).unwrap();
+            obj.insert("active", true).unwrap();
+            obj.finish().unwrap();
+        }
+
+        let (reused_metadata, value) = readonly_builder.finish();
+
+        // The metadata should be the same bytes we started with (zero copy)
+        assert_eq!(reused_metadata, metadata_bytes.as_slice());
+
+        // Verify the variant was built correctly
+        let variant = Variant::try_new(reused_metadata, &value).unwrap();
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.get("name"), Some(Variant::from("Alice")));
+        assert_eq!(obj.get("age"), Some(Variant::Int8(30)));
+        assert_eq!(obj.get("active"), Some(Variant::from(true)));
+    }
+
+    #[test]
+    fn test_read_only_metadata_builder_fails_on_unknown_field() {
+        // Create metadata with only one field
+        let mut default_builder = VariantBuilder::new();
+        default_builder.add_field_name("known_field");
+        let (metadata_bytes, _) = default_builder.finish();
+
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+
+        // Create a read-only builder
+        let mut readonly_builder = GenericVariantBuilder::try_from_metadata(metadata).unwrap();
+
+        {
+            let mut obj = readonly_builder.new_object();
+            // This should succeed
+            obj.insert("known_field", "value").unwrap();
+
+            // This should fail because "unknown_field" is not in the metadata
+            let result = obj.insert("unknown_field", "value");
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Field name 'unknown_field' not found"));
+        }
     }
 }

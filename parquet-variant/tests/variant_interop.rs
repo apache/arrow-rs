@@ -238,7 +238,7 @@ fn variant_array_builder() {
     arr.append_value(1i8);
     arr.append_value(5i8);
     arr.append_value(9i8);
-    arr.finish();
+    arr.finish().unwrap();
 
     let (built_metadata, built_value) = builder.finish();
     let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
@@ -253,19 +253,21 @@ fn variant_object_builder() {
     let mut builder = VariantBuilder::new();
 
     let mut obj = builder.new_object();
-    obj.insert("int_field", 1i8);
+    obj.insert("int_field", 1i8).unwrap();
 
     // The double field is actually encoded as decimal4 with scale 8
     // Value: 123456789, Scale: 8 -> 1.23456789
     obj.insert(
         "double_field",
         VariantDecimal4::try_new(123456789i32, 8u8).unwrap(),
-    );
-    obj.insert("boolean_true_field", true);
-    obj.insert("boolean_false_field", false);
-    obj.insert("string_field", "Apache Parquet");
-    obj.insert("null_field", ());
-    obj.insert("timestamp_field", "2025-04-16T12:34:56.78");
+    )
+    .unwrap();
+    obj.insert("boolean_true_field", true).unwrap();
+    obj.insert("boolean_false_field", false).unwrap();
+    obj.insert("string_field", "Apache Parquet").unwrap();
+    obj.insert("null_field", ()).unwrap();
+    obj.insert("timestamp_field", "2025-04-16T12:34:56.78")
+        .unwrap();
 
     obj.finish().unwrap();
 
@@ -366,7 +368,7 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
             for _ in 0..list_len {
                 list_builder.append_value(rng.random::<i32>());
             }
-            list_builder.finish();
+            list_builder.finish().unwrap();
         }
         14 => {
             // Generate an object
@@ -375,7 +377,7 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
 
             for i in 0..obj_size {
                 let key = format!("field_{i}");
-                object_builder.insert(&key, rng.random::<i32>());
+                object_builder.insert(&key, rng.random::<i32>()).unwrap();
             }
             object_builder.finish().unwrap();
         }
