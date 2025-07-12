@@ -71,23 +71,43 @@ impl VariantArray {
     /// - A new instance of `VariantArray`.
     ///
     /// # Errors:
-    /// If the `StructArray` does not contain the required fields
+    /// - If the `StructArray` does not contain the required fields
+    ///
+    /// # Current support
+    /// This structure does not (yet) support the full Arrow Variant Array specification.
+    ///
+    /// Only `StructArrays` with `metadata` and `value` fields that are
+    /// [`BinaryViewArray`] are supported. Shredded values are not currently supported
+    /// nor are using types other than `BinaryViewArray`
+    ///
     pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
         let Some(inner) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: requires StructArray as input".to_string(),
             ));
         };
-        // Ensure the StructArray has the expected fields
-        if !inner.fields().iter().any(|f| f.name() == "metadata") {
+        // Ensure the StructArray has a metadata field of BinaryView
+        let Some(metadata_field) = inner.fields().iter().find(|f| f.name() == "metadata") else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
             ));
+        };
+        if metadata_field.data_type() != &DataType::BinaryView {
+            return Err(ArrowError::NotYetImplemented(format!(
+                "VariantArray 'metadata' field must be BinaryView, got {}",
+                metadata_field.data_type()
+            )));
         }
-        if !inner.fields().iter().any(|f| f.name() == "value") {
+        let Some(value_field) = inner.fields().iter().find(|f| f.name() == "value") else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
             ));
+        };
+        if value_field.data_type() != &DataType::BinaryView {
+            return Err(ArrowError::NotYetImplemented(format!(
+                "VariantArray 'value' field must be BinaryView, got {}",
+                value_field.data_type()
+            )));
         }
 
         Ok(Self {
@@ -181,12 +201,12 @@ impl Array for VariantArray {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow::array::BinaryViewArray;
+    use arrow::array::{BinaryArray, BinaryViewArray};
     use arrow_schema::{Field, Fields};
 
     #[test]
     fn invalid_not_a_struct_array() {
-        let array = test_array();
+        let array = make_binary_view_array();
         // Should fail because the input is not a StructArray
         let err = VariantArray::try_new(array);
         assert_eq!(
@@ -198,7 +218,7 @@ mod test {
     #[test]
     fn invalid_missing_metadata() {
         let fields = Fields::from(vec![Field::new("value", DataType::BinaryView, true)]);
-        let array = StructArray::new(fields, vec![test_array()], None);
+        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
         // Should fail because the StructArray does not contain a 'metadata' field
         let err = VariantArray::try_new(Arc::new(array));
         assert_eq!(
@@ -210,7 +230,7 @@ mod test {
     #[test]
     fn invalid_missing_value() {
         let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
-        let array = StructArray::new(fields, vec![test_array()], None);
+        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
         // Should fail because the StructArray does not contain a 'value' field
         let err = VariantArray::try_new(Arc::new(array));
         assert_eq!(
@@ -219,7 +239,47 @@ mod test {
         );
     }
 
-    fn test_array() -> ArrayRef {
+    #[test]
+    fn invalid_metadata_field_type() {
+        let fields = Fields::from(vec![
+            Field::new("metadata", DataType::Binary, true), // Not yet supported
+            Field::new("value", DataType::BinaryView, true),
+        ]);
+        let array = StructArray::new(
+            fields,
+            vec![make_binary_array(), make_binary_view_array()],
+            None,
+        );
+        let err = VariantArray::try_new(Arc::new(array));
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            "Not yet implemented: VariantArray 'metadata' field must be BinaryView, got Binary"
+        );
+    }
+
+    #[test]
+    fn invalid_value_field_type() {
+        let fields = Fields::from(vec![
+            Field::new("metadata", DataType::BinaryView, true),
+            Field::new("value", DataType::Binary, true), // Not yet supported
+        ]);
+        let array = StructArray::new(
+            fields,
+            vec![make_binary_view_array(), make_binary_array()],
+            None,
+        );
+        let err = VariantArray::try_new(Arc::new(array));
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            "Not yet implemented: VariantArray 'value' field must be BinaryView, got Binary"
+        );
+    }
+
+    fn make_binary_view_array() -> ArrayRef {
         Arc::new(BinaryViewArray::from(vec![b"test" as &[u8]]))
+    }
+
+    fn make_binary_array() -> ArrayRef {
+        Arc::new(BinaryArray::from(vec![b"test" as &[u8]]))
     }
 }
