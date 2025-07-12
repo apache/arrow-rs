@@ -472,7 +472,7 @@ enum SerializedPageReaderState {
         offset: u64,
 
         /// The length of the chunk in bytes
-        remaining_bytes: usize,
+        remaining_bytes: u64,
 
         // If the next page header has already been "peeked", we will cache it and it`s length here
         next_page_header: Option<Box<PageHeader>>,
@@ -602,7 +602,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             }
             None => SerializedPageReaderState::Values {
                 offset: start,
-                remaining_bytes: usize::try_from(len)?,
+                remaining_bytes: len,
                 next_page_header: None,
                 page_index: 0,
                 require_dictionary: meta.dictionary_page_offset().is_some(),
@@ -653,7 +653,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                             *require_dictionary,
                         )?;
                         *offset += header_len as u64;
-                        *remaining_bytes -= header_len;
+                        *remaining_bytes -= header_len as u64;
                         let page_meta = if let Ok(_page_meta) = PageMetadata::try_from(&header) {
                             Ok(Some(*offset))
                         } else {
@@ -813,8 +813,8 @@ impl<R: ChunkReader> Iterator for SerializedPageReader<R> {
     }
 }
 
-fn verify_page_header_len(header_len: usize, remaining_bytes: usize) -> Result<()> {
-    if header_len > remaining_bytes {
+fn verify_page_header_len(header_len: usize, remaining_bytes: u64) -> Result<()> {
+    if header_len as u64 > remaining_bytes {
         return Err(eof_err!("Invalid page header"));
     }
     Ok(())
@@ -823,12 +823,12 @@ fn verify_page_header_len(header_len: usize, remaining_bytes: usize) -> Result<(
 fn verify_page_size(
     compressed_size: i32,
     uncompressed_size: i32,
-    remaining_bytes: usize,
+    remaining_bytes: u64,
 ) -> Result<()> {
     // The page's compressed size should not exceed the remaining bytes that are
     // available to read. The page's uncompressed size is the expected size
     // after decompression, which can never be negative.
-    if compressed_size < 0 || compressed_size as usize > remaining_bytes || uncompressed_size < 0 {
+    if compressed_size < 0 || compressed_size as u64 > remaining_bytes || uncompressed_size < 0 {
         return Err(eof_err!("Invalid page header"));
     }
     Ok(())
@@ -861,7 +861,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         )?;
                         verify_page_header_len(header_len, *remaining)?;
                         *offset += header_len as u64;
-                        *remaining -= header_len;
+                        *remaining -= header_len as u64;
                         header
                     };
                     verify_page_size(
@@ -871,7 +871,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     )?;
                     let data_len = header.compressed_page_size as usize;
                     *offset += data_len as u64;
-                    *remaining -= data_len;
+                    *remaining -= data_len as u64;
 
                     if header.type_ == PageType::INDEX_PAGE {
                         continue;
@@ -980,7 +980,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         )?;
                         verify_page_header_len(header_len, *remaining_bytes)?;
                         *offset += header_len as u64;
-                        *remaining_bytes -= header_len;
+                        *remaining_bytes -= header_len as u64;
                         let page_meta = if let Ok(page_meta) = (&header).try_into() {
                             Ok(Some(page_meta))
                         } else {
@@ -1039,7 +1039,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     )?;
                     // The next page header has already been peeked, so just advance the offset
                     *offset += buffered_header.compressed_page_size as u64;
-                    *remaining_bytes -= buffered_header.compressed_page_size as usize;
+                    *remaining_bytes -= buffered_header.compressed_page_size as u64;
                 } else {
                     let mut read = self.reader.get_read(*offset as u64)?;
                     let (header_len, header) = Self::read_page_header_len(
@@ -1054,9 +1054,9 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         header.uncompressed_page_size,
                         *remaining_bytes,
                     )?;
-                    let data_page_size = header.compressed_page_size as usize;
-                    *offset += header_len as u64 + data_page_size as u64;
-                    *remaining_bytes -= header_len + data_page_size;
+                    let data_page_size = header.compressed_page_size as u64;
+                    *offset += header_len as u64 + data_page_size;
+                    *remaining_bytes -= header_len as u64 + data_page_size;
                 }
                 if *require_dictionary {
                     *require_dictionary = false;
