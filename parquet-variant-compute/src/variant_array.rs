@@ -35,7 +35,8 @@ use std::sync::Arc;
 /// [`VariantArrayBuilder`]: crate::VariantArrayBuilder
 ///
 /// # Specification
-/// 1. This code follows the conventions for storing variants in Arrow Struct Array
+///
+/// 1. This code follows the conventions for storing variants in Arrow `StructArray`
 ///    defined by [Extension Type for Parquet Variant arrow] and this [document].
 ///    At the time of this writing, this is not yet a standardized Arrow extension type.
 ///
@@ -43,19 +44,16 @@ use std::sync::Arc;
 /// [document]: https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?usp=sharing
 #[derive(Debug)]
 pub struct VariantArray {
-    /// StructArray or up to three fields:
-    /// 1. A required field named metadata which is binary, large_binary, or binary_view
-    /// 2. An optional field named value that is binary, large_binary, or binary_view
-    /// 3. An optional field named typed_value which can be any primitive type or be a list, large_list, list_view or struct
+    /// StructArray of up to three fields:
     ///
-    /// If typed_value is a nested type, its elements must be required and must
-    /// be a struct containing only one of the following:
+    /// 1. A required field named `metadata` which is binary, large_binary, or
+    ///    binary_view
     ///
-    /// 1. A single required field, of type binary, large_binary, or binary_view named value
+    /// 2. An optional field named `value` that is binary, large_binary, or
+    ///    binary_view
     ///
-    /// 2. An optional field named value of type binary, large_binary, or
-    ///    binary_view AND an optional field named typed_value which follows these
-    ///    same rules
+    /// 3. An optional field named `typed_value` which can be any primitive type
+    ///    or be a list, large_list, list_view or struct
     ///
     /// NOTE: It is also permissible for the metadata field to be
     /// Dictionary-Encoded, preferably (but not required) with an index type of
