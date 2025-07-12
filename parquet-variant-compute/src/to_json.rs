@@ -18,52 +18,18 @@
 //! Module for transforming a batch of Variants represented as
 //! STRUCT<metadata: BINARY, value: BINARY> into a batch of JSON strings.
 
-use arrow::array::{Array, ArrayRef, BinaryArray, BooleanBufferBuilder, StringArray, StructArray};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, StringArray};
 use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::DataType;
 use arrow_schema::ArrowError;
 use parquet_variant::Variant;
 use parquet_variant_json::variant_to_json;
 
+use crate::utils::variant_from_struct_array;
+
 /// Transform a batch of Variant represented as STRUCT<metadata: BINARY, value: BINARY> to a batch
 /// of JSON strings where nulls are preserved. The JSON strings in the input must be valid.
 pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, ArrowError> {
-    let struct_array = input
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .ok_or_else(|| ArrowError::CastError("Expected StructArray as input".into()))?;
-
-    // Validate field types
-    let data_type = struct_array.data_type();
-    match data_type {
-        DataType::Struct(inner_fields) => {
-            if inner_fields.len() != 2
-                || inner_fields[0].data_type() != &DataType::Binary
-                || inner_fields[1].data_type() != &DataType::Binary
-            {
-                return Err(ArrowError::CastError(
-                    "Expected struct with two binary fields".into(),
-                ));
-            }
-        }
-        _ => {
-            return Err(ArrowError::CastError(
-                "Expected StructArray with known fields".into(),
-            ))
-        }
-    }
-
-    let metadata_array = struct_array
-        .column(0)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .ok_or_else(|| ArrowError::CastError("Expected BinaryArray for 'metadata'".into()))?;
-
-    let value_array = struct_array
-        .column(1)
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .ok_or_else(|| ArrowError::CastError("Expected BinaryArray for 'value'".into()))?;
+    let (struct_array, metadata_array, value_array) = variant_from_struct_array(input)?;
 
     // Zero-copy builder
     // The size per JSON string is assumed to be 128 bytes. If this holds true, resizing could be

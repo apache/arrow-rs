@@ -295,7 +295,7 @@ impl<'m, 'v> VariantList<'m, 'v> {
     }
 
     // Attempts to retrieve the ith offset from the offset array region of the byte buffer.
-    fn get_offset(&self, index: usize) -> Result<u32, ArrowError> {
+    pub fn get_offset(&self, index: usize) -> Result<u32, ArrowError> {
         let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
         self.header.offset_size.unpack_u32(offset_bytes, index)

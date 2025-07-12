@@ -385,6 +385,12 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
         self.field(i)
     }
+
+    pub fn field_offset(&self, name: &str) -> Option<Result<u32, ArrowError>> {
+        let i = try_binary_search_range_by(0..self.len(), &name, |i| self.field_name(i))?.ok()?;
+
+        (i < self.len()).then(|| self.get_offset(i))
+    }
 }
 
 #[cfg(test)]
