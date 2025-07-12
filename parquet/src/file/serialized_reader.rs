@@ -469,9 +469,11 @@ pub(crate) fn decode_page(
 enum SerializedPageReaderState {
     Values {
         /// The current byte offset in the reader
+        /// Note that offset is u64 (i.e., not usize) to support 32-bit architectures such as WASM
         offset: u64,
 
         /// The length of the chunk in bytes
+        /// Note that remaining_bytes is u64 (i.e., not usize) to support 32-bit architectures such as WASM
         remaining_bytes: u64,
 
         // If the next page header has already been "peeked", we will cache it and it`s length here
