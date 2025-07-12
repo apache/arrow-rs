@@ -33,6 +33,7 @@ mod builder;
 mod byte_array;
 mod byte_array_dictionary;
 mod byte_view_array;
+mod cached_array_reader;
 mod empty_array;
 mod fixed_len_byte_array;
 mod fixed_size_list_array;
@@ -40,17 +41,19 @@ mod list_array;
 mod map_array;
 mod null_array;
 mod primitive_array;
+mod row_group_cache;
 mod struct_array;
 
 #[cfg(test)]
 mod test_util;
 
 // Note that this crate is public under the `experimental` feature flag.
-pub use builder::ArrayReaderBuilder;
+pub use builder::{ArrayReaderBuilder, CacheOptions};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use byte_view_array::make_byte_view_array_reader;
+pub use cached_array_reader::CacheRole;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use fixed_size_list_array::FixedSizeListArrayReader;
@@ -58,6 +61,7 @@ pub use list_array::ListArrayReader;
 pub use map_array::MapArrayReader;
 pub use null_array::NullArrayReader;
 pub use primitive_array::PrimitiveArrayReader;
+pub use row_group_cache::RowGroupCache;
 pub use struct_array::StructArrayReader;
 
 /// Array reader reads parquet data into arrow array.
