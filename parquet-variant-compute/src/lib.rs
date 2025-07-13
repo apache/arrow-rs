@@ -16,6 +16,7 @@
 // under the License.
 
 mod from_json;
+mod shredding;
 mod to_json;
 mod variant_array;
 mod variant_array_builder;

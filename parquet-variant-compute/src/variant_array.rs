@@ -24,6 +24,8 @@ use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::shredding::validate_shredded_schema;
+
 /// An array of Parquet [`Variant`] values
 ///
 /// A [`VariantArray`] wraps an Arrow [`StructArray`] that stores the underlying
@@ -93,30 +95,21 @@ impl VariantArray {
                 "Invalid VariantArray: requires StructArray as input".to_string(),
             ));
         };
-        // Ensure the StructArray has a metadata field of BinaryView
 
+        validate_shredded_schema(inner.fields())?;
+
+        // todo, remove this since we already do it in validate_shredded_schema
         let Some(metadata_field) = VariantArray::find_metadata_field(inner) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
             ));
         };
-        if metadata_field.data_type() != &DataType::BinaryView {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "VariantArray 'metadata' field must be BinaryView, got {}",
-                metadata_field.data_type()
-            )));
-        }
+
         let Some(value_field) = VariantArray::find_value_field(inner) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
             ));
         };
-        if value_field.data_type() != &DataType::BinaryView {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "VariantArray 'value' field must be BinaryView, got {}",
-                value_field.data_type()
-            )));
-        }
 
         Ok(Self {
             inner: inner.clone(),
@@ -258,14 +251,14 @@ mod test {
         let err = VariantArray::try_new(Arc::new(array));
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'value' field"
+            "Invalid argument error: Invalid VariantArray: StructArray must contain either `value` or `typed_value` fields or both."
         );
     }
 
     #[test]
     fn invalid_metadata_field_type() {
         let fields = Fields::from(vec![
-            Field::new("metadata", DataType::Binary, true), // Not yet supported
+            Field::new("metadata", DataType::Binary, false), // Not yet supported
             Field::new("value", DataType::BinaryView, true),
         ]);
         let array = StructArray::new(
@@ -283,7 +276,7 @@ mod test {
     #[test]
     fn invalid_value_field_type() {
         let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, true),
+            Field::new("metadata", DataType::BinaryView, false),
             Field::new("value", DataType::Binary, true), // Not yet supported
         ]);
         let array = StructArray::new(

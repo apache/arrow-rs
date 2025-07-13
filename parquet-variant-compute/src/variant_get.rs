@@ -21,7 +21,7 @@ use arrow::{
     compute::CastOptions,
     error::Result,
 };
-use arrow_schema::{ArrowError, Field};
+use arrow_schema::{ArrowError, Field, Fields};
 use parquet_variant::VariantPath;
 
 use crate::{VariantArray, VariantArrayBuilder};
@@ -32,7 +32,11 @@ use crate::{VariantArray, VariantArrayBuilder};
 /// 1. `as_type: None`: a VariantArray is returned. The values in this new VariantArray will point
 ///    to the specified path.
 /// 2. `as_type: Some(<specific field>)`: an array of the specified type is returned.
-pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
+pub fn variant_get(
+    input: &ArrayRef,
+    options: GetOptions,
+    shredded_schema: Fields,
+) -> Result<ArrayRef> {
     let variant_array: &VariantArray = input.as_any().downcast_ref().ok_or_else(|| {
         ArrowError::InvalidArgumentError(
             "expected a VariantArray as the input for variant_get".to_owned(),
@@ -45,7 +49,7 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
         )));
     }
 
-    let mut builder = VariantArrayBuilder::new(variant_array.len());
+    let mut builder = VariantArrayBuilder::try_new(variant_array.len(), shredded_schema).unwrap();
     for i in 0..variant_array.len() {
         let new_variant = variant_array.value(i);
         // TODO: perf?
@@ -90,6 +94,9 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{Array, ArrayRef, StringArray};
+    use arrow_schema::DataType;
+    use arrow_schema::Field;
+    use arrow_schema::Fields;
     use parquet_variant::VariantPath;
 
     use crate::batch_json_string_to_variant;
@@ -103,8 +110,17 @@ mod test {
         let input_variant_array_ref: ArrayRef =
             Arc::new(batch_json_string_to_variant(&input_array_ref).unwrap());
 
-        let result =
-            variant_get(&input_variant_array_ref, GetOptions::new_with_path(path)).unwrap();
+        let metadata_field = Field::new("metadata", DataType::BinaryView, false);
+        let value_field = Field::new("value", DataType::BinaryView, false);
+
+        let schema = Fields::from(vec![metadata_field, value_field]);
+
+        let result = variant_get(
+            &input_variant_array_ref,
+            GetOptions::new_with_path(path),
+            schema,
+        )
+        .unwrap();
 
         // Create expected array from JSON string
         let expected_array_ref: ArrayRef = Arc::new(StringArray::from(vec![Some(expected_json)]));

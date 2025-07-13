@@ -17,9 +17,9 @@
 
 //! [`VariantArrayBuilder`] implementation
 
-use crate::VariantArray;
+use crate::{shredding::validate_shredded_schema, VariantArray};
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
-use arrow_schema::{DataType, Field, Fields};
+use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use std::sync::Arc;
 
@@ -39,8 +39,14 @@ use std::sync::Arc;
 /// # use arrow::array::Array;
 /// # use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
 /// # use parquet_variant_compute::VariantArrayBuilder;
+/// # use arrow_schema::{DataType, Field, Fields};
 /// // Create a new VariantArrayBuilder with a capacity of 100 rows
-/// let mut builder = VariantArrayBuilder::new(100);
+///  
+/// let metadata_field = Field::new("metadata", DataType::BinaryView, false);
+/// let value_field = Field::new("value", DataType::BinaryView, false);
+/// let schema = Fields::from(vec![metadata_field, value_field]);
+///
+/// let mut builder = VariantArrayBuilder::try_new(100, schema).unwrap();
 /// // append variant values
 /// builder.append_variant(Variant::from(42));
 /// // append a null row (note not a Variant::Null)
@@ -88,19 +94,17 @@ pub struct VariantArrayBuilder {
 }
 
 impl VariantArrayBuilder {
-    pub fn new(row_capacity: usize) -> Self {
-        // The subfields are expected to be non-nullable according to the parquet variant spec.
-        let metadata_field = Field::new("metadata", DataType::BinaryView, false);
-        let value_field = Field::new("value", DataType::BinaryView, false);
+    pub fn try_new(row_capacity: usize, schema: Fields) -> Result<Self, ArrowError> {
+        validate_shredded_schema(&schema)?;
 
-        Self {
+        Ok(Self {
             nulls: NullBufferBuilder::new(row_capacity),
             metadata_buffer: Vec::new(), // todo allocation capacity
             metadata_locations: Vec::with_capacity(row_capacity),
             value_buffer: Vec::new(),
             value_locations: Vec::with_capacity(row_capacity),
-            fields: Fields::from(vec![metadata_field, value_field]),
-        }
+            fields: schema,
+        })
     }
 
     /// Build the final builder
@@ -363,7 +367,12 @@ mod test {
     /// Test that both the metadata and value buffers are non nullable
     #[test]
     fn test_variant_array_builder_non_nullable() {
-        let mut builder = VariantArrayBuilder::new(10);
+        let metadata_field = Field::new("metadata", DataType::BinaryView, false);
+        let value_field = Field::new("value", DataType::BinaryView, false);
+
+        let schema = Fields::from(vec![metadata_field, value_field]);
+
+        let mut builder = VariantArrayBuilder::try_new(10, schema).unwrap();
         builder.append_null(); // should not panic
         builder.append_variant(Variant::from(42i32));
         let variant_array = builder.build();

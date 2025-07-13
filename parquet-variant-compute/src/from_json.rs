@@ -20,7 +20,8 @@
 
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, ArrayRef, StringArray};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType, Field, Fields};
+use parquet_variant::VariantBuilder;
 use parquet_variant_json::json_to_variant;
 
 /// Parse a batch of JSON strings into a batch of Variants represented as
@@ -34,7 +35,14 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, Ar
         )),
     }?;
 
-    let mut variant_array_builder = VariantArrayBuilder::new(input_string_array.len());
+    let metadata_field = Field::new("metadata", DataType::BinaryView, false);
+    let value_field = Field::new("value", DataType::BinaryView, false);
+
+    let schema = Fields::from(vec![metadata_field, value_field]);
+
+    let mut variant_array_builder =
+        VariantArrayBuilder::try_new(input_string_array.len(), schema).unwrap();
+
     for i in 0..input.len() {
         if input.is_null(i) {
             // The subfields are expected to be non-nullable according to the parquet variant spec.
