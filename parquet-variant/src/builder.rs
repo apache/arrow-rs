@@ -61,6 +61,13 @@ fn write_offset(buf: &mut Vec<u8>, value: usize, nbytes: u8) {
     buf.extend_from_slice(&bytes[..nbytes as usize]);
 }
 
+/// Wrapper around a `Vec<u8>` that provides methods for appending
+/// primitive values, variant types, and metadata.
+///
+/// This is used internally by the builders to construct the
+/// the `value` field for [`Variant`] values.
+///
+/// You can reuse an existing `Vec<u8>` by using the `from` impl
 #[derive(Debug, Default)]
 struct ValueBuffer(Vec<u8>);
 
@@ -69,10 +76,17 @@ impl ValueBuffer {
     fn new() -> Self {
         Default::default()
     }
+}
 
-    /// Construct a ValueBuffer from an existing buffer
-    fn from_existing(existing: Vec<u8>) -> Self {
-        Self(existing)
+impl From<Vec<u8>> for ValueBuffer {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<ValueBuffer> for Vec<u8> {
+    fn from(value_buffer: ValueBuffer) -> Self {
+        value_buffer.0
     }
 }
 
@@ -94,7 +108,7 @@ impl ValueBuffer {
     }
 
     fn into_inner(self) -> Vec<u8> {
-        self.0
+        self.into()
     }
 
     fn inner_mut(&mut self) -> &mut Vec<u8> {
@@ -264,6 +278,11 @@ impl ValueBuffer {
     }
 }
 
+/// Builder for constructing metadata for [`Variant`] values.
+///
+/// This is used internally by the [`VariantBuilder`] to construct the metadata
+///
+/// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
 #[derive(Default, Debug)]
 struct MetadataBuilder {
     // Field names -- field_ids are assigned in insert order
@@ -276,14 +295,17 @@ struct MetadataBuilder {
     metadata_buffer: Vec<u8>,
 }
 
-impl MetadataBuilder {
-    /// Specify that the metadata builder should write to the specified
-    /// buffer.
-    pub fn with_metadata_buffer(mut self, metadata_buffer: Vec<u8>) -> Self {
-        self.metadata_buffer = metadata_buffer;
-        self
+/// Create a new MetadataBuilder that will write to the specified metadata buffer
+impl From<Vec<u8>> for MetadataBuilder {
+    fn from(metadata_buffer: Vec<u8>) -> Self {
+        Self {
+            metadata_buffer,
+            ..Default::default()
+        }
     }
+}
 
+impl MetadataBuilder {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
@@ -710,8 +732,8 @@ impl VariantBuilder {
     /// the specified buffers.
     pub fn new_with_buffers(metadata_buffer: Vec<u8>, value_buffer: Vec<u8>) -> Self {
         Self {
-            buffer: ValueBuffer::from_existing(value_buffer),
-            metadata_builder: MetadataBuilder::default().with_metadata_buffer(metadata_buffer),
+            buffer: ValueBuffer::from(value_buffer),
+            metadata_builder: MetadataBuilder::from(metadata_buffer),
             validate_unique_fields: false,
         }
     }
