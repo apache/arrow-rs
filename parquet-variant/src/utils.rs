@@ -74,17 +74,14 @@ pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
         .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 
-/// Helper to get a &str from a slice at the given offset and range, or an error if invalid.
+/// Helper to get a &str from a slice at the given offset and range, or an error if it contains invalid UTF-8 data.
 #[inline]
 pub(crate) fn string_from_slice(
     slice: &[u8],
     offset: usize,
     range: Range<usize>,
 ) -> Result<&str, ArrowError> {
-    let offset_buffer = match offset {
-        0 => slice_from_slice(slice, range)?,
-        _ => slice_from_slice_at_offset(slice, offset, range)?,
-    };
+    let offset_buffer = slice_from_slice_at_offset(slice, offset, range)?;
 
     //Use simdutf8 by default
     #[cfg(feature = "simdutf8")]
