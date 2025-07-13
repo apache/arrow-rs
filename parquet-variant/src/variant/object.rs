@@ -622,22 +622,26 @@ mod tests {
     }
 
     fn test_variant_object_with_count(count: i32, expected_field_id_size: OffsetSizeBytes) {
-        let mut builder = VariantBuilder::new();
+        let field_names: Vec<_> = (0..count).map(|val| val.to_string()).collect();
+        let mut builder =
+            VariantBuilder::new().with_field_names(field_names.iter().map(|s| s.as_str()));
+
         let mut obj = builder.new_object();
-        for val in 0..count {
-            let key = format!("id_{}", val);
-            obj.insert(&key, val);
+
+        for i in 0..count {
+            obj.insert(&field_names[i as usize], i);
         }
 
         obj.finish().unwrap();
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let variant = Variant::new(&metadata, &value);
 
         if let Variant::Object(obj) = variant {
             assert_eq!(obj.len(), count as usize);
-            assert_eq!(obj.get(&format!("id_{}", 0)).unwrap(), Variant::Int32(0));
+
+            assert_eq!(obj.get(&field_names[0]).unwrap(), Variant::Int32(0));
             assert_eq!(
-                obj.get(&format!("id_{}", count - 1)).unwrap(),
+                obj.get(&field_names[(count - 1) as usize]).unwrap(),
                 Variant::Int32(count - 1)
             );
 
@@ -655,18 +659,18 @@ mod tests {
 
     #[test]
     fn test_variant_object_257_elements() {
-        test_variant_object_with_count(2_i32.pow(8) + 1, OffsetSizeBytes::Two); // 2^8 + 1, expected 2-byte field IDs
+        test_variant_object_with_count((1 << 8) + 1, OffsetSizeBytes::Two); // 2^8 + 1, expected 2-byte field IDs
     }
 
     #[test]
     fn test_variant_object_65537_elements() {
-        test_variant_object_with_count(2_i32.pow(16) + 1, OffsetSizeBytes::Three);
+        test_variant_object_with_count((1 << 16) + 1, OffsetSizeBytes::Three);
         // 2^16 + 1, expected 3-byte field IDs
     }
 
     #[test]
     fn test_variant_object_16777217_elements() {
-        test_variant_object_with_count(2_i32.pow(24) + 1, OffsetSizeBytes::Four);
+        test_variant_object_with_count((1 << 24) + 1, OffsetSizeBytes::Four);
         // 2^24 + 1, expected 4-byte field IDs
     }
 
@@ -692,7 +696,7 @@ mod tests {
 
         obj.finish().unwrap();
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let variant = Variant::new(&metadata, &value);
 
         if let Variant::Object(obj) = variant {
             assert_eq!(obj.len(), num_fields);
