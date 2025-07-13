@@ -1199,7 +1199,19 @@ impl TryFrom<(i128, u8)> for Variant<'_, '_> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    #[test]
+    fn test_empty_variant_will_fail() {
+        let metadata = VariantMetadata::try_new(&[1, 0, 0]).unwrap();
+
+        let err = Variant::try_new_with_metadata(metadata, &[]).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ArrowError::InvalidArgumentError(ref msg) if msg == "Received empty bytes"));
+    }
 
     #[test]
     fn test_construct_short_string() {

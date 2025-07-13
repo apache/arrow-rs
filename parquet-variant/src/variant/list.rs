@@ -216,28 +216,19 @@ impl<'m, 'v> VariantList<'m, 'v> {
                 self.header.first_offset_byte() as _..self.first_value_byte as _,
             )?;
 
-            let offsets =
-                map_bytes_to_offsets(offset_buffer, self.header.offset_size).collect::<Vec<_>>();
-
-            // Validate offsets are in-bounds and monotonically increasing.
-            // Since shallow verification checks whether the first and last offsets are in-bounds,
-            // we can also verify all offsets are in-bounds by checking if offsets are monotonically increasing.
-            let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
-            if !are_offsets_monotonic {
-                return Err(ArrowError::InvalidArgumentError(
-                    "offsets are not monotonically increasing".to_string(),
-                ));
-            }
-
             let value_buffer = slice_from_slice(self.value, self.first_value_byte as _..)?;
 
             // Validate whether values are valid variant objects
-            for i in 1..offsets.len() {
-                let start_offset = offsets[i - 1];
-                let end_offset = offsets[i];
+            //
+            // Since we use offsets to slice into the value buffer, this also verifies all offsets are in-bounds
+            // and monotonically increasing
+            let mut offset_iter = map_bytes_to_offsets(offset_buffer, self.header.offset_size);
+            let mut current_offset = offset_iter.next().unwrap_or(0);
 
-                let value_bytes = slice_from_slice(value_buffer, start_offset..end_offset)?;
+            for next_offset in offset_iter {
+                let value_bytes = slice_from_slice(value_buffer, current_offset..next_offset)?;
                 Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
+                current_offset = next_offset;
             }
 
             self.validated = true;
