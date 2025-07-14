@@ -145,7 +145,7 @@ impl Ord for Int96 {
     ///
     /// Note: this is done even though the Int96 type is deprecated and the
     /// [spec does not define the sort order]
-    /// because some engines, notably Spark and DataBricks photon still write
+    /// because some engines, notably Spark and Databricks Photon still write
     /// Int96 timestamps and rely on their order for optimization.
     ///
     /// [spec does not define the sort order]: https://github.com/apache/parquet-format/blob/cf943c197f4fad826b14ba0c40eb0ffdab585285/src/main/thrift/parquet.thrift#L1079
