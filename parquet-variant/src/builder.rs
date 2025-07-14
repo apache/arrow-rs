@@ -240,6 +240,7 @@ impl ValueBuffer {
                 for (field_name, value) in obj.iter() {
                     object_builder.insert(field_name, value);
                 }
+                // TODO propagate error
                 object_builder.finish().unwrap();
             }
             Variant::List(list) => {
@@ -247,6 +248,7 @@ impl ValueBuffer {
                 for value in list.iter() {
                     list_builder.append_value(value);
                 }
+                // TOOD propagate error
                 list_builder.finish();
             }
         }
