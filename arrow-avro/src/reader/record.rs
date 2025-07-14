@@ -19,7 +19,6 @@ use crate::codec::{AvroDataType, Codec, Nullability};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
-use crate::reader::ReadOptions;
 use crate::schema::*;
 use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
 use arrow_array::types::*;
@@ -36,35 +35,84 @@ use std::sync::Arc;
 
 const DEFAULT_CAPACITY: usize = 1024;
 
+#[derive(Debug)]
+pub(crate) struct RecordDecoderBuilder<'a> {
+    data_type: &'a AvroDataType,
+    use_utf8view: bool,
+    strict_mode: bool,
+}
+
+impl<'a> RecordDecoderBuilder<'a> {
+    pub(crate) fn new(data_type: &'a AvroDataType) -> Self {
+        Self {
+            data_type,
+            use_utf8view: false,
+            strict_mode: false,
+        }
+    }
+
+    pub(crate) fn with_utf8_view(mut self, use_utf8view: bool) -> Self {
+        self.use_utf8view = use_utf8view;
+        self
+    }
+
+    pub(crate) fn with_strict_mode(mut self, strict_mode: bool) -> Self {
+        self.strict_mode = strict_mode;
+        self
+    }
+
+    /// Builds the `RecordDecoder`.
+    pub(crate) fn build(self) -> Result<RecordDecoder, ArrowError> {
+        RecordDecoder::try_new_with_options(self.data_type, self.use_utf8view, self.strict_mode)
+    }
+}
+
 /// Decodes avro encoded data into [`RecordBatch`]
-pub struct RecordDecoder {
+#[derive(Debug)]
+pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     use_utf8view: bool,
+    strict_mode: bool,
 }
 
 impl RecordDecoder {
-    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
-    pub fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        Self::try_new_with_options(data_type, ReadOptions::default())
+    /// Creates a new `RecordDecoderBuilder` for configuring a `RecordDecoder`.
+    pub(crate) fn new(data_type: &'_ AvroDataType) -> Self {
+        RecordDecoderBuilder::new(data_type).build().unwrap()
     }
 
-    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options
+    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
+    pub(crate) fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
+        RecordDecoderBuilder::new(data_type)
+            .with_utf8_view(true)
+            .with_strict_mode(true)
+            .build()
+    }
+
+    /// Creates a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options.
     ///
     /// This method allows you to customize how the Avro data is decoded into Arrow arrays.
     ///
-    /// # Parameters
-    /// * `data_type` - The Avro data type to decode
-    /// * `options` - Configuration options for decoding
-    pub fn try_new_with_options(
+    /// # Arguments
+    /// * `data_type` - The Avro data type to decode.
+    /// * `use_utf8view` - A flag indicating whether to use `Utf8View` for string types.
+    /// * `strict_mode` - A flag to enable strict decoding, returning an error if the data
+    ///   does not conform to the schema.
+    ///
+    /// # Errors
+    /// This function will return an error if the provided `data_type` is not a `Record`.
+    pub(crate) fn try_new_with_options(
         data_type: &AvroDataType,
-        options: ReadOptions,
+        use_utf8view: bool,
+        strict_mode: bool,
     ) -> Result<Self, ArrowError> {
         match Decoder::try_new(data_type)? {
             Decoder::Record(fields, encodings) => Ok(Self {
                 schema: Arc::new(ArrowSchema::new(fields)),
                 fields: encodings,
-                use_utf8view: options.use_utf8view(),
+                use_utf8view,
+                strict_mode,
             }),
             encoding => Err(ArrowError::ParseError(format!(
                 "Expected record got {encoding:?}"
@@ -72,12 +120,13 @@ impl RecordDecoder {
         }
     }
 
-    pub fn schema(&self) -> &SchemaRef {
+    /// Returns the decoder's `SchemaRef`
+    pub(crate) fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
     /// Decode `count` records from `buf`
-    pub fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
+    pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
         let mut cursor = AvroCursor::new(buf);
         for _ in 0..count {
             for field in &mut self.fields {
@@ -88,7 +137,7 @@ impl RecordDecoder {
     }
 
     /// Flush the decoded records into a [`RecordBatch`]
-    pub fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
+    pub(crate) fn flush(&mut self) -> Result<RecordBatch, ArrowError> {
         let arrays = self
             .fields
             .iter_mut()
@@ -127,6 +176,7 @@ enum Decoder {
         Box<Decoder>,
     ),
     Fixed(i32, Vec<u8>),
+    Enum(Vec<i32>, Arc<[String]>),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
@@ -175,12 +225,12 @@ impl Decoder {
                     (Some(fixed_size), _) if fixed_size <= 16 => {
                         let builder =
                             Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
-                        return Ok(Self::Decimal128(p, s, sz, builder));
+                        Self::Decimal128(p, s, sz, builder)
                     }
                     (Some(fixed_size), _) if fixed_size <= 32 => {
                         let builder =
                             Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
-                        return Ok(Self::Decimal256(p, s, sz, builder));
+                        Self::Decimal256(p, s, sz, builder)
                     }
                     (Some(fixed_size), _) => {
                         return Err(ArrowError::ParseError(format!(
@@ -212,6 +262,9 @@ impl Decoder {
                     OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                     Box::new(decoder),
                 )
+            }
+            Codec::Enum(symbols) => {
+                Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone())
             }
             Codec::Struct(fields) => {
                 let mut arrow_fields = Vec::with_capacity(fields.len());
@@ -282,6 +335,7 @@ impl Decoder {
             }
             Self::Decimal128(_, _, _, builder) => builder.append_value(0),
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
+            Self::Enum(indices, _) => indices.push(0),
             Self::Nullable(_, _, _) => unreachable!("Nulls cannot be nested"),
         }
     }
@@ -348,6 +402,9 @@ impl Decoder {
                 let ext = sign_extend_to::<32>(raw)?;
                 let val = i256::from_be_bytes(ext);
                 builder.append_value(val);
+            }
+            Self::Enum(indices, _) => {
+                indices.push(buf.get_int()?);
             }
             Self::Nullable(nullability, nulls, e) => {
                 let is_valid = buf.get_bool()? == matches!(nullability, Nullability::NullFirst);
@@ -480,6 +537,13 @@ impl Decoder {
                     .with_precision_and_scale(*precision as u8, scl as i8)
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(dec)
+            }
+            Self::Enum(indices, symbols) => {
+                let keys = flush_primitive::<Int32Type>(indices, nulls);
+                let values = Arc::new(StringArray::from(
+                    symbols.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                ));
+                Arc::new(DictionaryArray::try_new(keys, values)?)
             }
         })
     }
@@ -674,22 +738,18 @@ mod tests {
             .decode(&mut cursor1)
             .expect("Failed to decode data1");
         assert_eq!(cursor1.position(), 3, "Cursor should advance by fixed size");
-
         let data2 = [4u8, 5, 6];
         let mut cursor2 = AvroCursor::new(&data2);
         decoder
             .decode(&mut cursor2)
             .expect("Failed to decode data2");
         assert_eq!(cursor2.position(), 3, "Cursor should advance by fixed size");
-
         let array = decoder.flush(None).expect("Failed to flush decoder");
-
         assert_eq!(array.len(), 2, "Array should contain two items");
         let fixed_size_binary_array = array
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
             .expect("Failed to downcast to FixedSizeBinaryArray");
-
         assert_eq!(
             fixed_size_binary_array.value_length(),
             3,
@@ -955,5 +1015,73 @@ mod tests {
         assert!(dec_arr.is_valid(2));
         assert_eq!(dec_arr.value_as_string(0), "1234.56");
         assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+    }
+
+    #[test]
+    fn test_enum_decoding() {
+        let symbols: Arc<[String]> = vec!["A", "B", "C"].into_iter().map(String::from).collect();
+        let avro_type = avro_from_codec(Codec::Enum(symbols.clone()));
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(2));
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&encode_avro_int(1));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let dict_array = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        assert_eq!(dict_array.len(), 3);
+        let values = dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(0), "A");
+        assert_eq!(values.value(1), "B");
+        assert_eq!(values.value(2), "C");
+        assert_eq!(dict_array.keys().values(), &[2, 0, 1]);
+    }
+
+    #[test]
+    fn test_enum_decoding_with_nulls() {
+        let symbols: Arc<[String]> = vec!["X", "Y"].into_iter().map(String::from).collect();
+        let enum_codec = Codec::Enum(symbols.clone());
+        let avro_type =
+            AvroDataType::new(enum_codec, Default::default(), Some(Nullability::NullFirst));
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&encode_avro_int(1));
+        data.extend_from_slice(&encode_avro_long(0));
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&encode_avro_int(0));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let dict_array = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(dict_array.len(), 3);
+        assert!(dict_array.is_valid(0));
+        assert!(dict_array.is_null(1));
+        assert!(dict_array.is_valid(2));
+        let expected_keys = Int32Array::from(vec![Some(1), None, Some(0)]);
+        assert_eq!(dict_array.keys(), &expected_keys);
+        let values = dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(0), "X");
+        assert_eq!(values.value(1), "Y");
     }
 }

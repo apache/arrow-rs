@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
-use arrow_schema::DataType::{Decimal128, Decimal256};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
     TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -203,6 +202,10 @@ pub enum Codec {
     Decimal(usize, Option<usize>, Option<usize>),
     /// Represents Avro Uuid type, a FixedSizeBinary with a length of 16
     Uuid,
+    /// Represents an Avro enum, maps to Arrow's Dictionary(Int32, Utf8) type.
+    ///
+    /// The enclosed value contains the enum's symbols.
+    Enum(Arc<[String]>),
     /// Represents Avro array type, maps to Arrow's List data type
     List(Arc<AvroDataType>),
     /// Represents Avro record type, maps to Arrow's Struct data type
@@ -247,12 +250,15 @@ impl Codec {
                     }
                 };
                 if too_large_for_128 {
-                    Decimal256(p, s)
+                    DataType::Decimal256(p, s)
                 } else {
-                    Decimal128(p, s)
+                    DataType::Decimal128(p, s)
                 }
             }
             Self::Uuid => DataType::FixedSizeBinary(16),
+            Self::Enum(_) => {
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+            }
             Self::List(f) => {
                 DataType::List(Arc::new(f.field_with_name(Field::LIST_FIELD_DEFAULT_NAME)))
             }
@@ -441,7 +447,6 @@ fn make_data_type<'a>(
                         })
                     })
                     .collect::<Result<_, ArrowError>>()?;
-
                 let field = AvroDataType {
                     nullability: None,
                     codec: Codec::Struct(fields),
@@ -463,17 +468,47 @@ fn make_data_type<'a>(
                 let size = f.size.try_into().map_err(|e| {
                     ArrowError::ParseError(format!("Overflow converting size to i32: {e}"))
                 })?;
-                let field = AvroDataType {
-                    nullability: None,
-                    metadata: f.attributes.field_metadata(),
-                    codec: Codec::Fixed(size),
+                let md = f.attributes.field_metadata();
+                let field = match f.attributes.logical_type {
+                    Some("decimal") => {
+                        let (precision, scale, _) =
+                            parse_decimal_attributes(&f.attributes, Some(size as usize), true)?;
+                        AvroDataType {
+                            nullability: None,
+                            metadata: md,
+                            codec: Codec::Decimal(precision, Some(scale), Some(size as usize)),
+                        }
+                    }
+                    _ => AvroDataType {
+                        nullability: None,
+                        metadata: md,
+                        codec: Codec::Fixed(size),
+                    },
                 };
                 resolver.register(f.name, namespace, field.clone());
                 Ok(field)
             }
-            ComplexType::Enum(e) => Err(ArrowError::NotYetImplemented(format!(
-                "Enum of {e:?} not currently supported"
-            ))),
+            ComplexType::Enum(e) => {
+                let namespace = e.namespace.or(namespace);
+                let symbols = e
+                    .symbols
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Arc<[String]>>();
+
+                let mut metadata = e.attributes.field_metadata();
+                let symbols_json = serde_json::to_string(&e.symbols).map_err(|e| {
+                    ArrowError::ParseError(format!("Failed to serialize enum symbols: {e}"))
+                })?;
+                metadata.insert("avro.enum.symbols".to_string(), symbols_json);
+                let field = AvroDataType {
+                    nullability: None,
+                    metadata,
+                    codec: Codec::Enum(symbols),
+                };
+                resolver.register(e.name, namespace, field.clone());
+                Ok(field)
+            }
             ComplexType::Map(m) => {
                 let val = make_data_type(&m.values, namespace, resolver, use_utf8view)?;
                 Ok(AvroDataType {
@@ -493,27 +528,10 @@ fn make_data_type<'a>(
 
             // https://avro.apache.org/docs/1.11.1/specification/#logical-types
             match (t.attributes.logical_type, &mut field.codec) {
-                (Some("decimal"), c) => match *c {
-                    Codec::Fixed(sz_val) => {
-                        let (prec, sc, size_opt) =
-                            parse_decimal_attributes(&t.attributes, Some(sz_val as usize), true)?;
-                        let final_sz = if let Some(sz_actual) = size_opt {
-                            sz_actual
-                        } else {
-                            sz_val as usize
-                        };
-                        *c = Codec::Decimal(prec, Some(sc), Some(final_sz));
-                    }
-                    Codec::Binary => {
-                        let (prec, sc, _) = parse_decimal_attributes(&t.attributes, None, false)?;
-                        *c = Codec::Decimal(prec, Some(sc), None);
-                    }
-                    _ => {
-                        return Err(ArrowError::SchemaError(format!(
-                            "Decimal logical type can only be backed by Fixed or Bytes, found {c:?}"
-                        )))
-                    }
-                },
+                (Some("decimal"), c @ Codec::Binary) => {
+                    let (prec, sc, _) = parse_decimal_attributes(&t.attributes, None, false)?;
+                    *c = Codec::Decimal(prec, Some(sc), None);
+                }
                 (Some("date"), c @ Codec::Int32) => *c = Codec::Date32,
                 (Some("time-millis"), c @ Codec::Int32) => *c = Codec::TimeMillis,
                 (Some("time-micros"), c @ Codec::Int64) => *c = Codec::TimeMicros,

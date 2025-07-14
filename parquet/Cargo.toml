@@ -51,7 +51,8 @@ bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
+# To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
+flate2 = { version = "1.1", default-features = false, optional = true }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
@@ -86,13 +87,13 @@ arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "jso
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { version = "0.12.0", default-features = false, features = ["azure", "fs"] }
-sysinfo = { version = "0.35.0", default-features = false, features = ["system"] }
+sysinfo = { version = "0.36.0", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "simdutf8"]
+default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
@@ -119,6 +120,9 @@ crc = ["dep:crc32fast"]
 simdutf8 = ["dep:simdutf8"]
 # Enable Parquet modular encryption support
 encryption = ["dep:ring"]
+# Explicitely enabling rust_backend and zlib-rs features for flate2
+flate2-rust_backened = ["flate2/rust_backend"]
+flate2-zlib-rs = ["flate2/zlib-rs"]
 
 
 [[example]]
