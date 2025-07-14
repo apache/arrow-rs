@@ -15,22 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Arrow selection kernels
+mod from_json;
+mod to_json;
+mod variant_array;
+mod variant_array_builder;
 
-#![doc(
-    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
-    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
-)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![warn(missing_docs)]
+pub use variant_array::VariantArray;
+pub use variant_array_builder::VariantArrayBuilder;
 
-pub mod coalesce;
-pub mod concat;
-pub mod dictionary;
-pub mod filter;
-pub mod interleave;
-pub mod nullif;
-pub mod take;
-pub mod union_extract;
-pub mod window;
-pub mod zip;
+pub use from_json::batch_json_string_to_variant;
+pub use to_json::batch_variant_to_json_string;

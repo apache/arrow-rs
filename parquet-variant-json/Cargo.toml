@@ -28,8 +28,7 @@ authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
 readme = "README.md"
 edition = { workspace = true }
-# needs a newer version than workspace due to
-# rror: `Option::<T>::unwrap` is not yet stable as a const fn
+# parquet-variant needs newer version than workspace
 rust-version = "1.83"
 
 
@@ -46,4 +45,3 @@ name = "parquet_variant_json"
 bench = false
 
 [dev-dependencies]
-

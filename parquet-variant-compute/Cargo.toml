@@ -16,46 +16,29 @@
 # under the License.
 
 [package]
-name = "parquet-variant"
+name = "parquet-variant-compute"
 # This package is still in development and thus the version does
 # not follow the versions of the rest of the crates in this repo.
 version = "0.1.0"
 license = { workspace = true }
-description = "Apache Parquet Variant implementation in Rust"
+description = "Apache Parquet Variant Batch Processing"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
-readme = "README.md"
 edition = { workspace = true }
-# needs a newer version than workspace due to
-# Error: `Option::<T>::unwrap` is not yet stable as a const fn
+# parquet-variant needs newer version than workspace
 rust-version = "1.83"
 
-[dependencies]
-arrow-schema = { workspace = true }
-chrono = { workspace = true }
-indexmap = "2.10.0"
 
+[dependencies]
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+parquet-variant = { workspace = true }
+parquet-variant-json = { workspace = true }
 
 [lib]
-name = "parquet_variant"
+name = "parquet_variant_compute"
 bench = false
 
 [dev-dependencies]
-paste = { version = "1.0" }
-criterion = { version = "0.6", default-features = false }
-rand = { version = "0.9", default-features = false, features = [
-    "std",
-    "std_rng",
-    "thread_rng",
-] }
-
-
-[[bench]]
-name = "variant_builder"
-harness = false
-
-[[bench]]
-name = "variant_validation"
-harness = false
