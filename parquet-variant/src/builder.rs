@@ -740,10 +740,10 @@ impl VariantBuilder {
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
-    /// Append a non-nested value to the builder. Use [`try_append_value`] for a falliable operation.
+    /// Append a value to the builder. Use [`VariantBuilder::try_append_value`] for a falliable operation.
     ///
     /// # Panics
-    /// Will panic you append a variant object and that object contains duplicate field names.
+    /// Will panic if you append a variant object and that object contains duplicate field names.
     ///
     /// # Example
     /// ```
