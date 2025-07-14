@@ -218,6 +218,14 @@ impl ValueBuffer {
         variant: Variant<'m, 'd>,
         metadata_builder: &mut MetadataBuilder,
     ) {
+        self.try_append_variant(variant, metadata_builder).unwrap();
+    }
+
+    fn try_append_variant<'m, 'd>(
+        &mut self,
+        variant: Variant<'m, 'd>,
+        metadata_builder: &mut MetadataBuilder,
+    ) -> Result<(), ArrowError> {
         match variant {
             Variant::Null => self.append_null(),
             Variant::BooleanTrue => self.append_bool(true),
@@ -242,18 +250,18 @@ impl ValueBuffer {
                 for (field_name, value) in obj.iter() {
                     object_builder.insert(field_name, value);
                 }
-                // TODO propagate error
-                object_builder.finish().unwrap();
+                object_builder.finish()?;
             }
             Variant::List(list) => {
                 let mut list_builder = self.new_list(metadata_builder);
                 for value in list.iter() {
                     list_builder.append_value(value);
                 }
-                // TOOD propagate error
                 list_builder.finish();
             }
         }
+
+        Ok(())
     }
 
     /// Writes out the header byte for a variant object or list
@@ -732,7 +740,10 @@ impl VariantBuilder {
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
-    /// Append a non-nested value to the builder.
+    /// Append a non-nested value to the builder. Use [`try_append_value`] for a falliable operation.
+    ///
+    /// # Panics
+    /// Will panic you append a variant object and that object contains duplicate field names.
     ///
     /// # Example
     /// ```
@@ -745,6 +756,18 @@ impl VariantBuilder {
         let variant = value.into();
         self.buffer
             .append_variant(variant, &mut self.metadata_builder);
+    }
+
+    /// Append a non-nested value to the builder.
+    pub fn try_append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(
+        &mut self,
+        value: T,
+    ) -> Result<(), ArrowError> {
+        let variant = value.into();
+        self.buffer
+            .try_append_variant(variant, &mut self.metadata_builder)?;
+
+        Ok(())
     }
 
     /// Finish the builder and return the metadata and value buffers.
@@ -2216,6 +2239,7 @@ mod tests {
 
         let mut builder = VariantBuilder::new();
         builder.append_value(variant.clone());
+
         let (metadata, value) = builder.finish();
         assert_eq!(variant, Variant::new(&metadata, &value));
     }
