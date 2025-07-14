@@ -44,7 +44,8 @@ pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBa
     let mut batches = vec![];
     let dictionaries_by_id = HashMap::new();
     for datum in flight_data[1..].iter() {
-        let batch = flight_data_to_arrow_batch(datum, schema.clone(), &dictionaries_by_id)?;
+        let batch =
+            flight_data_to_arrow_batch(datum, ipc_schema, schema.clone(), &dictionaries_by_id)?;
         batches.push(batch);
     }
     Ok(batches)
@@ -53,6 +54,7 @@ pub fn flight_data_to_batches(flight_data: &[FlightData]) -> Result<Vec<RecordBa
 /// Convert `FlightData` (with supplied schema and dictionaries) to an arrow `RecordBatch`.
 pub fn flight_data_to_arrow_batch(
     data: &FlightData,
+    ipc_schema: arrow_ipc::Schema,
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
 ) -> Result<RecordBatch, ArrowError> {
@@ -71,6 +73,7 @@ pub fn flight_data_to_arrow_batch(
             reader::read_record_batch(
                 &Buffer::from(data.data_body.as_ref()),
                 batch,
+                ipc_schema,
                 schema,
                 dictionaries_by_id,
                 None,
@@ -90,9 +93,7 @@ pub fn batches_to_flight_data(
     let mut flight_data = vec![];
 
     let data_gen = writer::IpcDataGenerator::default();
-    #[allow(deprecated)]
-    let mut dictionary_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+    let mut dictionary_tracker = writer::DictionaryTracker::new(false);
 
     for batch in batches.iter() {
         let (encoded_dictionaries, encoded_batch) =
