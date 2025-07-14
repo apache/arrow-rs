@@ -16,8 +16,7 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{
-    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantList,
-    VariantObject,
+    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
 use arrow_schema::ArrowError;
 use indexmap::{IndexMap, IndexSet};
@@ -195,7 +194,28 @@ impl ValueBuffer {
         self.0.len()
     }
 
-    fn append_variant<'m, 'd>(&mut self, variant: Variant<'m, 'd>) {
+    fn new_object<'a>(&'a mut self, metadata_builder: &'a mut MetadataBuilder) -> ObjectBuilder<'a> {
+        let parent_state = ParentState::Variant {
+            buffer: self,
+            metadata_builder,
+        };
+        let validate_unique_fields = false;
+        ObjectBuilder::new(parent_state, validate_unique_fields)
+    }
+
+    fn new_list<'a>(
+        &'a mut self,
+        metadata_builder: &'a mut MetadataBuilder,
+    ) -> ListBuilder<'a> {
+        let parent_state = ParentState::Variant {
+            buffer: self,
+            metadata_builder,
+        };
+        let validate_unique_fields = false;
+        ListBuilder::new(parent_state, validate_unique_fields)
+    }
+
+    fn append_variant<'m, 'd>(&mut self, variant: Variant<'m, 'd>, metadata_builder: &mut MetadataBuilder) {
         match variant {
             Variant::Null => self.append_null(),
             Variant::BooleanTrue => self.append_bool(true),
@@ -215,12 +235,21 @@ impl ValueBuffer {
             Variant::Binary(v) => self.append_binary(v),
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
-            _ => unreachable!("Objects and lists must be appended using VariantBuilder::append_object and VariantBuilder::append_list"),
+            Variant::Object(obj) => {
+                let mut object_builder = self.new_object(metadata_builder);
+                for (field_name, value) in obj.iter() {
+                    object_builder.insert(field_name, value);
+                }
+                object_builder.finish().unwrap();
+            }
+            Variant::List(list) => {
+                let mut list_builder = self.new_list(metadata_builder);
+                for value in list.iter() {
+                    list_builder.append_value(value);
+                }
+                list_builder.finish();
+            }
         }
-    }
-
-    fn append_non_nested_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        self.append_variant(value.into());
     }
 
     /// Writes out the header byte for a variant object or list
@@ -699,79 +728,6 @@ impl VariantBuilder {
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
-    /// Appends a [`VariantObject`] to the builder.
-    ///
-    /// # Panics
-    /// Will panic if the appended object has duplicate field names or any nested validation fails.
-    /// Use `try_append_object` if you need full validation for untrusted data.
-    pub fn append_object<'m, 'v>(&mut self, object: VariantObject<'m, 'v>) {
-        let (parent_state, validate_unique_fields) = self.parent_state();
-
-        let mut obj_builder = ObjectBuilder::new(parent_state, validate_unique_fields);
-
-        for (field_name, variant) in object.iter() {
-            obj_builder.insert(field_name, variant);
-        }
-
-        obj_builder.finish().unwrap();
-    }
-
-    /// Appends a [`VariantObject`] to the builder with full validation during iteration.
-    ///
-    /// Recursively validates all nested variants in the object during iteration.
-    pub fn try_append_object<'m, 'v>(
-        &mut self,
-        object: VariantObject<'m, 'v>,
-    ) -> Result<(), ArrowError> {
-        let (parent_state, validate_unique_fields) = self.parent_state();
-
-        let mut obj_builder = ObjectBuilder::new(parent_state, validate_unique_fields);
-
-        for res in object.iter_try() {
-            let (field_name, variant) = res?;
-
-            obj_builder.insert(field_name, variant);
-        }
-
-        obj_builder.finish()?;
-
-        Ok(())
-    }
-
-    /// Appends a [`VariantList`] to the builder.
-    ///
-    /// # Panics
-    /// Will panic if any nested validation fails during list iteration.
-    /// Use `try_append_list` if you need full validation for untrusted data.
-    pub fn append_list<'m, 'v>(&mut self, list: VariantList<'m, 'v>) {
-        let (parent_state, validate_unique_fields) = self.parent_state();
-
-        let mut list_builder = ListBuilder::new(parent_state, validate_unique_fields);
-
-        for variant in list.iter() {
-            list_builder.append_value(variant);
-        }
-
-        list_builder.finish();
-    }
-
-    /// Appends a [`VariantList`] to the builder with full validation during iteration.
-    ///
-    /// Recursively validates all nested variants in the list during iteration.
-    pub fn try_append_list<'m, 'v>(&mut self, list: VariantList<'m, 'v>) -> Result<(), ArrowError> {
-        let (parent_state, validate_unique_fields) = self.parent_state();
-
-        let mut list_builder = ListBuilder::new(parent_state, validate_unique_fields);
-
-        for variant in list.iter_try() {
-            list_builder.append_value(variant?);
-        }
-
-        list_builder.finish();
-
-        Ok(())
-    }
-
     /// Append a non-nested value to the builder.
     ///
     /// # Example
@@ -783,12 +739,7 @@ impl VariantBuilder {
     /// ```
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         let variant = value.into();
-
-        match variant {
-            Variant::Object(obj) => self.append_object(obj),
-            Variant::List(list) => self.append_list(list),
-            primitive => self.buffer.append_variant(primitive),
-        }
+        self.buffer.append_variant(variant, &mut self.metadata_builder);
     }
 
     /// Finish the builder and return the metadata and value buffers.
@@ -855,7 +806,7 @@ impl<'a> ListBuilder<'a> {
     /// Appends a new primitive value to this list
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         self.offsets.push(self.buffer.offset());
-        self.buffer.append_non_nested_value(value);
+        self.buffer.append_variant(value.into(), self.parent_state.metadata_builder())
     }
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
@@ -927,7 +878,7 @@ impl<'a> ObjectBuilder<'a> {
             self.duplicate_fields.insert(field_id);
         }
 
-        self.buffer.append_non_nested_value(value);
+        self.buffer.append_variant(value.into(), metadata_builder)
     }
 
     /// Enables validation for unique field keys when inserting into this object.
