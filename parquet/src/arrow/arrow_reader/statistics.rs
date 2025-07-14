@@ -1498,7 +1498,7 @@ impl<'a> StatisticsConverter<'a> {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = metadatas.into_iter().count();
             return Ok(BooleanArray::from_iter(
-                std::iter::repeat(None).take(num_row_groups),
+                std::iter::repeat_n(None, num_row_groups),
             ));
         };
 
@@ -1519,7 +1519,7 @@ impl<'a> StatisticsConverter<'a> {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = metadatas.into_iter().count();
             return Ok(BooleanArray::from_iter(
-                std::iter::repeat(None).take(num_row_groups),
+                std::iter::repeat_n(None, num_row_groups),
             ));
         };
 
@@ -1540,7 +1540,7 @@ impl<'a> StatisticsConverter<'a> {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = metadatas.into_iter().count();
             return Ok(UInt64Array::from_iter(
-                std::iter::repeat(None).take(num_row_groups),
+                std::iter::repeat_n(None, num_row_groups),
             ));
         };
 
@@ -1684,7 +1684,7 @@ impl<'a> StatisticsConverter<'a> {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = row_group_indices.into_iter().count();
             return Ok(UInt64Array::from_iter(
-                std::iter::repeat(None).take(num_row_groups),
+                std::iter::repeat_n(None, num_row_groups),
             ));
         };
 

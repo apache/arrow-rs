@@ -997,13 +997,13 @@ mod tests {
     #[should_panic(expected = "capacity overflow")]
     fn test_from_iter_overflow() {
         let iter_len = usize::MAX / std::mem::size_of::<u64>() + 1;
-        let _ = Buffer::from_iter(std::iter::repeat(0_u64).take(iter_len));
+        let _ = Buffer::from_iter(std::iter::repeat_n(0_u64, iter_len));
     }
 
     #[test]
     fn bit_slice_length_preserved() {
         // Create a boring buffer
-        let buf = Buffer::from_iter(std::iter::repeat(true).take(64));
+        let buf = Buffer::from_iter(std::iter::repeat_n(true, 64));
 
         let assert_preserved = |offset: usize, len: usize| {
             let new_buf = buf.bit_slice(offset, len);
@@ -1035,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_strong_count() {
-        let buffer = Buffer::from_iter(std::iter::repeat(0_u8).take(100));
+        let buffer = Buffer::from_iter(std::iter::repeat_n(0_u8, 100));
         assert_eq!(buffer.strong_count(), 1);
 
         let buffer2 = buffer.clone();

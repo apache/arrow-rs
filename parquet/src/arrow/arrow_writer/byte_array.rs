@@ -548,11 +548,11 @@ where
 {
     if encoder.statistics_enabled != EnabledStatistics::None {
         if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
-            if encoder.min_value.as_ref().map_or(true, |m| m > &min) {
+            if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
                 encoder.min_value = Some(min);
             }
 
-            if encoder.max_value.as_ref().map_or(true, |m| m < &max) {
+            if encoder.max_value.as_ref().is_none_or(|m| m < &max) {
                 encoder.max_value = Some(max);
             }
         }

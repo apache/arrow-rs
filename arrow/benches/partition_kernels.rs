@@ -45,11 +45,10 @@ fn bench_partition(sorted_columns: &[ArrayRef]) {
 
 fn create_sorted_low_cardinality_data(length: usize) -> Vec<ArrayRef> {
     let arr = Int64Array::from_iter_values(
-        iter::repeat(1)
-            .take(length / 4)
-            .chain(iter::repeat(2).take(length / 4))
-            .chain(iter::repeat(3).take(length / 4))
-            .chain(iter::repeat(4).take(length / 4)),
+        std::iter::repeat_n(1, length / 4)
+            .chain(std::iter::repeat_n(2, length / 4))
+            .chain(std::iter::repeat_n(3, length / 4))
+            .chain(std::iter::repeat_n(4, length / 4)),
     );
     lexsort(
         &[SortColumn {

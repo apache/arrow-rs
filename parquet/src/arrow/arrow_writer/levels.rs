@@ -353,10 +353,10 @@ impl LevelInfoBuilder {
                     let len = range.end - range.start;
 
                     let def_levels = info.def_levels.as_mut().unwrap();
-                    def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+                    def_levels.extend(std::iter::repeat_n(ctx.def_level - 1, len));
 
                     if let Some(rep_levels) = info.rep_levels.as_mut() {
-                        rep_levels.extend(std::iter::repeat(ctx.rep_level).take(len));
+                        rep_levels.extend(std::iter::repeat_n(ctx.rep_level, len));
                     }
                 })
             }
@@ -444,9 +444,9 @@ impl LevelInfoBuilder {
             let len = end_idx - start_idx;
             child.visit_leaves(|leaf| {
                 let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                rep_levels.extend(std::iter::repeat(ctx.rep_level - 1).take(len));
+                rep_levels.extend(std::iter::repeat_n(ctx.rep_level - 1, len));
                 let def_levels = leaf.def_levels.as_mut().unwrap();
-                def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+                def_levels.extend(std::iter::repeat_n(ctx.def_level - 1, len));
             })
         };
 
@@ -513,7 +513,7 @@ impl LevelInfoBuilder {
                         );
                     }
                     None => {
-                        let iter = std::iter::repeat(info.max_def_level).take(len);
+                        let iter = std::iter::repeat_n(info.max_def_level, len);
                         def_levels.extend(iter);
                         info.non_null_indices.extend(range);
                     }
@@ -523,7 +523,7 @@ impl LevelInfoBuilder {
         }
 
         if let Some(rep_levels) = &mut info.rep_levels {
-            rep_levels.extend(std::iter::repeat(info.max_rep_level).take(len))
+            rep_levels.extend(std::iter::repeat_n(info.max_rep_level, len))
         }
     }
 
