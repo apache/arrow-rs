@@ -28,7 +28,7 @@ use arrow::{
 };
 use arrow_ord::partition::partition;
 use rand::distr::{Distribution, StandardUniform};
-use std::{hint, iter};
+use std::hint;
 
 fn create_array<T: ArrowPrimitiveType>(size: usize, with_nulls: bool) -> ArrayRef
 where

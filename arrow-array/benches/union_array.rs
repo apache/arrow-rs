@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    hint,
-    iter::{repeat, repeat_with},
-    sync::Arc,
-};
+use std::{hint, iter::repeat_with, sync::Arc};
 
 use arrow_array::{Array, ArrayRef, Int32Array, UnionArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer};
