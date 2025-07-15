@@ -5075,10 +5075,11 @@ impl Default for ColumnOrder {
 
 impl crate::thrift::TSerializable for ColumnOrder {
   fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ColumnOrder> {
-    i_prot.read_struct_begin()?;
+    let mut received_field_count = 0;
     let mut disc : ColumnOrderDisc = ColumnOrderDisc(0);
     let mut f_1: Option<TypeDefinedOrder> = None;
     let mut f_2: Option<TypeDefinedOrder> = None;
+    i_prot.read_struct_begin()?;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -5090,29 +5091,48 @@ impl crate::thrift::TSerializable for ColumnOrder {
           let val = TypeDefinedOrder::read_from_in_protocol(i_prot)?;
           f_1 = Some(val);
           disc = ColumnOrderDisc::TYPE_ORDER;
-        }
+          received_field_count += 1;
+        },
         2 => {
           let val = TypeDefinedOrder::read_from_in_protocol(i_prot)?;
           f_2 = Some(val);
           disc = ColumnOrderDisc::NO_SUCH_ORDER;
-        }
+          received_field_count += 1;
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
-        }
-      }
+          received_field_count += 1;
+        },
+      };
       i_prot.read_field_end()?;
     }
     i_prot.read_struct_end()?;
-    /* original error returned for undefined type order
-    if disc != ColumnOrderDisc::TYPE_ORDER {
-      return Err(thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")));
-    }*/
-    let ret = ColumnOrder {
-      disc: disc,
-      TYPE_ORDER: f_1,
-      NO_SUCH_ORDER: f_2,
-    };
-    Ok(ret)
+    if received_field_count == 0 {
+      Err(
+        thrift::Error::Protocol(
+          ProtocolError::new(
+            ProtocolErrorKind::InvalidData,
+            "received empty union from remote ColumnOrder"
+          )
+        )
+      )
+    } else if received_field_count > 1 {
+      Err(
+        thrift::Error::Protocol(
+          ProtocolError::new(
+            ProtocolErrorKind::InvalidData,
+            "received multiple fields for union from remote ColumnOrder"
+          )
+        )
+      )
+    } else {
+      let ret = ColumnOrder {
+        disc: disc,
+        TYPE_ORDER: f_1,
+        NO_SUCH_ORDER: f_2,
+      };
+      Ok(ret)
+    }
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("ColumnOrder");
@@ -5125,6 +5145,13 @@ impl crate::thrift::TSerializable for ColumnOrder {
           o_prot.write_field_end()?
         }
       },
+      ColumnOrderDisc::NO_SUCH_ORDER => {
+        if let Some(ref fld_var) = self.NO_SUCH_ORDER {
+          o_prot.write_field_begin(&TFieldIdentifier::new("NO_SUCH_ORDER", TType::Struct, 2))?;
+          fld_var.write_to_out_protocol(o_prot)?;
+          o_prot.write_field_end()?
+        }
+      }
       _ => {}
     }
     o_prot.write_field_stop()?;
