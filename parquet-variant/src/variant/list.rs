@@ -218,37 +218,17 @@ impl<'m, 'v> VariantList<'m, 'v> {
 
             let value_buffer = slice_from_slice(self.value, self.first_value_byte as _..)?;
 
-            let mut offsets_iter = map_bytes_to_offsets(offset_buffer, self.header.offset_size);
-            
-            // Get first offset and validate it's zero
-            let mut prev_offset = match offsets_iter.next() {
-                Some(0) => 0,
-                Some(offset) => {
-                    return Err(ArrowError::InvalidArgumentError(
-                        format!("First offset is not zero: {offset}"),
-                    ));
-                }
-                None => {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Empty offset array".to_string(),
-                    ));
-                }
-            };
+            // Validate whether values are valid variant objects
+            //
+            // Since we use offsets to slice into the value buffer, this also verifies all offsets are in-bounds
+            // and monotonically increasing
+            let mut offset_iter = map_bytes_to_offsets(offset_buffer, self.header.offset_size);
+            let mut current_offset = offset_iter.next().unwrap_or(0);
 
-            // Validate offsets and values in a single pass
-            for (i, curr_offset) in offsets_iter.enumerate() {
-                // Check offsets are monotonically increasing
-                if curr_offset < prev_offset {
-                    return Err(ArrowError::InvalidArgumentError(
-                        format!("Offsets are not monotonically increasing at index {i}: {prev_offset} > {curr_offset}"),
-                    ));
-                }
-
-                // Validate the value between offsets
-                let value_bytes = slice_from_slice(value_buffer, prev_offset..curr_offset)?;
+            for next_offset in offset_iter {
+                let value_bytes = slice_from_slice(value_buffer, current_offset..next_offset)?;
                 Variant::try_new_with_metadata(self.metadata.clone(), value_bytes)?;
-                
-                prev_offset = curr_offset;
+                current_offset = next_offset;
             }
 
             self.validated = true;

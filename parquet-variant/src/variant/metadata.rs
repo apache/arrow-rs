@@ -234,18 +234,8 @@ impl<'m> VariantMetadata<'m> {
                 self.header.first_offset_byte() as _..self.first_value_byte as _,
             )?;
 
-            // Validate offsets are in-bounds and monotonically increasing by iterating directly
-            let mut prev_offset = None;
-            for offset in map_bytes_to_offsets(offset_bytes, self.header.offset_size) {
-                if let Some(prev) = prev_offset {
-                    if offset <= prev {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "offsets not monotonically increasing".to_string(),
-                        ));
-                    }
-                }
-                prev_offset = Some(offset);
-            }
+            let offsets =
+                map_bytes_to_offsets(offset_bytes, self.header.offset_size).collect::<Vec<_>>();
 
             // Verify the string values in the dictionary are UTF-8 encoded strings.
             let value_buffer =
@@ -253,24 +243,35 @@ impl<'m> VariantMetadata<'m> {
 
             if self.header.is_sorted {
                 // Validate the dictionary values are unique and lexicographically sorted
-                let mut prev_value: Option<&str> = None;
-                for i in 0..self.dictionary_size as usize {
-                    let start = self.get_offset(i)? as usize;
-                    let end = self.get_offset(i + 1)? as usize;
-                    let current = value_buffer.get(start..end).ok_or_else(|| {
-                        ArrowError::InvalidArgumentError(
-                            "dictionary value out of bounds".to_string(),
-                        )
-                    })?;
-                    
-                    if let Some(prev) = prev_value {
-                        if current <= prev {
-                            return Err(ArrowError::InvalidArgumentError(
-                                "dictionary values are not unique and ordered".to_string(),
-                            ));
-                        }
-                    }
-                    prev_value = Some(current);
+                //
+                // Since we use the offsets to access dictionary values, this also validates
+                // offsets are in-bounds and monotonically increasing
+                let are_dictionary_values_unique_and_sorted = (1..offsets.len())
+                    .map(|i| {
+                        let field_range = offsets[i - 1]..offsets[i];
+                        value_buffer.get(field_range)
+                    })
+                    .is_sorted_by(|a, b| match (a, b) {
+                        (Some(a), Some(b)) => a < b,
+                        _ => false,
+                    });
+
+                if !are_dictionary_values_unique_and_sorted {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "dictionary values are not unique and ordered".to_string(),
+                    ));
+                }
+            } else {
+                // Validate offsets are in-bounds and monotonically increasing
+                //
+                // Since shallow validation ensures the first and last offsets are in bounds,
+                // we can also verify all offsets are in-bounds by checking if
+                // offsets are monotonically increasing
+                let are_offsets_monotonic = offsets.is_sorted_by(|a, b| a < b);
+                if !are_offsets_monotonic {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "offsets not monotonically increasing".to_string(),
+                    ));
                 }
             }
 
