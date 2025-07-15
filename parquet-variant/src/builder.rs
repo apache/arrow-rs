@@ -2287,6 +2287,10 @@ mod tests {
     #[test]
     fn test_append_nested_object() {
         let (m1, v1) = make_nested_object();
+
+        let metadata = VariantMetadata::new(&m1);
+        assert!(metadata.is_sorted());
+
         let variant = Variant::new(&m1, &v1);
 
         let mut builder = VariantBuilder::new();
@@ -2294,6 +2298,8 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let result_variant = Variant::new(&metadata, &value);
+
+        let metadata = VariantMetadata::new(&metadata);
 
         {
             assert_eq!(variant.metadata(), result_variant.metadata());
@@ -2307,6 +2313,8 @@ mod tests {
         let mut builder = VariantBuilder::new();
 
         let mut obj = builder.new_object();
+
+        obj.insert("b", true);
         obj.insert("a", true);
         obj.finish().unwrap();
         builder.finish()
@@ -2320,8 +2328,8 @@ mod tests {
             let mut outer_obj = builder.new_object();
 
             {
-                let mut inner_obj = outer_obj.new_object("nested");
-                inner_obj.insert("y", "inner_value");
+                let mut inner_obj = outer_obj.new_object("b");
+                inner_obj.insert("a", "inner_value");
                 inner_obj.finish().unwrap();
             }
 
