@@ -1335,7 +1335,7 @@ mod tests {
         assert_eq!(data.buffers()[0].len(), 120);
         assert_eq!(data.buffers()[0].capacity(), 128); // Nearest multiple of 64
 
-        let a = StringArray::from_iter_values(std::iter::repeat("foo").take(100));
+        let a = StringArray::from_iter_values(std::iter::repeat_n("foo", 100));
         let b = StringArray::from(vec!["bingo", "bongo", "lorem", ""]);
 
         let a = concat(&[&a, &b]).unwrap();
@@ -1358,8 +1358,8 @@ mod tests {
         assert_eq!(data.buffers()[1].len(), 135);
         assert_eq!(data.buffers()[1].capacity(), 192); // Nearest multiple of 64
 
-        let a = LargeBinaryArray::from_iter_values(std::iter::repeat(b"foo").take(100));
-        let b = LargeBinaryArray::from_iter_values(std::iter::repeat(b"cupcakes").take(10));
+        let a = LargeBinaryArray::from_iter_values(std::iter::repeat_n(b"foo", 100));
+        let b = LargeBinaryArray::from_iter_values(std::iter::repeat_n(b"cupcakes", 10));
 
         let a = concat(&[&a, &b]).unwrap();
         let data = a.to_data();

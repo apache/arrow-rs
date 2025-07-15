@@ -338,7 +338,7 @@ impl Decoder {
                 moff.push_length(0);
             }
             Self::Fixed(sz, accum) => {
-                accum.extend(std::iter::repeat(0u8).take(*sz as usize));
+                accum.extend(std::iter::repeat_n(0u8, *sz as usize));
             }
             Self::Decimal128(_, _, _, builder) => builder.append_value(0),
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),

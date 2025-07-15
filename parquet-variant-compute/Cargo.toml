@@ -27,8 +27,7 @@ repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
 edition = { workspace = true }
-# parquet-variant needs newer version than workspace
-rust-version = "1.83"
+rust-version = { workspace = true }
 
 
 [dependencies]

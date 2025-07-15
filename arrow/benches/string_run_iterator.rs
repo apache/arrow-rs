@@ -29,7 +29,7 @@ fn build_strings_runs(
     let run_len = logical_array_len / physical_array_len;
     let mut values: Vec<String> = (0..physical_array_len)
         .map(|_| (0..string_len).map(|_| rng.random::<char>()).collect())
-        .flat_map(|s| std::iter::repeat(s).take(run_len))
+        .flat_map(|s| std::iter::repeat_n(s, run_len))
         .collect();
     while values.len() < logical_array_len {
         let last_val = values[values.len() - 1].clone();

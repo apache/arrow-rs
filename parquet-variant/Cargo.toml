@@ -28,9 +28,7 @@ authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
 readme = "README.md"
 edition = { workspace = true }
-# needs a newer version than workspace due to
-# Error: `Option::<T>::unwrap` is not yet stable as a const fn
-rust-version = "1.83"
+rust-version = { workspace = true }
 
 [dependencies]
 arrow-schema = { workspace = true }

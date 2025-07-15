@@ -396,7 +396,7 @@ pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
                 take_len += 1;
                 run_len_extra -= 1;
             }
-            std::iter::repeat(V::Native::from_usize(s).unwrap()).take(take_len)
+            std::iter::repeat_n(V::Native::from_usize(s).unwrap(), take_len)
         })
         .collect();
     while values.len() < logical_array_len {
@@ -434,7 +434,7 @@ pub fn create_string_array_for_runs(
                 take_len += 1;
                 run_len_extra -= 1;
             }
-            std::iter::repeat(s).take(take_len)
+            std::iter::repeat_n(s, take_len)
         })
         .collect();
     while values.len() < logical_array_len {
