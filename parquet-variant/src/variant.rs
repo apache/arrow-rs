@@ -1069,14 +1069,11 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// If the path is not found, `None` is returned.
     pub fn get_path(&self, path: &VariantPath) -> Option<Variant> {
-        let mut output = self.clone();
-        for element in path.iter() {
-            output = match element {
-                VariantPathElement::Field { name } => output.get_object_field(name)?,
-                VariantPathElement::Index { index } => output.get_list_element(*index)?,
-            };
-        }
-        Some(output)
+        path.iter()
+            .try_fold(self.clone(), |output, element| match element {
+                VariantPathElement::Field { name } => output.get_object_field(name),
+                VariantPathElement::Index { index } => output.get_list_element(*index),
+            })
     }
 }
 

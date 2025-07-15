@@ -51,12 +51,11 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
         let new_variant = variant_array.value(i);
         // TODO: perf?
         let new_variant = new_variant.get_path(&options.path);
-        if let Some(new_variant) = new_variant {
+        match new_variant {
             // TODO: we're decoding the value and doing a copy into a variant value again. This
             // copy can be much smarter.
-            builder.append_variant(new_variant);
-        } else {
-            builder.append_null();
+            Some(new_variant) => builder.append_variant(new_variant),
+            None => builder.append_null(),
         }
     }
 
@@ -70,8 +69,7 @@ pub struct GetOptions<'a> {
     pub path: VariantPath<'a>,
     /// if `as_type` is None, the returned array will itself be a VariantArray.
     ///
-    /// if `as_type` is `Some(type)` the field is returned as the specified type if possible. To specify returning
-    /// a Variant, pass a Field with variant type in the metadata.
+    /// if `as_type` is `Some(type)` the field is returned as the specified type.
     pub as_type: Option<Field>,
     /// Controls the casting behavior (e.g. error vs substituting null on cast error).
     pub cast_options: CastOptions<'a>,
