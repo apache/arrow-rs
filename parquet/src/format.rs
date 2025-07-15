@@ -4984,16 +4984,84 @@ impl crate::thrift::TSerializable for TypeDefinedOrder {
 // ColumnOrder
 //
 
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ColumnOrderDisc(i32);
+
+impl ColumnOrderDisc {
+  pub const TYPE_ORDER : Self = Self(1);
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::TYPE_ORDER,
+  ];
+}
+
+impl crate::thrift::TSerializable for ColumnOrderDisc {
+  #[allow(clippy::trivially_copy_pass_by_ref)]
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
+    o_prot.write_i32(self.0)
+  }
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<
+ColumnOrderDisc> {
+    let enum_value = i_prot.read_i32()?;
+    Ok(ColumnOrderDisc::from(enum_value))
+  }
+}
+
+impl From<i32> for ColumnOrderDisc {
+  fn from(i: i32) -> Self {
+    match i {
+      1 => ColumnOrderDisc::TYPE_ORDER,
+      _ => ColumnOrderDisc(i)
+    }
+  }
+}
+
+impl From<&i32> for ColumnOrderDisc {
+  fn from(i: &i32) -> Self {
+    ColumnOrderDisc::from(*i)
+  }
+}
+
+impl From<ColumnOrderDisc> for i32 {
+  fn from(e: ColumnOrderDisc) -> i32 {
+    e.0
+  }
+}
+
+impl From<&ColumnOrderDisc> for i32 {
+  fn from(e: &ColumnOrderDisc) -> i32 {
+    e.0
+  }
+}
+
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ColumnOrder {
-  TYPEORDER(TypeDefinedOrder),
+#[allow(non_snake_case)]
+pub struct ColumnOrder {
+  pub disc: ColumnOrderDisc,
+  pub TYPE_ORDER: Option<TypeDefinedOrder>,
+}
+
+#[allow(non_snake_case)]
+impl ColumnOrder {
+  pub fn new<F1, F2>(disc: F1, TYPE_ORDER: F2) -> Self where F1: Into<ColumnOrderDisc>, F2: Into<Option<TypeDefinedOrder>> {
+    Self {
+      disc: disc.into(),
+      TYPE_ORDER: TYPE_ORDER.into(),
+    }
+  }
+}
+
+impl Default for ColumnOrder {
+  fn default() -> ColumnOrder {
+    ColumnOrder::new(0, None)
+  }
 }
 
 impl crate::thrift::TSerializable for ColumnOrder {
   fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<ColumnOrder> {
-    let mut ret: Option<ColumnOrder> = None;
-    let mut received_field_count = 0;
     i_prot.read_struct_begin()?;
+    let mut disc : ColumnOrderDisc = ColumnOrderDisc(0);
+    let mut f_1: Option<TypeDefinedOrder> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -5003,50 +5071,38 @@ impl crate::thrift::TSerializable for ColumnOrder {
       match field_id {
         1 => {
           let val = TypeDefinedOrder::read_from_in_protocol(i_prot)?;
-          if ret.is_none() {
-            ret = Some(ColumnOrder::TYPEORDER(val));
-          }
-          received_field_count += 1;
-        },
+          f_1 = Some(val);
+          disc = ColumnOrderDisc::TYPE_ORDER;
+        }
         _ => {
           i_prot.skip(field_ident.field_type)?;
-          received_field_count += 1;
-        },
-      };
+        }
+      }
       i_prot.read_field_end()?;
     }
     i_prot.read_struct_end()?;
-    if received_field_count == 0 {
-      Err(
-        thrift::Error::Protocol(
-          ProtocolError::new(
-            ProtocolErrorKind::InvalidData,
-            "received empty union from remote ColumnOrder"
-          )
-        )
-      )
-    } else if received_field_count > 1 {
-      Err(
-        thrift::Error::Protocol(
-          ProtocolError::new(
-            ProtocolErrorKind::InvalidData,
-            "received multiple fields for union from remote ColumnOrder"
-          )
-        )
-      )
-    } else {
-      ret.ok_or_else(|| thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")))
-    }
+    /* original error returned for undefined type order
+    if disc != ColumnOrderDisc::TYPE_ORDER {
+      return Err(thrift::Error::Protocol(ProtocolError::new(ProtocolErrorKind::InvalidData, "return value should have been constructed")));
+    }*/
+    let ret = ColumnOrder {
+      disc: disc,
+      TYPE_ORDER: f_1,
+    };
+    Ok(ret)
   }
   fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
     let struct_ident = TStructIdentifier::new("ColumnOrder");
     o_prot.write_struct_begin(&struct_ident)?;
-    match *self {
-      ColumnOrder::TYPEORDER(ref f) => {
-        o_prot.write_field_begin(&TFieldIdentifier::new("TYPE_ORDER", TType::Struct, 1))?;
-        f.write_to_out_protocol(o_prot)?;
-        o_prot.write_field_end()?;
+    match self.disc {
+      ColumnOrderDisc::TYPE_ORDER => {
+        if let Some(ref fld_var) = self.TYPE_ORDER {
+          o_prot.write_field_begin(&TFieldIdentifier::new("TYPE_ORDER", TType::Struct, 1))?;
+          fld_var.write_to_out_protocol(o_prot)?;
+          o_prot.write_field_end()?
+        }
       },
+      _ => {}
     }
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
