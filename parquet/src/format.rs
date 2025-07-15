@@ -4994,18 +4994,6 @@ impl ColumnOrderDisc {
   ];
 }
 
-impl crate::thrift::TSerializable for ColumnOrderDisc {
-  #[allow(clippy::trivially_copy_pass_by_ref)]
-  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
-    o_prot.write_i32(self.0)
-  }
-  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<
-ColumnOrderDisc> {
-    let enum_value = i_prot.read_i32()?;
-    Ok(ColumnOrderDisc::from(enum_value))
-  }
-}
-
 impl From<i32> for ColumnOrderDisc {
   fn from(i: i32) -> Self {
     match i {
@@ -5043,10 +5031,19 @@ pub struct ColumnOrder {
 
 #[allow(non_snake_case)]
 impl ColumnOrder {
+  pub const TYPE_ORDER : ColumnOrderDisc = ColumnOrderDisc::TYPE_ORDER;
+
   pub fn new<F1, F2>(disc: F1, TYPE_ORDER: F2) -> Self where F1: Into<ColumnOrderDisc>, F2: Into<Option<TypeDefinedOrder>> {
     Self {
       disc: disc.into(),
       TYPE_ORDER: TYPE_ORDER.into(),
+    }
+  }
+
+  pub fn newTYPE_ORDER() -> Self {
+    Self {
+      disc: ColumnOrder::TYPE_ORDER,
+      TYPE_ORDER: Some(TypeDefinedOrder {}),
     }
   }
 }

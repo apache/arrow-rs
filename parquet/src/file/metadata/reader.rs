@@ -17,12 +17,12 @@
 
 use std::{io::Read, ops::Range, sync::Arc};
 
+use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::{FileDecryptionProperties, FileDecryptor},
     modules::create_footer_aad,
 };
-use crate::{basic::ColumnOrder, format::ColumnOrderDisc};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
@@ -1044,7 +1044,8 @@ impl ParquetMetaDataReader {
                 let mut res = Vec::new();
                 for (i, column) in schema_descr.columns().iter().enumerate() {
                     match orders[i].disc {
-                        ColumnOrderDisc::TYPE_ORDER => {
+                        TColumnOrder::TYPE_ORDER => {
+                            assert!(orders[i].TYPE_ORDER.is_some());
                             let sort_order = ColumnOrder::get_sort_order(
                                 column.logical_type(),
                                 column.converted_type(),
@@ -1100,7 +1101,6 @@ mod tests {
     use crate::basic::SortOrder;
     use crate::basic::Type;
     use crate::file::reader::Length;
-    use crate::format::TypeDefinedOrder;
     use crate::schema::types::Type as SchemaType;
     use crate::util::test_common::file_util::get_test_file;
 
@@ -1154,8 +1154,8 @@ mod tests {
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
         let t_column_orders = Some(vec![
-            TColumnOrder::new(ColumnOrderDisc::TYPE_ORDER, Some(TypeDefinedOrder::new())),
-            TColumnOrder::new(ColumnOrderDisc::TYPE_ORDER, Some(TypeDefinedOrder::new())),
+            TColumnOrder::newTYPE_ORDER(),
+            TColumnOrder::newTYPE_ORDER(),
         ]);
 
         assert_eq!(
@@ -1178,10 +1178,7 @@ mod tests {
         let schema = SchemaType::group_type_builder("schema").build().unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
-        let t_column_orders = Some(vec![TColumnOrder::new(
-            ColumnOrderDisc::TYPE_ORDER,
-            Some(TypeDefinedOrder::new()),
-        )]);
+        let t_column_orders = Some(vec![TColumnOrder::newTYPE_ORDER()]);
 
         let res = ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
         assert!(res.is_err());

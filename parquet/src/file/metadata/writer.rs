@@ -24,6 +24,7 @@ use crate::encryption::{
 };
 #[cfg(feature = "encryption")]
 use crate::errors::ParquetError;
+use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::writer::{get_file_magic, TrackedWrite};
@@ -34,7 +35,6 @@ use crate::format::{ColumnChunk, ColumnIndex, FileMetaData, OffsetIndex, RowGrou
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
-use crate::{errors::Result, format::ColumnOrderDisc};
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
@@ -134,12 +134,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // Even if the column has an undefined sort order, such as INTERVAL, this
         // is still technically the defined TYPEORDER so it should still be set.
         let column_orders = (0..self.schema_descr.num_columns())
-            .map(|_| {
-                crate::format::ColumnOrder::new(
-                    ColumnOrderDisc::TYPE_ORDER,
-                    crate::format::TypeDefinedOrder {},
-                )
-            })
+            .map(|_| crate::format::ColumnOrder::newTYPE_ORDER())
             .collect();
         // This field is optional, perhaps in cases where no min/max fields are set
         // in any Statistics or ColumnIndex object in the whole file.
