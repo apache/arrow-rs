@@ -43,18 +43,18 @@ pub struct RowGroupCache {
     /// Cache granularity
     batch_size: usize,
     /// Maximum cache size in bytes (None means unlimited)
-    max_cache_size: Option<usize>,
+    max_cache_bytes: Option<usize>,
     /// Current cache size in bytes
     current_cache_size: usize,
 }
 
 impl RowGroupCache {
     /// Creates a new empty row group cache
-    pub fn new(batch_size: usize, max_cache_size: Option<usize>) -> Self {
+    pub fn new(batch_size: usize, max_cache_bytes: Option<usize>) -> Self {
         Self {
             cache: HashMap::new(),
             batch_size,
-            max_cache_size,
+            max_cache_bytes,
             current_cache_size: 0,
         }
     }
@@ -65,7 +65,7 @@ impl RowGroupCache {
         let array_size = array.get_array_memory_size();
 
         // Check if adding this array would exceed the cache size limit
-        if let Some(max_size) = self.max_cache_size {
+        if let Some(max_size) = self.max_cache_bytes {
             if self.current_cache_size + array_size > max_size {
                 return false; // Cache is full, don't insert
             }

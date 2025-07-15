@@ -17,13 +17,12 @@
 
 use crate::arrow::array_reader::row_group_cache::BatchID;
 use crate::arrow::array_reader::{row_group_cache::RowGroupCache, ArrayReader};
-use crate::arrow::arrow_reader::RowSelector;
 use crate::errors::Result;
 use arrow_array::{new_empty_array, ArrayRef, BooleanArray};
-use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Role of the cached array reader
@@ -73,8 +72,8 @@ pub struct CachedArrayReader {
     inner_position: usize,
     /// Batch size for the cache
     batch_size: usize,
-    /// Selections to be applied to the next consume_batch()
-    selections: VecDeque<RowSelector>,
+    /// Boolean buffer builder to track selections for the next consume_batch()
+    selections: BooleanBufferBuilder,
     /// Role of this reader (Producer or Consumer)
     role: CacheRole,
     /// Local buffer to store batches between read_records and consume_batch calls
@@ -99,7 +98,7 @@ impl CachedArrayReader {
             outer_position: 0,
             inner_position: 0,
             batch_size,
-            selections: VecDeque::new(),
+            selections: BooleanBufferBuilder::new(0),
             role,
             local_buffer: HashMap::new(),
         }
@@ -206,7 +205,7 @@ impl ArrayReader for CachedArrayReader {
                             array_len + batch_id.val * self.batch_size - self.outer_position - read;
                         let select_cnt = std::cmp::min(num_records - read, v);
                         read += select_cnt;
-                        self.selections.push_back(RowSelector::select(select_cnt));
+                        self.selections.append_n(select_cnt, true);
                         self.outer_position += select_cnt;
                     } else {
                         // this is last batch and we have used all records from it
@@ -224,8 +223,7 @@ impl ArrayReader for CachedArrayReader {
                         self.inner_position - self.outer_position,
                     );
                     read += select_from_this_batch;
-                    self.selections
-                        .push_back(RowSelector::select(select_from_this_batch));
+                    self.selections.append_n(select_from_this_batch, true);
                     self.outer_position += select_from_this_batch;
                     if read_from_inner < self.batch_size {
                         // this is last batch from inner reader
@@ -242,21 +240,21 @@ impl ArrayReader for CachedArrayReader {
         while skipped < num_records {
             let size = std::cmp::min(num_records - skipped, self.batch_size);
             skipped += size;
-            self.selections.push_back(RowSelector::skip(size));
+            self.selections.append_n(size, false);
             self.outer_position += size;
         }
         Ok(num_records)
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
-        let row_count = self.selections.iter().map(|s| s.row_count).sum::<usize>();
+        let row_count = self.selections.len();
         if row_count == 0 {
             return Ok(new_empty_array(self.inner.get_data_type()));
         }
 
         let start_position = self.outer_position - row_count;
 
-        let selection_buffer = row_selection_to_boolean_buffer(row_count, self.selections.iter());
+        let selection_buffer = self.selections.finish();
 
         let start_batch = start_position / self.batch_size;
         let end_batch = (start_position + row_count - 1) / self.batch_size;
@@ -294,7 +292,7 @@ impl ArrayReader for CachedArrayReader {
             selected_arrays.push(filtered);
         }
 
-        self.selections.clear();
+        self.selections = BooleanBufferBuilder::new(0);
 
         // Only remove batches from local buffer that are completely behind current position
         // Keep the current batch and any future batches as they might still be needed
@@ -327,17 +325,6 @@ impl ArrayReader for CachedArrayReader {
     fn get_rep_levels(&self) -> Option<&[i16]> {
         None
     }
-}
-
-fn row_selection_to_boolean_buffer<'a>(
-    row_count: usize,
-    selection: impl Iterator<Item = &'a RowSelector>,
-) -> BooleanBuffer {
-    let mut buffer = BooleanBufferBuilder::new(row_count);
-    for selector in selection {
-        buffer.append_n(selector.row_count, !selector.skip);
-    }
-    buffer.finish()
 }
 
 #[cfg(test)]
