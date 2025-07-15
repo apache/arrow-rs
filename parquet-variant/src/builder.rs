@@ -213,6 +213,12 @@ impl ValueBuffer {
         ListBuilder::new(parent_state, validate_unique_fields)
     }
 
+    /// Appends a variant to the buffer.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if the variant contains duplicate field names in objects
+    /// when validation is enabled. For a fallible version, use [`ValueBuffer::try_append_variant`]
     fn append_variant<'m, 'd>(
         &mut self,
         variant: Variant<'m, 'd>,
@@ -740,10 +746,12 @@ impl VariantBuilder {
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
-    /// Append a value to the builder. Use [`VariantBuilder::try_append_value`] for a falliable operation.
+    /// Append a value to the builder.
     ///
     /// # Panics
-    /// Will panic if you append a variant object and that object contains duplicate field names.
+    ///
+    /// This method will panic if the variant contains duplicate field names in objects
+    /// when validation is enabled. For a fallible version, use [`VariantBuilder::try_append_value`]
     ///
     /// # Example
     /// ```
@@ -831,11 +839,26 @@ impl<'a> ListBuilder<'a> {
         ListBuilder::new(parent_state, validate_unique_fields)
     }
 
+    /// Appends a variant to the list.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if the variant contains duplicate field names in objects
+    /// when validation is enabled. For a fallible version, use [`ListBuilder::try_append_value`].
+    pub fn append_variant<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+        self.try_append_value(value).unwrap();
+    }
+
     /// Appends a new primitive value to this list
-    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+    pub fn try_append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(
+        &mut self,
+        value: T,
+    ) -> Result<(), ArrowError> {
         self.offsets.push(self.buffer.offset());
         self.buffer
-            .append_variant(value.into(), self.parent_state.metadata_builder())
+            .try_append_variant(value.into(), self.parent_state.metadata_builder())?;
+
+        Ok(())
     }
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
@@ -894,9 +917,23 @@ impl<'a> ObjectBuilder<'a> {
 
     /// Add a field with key and value to the object
     ///
+    /// # Panics
+    ///
+    /// This method will panic if the variant contains duplicate field names in objects
+    /// when validation is enabled. For a fallible version, use [`ObjectBuilder::try_insert`]
+    pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
+        self.try_insert(key, value).unwrap();
+    }
+
+    /// Add a field with key and value to the object
+    ///
     /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
     /// but the old value remains in the buffer, resulting in a larger variant
-    pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
+    pub fn try_insert<'m, 'd, T: Into<Variant<'m, 'd>>>(
+        &mut self,
+        key: &str,
+        value: T,
+    ) -> Result<(), ArrowError> {
         // Get metadata_builder from parent state
         let metadata_builder = self.parent_state.metadata_builder();
 
@@ -907,7 +944,10 @@ impl<'a> ObjectBuilder<'a> {
             self.duplicate_fields.insert(field_id);
         }
 
-        self.buffer.append_variant(value.into(), metadata_builder)
+        self.buffer
+            .try_append_variant(value.into(), metadata_builder)?;
+
+        Ok(())
     }
 
     /// Enables validation for unique field keys when inserting into this object.
