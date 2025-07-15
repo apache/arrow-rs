@@ -393,7 +393,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             self.metadata
                 .row_groups()
                 .iter()
-                .map(|rg| std::iter::repeat(None).take(rg.columns().len()).collect())
+                .map(|rg| std::iter::repeat_n(None, rg.columns().len()).collect())
                 .collect()
         }
     }
@@ -414,7 +414,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             self.metadata
                 .row_groups()
                 .iter()
-                .map(|rg| std::iter::repeat(None).take(rg.columns().len()).collect())
+                .map(|rg| std::iter::repeat_n(None, rg.columns().len()).collect())
                 .collect()
         }
     }
