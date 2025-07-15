@@ -4989,6 +4989,7 @@ pub struct ColumnOrderDisc(i32);
 
 impl ColumnOrderDisc {
   pub const TYPE_ORDER : Self = Self(1);
+  pub const NO_SUCH_ORDER: Self = Self(2);
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::TYPE_ORDER,
   ];
@@ -4998,6 +4999,7 @@ impl From<i32> for ColumnOrderDisc {
   fn from(i: i32) -> Self {
     match i {
       1 => ColumnOrderDisc::TYPE_ORDER,
+      2 => ColumnOrderDisc::NO_SUCH_ORDER,
       _ => ColumnOrderDisc(i)
     }
   }
@@ -5027,16 +5029,24 @@ impl From<&ColumnOrderDisc> for i32 {
 pub struct ColumnOrder {
   pub disc: ColumnOrderDisc,
   pub TYPE_ORDER: Option<TypeDefinedOrder>,
+  pub NO_SUCH_ORDER: Option<TypeDefinedOrder>,
 }
 
 #[allow(non_snake_case)]
 impl ColumnOrder {
   pub const TYPE_ORDER : ColumnOrderDisc = ColumnOrderDisc::TYPE_ORDER;
+  pub const NO_SUCH_ORDER : ColumnOrderDisc = ColumnOrderDisc::NO_SUCH_ORDER;
 
-  pub fn new<F1, F2>(disc: F1, TYPE_ORDER: F2) -> Self where F1: Into<ColumnOrderDisc>, F2: Into<Option<TypeDefinedOrder>> {
+  pub fn new<F1, F2, F3>(disc: F1, TYPE_ORDER: F2, NO_SUCH_ORDER: F3) -> Self
+  where
+    F1: Into<ColumnOrderDisc>,
+    F2: Into<Option<TypeDefinedOrder>>,
+    F3: Into<Option<TypeDefinedOrder>>
+  {
     Self {
       disc: disc.into(),
       TYPE_ORDER: TYPE_ORDER.into(),
+      NO_SUCH_ORDER: NO_SUCH_ORDER.into(),
     }
   }
 
@@ -5044,13 +5054,22 @@ impl ColumnOrder {
     Self {
       disc: ColumnOrder::TYPE_ORDER,
       TYPE_ORDER: Some(TypeDefinedOrder {}),
+      ..Default::default()
+    }
+  }
+
+  pub fn newNO_SUCH_ORDER() -> Self {
+    Self {
+      disc: ColumnOrder::NO_SUCH_ORDER,
+      NO_SUCH_ORDER: Some(TypeDefinedOrder {}),
+      ..Default::default()
     }
   }
 }
 
 impl Default for ColumnOrder {
   fn default() -> ColumnOrder {
-    ColumnOrder::new(0, None)
+    ColumnOrder::new(0, None, None)
   }
 }
 
@@ -5059,6 +5078,7 @@ impl crate::thrift::TSerializable for ColumnOrder {
     i_prot.read_struct_begin()?;
     let mut disc : ColumnOrderDisc = ColumnOrderDisc(0);
     let mut f_1: Option<TypeDefinedOrder> = None;
+    let mut f_2: Option<TypeDefinedOrder> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -5070,6 +5090,11 @@ impl crate::thrift::TSerializable for ColumnOrder {
           let val = TypeDefinedOrder::read_from_in_protocol(i_prot)?;
           f_1 = Some(val);
           disc = ColumnOrderDisc::TYPE_ORDER;
+        }
+        2 => {
+          let val = TypeDefinedOrder::read_from_in_protocol(i_prot)?;
+          f_2 = Some(val);
+          disc = ColumnOrderDisc::NO_SUCH_ORDER;
         }
         _ => {
           i_prot.skip(field_ident.field_type)?;
@@ -5085,6 +5110,7 @@ impl crate::thrift::TSerializable for ColumnOrder {
     let ret = ColumnOrder {
       disc: disc,
       TYPE_ORDER: f_1,
+      NO_SUCH_ORDER: f_2,
     };
     Ok(ret)
   }

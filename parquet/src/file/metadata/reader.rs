@@ -1053,6 +1053,7 @@ impl ParquetMetaDataReader {
                             );
                             res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
                         }
+                        TColumnOrder::NO_SUCH_ORDER => res.push(ColumnOrder::UNDEFINED),
                         _ => res.push(ColumnOrder::UNDEFINED),
                     }
                 }
