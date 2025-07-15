@@ -28,7 +28,7 @@ use std::collections::HashMap;
 /// The `BatchID` for any particular row is `row_index / batch_size`. The
 /// integer division ensures that rows in the same batch share the same
 /// the BatchID which can be calculated quickly from the row index
-# [derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BatchID {
     pub val: usize,
 }
