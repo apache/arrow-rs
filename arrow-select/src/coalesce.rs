@@ -730,7 +730,7 @@ mod tests {
         // The strings are designed to exactly fit into buffers that are powers of 2 long
         let batch = stringview_batch_repeated(100, [Some("This string is a power of two=32")]);
         let output_batches = Test::new()
-            .with_batches(std::iter::repeat(batch).take(20))
+            .with_batches(std::iter::repeat_n(batch, 20))
             .with_batch_size(900)
             .with_expected_output_sizes(vec![900, 900, 200])
             .run();

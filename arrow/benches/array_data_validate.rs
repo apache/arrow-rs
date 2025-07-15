@@ -53,7 +53,7 @@ fn validate_benchmark(c: &mut Criterion) {
         b.iter(|| validate_utf8_array(&str_arr))
     });
 
-    let byte_array = BinaryArray::from_iter_values(std::iter::repeat(b"test").take(20000));
+    let byte_array = BinaryArray::from_iter_values(std::iter::repeat_n(b"test", 20000));
     c.bench_function("byte_array_to_string_array 20000", |b| {
         b.iter(|| StringArray::from(BinaryArray::from(byte_array.to_data())))
     });

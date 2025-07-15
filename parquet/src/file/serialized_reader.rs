@@ -41,7 +41,6 @@ use crate::thrift::TCompactSliceInputProtocol;
 use crate::thrift::TSerializable;
 use bytes::Bytes;
 use std::collections::VecDeque;
-use std::iter;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
 use thrift::protocol::TCompactInputProtocol;
 
@@ -293,7 +292,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
                 .map(|col| Sbbf::read_from_column_chunk(col, &*chunk_reader))
                 .collect::<Result<Vec<_>>>()?
         } else {
-            iter::repeat(None).take(metadata.columns().len()).collect()
+            std::iter::repeat_n(None, metadata.columns().len()).collect()
         };
         Ok(Self {
             chunk_reader,

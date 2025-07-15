@@ -1388,7 +1388,7 @@ fn update_stat<T: ParquetValueType, F>(
         return;
     }
 
-    if cur.as_ref().map_or(true, should_update) {
+    if cur.as_ref().is_none_or(should_update) {
         *cur = Some(val.clone());
     }
 }
