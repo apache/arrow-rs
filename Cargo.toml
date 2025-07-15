@@ -108,6 +108,8 @@ parquet-variant-compute = { version = "0.1.0", path = "./parquet-variant-json" }
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 
+simdutf8 = { version = "0.1.5", default-features = false }
+
 # release inherited profile keeping debug information and symbols
 # for mem/cpu profiling
 [profile.profiling]
