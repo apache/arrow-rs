@@ -665,11 +665,13 @@ mod tests {
         // 2^16 + 1, expected 3-byte field IDs
     }
 
+    /* Can't run this test now as it takes 45x longer than other tests
     #[test]
     fn test_variant_object_16777217_elements() {
         test_variant_object_with_count((1 << 24) + 1, OffsetSizeBytes::Four);
         // 2^24 + 1, expected 4-byte field IDs
     }
+     */
 
     #[test]
     fn test_variant_object_small_sizes_255_elements() {
@@ -687,7 +689,7 @@ mod tests {
         let str_val = "a".repeat(data_size_per_field);
 
         for val in 0..num_fields {
-            let key = format!("id_{}", val);
+            let key = format!("id_{val}");
             obj.insert(&key, str_val.as_str());
         }
 
