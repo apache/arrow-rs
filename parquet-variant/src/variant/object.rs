@@ -241,11 +241,15 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                     }
                     prev_field_id = Some(field_id);
                 }
-                
-                if !all_in_bounds {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "field id is not valid".to_string(),
-                    ));
+
+                // Since field ids are sorted, if the last field is smaller than the dictionary size,
+                // we also know all field ids are smaller than the dictionary size and in-bounds.
+                if let Some(&last_field_id) = field_ids.last() {
+                    if last_field_id >= self.metadata.dictionary_size() {
+                        return Err(ArrowError::InvalidArgumentError(
+                            "field id is not valid".to_string(),
+                        ));
+                    }
                 }
             } else {
                 // The metadata dictionary can't guarantee uniqueness or sortedness, so we have to parse out the corresponding field names
