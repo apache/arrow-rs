@@ -23,6 +23,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_schema::*;
+use num::cast;
 use std::borrow::BorrowMut;
 use std::cmp::{self, Ordering};
 use std::ops::{BitAnd, BitOr, BitXor};
@@ -573,6 +574,26 @@ where
 
             Some(sum)
         }
+        DataType::RunEndEncoded(_, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return None;
+            }
+
+            // Expand REE array to its logical form and recursively call sum_array
+            if let Some(expanded_array) = arrow_array::unwrap_ree_array(&array) {
+                // Cast the expanded array to the appropriate type and call sum_array recursively
+                if let Some(primitive_array) = expanded_array.as_any().downcast_ref::<PrimitiveArray<T>>() {
+                    sum::<T>(primitive_array)
+                } else {
+                    // If we can't downcast, return None
+                    None
+                }
+            } else {
+                None
+            }
+        }
         _ => sum::<T>(as_primitive_array(&array)),
     }
 }
@@ -608,6 +629,26 @@ where
                 })?;
 
             Ok(Some(sum))
+        }
+        DataType::RunEndEncoded(_, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return Ok(None);
+            }
+
+            // Expand REE array to its logical form and recursively call sum_array_checked
+            if let Some(expanded_array) = arrow_array::unwrap_ree_array(&array) {
+                // Cast the expanded array to the appropriate type and call sum_checked recursively
+                if let Some(primitive_array) = expanded_array.as_any().downcast_ref::<PrimitiveArray<T>>() {
+                    sum_checked::<T>(primitive_array)
+                } else {
+                    // If we can't downcast, return None
+                    Ok(None)
+                }
+            } else {
+                Ok(None)
+            }
         }
         _ => sum_checked::<T>(as_primitive_array(&array)),
     }
@@ -645,6 +686,26 @@ where
 {
     match array.data_type() {
         DataType::Dictionary(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
+        DataType::RunEndEncoded(_, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return None;
+            }
+
+            // Expand REE array to its logical form and recursively call min_max_array_helper
+            if let Some(expanded_array) = arrow_array::unwrap_ree_array(&array) {
+                // Cast the expanded array to the appropriate type and call min_max_helper recursively
+                if let Some(primitive_array) = expanded_array.as_any().downcast_ref::<PrimitiveArray<T>>() {
+                    min_max_helper::<T::Native, _, _>(primitive_array, cmp)
+                } else {
+                    // If we can't downcast, return None
+                    None
+                }
+            } else {
+                None
+            }
+        }
         _ => m(as_primitive_array(&array)),
     }
 }
@@ -1700,5 +1761,152 @@ mod tests {
 
         sum_checked(&a).expect_err("overflow should be detected");
         sum_array_checked::<Int32Type, _>(&a).expect_err("overflow should be detected");
+    }
+    // ... existing code ...
+    // REE (RunEndEncodedArray) Tests
+    mod ree_aggregation {
+        use super::*;
+        use arrow_array::{RunArray, Int32Array, Int64Array, Float64Array};
+        use arrow_array::types::{Int32Type, Int64Type, Float64Type};
+
+        #[test]
+        fn test_ree_sum_array_basic() {
+            // REE array: [10, 10, 20, 30, 30] (logical length 5)
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![10, 20, 30]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = sum_array::<Int32Type, _>(primitive_array);
+            assert_eq!(result, Some(100)); // 10+10+20+30+30 = 100
+        }
+
+        #[test]
+        fn test_ree_sum_array_with_nulls() {
+            // REE array with nulls: [10, NULL, 20, NULL, 30]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![10, -1, 20, -1, 30]); // -1 represents null
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = sum_array::<Int32Type, _>(primitive_array);
+            assert_eq!(result, Some(60)); // 10+20+30 = 60 (nulls ignored)
+        }
+
+        #[test]
+        fn test_ree_sum_array_checked_basic() {
+            // REE array: [5, 5, 10, 15, 15] (logical length 5)
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![5, 10, 15]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = sum_array_checked::<Int32Type, _>(primitive_array).unwrap();
+            assert_eq!(result, Some(50)); // 5+5+10+15+15 = 50
+        }
+
+        #[test]
+        fn test_ree_sum_array_checked_overflow() {
+            // REE array that will overflow: [i32::MAX, i32::MAX, 1]
+            let run_ends = Int32Array::from(vec![2, 3]);
+            let values = Int32Array::from(vec![i32::MAX, 1]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = sum_array_checked::<Int32Type, _>(primitive_array);
+            assert!(result.is_err()); // Should overflow
+        }
+
+        #[test]
+        fn test_ree_min_array_basic() {
+            // REE array: [50, 50, 10, 30, 30] (logical length 5)
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![50, 10, 30]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = min_array::<Int32Type, _>(primitive_array);
+            assert_eq!(result, Some(10)); // Minimum value is 10
+        }
+
+        #[test]
+        fn test_ree_min_array_with_nulls() {
+            // REE array with nulls: [100, NULL, 5, NULL, 200]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![100, -1, 5, -1, 200]); // -1 represents null
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = min_array::<Int32Type, _>(primitive_array);
+            assert_eq!(result, Some(5)); // Minimum non-null value is 5
+        }
+
+        #[test]
+        fn test_ree_max_array_basic() {
+            // REE array: [10, 10, 50, 20, 20] (logical length 5)
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![10, 50, 20]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = max_array::<Int32Type, _>(primitive_array);
+            assert_eq!(result, Some(50)); // Maximum value is 50
+        }
+
+        #[test]
+        fn test_ree_max_array_with_nulls() {
+            // REE array with nulls: [5, NULL, 500, NULL, 10]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![5, -1, 500, -1, 10]); // -1 represents null
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int32Array>().unwrap();
+            let result = max_array::<Int32Type, _>(primitive_array);
+            assert_eq!(result, Some(500)); // Maximum non-null value is 500
+        }
+
+        #[test]
+        fn test_ree_sum_array_large_values() {
+            // REE array with large values: [1000000, 1000000, 2000000, 3000000, 3000000]
+            let run_ends = Int64Array::from(vec![2, 3, 5]);
+            let values = Int64Array::from(vec![1000000, 2000000, 3000000]);
+            let run_array = RunArray::<Int64Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Int64Array>().unwrap();
+            let result = sum_array::<Int64Type, _>(primitive_array);
+            assert_eq!(result, Some(10000000)); // 1M+1M+2M+3M+3M = 10M
+        }
+
+        #[test]
+        fn test_ree_max_array_float_values() {
+            // REE array with float values: [1.5, 1.5, 3.7, 2.1, 2.1]
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Float64Array::from(vec![1.5, 3.7, 2.1]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Expand to logical form and test
+            let expanded = arrow_array::unwrap_ree_array(&run_array).unwrap();
+            let primitive_array = expanded.as_any().downcast_ref::<Float64Array>().unwrap();
+            let result = max_array::<Float64Type, _>(primitive_array);
+            assert_eq!(result, Some(3.7)); // Maximum value is 3.7
+        }
     }
 }

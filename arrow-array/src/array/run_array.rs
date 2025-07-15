@@ -23,11 +23,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
-    builder::StringRunBuilder,
-    make_array,
-    run_iterator::RunArrayIter,
-    types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
-    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
+    builder::StringRunBuilder, cast::AsArray, make_array, run_iterator::RunArrayIter, types::{Int16Type, Int32Type, Int64Type, RunEndIndexType}, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, PrimitiveArray
 };
 
 /// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
@@ -251,6 +247,47 @@ impl<R: RunEndIndexType> RunArray<R> {
             values: self.values.clone(),
         }
     }
+    /// Expands the REE array to its logical form
+    pub fn expand_to_logical<T: ArrowPrimitiveType>(&self) -> Result<Box<dyn Array>, ArrowError> 
+    where
+        T::Native: Default,
+    {
+        let typed_ree = self.downcast::<PrimitiveArray<T>>()
+            .ok_or_else(|| ArrowError::InvalidArgumentError("Failed to downcast to typed REE".to_string()))?;
+        
+        let mut builder = PrimitiveArray::<T>::builder(typed_ree.len());
+        for i in 0..typed_ree.len() {
+            if typed_ree.is_null(i) {
+                builder.append_null();
+            } else {
+                builder.append_value(typed_ree.value(i));
+            }
+        }
+        Ok(Box::new(builder.finish()))
+    }
+    /// Unwraps a REE array into a logical array
+    pub fn unwrap_ree_array(array: &dyn Array) -> Option<Box<dyn Array>> {
+    match array.data_type() {
+        arrow_schema::DataType::RunEndEncoded(run_ends_field, _) => {
+            match run_ends_field.data_type() {
+                arrow_schema::DataType::Int16 => {
+                    array.as_run_opt::<Int16Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int16Type>().ok())
+                }
+                arrow_schema::DataType::Int32 => {
+                    array.as_run_opt::<Int32Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int32Type>().ok())
+                }
+                arrow_schema::DataType::Int64 => {
+                    array.as_run_opt::<Int64Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int64Type>().ok())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
 }
 
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
@@ -528,6 +565,29 @@ pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
     values: &'a V,
 }
 
+/// Unwraps a REE array into a logical array
+pub fn unwrap_ree_array(array: &dyn Array) -> Option<Box<dyn Array>> {
+    match array.data_type() {
+        arrow_schema::DataType::RunEndEncoded(run_ends_field, _) => {
+            match run_ends_field.data_type() {
+                arrow_schema::DataType::Int16 => {
+                    array.as_run_opt::<Int16Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int16Type>().ok())
+                }
+                arrow_schema::DataType::Int32 => {
+                    array.as_run_opt::<Int32Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int32Type>().ok())
+                }
+                arrow_schema::DataType::Int64 => {
+                    array.as_run_opt::<Int64Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int64Type>().ok())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
 // Manually implement `Clone` to avoid `V: Clone` type constraint
 impl<R: RunEndIndexType, V> Clone for TypedRunArray<'_, R, V> {
     fn clone(&self) -> Self {
@@ -615,6 +675,30 @@ impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
 
     fn get_array_memory_size(&self) -> usize {
         self.run_array.get_array_memory_size()
+    }
+}
+
+// ArrayAccessor implementation for RunArray itself
+// This allows RunArray to be used directly with aggregation functions
+impl<'a, R: RunEndIndexType> ArrayAccessor for &'a RunArray<R> {
+    type Item = ArrayRef;
+
+    fn value(&self, logical_index: usize) -> Self::Item {
+        assert!(
+            logical_index < self.len(),
+            "Trying to access an element at index {} from a RunArray of length {}",
+            logical_index,
+            self.len()
+        );
+        unsafe { self.value_unchecked(logical_index) }
+    }
+
+    unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
+        let physical_index = self.get_physical_index(logical_index);
+        // Return the value at the physical index as an ArrayRef
+        // This is a single-element array containing the value
+        let value_array = self.values().slice(physical_index, 1);
+        value_array
     }
 }
 

@@ -49,6 +49,7 @@
 )]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![warn(missing_docs)]
+pub use arrow_array::downcast_primitive_array;
 pub mod cmp;
 #[doc(hidden)]
 pub mod comparison;
