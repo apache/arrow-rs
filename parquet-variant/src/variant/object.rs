@@ -408,7 +408,7 @@ mod tests {
     fn test_variant_object_simple() {
         // Create metadata with field names: "age", "name", "active" (sorted)
         // Header: version=1, sorted=1, offset_size=1 (offset_size_minus_one=0)
-        // So header byte = 00_0_1_0001 = 0x10
+        // So header byte = 00_0_1_0001 = 0x11
         let metadata_bytes = vec![
             0b0001_0001,
             3, // dictionary size
@@ -644,13 +644,10 @@ mod tests {
                 obj.get(&field_names[(count - 1) as usize]).unwrap(),
                 Variant::Int32(count - 1)
             );
-
-            let header_byte = first_byte_from_slice(&value).unwrap();
-            let header = VariantObjectHeader::try_new(header_byte).unwrap();
             assert_eq!(
-                header.field_id_size, expected_field_id_size,
+                obj.header.field_id_size, expected_field_id_size,
                 "Expected {}-byte field IDs, got {}-byte field IDs",
-                expected_field_id_size as usize, header.field_id_size as usize
+                expected_field_id_size as usize, obj.header.field_id_size as usize
             );
         } else {
             panic!("Expected object variant");
@@ -700,12 +697,10 @@ mod tests {
 
         if let Variant::Object(obj) = variant {
             assert_eq!(obj.len(), num_fields);
-            let header_byte = first_byte_from_slice(&value).unwrap();
-            let header = VariantObjectHeader::try_new(header_byte).unwrap();
             assert_eq!(
-                header.field_offset_size, expected_field_offset_size,
+                obj.header.field_offset_size, expected_field_offset_size,
                 "Expected {}-byte field offsets, got {}-byte field offsets",
-                expected_field_offset_size as usize, header.field_offset_size as usize
+                expected_field_offset_size as usize, obj.header.field_offset_size as usize
             );
         } else {
             panic!("Expected object variant");
