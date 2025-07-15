@@ -475,7 +475,7 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
             _ => unreachable!(),
         };
         let mut acc = 0_usize;
-        let iter = std::iter::repeat(size).take(value.len());
+        let iter = std::iter::repeat_n(size, value.len());
         let mut sizes = Vec::with_capacity(iter.size_hint().0);
         let mut offsets = Vec::with_capacity(iter.size_hint().0);
 

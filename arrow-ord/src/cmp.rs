@@ -273,7 +273,7 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
                     let r = r.inner().bit_chunks().iter_padded();
                     let ne = values.bit_chunks().iter_padded();
 
-                    let c = |((l, r), n)| ((l ^ r) | (l & r & n));
+                    let c = |((l, r), n)| (l ^ r) | (l & r & n);
                     let buffer = l.zip(r).zip(ne).map(c).collect();
                     BooleanBuffer::new(buffer, 0, len).into()
                 }

@@ -473,13 +473,89 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Note: this function does not attempt to canonicalize / deduplicate values. For this
     /// feature see  [`GenericByteViewBuilder::with_deduplicate_strings`].
     pub fn gc(&self) -> Self {
-        let mut builder = GenericByteViewBuilder::<T>::with_capacity(self.len());
+        // 1) Read basic properties once
+        let len = self.len(); // number of elements
+        let nulls = self.nulls().cloned(); // reuse & clone existing null bitmap
 
-        for v in self.iter() {
-            builder.append_option(v);
+        // 1.5) Fast path: if there are no buffers, just reuse original views and no data blocks
+        if self.data_buffers().is_empty() {
+            return unsafe {
+                GenericByteViewArray::new_unchecked(
+                    self.views().clone(),
+                    vec![], // empty data blocks
+                    nulls,
+                )
+            };
         }
 
-        builder.finish()
+        // 2) Calculate total size of all non-inline data and detect if any exists
+        let total_large = self.total_buffer_bytes_used();
+
+        // 2.5) Fast path: if there is no non-inline data, avoid buffer allocation & processing
+        if total_large == 0 {
+            // Views are inline-only or all null; just reuse original views and no data blocks
+            return unsafe {
+                GenericByteViewArray::new_unchecked(
+                    self.views().clone(),
+                    vec![], // empty data blocks
+                    nulls,
+                )
+            };
+        }
+
+        // 3) Allocate exactly capacity for all non-inline data
+        let mut data_buf = Vec::with_capacity(total_large);
+
+        // 4) Iterate over views and process each inline/non-inline view
+        let views_buf: Vec<u128> = (0..len)
+            .map(|i| unsafe { self.copy_view_to_buffer(i, &mut data_buf) })
+            .collect();
+
+        // 5) Wrap up buffers
+        let data_block = Buffer::from_vec(data_buf);
+        let views_scalar = ScalarBuffer::from(views_buf);
+        let data_blocks = vec![data_block];
+
+        // SAFETY: views_scalar, data_blocks, and nulls are correctly aligned and sized
+        unsafe { GenericByteViewArray::new_unchecked(views_scalar, data_blocks, nulls) }
+    }
+
+    /// Copy the i‑th view into `data_buf` if it refers to an out‑of‑line buffer.
+    ///
+    /// # Safety
+    ///
+    /// - `i < self.len()`.
+    /// - Every element in `self.views()` must currently refer to a valid slice
+    ///   inside one of `self.buffers`.
+    /// - `data_buf` must be ready to have additional bytes appended.
+    /// - After this call, the returned view will have its
+    ///   `buffer_index` reset to `0` and its `offset` updated so that it points
+    ///   into the bytes just appended at the end of `data_buf`.
+    #[inline(always)]
+    unsafe fn copy_view_to_buffer(&self, i: usize, data_buf: &mut Vec<u8>) -> u128 {
+        // SAFETY: `i < self.len()` ensures this is in‑bounds.
+        let raw_view = *self.views().get_unchecked(i);
+        let mut bv = ByteView::from(raw_view);
+
+        // Inline‑small views stay as‑is.
+        if bv.length <= MAX_INLINE_VIEW_LEN {
+            raw_view
+        } else {
+            // SAFETY: `bv.buffer_index` and `bv.offset..bv.offset+bv.length`
+            // must both lie within valid ranges for `self.buffers`.
+            let buffer = self.buffers.get_unchecked(bv.buffer_index as usize);
+            let start = bv.offset as usize;
+            let end = start + bv.length as usize;
+            let slice = buffer.get_unchecked(start..end);
+
+            // Copy out‑of‑line data into our single “0” buffer.
+            let new_offset = data_buf.len() as u32;
+            data_buf.extend_from_slice(slice);
+
+            bv.buffer_index = 0;
+            bv.offset = new_offset;
+            bv.into()
+        }
     }
 
     /// Returns the total number of bytes used by all non inlined views in all
@@ -998,7 +1074,11 @@ mod tests {
         Array, BinaryViewArray, GenericBinaryArray, GenericByteViewArray, StringViewArray,
     };
     use arrow_buffer::{Buffer, ScalarBuffer};
-    use arrow_data::ByteView;
+    use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
+    use rand::prelude::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    const BLOCK_SIZE: u32 = 8;
 
     #[test]
     fn try_new_string() {
@@ -1186,6 +1266,130 @@ mod tests {
         check_gc(&array.slice(2, 1));
         check_gc(&array.slice(2, 2));
         check_gc(&array.slice(3, 1));
+    }
+
+    /// 1) Empty array: no elements, expect gc to return empty with no data buffers
+    #[test]
+    fn test_gc_empty_array() {
+        let array = StringViewBuilder::new()
+            .with_fixed_block_size(BLOCK_SIZE)
+            .finish();
+        let gced = array.gc();
+        // length and null count remain zero
+        assert_eq!(gced.len(), 0);
+        assert_eq!(gced.null_count(), 0);
+        // no underlying data buffers should be allocated
+        assert!(
+            gced.data_buffers().is_empty(),
+            "Expected no data buffers for empty array"
+        );
+    }
+
+    /// 2) All inline values (<= INLINE_LEN): capacity-only data buffer, same values
+    #[test]
+    fn test_gc_all_inline() {
+        let mut builder = StringViewBuilder::new().with_fixed_block_size(BLOCK_SIZE);
+        // append many short strings, each exactly INLINE_LEN long
+        for _ in 0..100 {
+            let s = "A".repeat(MAX_INLINE_VIEW_LEN as usize);
+            builder.append_option(Some(&s));
+        }
+        let array = builder.finish();
+        let gced = array.gc();
+        // Since all views fit inline, data buffer is empty
+        assert_eq!(
+            gced.data_buffers().len(),
+            0,
+            "Should have no data buffers for inline values"
+        );
+        assert_eq!(gced.len(), 100);
+        // verify element-wise equality
+        array.iter().zip(gced.iter()).for_each(|(orig, got)| {
+            assert_eq!(orig, got, "Inline value mismatch after gc");
+        });
+    }
+
+    /// 3) All large values (> INLINE_LEN): each must be copied into the new data buffer
+    #[test]
+    fn test_gc_all_large() {
+        let mut builder = StringViewBuilder::new().with_fixed_block_size(BLOCK_SIZE);
+        let large_str = "X".repeat(MAX_INLINE_VIEW_LEN as usize + 5);
+        // append multiple large strings
+        for _ in 0..50 {
+            builder.append_option(Some(&large_str));
+        }
+        let array = builder.finish();
+        let gced = array.gc();
+        // New data buffers should be populated (one or more blocks)
+        assert!(
+            !gced.data_buffers().is_empty(),
+            "Expected data buffers for large values"
+        );
+        assert_eq!(gced.len(), 50);
+        // verify that every large string emerges unchanged
+        array.iter().zip(gced.iter()).for_each(|(orig, got)| {
+            assert_eq!(orig, got, "Large view mismatch after gc");
+        });
+    }
+
+    /// 4) All null elements: ensure null bitmap handling path is correct
+    #[test]
+    fn test_gc_all_nulls() {
+        let mut builder = StringViewBuilder::new().with_fixed_block_size(BLOCK_SIZE);
+        for _ in 0..20 {
+            builder.append_null();
+        }
+        let array = builder.finish();
+        let gced = array.gc();
+        // length and null count match
+        assert_eq!(gced.len(), 20);
+        assert_eq!(gced.null_count(), 20);
+        // data buffers remain empty for null-only array
+        assert!(
+            gced.data_buffers().is_empty(),
+            "No data should be stored for nulls"
+        );
+    }
+
+    /// 5) Random mix of inline, large, and null values with slicing tests
+    #[test]
+    fn test_gc_random_mixed_and_slices() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut builder = StringViewBuilder::new().with_fixed_block_size(BLOCK_SIZE);
+        // Keep a Vec of original Option<String> for later comparison
+        let mut original: Vec<Option<String>> = Vec::new();
+
+        for _ in 0..200 {
+            if rng.random_bool(0.1) {
+                // 10% nulls
+                builder.append_null();
+                original.push(None);
+            } else {
+                // random length between 0 and twice the inline limit
+                let len = rng.random_range(0..(MAX_INLINE_VIEW_LEN * 2));
+                let s: String = "A".repeat(len as usize);
+                builder.append_option(Some(&s));
+                original.push(Some(s));
+            }
+        }
+
+        let array = builder.finish();
+        // Test multiple slice ranges to ensure offset logic is correct
+        for (offset, slice_len) in &[(0, 50), (10, 100), (150, 30)] {
+            let sliced = array.slice(*offset, *slice_len);
+            let gced = sliced.gc();
+            // Build expected slice of Option<&str>
+            let expected: Vec<Option<&str>> = original[*offset..(*offset + *slice_len)]
+                .iter()
+                .map(|opt| opt.as_deref())
+                .collect();
+
+            assert_eq!(gced.len(), *slice_len, "Slice length mismatch");
+            // Compare element-wise
+            gced.iter().zip(expected.iter()).for_each(|(got, expect)| {
+                assert_eq!(got, *expect, "Value mismatch in mixed slice after gc");
+            });
+        }
     }
 
     #[test]

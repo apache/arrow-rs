@@ -256,6 +256,9 @@ pub enum Variant<'m, 'v> {
     List(VariantList<'m, 'v>),
 }
 
+// We don't want this to grow because it could hurt performance of a frequently-created type.
+const _: () = crate::utils::expect_size_of::<Variant>(80);
+
 impl<'m, 'v> Variant<'m, 'v> {
     /// Attempts to interpret a metadata and value buffer pair as a new `Variant`.
     ///
@@ -962,6 +965,34 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// If this is an object and the requested field name exists, retrieves the corresponding field
+    /// value. Otherwise, returns None.
+    ///
+    /// This is shorthand for [`Self::as_object`] followed by [`VariantObject::get`].
+    ///
+    /// # Examples
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder, VariantObject};
+    /// # let mut builder = VariantBuilder::new();
+    /// # let mut obj = builder.new_object();
+    /// # obj.insert("name", "John");
+    /// # obj.finish();
+    /// # let (metadata, value) = builder.finish();
+    /// // object that is {"name": "John"}
+    ///  let variant = Variant::new(&metadata, &value);
+    /// // use the `get_object_field` method to access the object
+    /// let obj = variant.get_object_field("name");
+    /// assert_eq!(obj, Some(Variant::from("John")));
+    /// let obj = variant.get_object_field("foo");
+    /// assert!(obj.is_none());
+    /// ```
+    pub fn get_object_field(&self, field_name: &str) -> Option<Self> {
+        match self {
+            Variant::Object(object) => object.get(field_name),
+            _ => None,
+        }
+    }
+
     /// Converts this variant to a `List` if it is a [`VariantList`].
     ///
     /// Returns `Some(&VariantList)` for list variants,
@@ -991,6 +1022,34 @@ impl<'m, 'v> Variant<'m, 'v> {
             Some(list)
         } else {
             None
+        }
+    }
+
+    /// If this is a list and the requested index is in bounds, retrieves the corresponding
+    /// element. Otherwise, returns None.
+    ///
+    /// This is shorthand for [`Self::as_list`] followed by [`VariantList::get`].
+    ///
+    /// # Examples
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder, VariantList};
+    /// # let mut builder = VariantBuilder::new();
+    /// # let mut list = builder.new_list();
+    /// # list.append_value("John");
+    /// # list.append_value("Doe");
+    /// # list.finish();
+    /// # let (metadata, value) = builder.finish();
+    /// // list that is ["John", "Doe"]
+    /// let variant = Variant::new(&metadata, &value);
+    /// // use the `get_list_element` method to access the list
+    /// assert_eq!(variant.get_list_element(0), Some(Variant::from("John")));
+    /// assert_eq!(variant.get_list_element(1), Some(Variant::from("Doe")));
+    /// assert!(variant.get_list_element(2).is_none());
+    /// ```
+    pub fn get_list_element(&self, index: usize) -> Option<Self> {
+        match self {
+            Variant::List(list) => list.get(index),
+            _ => None,
         }
     }
 
@@ -1140,7 +1199,19 @@ impl TryFrom<(i128, u8)> for Variant<'_, '_> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    #[test]
+    fn test_empty_variant_will_fail() {
+        let metadata = VariantMetadata::try_new(&[1, 0, 0]).unwrap();
+
+        let err = Variant::try_new_with_metadata(metadata, &[]).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ArrowError::InvalidArgumentError(ref msg) if msg == "Received empty bytes"));
+    }
 
     #[test]
     fn test_construct_short_string() {

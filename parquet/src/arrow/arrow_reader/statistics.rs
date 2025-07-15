@@ -1497,9 +1497,10 @@ impl<'a> StatisticsConverter<'a> {
     {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = metadatas.into_iter().count();
-            return Ok(BooleanArray::from_iter(
-                std::iter::repeat(None).take(num_row_groups),
-            ));
+            return Ok(BooleanArray::from_iter(std::iter::repeat_n(
+                None,
+                num_row_groups,
+            )));
         };
 
         let is_max_value_exact = metadatas
@@ -1518,9 +1519,10 @@ impl<'a> StatisticsConverter<'a> {
     {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = metadatas.into_iter().count();
-            return Ok(BooleanArray::from_iter(
-                std::iter::repeat(None).take(num_row_groups),
-            ));
+            return Ok(BooleanArray::from_iter(std::iter::repeat_n(
+                None,
+                num_row_groups,
+            )));
         };
 
         let is_min_value_exact = metadatas
@@ -1539,9 +1541,10 @@ impl<'a> StatisticsConverter<'a> {
     {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = metadatas.into_iter().count();
-            return Ok(UInt64Array::from_iter(
-                std::iter::repeat(None).take(num_row_groups),
-            ));
+            return Ok(UInt64Array::from_iter(std::iter::repeat_n(
+                None,
+                num_row_groups,
+            )));
         };
 
         let null_counts = metadatas
@@ -1683,9 +1686,10 @@ impl<'a> StatisticsConverter<'a> {
     {
         let Some(parquet_index) = self.parquet_column_index else {
             let num_row_groups = row_group_indices.into_iter().count();
-            return Ok(UInt64Array::from_iter(
-                std::iter::repeat(None).take(num_row_groups),
-            ));
+            return Ok(UInt64Array::from_iter(std::iter::repeat_n(
+                None,
+                num_row_groups,
+            )));
         };
 
         let iter = row_group_indices.into_iter().map(|rg_index| {

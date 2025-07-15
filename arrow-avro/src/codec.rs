@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
-use arrow_schema::DataType::{Decimal128, Decimal256};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
     TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -36,6 +35,14 @@ pub enum Nullability {
     NullFirst,
     /// The nulls are encoded as the second union variant
     NullSecond,
+}
+
+#[cfg(feature = "canonical_extension_types")]
+fn with_extension_type(codec: &Codec, field: Field) -> Field {
+    match codec {
+        Codec::Uuid => field.with_extension_type(arrow_schema::extension::Uuid),
+        _ => field,
+    }
 }
 
 /// An Avro datatype mapped to the arrow data model
@@ -62,8 +69,13 @@ impl AvroDataType {
 
     /// Returns an arrow [`Field`] with the given name
     pub fn field_with_name(&self, name: &str) -> Field {
-        let d = self.codec.data_type();
-        Field::new(name, d, self.nullability.is_some()).with_metadata(self.metadata.clone())
+        let nullable = self.nullability.is_some();
+        let data_type = self.codec.data_type();
+        let field = Field::new(name, data_type, nullable).with_metadata(self.metadata.clone());
+        #[cfg(feature = "canonical_extension_types")]
+        return with_extension_type(&self.codec, field);
+        #[cfg(not(feature = "canonical_extension_types"))]
+        field
     }
 
     /// Returns a reference to the codec used by this data type
@@ -201,7 +213,7 @@ pub enum Codec {
     /// - `scale` (`Option<usize>`): Number of fractional digits.
     /// - `fixed_size` (`Option<usize>`): Size in bytes if backed by a `fixed` type, otherwise `None`.
     Decimal(usize, Option<usize>, Option<usize>),
-    /// Represents Avro Uuid type, a FixedSizeBinary with a length of 16
+    /// Represents Avro Uuid type, a FixedSizeBinary with a length of 16.
     Uuid,
     /// Represents an Avro enum, maps to Arrow's Dictionary(Int32, Utf8) type.
     ///
@@ -251,9 +263,9 @@ impl Codec {
                     }
                 };
                 if too_large_for_128 {
-                    Decimal256(p, s)
+                    DataType::Decimal256(p, s)
                 } else {
-                    Decimal128(p, s)
+                    DataType::Decimal128(p, s)
                 }
             }
             Self::Uuid => DataType::FixedSizeBinary(16),
@@ -480,6 +492,18 @@ fn make_data_type<'a>(
                             codec: Codec::Decimal(precision, Some(scale), Some(size as usize)),
                         }
                     }
+                    Some("duration") => {
+                        if size != 12 {
+                            return Err(ArrowError::ParseError(format!(
+                                "Invalid fixed size for Duration: {size}, must be 12"
+                            )));
+                        };
+                        AvroDataType {
+                            nullability: None,
+                            metadata: md,
+                            codec: Codec::Interval,
+                        }
+                    }
                     _ => AvroDataType {
                         nullability: None,
                         metadata: md,
@@ -544,7 +568,6 @@ fn make_data_type<'a>(
                 (Some("local-timestamp-micros"), c @ Codec::Int64) => {
                     *c = Codec::TimestampMicros(false)
                 }
-                (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Interval,
                 (Some("uuid"), c @ Codec::Utf8) => *c = Codec::Uuid,
                 (Some(logical), _) => {
                     // Insert unrecognized logical type into metadata map
