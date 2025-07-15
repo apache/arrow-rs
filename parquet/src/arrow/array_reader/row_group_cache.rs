@@ -18,9 +18,19 @@
 use arrow_array::ArrayRef;
 use std::collections::HashMap;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+/// Starting row ID for this batch
+///
+/// The `BatchID` is used to identify batches of rows within a row group.
+///
+/// The row_index in the id are relative to the rows being read from the
+/// underlying column reader (which might already have a RowSelection applied)
+///
+/// The `BatchID` for any particular row is `row_index / batch_size`. The
+/// integer division ensures that rows in the same batch share the same
+/// the BatchID which can be calculated quickly from the row index
+# [derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BatchID {
-    pub val: usize, // batch id is row id / batch_size
+    pub val: usize,
 }
 
 /// Cache key that uniquely identifies a batch within a row group
