@@ -14,6 +14,10 @@ updates:
         applies-to: version-updates
         patterns:
           - "prost*"
+      tonic:
+        applies-to: version-updates
+        patterns:
+          - "tonic*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

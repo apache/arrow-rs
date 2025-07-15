@@ -397,9 +397,9 @@ mod test {
     use crate::reader::vlq::VLQDecoder;
     use crate::reader::{read_header, Decoder, ReaderBuilder};
     use crate::test_util::arrow_test_data;
-    use arrow_array::types::Int32Type;
+    use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
-    use arrow_schema::{ArrowError, DataType, Field, Schema};
+    use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, Schema};
     use bytes::{Buf, BufMut, Bytes};
     use futures::executor::block_on;
     use futures::{stream, Stream, StreamExt, TryStreamExt};
@@ -795,5 +795,66 @@ mod test {
             let actual2 = read_file(&file, alt_batch_size, false);
             assert_eq!(actual2, expected);
         }
+    }
+
+    #[test]
+    fn test_duration_uuid() {
+        let batch = read_file("test/data/duration_uuid.avro", 4, false);
+        let schema = batch.schema();
+        let fields = schema.fields();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name(), "duration_field");
+        assert_eq!(
+            fields[0].data_type(),
+            &DataType::Interval(IntervalUnit::MonthDayNano)
+        );
+        assert_eq!(fields[1].name(), "uuid_field");
+        assert_eq!(fields[1].data_type(), &DataType::FixedSizeBinary(16));
+        assert_eq!(batch.num_rows(), 4);
+        assert_eq!(batch.num_columns(), 2);
+        let duration_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+        let expected_duration_array: IntervalMonthDayNanoArray = [
+            Some(IntervalMonthDayNanoType::make_value(1, 15, 500_000_000)),
+            Some(IntervalMonthDayNanoType::make_value(0, 5, 2_500_000_000)),
+            Some(IntervalMonthDayNanoType::make_value(2, 0, 0)),
+            Some(IntervalMonthDayNanoType::make_value(12, 31, 999_000_000)),
+        ]
+        .iter()
+        .copied()
+        .collect();
+        assert_eq!(&expected_duration_array, duration_array);
+        let uuid_array = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        let expected_uuid_array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            [
+                Some([
+                    0xfe, 0x7b, 0xc3, 0x0b, 0x4c, 0xe8, 0x4c, 0x5e, 0xb6, 0x7c, 0x22, 0x34, 0xa2,
+                    0xd3, 0x8e, 0x66,
+                ]),
+                Some([
+                    0xb3, 0x3f, 0x2a, 0xd7, 0x97, 0xb4, 0x4d, 0xe1, 0x8b, 0xfe, 0x94, 0x94, 0x1d,
+                    0x60, 0x15, 0x6e,
+                ]),
+                Some([
+                    0x5f, 0x74, 0x92, 0x64, 0x07, 0x4b, 0x40, 0x05, 0x84, 0xbf, 0x11, 0x5e, 0xa8,
+                    0x4e, 0xd2, 0x0a,
+                ]),
+                Some([
+                    0x08, 0x26, 0xcc, 0x06, 0xd2, 0xe3, 0x45, 0x99, 0xb4, 0xad, 0xaf, 0x5f, 0xa6,
+                    0x90, 0x5c, 0xdb,
+                ]),
+            ]
+            .into_iter(),
+            16,
+        )
+        .unwrap();
+        assert_eq!(&expected_uuid_array, uuid_array);
     }
 }
