@@ -845,7 +845,7 @@ impl<'a> ListBuilder<'a> {
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ListBuilder::try_append_value`].
-    pub fn append_variant<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
+    pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
         self.try_append_value(value).unwrap();
     }
 
@@ -2284,6 +2284,24 @@ mod tests {
         assert_eq!(variant, Variant::new(&metadata, &value));
     }
 
+    #[test]
+    fn test_append_nested_object() {
+        let (m1, v1) = make_nested_object();
+        let variant = Variant::new(&m1, &v1);
+
+        let mut builder = VariantBuilder::new();
+        builder.append_value(variant.clone());
+
+        let (metadata, value) = builder.finish();
+        let result_variant = Variant::new(&metadata, &value);
+
+        {
+            assert_eq!(variant.metadata(), result_variant.metadata());
+        }
+
+        assert_eq!(variant, result_variant);
+    }
+
     /// make an object variant
     fn make_object() -> (Vec<u8>, Vec<u8>) {
         let mut builder = VariantBuilder::new();
@@ -2291,6 +2309,25 @@ mod tests {
         let mut obj = builder.new_object();
         obj.insert("a", true);
         obj.finish().unwrap();
+        builder.finish()
+    }
+
+    /// make a nested object variant
+    fn make_nested_object() -> (Vec<u8>, Vec<u8>) {
+        let mut builder = VariantBuilder::new();
+
+        {
+            let mut outer_obj = builder.new_object();
+
+            {
+                let mut inner_obj = outer_obj.new_object("nested");
+                inner_obj.insert("y", "inner_value");
+                inner_obj.finish().unwrap();
+            }
+
+            outer_obj.finish().unwrap();
+        }
+
         builder.finish()
     }
 
