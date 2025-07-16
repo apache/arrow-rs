@@ -15,18 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`VariantArray`] implementation with hybrid byte-level and high-level APIs
+//! [`VariantArray`] implementation
 
 use crate::field_operations::FieldOperations;
-use arrow::array::{Array, ArrayData, BinaryViewArray, StructArray};
+use arrow::array::{Array, ArrayData, ArrayRef, AsArray, StructArray};
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::DataType;
-use arrow::error::ArrowError;
-use parquet_variant::{Variant, VariantMetadata};
+use arrow_schema::{ArrowError, DataType};
+use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
 
-/// Array implementation for variant data with hybrid byte-level and high-level APIs
+/// An array of Parquet [`Variant`] values
+///
+/// A [`VariantArray`] wraps an Arrow [`StructArray`] that stores the underlying
+/// `metadata` and `value` fields, and adds convenience methods to access
+/// the `Variant`s
+///
+/// See [`VariantArrayBuilder`] for constructing a `VariantArray`.
+///
+/// [`VariantArrayBuilder`]: crate::VariantArrayBuilder
+///
+/// # Specification
+///
+/// 1. This code follows the conventions for storing variants in Arrow `StructArray`
+///    defined by [Extension Type for Parquet Variant arrow] and this [document].
+///    At the time of this writing, this is not yet a standardized Arrow extension type.
+///
+/// [Extension Type for Parquet Variant arrow]: https://github.com/apache/arrow/issues/46908
+/// [document]: https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?usp=sharing
 #[derive(Debug)]
 pub struct VariantArray {
     /// StructArray of up to three fields:
@@ -53,12 +69,29 @@ pub struct VariantArray {
 }
 
 impl VariantArray {
-    /// Create a new VariantArray from a StructArray
-    pub fn try_new(inner: Arc<StructArray>) -> Result<Self, ArrowError> {
-        // Validate that the struct has the expected format
-        if inner.num_columns() != 2 {
+    /// Creates a new `VariantArray` from a [`StructArray`].
+    ///
+    /// # Arguments
+    /// - `inner` - The underlying [`StructArray`] that contains the variant data.
+    ///
+    /// # Returns
+    /// - A new instance of `VariantArray`.
+    ///
+    /// # Errors:
+    /// - If the `StructArray` does not contain the required fields
+    ///
+    /// # Current support
+    /// This structure does not (yet) support the full Arrow Variant Array specification.
+    ///
+    /// Only `StructArrays` with `metadata` and `value` fields that are
+    /// [`BinaryViewArray`] are supported. Shredded values are not currently supported
+    /// nor are using types other than `BinaryViewArray`
+    ///
+    /// [`BinaryViewArray`]: arrow::array::BinaryViewArray
+    pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
+        let Some(inner) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
-                "Expected struct with exactly 2 columns (metadata, value)".to_string(),
+                "Invalid VariantArray: requires StructArray as input".to_string(),
             ));
         };
         // Ensure the StructArray has a metadata field of BinaryView
@@ -160,50 +193,49 @@ impl VariantArray {
         
         Ok(Self { inner })
     }
-    
-    /// Get the metadata field as a BinaryViewArray
-    pub fn metadata_field(&self) -> &BinaryViewArray {
-        self.inner.column(0)
-            .as_any()
-            .downcast_ref::<BinaryViewArray>()
-            .expect("Expected metadata field to be BinaryViewArray")
+
+    /// Returns a reference to the underlying [`StructArray`].
+    pub fn inner(&self) -> &StructArray {
+        &self.inner
     }
-    
-    /// Get the value field as a BinaryViewArray
-    pub fn value_field(&self) -> &BinaryViewArray {
-        self.inner.column(1)
-            .as_any()
-            .downcast_ref::<BinaryViewArray>()
-            .expect("Expected value field to be BinaryViewArray")
+
+    /// Returns the inner [`StructArray`], consuming self
+    pub fn into_inner(self) -> StructArray {
+        self.inner
     }
-    
+
+    /// Return the [`Variant`] instance stored at the given row
+    ///
+    /// Panics if the index is out of bounds.
+    ///
+    /// Note: Does not do deep validation of the [`Variant`], so it is up to the
+    /// caller to ensure that the metadata and value were constructed correctly.
+    pub fn value(&self, index: usize) -> Variant {
+        let metadata = self.metadata_field().as_binary_view().value(index);
+        let value = self.value_field().as_binary_view().value(index);
+        Variant::new(metadata, value)
+    }
+
+    /// Return a reference to the metadata field of the [`StructArray`]
+    pub fn metadata_field(&self) -> &ArrayRef {
+        // spec says fields order is not guaranteed, so we search by name
+        self.inner.column_by_name("metadata").unwrap()
+    }
+
+    /// Return a reference to the value field of the `StructArray`
+    pub fn value_field(&self) -> &ArrayRef {
+        // spec says fields order is not guaranteed, so we search by name
+        self.inner.column_by_name("value").unwrap()
+    }
+
     /// Get the metadata bytes for a specific index
     pub fn metadata(&self, index: usize) -> &[u8] {
-        self.metadata_field().value(index).as_ref()
+        self.metadata_field().as_binary_view().value(index).as_ref()
     }
     
     /// Get the value bytes for a specific index
     pub fn value_bytes(&self, index: usize) -> &[u8] {
-        self.value_field().value(index).as_ref()
-    }
-    
-    /// Get the parsed variant at a specific index
-    pub fn value(&self, index: usize) -> Variant {
-        if index >= self.len() {
-            panic!("Index {} out of bounds for array of length {}", index, self.len());
-        }
-        
-        if self.is_null(index) {
-            return Variant::Null;
-        }
-        
-        let metadata = self.metadata(index);
-        let value = self.value_bytes(index);
-        
-        let variant_metadata = VariantMetadata::try_new(metadata)
-            .expect("Failed to parse variant metadata");
-        Variant::try_new_with_metadata(variant_metadata, value)
-            .expect("Failed to create variant from metadata and value")
+        self.value_field().as_binary_view().value(index).as_ref()
     }
     
     /// Get value at a specific path for the variant at the given index
@@ -342,18 +374,15 @@ impl Array for VariantArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
-    
+
     fn to_data(&self) -> ArrayData {
         self.inner.to_data()
     }
-    
+
     fn into_data(self) -> ArrayData {
-        match Arc::try_unwrap(self.inner) {
-            Ok(inner) => inner.into_data(),
-            Err(inner) => inner.to_data(),
-        }
+        self.inner.into_data()
     }
-    
+
     fn data_type(&self) -> &DataType {
         self.inner.data_type()
     }
@@ -368,37 +397,110 @@ impl Array for VariantArray {
             value_ref: val,
         })
     }
-    
+
     fn len(&self) -> usize {
         self.inner.len()
     }
-    
+
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
-    
-    fn nulls(&self) -> Option<&NullBuffer> {
-        self.inner.nulls()
-    }
-    
+
     fn offset(&self) -> usize {
         self.inner.offset()
     }
-    
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.inner.nulls()
+    }
+
     fn get_buffer_memory_size(&self) -> usize {
         self.inner.get_buffer_memory_size()
     }
-    
+
     fn get_array_memory_size(&self) -> usize {
         self.inner.get_array_memory_size()
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
     use crate::variant_array_builder::VariantArrayBuilder;
+    use arrow::array::{BinaryArray, BinaryViewArray};
+    use arrow_schema::{Field, Fields};
     use parquet_variant::VariantBuilder;
+
+    #[test]
+    fn invalid_not_a_struct_array() {
+        let array = make_binary_view_array();
+        // Should fail because the input is not a StructArray
+        let err = VariantArray::try_new(array);
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            "Invalid argument error: Invalid VariantArray: requires StructArray as input"
+        );
+    }
+
+    #[test]
+    fn invalid_missing_metadata() {
+        let fields = Fields::from(vec![Field::new("value", DataType::BinaryView, true)]);
+        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
+        // Should fail because the StructArray does not contain a 'metadata' field
+        let err = VariantArray::try_new(Arc::new(array));
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'metadata' field"
+        );
+    }
+
+    #[test]
+    fn invalid_missing_value() {
+        let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
+        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
+        // Should fail because the StructArray does not contain a 'value' field
+        let err = VariantArray::try_new(Arc::new(array));
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'value' field"
+        );
+    }
+
+    #[test]
+    fn invalid_metadata_field_type() {
+        let fields = Fields::from(vec![
+            Field::new("metadata", DataType::Binary, true), // Not yet supported
+            Field::new("value", DataType::BinaryView, true),
+        ]);
+        let array = StructArray::new(
+            fields,
+            vec![make_binary_array(), make_binary_view_array()],
+            None,
+        );
+        let err = VariantArray::try_new(Arc::new(array));
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            "Not yet implemented: VariantArray 'metadata' field must be BinaryView, got Binary"
+        );
+    }
+
+    #[test]
+    fn invalid_value_field_type() {
+        let fields = Fields::from(vec![
+            Field::new("metadata", DataType::BinaryView, true),
+            Field::new("value", DataType::Binary, true), // Not yet supported
+        ]);
+        let array = StructArray::new(
+            fields,
+            vec![make_binary_view_array(), make_binary_array()],
+            None,
+        );
+        let err = VariantArray::try_new(Arc::new(array));
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            "Not yet implemented: VariantArray 'value' field must be BinaryView, got Binary"
+        );
+    }
 
     fn create_test_variant_array() -> VariantArray {
         let mut builder = VariantArrayBuilder::new(2);
@@ -510,10 +612,18 @@ mod tests {
         assert_eq!(value_field.len(), 2);
         
         // Check that metadata and value bytes are non-empty
-        assert!(!metadata_field.value(0).is_empty());
-        assert!(!value_field.value(0).is_empty());
-        assert!(!metadata_field.value(1).is_empty());
-        assert!(!value_field.value(1).is_empty());
+        assert!(!metadata_field.as_binary_view().value(0).is_empty());
+        assert!(!value_field.as_binary_view().value(0).is_empty());
+        assert!(!metadata_field.as_binary_view().value(1).is_empty());
+        assert!(!value_field.as_binary_view().value(1).is_empty());
+    }
+
+    fn make_binary_view_array() -> ArrayRef {
+        Arc::new(BinaryViewArray::from(vec![b"test" as &[u8]]))
+    }
+
+    fn make_binary_array() -> ArrayRef {
+        Arc::new(BinaryArray::from(vec![b"test" as &[u8]]))
     }
 }
 

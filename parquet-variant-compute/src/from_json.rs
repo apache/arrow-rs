@@ -54,7 +54,7 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, Ar
 #[cfg(test)]
 mod test {
     use crate::batch_json_string_to_variant;
-    use arrow::array::{Array, ArrayRef, StringArray};
+    use arrow::array::{Array, ArrayRef, AsArray, StringArray};
     use arrow_schema::ArrowError;
     use std::sync::Arc;
 
@@ -103,10 +103,10 @@ mod test {
         assert!(!value_array.is_null(4));
         
         // Null rows should have 0-length metadata and value
-        assert_eq!(metadata_array.value(1).len(), 0);
-        assert_eq!(value_array.value(1).len(), 0);
-        assert_eq!(metadata_array.value(4).len(), 0);
-        assert_eq!(value_array.value(4).len(), 0);
+        assert_eq!(metadata_array.as_binary_view().value(1).len(), 0);
+        assert_eq!(value_array.as_binary_view().value(1).len(), 0);
+        assert_eq!(metadata_array.as_binary_view().value(4).len(), 0);
+        assert_eq!(value_array.as_binary_view().value(4).len(), 0);
         Ok(())
     }
 }
