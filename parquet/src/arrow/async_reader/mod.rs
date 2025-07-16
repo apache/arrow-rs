@@ -38,7 +38,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
-use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptions, RowGroupCache, RowGroups};
+use crate::arrow::array_reader::{
+    ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache, RowGroups,
+};
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection,
@@ -607,11 +609,16 @@ where
             metadata: self.metadata.as_ref(),
         };
 
+        let cache_options_builder =
+            CacheOptionsBuilder::new(&cache_projection, row_group_cache.clone());
+
         let filter = self.filter.as_mut();
         let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
 
         // Update selection based on any filters
         if let Some(filter) = filter {
+            let cache_options = cache_options_builder.clone().producer();
+
             for predicate in filter.predicates.iter_mut() {
                 if !plan_builder.selects_any() {
                     return Ok((self, None)); // ruled out entire row group
@@ -631,15 +638,8 @@ where
                 let mut cache_projection = predicate.projection().clone();
                 cache_projection.intersect(&projection);
                 let array_reader = ArrayReaderBuilder::new(&row_group)
-                    .build_array_reader_with_cache(
-                        self.fields.as_deref(),
-                        predicate.projection(),
-                        CacheOptions {
-                            projection_mask: &cache_projection,
-                            cache: row_group_cache.clone(),
-                            role: crate::arrow::array_reader::CacheRole::Producer,
-                        },
-                    )?;
+                    .with_cache_options(Some(&cache_options))
+                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
@@ -691,15 +691,10 @@ where
 
         let plan = plan_builder.build();
 
-        let array_reader = ArrayReaderBuilder::new(&row_group).build_array_reader_with_cache(
-            self.fields.as_deref(),
-            &projection,
-            CacheOptions {
-                projection_mask: &cache_projection,
-                cache: row_group_cache.clone(),
-                role: crate::arrow::array_reader::CacheRole::Consumer,
-            },
-        )?;
+        let cache_options = cache_options_builder.consumer();
+        let array_reader = ArrayReaderBuilder::new(&row_group)
+            .with_cache_options(Some(&cache_options))
+            .build_array_reader(self.fields.as_deref(), &projection)?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
