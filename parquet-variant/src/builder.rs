@@ -506,6 +506,7 @@ enum ParentState<'a> {
         metadata_builder: &'a mut MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
         field_name: &'a str,
+        object_start_offset: usize,
     },
 }
 
@@ -999,8 +1000,17 @@ impl<'a> ListBuilder<'a> {
         let offset_size = int_size(data_size);
 
         // Get parent's buffer
+        let offset_shift = match &self.parent_state {
+            ParentState::Object {
+                object_start_offset,
+                ..
+            } => *object_start_offset,
+            _ => 0,
+        };
         let parent_buffer = self.parent_state.buffer();
-        let starting_offset = parent_buffer.offset();
+        // as object builder has been reused the parent buffer,
+        // we need to shift the offset by the starting offset of the parent object
+        let starting_offset = parent_buffer.offset() - offset_shift;
 
         // Write header
         let header = array_header(is_large, offset_size);
@@ -1114,6 +1124,7 @@ impl<'a> ObjectBuilder<'a> {
                     metadata_builder,
                     fields: &mut self.fields,
                     field_name: key,
+                    object_start_offset: self.object_start_offset,
                 };
                 (state, validate_unique_fields)
             }
@@ -1127,6 +1138,7 @@ impl<'a> ObjectBuilder<'a> {
                     metadata_builder,
                     fields: &mut self.fields,
                     field_name: key,
+                    object_start_offset: self.object_start_offset,
                 };
                 (state, validate_unique_fields)
             }
@@ -1140,6 +1152,7 @@ impl<'a> ObjectBuilder<'a> {
                     metadata_builder,
                     fields: &mut self.fields,
                     field_name: key,
+                    object_start_offset: self.object_start_offset,
                 };
                 (state, validate_unique_fields)
             }
@@ -1258,7 +1271,15 @@ impl<'a> ObjectBuilder<'a> {
         buffer[header_pos..header_pos + offset_size as usize]
             .copy_from_slice(&data_size_bytes[..offset_size as usize]);
 
-        self.parent_state.finish(starting_offset);
+        let start_offset_shift = match &self.parent_state {
+            ParentState::Object {
+                object_start_offset,
+                ..
+            } => *object_start_offset,
+            _ => 0,
+        };
+        self.parent_state
+            .finish(starting_offset - start_offset_shift);
 
         // mark that this object has been finished
         self.has_been_finished = true;
