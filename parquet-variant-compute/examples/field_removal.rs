@@ -107,10 +107,4 @@ fn main() {
         }
     }
     
-    println!("\n=== Performance Features ===");
-    println!("✓ Efficient field removal at byte level");
-    println!("✓ Support for nested field removal");
-    println!("✓ Batch operations for cleaning multiple fields");
-    println!("✓ Maintains data integrity during field removal");
-    println!("✓ Foundation for data governance and privacy compliance");
 } 
