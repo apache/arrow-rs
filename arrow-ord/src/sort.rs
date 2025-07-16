@@ -202,6 +202,10 @@ fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
                 }
             });
 
+            assert_eq!(null_idx, null_count);
+            assert_eq!(valid_idx, len - null_count);
+            // Safety: The new lengths match the initial capacity as asserted above,
+            // the bounds checks while writing also ensure they less than or equal to the capacity.
             unsafe {
                 valid_indices.set_len(valid_idx);
                 null_indices.set_len(null_idx);
