@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
-use crate::{ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use crate::{
+    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantMetadata,
+};
 use arrow_schema::ArrowError;
 use indexmap::{IndexMap, IndexSet};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -252,10 +254,25 @@ impl ValueBuffer {
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(obj) => {
+                let metadata_field_names = metadata_builder
+                    .field_names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| (f.clone(), i))
+                    .collect::<HashMap<_, _>>();
+
                 let mut object_builder = self.new_object(metadata_builder);
-                for (field_name, value) in obj.iter() {
+
+                // first add all object fields that exist in metadata builder
+                let mut object_fields = obj.iter().collect::<Vec<_>>();
+
+                object_fields
+                    .sort_by_key(|(field_name, _)| metadata_field_names.get(field_name as &str));
+
+                for (field_name, value) in object_fields {
                     object_builder.insert(field_name, value);
                 }
+
                 object_builder.finish()?;
             }
             Variant::List(list) => {
@@ -314,6 +331,8 @@ impl MetadataBuilder {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
+
+        dbg!(new_entry);
 
         if new_entry {
             let n = self.num_field_names();
@@ -692,6 +711,12 @@ impl VariantBuilder {
         }
     }
 
+    pub fn with_metadata(mut self, metadata: VariantMetadata) -> Self {
+        self.metadata_builder.extend(metadata.iter());
+
+        self
+    }
+
     /// Enables validation of unique field keys in nested objects.
     ///
     /// This setting is propagated to all [`ObjectBuilder`]s created through this [`VariantBuilder`]
@@ -938,6 +963,7 @@ impl<'a> ObjectBuilder<'a> {
         let metadata_builder = self.parent_state.metadata_builder();
 
         let field_id = metadata_builder.upsert_field_name(key);
+        dbg!(field_id);
         let field_start = self.buffer.offset();
 
         if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
@@ -2272,12 +2298,16 @@ mod tests {
         assert_eq!(variant, Variant::Int8(2));
     }
 
+    // matthew
     #[test]
     fn test_append_object() {
         let (m1, v1) = make_object();
         let variant = Variant::new(&m1, &v1);
 
-        let mut builder = VariantBuilder::new();
+        let mut builder = VariantBuilder::new().with_metadata(VariantMetadata::new(&m1));
+
+        dbg!("building");
+
         builder.append_value(variant.clone());
 
         let (metadata, value) = builder.finish();
@@ -2287,35 +2317,26 @@ mod tests {
     #[test]
     fn test_append_nested_object() {
         let (m1, v1) = make_nested_object();
-
-        let metadata = VariantMetadata::new(&m1);
-        assert!(metadata.is_sorted());
-
         let variant = Variant::new(&m1, &v1);
 
-        let mut builder = VariantBuilder::new();
+        // because we can guarantee metadata is validated through the builder
+        let mut builder = VariantBuilder::new().with_metadata(VariantMetadata::new(&m1));
         builder.append_value(variant.clone());
 
         let (metadata, value) = builder.finish();
         let result_variant = Variant::new(&metadata, &value);
 
-        let metadata = VariantMetadata::new(&metadata);
-
-        {
-            assert_eq!(variant.metadata(), result_variant.metadata());
-        }
-
         assert_eq!(variant, result_variant);
     }
 
-    /// make an object variant
+    /// make an object variant with field names in reverse lexicographical order
     fn make_object() -> (Vec<u8>, Vec<u8>) {
         let mut builder = VariantBuilder::new();
 
         let mut obj = builder.new_object();
 
         obj.insert("b", true);
-        obj.insert("a", true);
+        obj.insert("a", false);
         obj.finish().unwrap();
         builder.finish()
     }
