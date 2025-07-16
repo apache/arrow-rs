@@ -796,13 +796,12 @@ impl VariantBuilder {
         }
     }
 
-
     pub fn with_metadata(mut self, metadata: VariantMetadata) -> Self {
         self.metadata_builder.extend(metadata.iter());
 
         self
     }
-  
+
     /// Create a new VariantBuilder that will write the metadata and values to
     /// the specified buffers.
     pub fn new_with_buffers(metadata_buffer: Vec<u8>, value_buffer: Vec<u8>) -> Self {
