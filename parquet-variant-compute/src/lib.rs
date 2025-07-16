@@ -15,13 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Suppress warnings from arrow dependencies
+#![allow(unknown_lints)]
+#![allow(clippy::transmute_int_to_float)]
+
 mod from_json;
 mod to_json;
 mod variant_array;
 mod variant_array_builder;
 pub mod variant_get;
 
-pub use variant_array::VariantArray;
+pub use variant_array::{VariantArray, VariantPath, VariantPathElement};
 pub use variant_array_builder::VariantArrayBuilder;
 
 pub use from_json::batch_json_string_to_variant;

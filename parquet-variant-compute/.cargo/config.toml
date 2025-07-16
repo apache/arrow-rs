@@ -1,0 +1,2 @@
+[build]
+rustflags = ["-A", "unknown-lints", "-A", "clippy::transmute-int-to-float"] 
