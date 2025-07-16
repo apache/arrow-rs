@@ -187,9 +187,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Nested values are handled specially by ObjectBuilder and ListBuilder"
-    )]
     fn get_complex_variant() {
         single_variant_get_test(
             r#"{"top_level_field": {"inner_field": 1234}}"#,
