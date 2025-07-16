@@ -16,11 +16,12 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{
-    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantMetadata,
+    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantList,
+    VariantMetadata, VariantObject,
 };
 use arrow_schema::ArrowError;
 use indexmap::{IndexMap, IndexSet};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -216,6 +217,57 @@ impl ValueBuffer {
         self.append_slice(value.as_bytes());
     }
 
+    fn append_object(&mut self, metadata_builder: &mut MetadataBuilder, obj: VariantObject) {
+        let mut object_builder = self.new_object(metadata_builder);
+
+        for (field_name, value) in obj.iter() {
+            object_builder.insert(field_name, value);
+        }
+
+        object_builder.finish().unwrap();
+    }
+
+    fn try_append_object(
+        &mut self,
+        metadata_builder: &mut MetadataBuilder,
+        obj: VariantObject,
+    ) -> Result<(), ArrowError> {
+        let mut object_builder = self.new_object(metadata_builder);
+
+        for res in obj.iter_try() {
+            let (field_name, value) = res?;
+            object_builder.try_insert(field_name, value)?;
+        }
+
+        object_builder.finish()?;
+
+        Ok(())
+    }
+
+    fn append_list(&mut self, metadata_builder: &mut MetadataBuilder, list: VariantList) {
+        let mut list_builder = self.new_list(metadata_builder);
+        for value in list.iter() {
+            list_builder.append_value(value);
+        }
+        list_builder.finish();
+    }
+
+    fn try_append_list(
+        &mut self,
+        metadata_builder: &mut MetadataBuilder,
+        list: VariantList,
+    ) -> Result<(), ArrowError> {
+        let mut list_builder = self.new_list(metadata_builder);
+        for res in list.iter_try() {
+            let value = res?;
+            list_builder.try_append_value(value)?;
+        }
+
+        list_builder.finish();
+
+        Ok(())
+    }
+
     fn offset(&self) -> usize {
         self.0.len()
     }
@@ -252,9 +304,31 @@ impl ValueBuffer {
         variant: Variant<'m, 'd>,
         metadata_builder: &mut MetadataBuilder,
     ) {
-        self.try_append_variant(variant, metadata_builder).unwrap();
+        match variant {
+            Variant::Null => self.append_null(),
+            Variant::BooleanTrue => self.append_bool(true),
+            Variant::BooleanFalse => self.append_bool(false),
+            Variant::Int8(v) => self.append_int8(v),
+            Variant::Int16(v) => self.append_int16(v),
+            Variant::Int32(v) => self.append_int32(v),
+            Variant::Int64(v) => self.append_int64(v),
+            Variant::Date(v) => self.append_date(v),
+            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
+            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
+            Variant::Float(v) => self.append_float(v),
+            Variant::Double(v) => self.append_double(v),
+            Variant::Binary(v) => self.append_binary(v),
+            Variant::String(s) => self.append_string(s),
+            Variant::ShortString(s) => self.append_short_string(s),
+            Variant::Object(obj) => self.append_object(metadata_builder, obj),
+            Variant::List(list) => self.append_list(metadata_builder, list),
+        }
     }
 
+    /// Appends a variant to the buffer
     fn try_append_variant<'m, 'd>(
         &mut self,
         variant: Variant<'m, 'd>,
@@ -279,35 +353,8 @@ impl ValueBuffer {
             Variant::Binary(v) => self.append_binary(v),
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
-            Variant::Object(obj) => {
-                let metadata_field_names = metadata_builder
-                    .field_names
-                    .iter()
-                    .enumerate()
-                    .map(|(i, f)| (f.clone(), i))
-                    .collect::<HashMap<_, _>>();
-
-                let mut object_builder = self.new_object(metadata_builder);
-
-                // first add all object fields that exist in metadata builder
-                let mut object_fields = obj.iter().collect::<Vec<_>>();
-
-                object_fields
-                    .sort_by_key(|(field_name, _)| metadata_field_names.get(field_name as &str));
-
-                for (field_name, value) in object_fields {
-                    object_builder.insert(field_name, value);
-                }
-
-                object_builder.finish()?;
-            }
-            Variant::List(list) => {
-                let mut list_builder = self.new_list(metadata_builder);
-                for value in list.iter() {
-                    list_builder.append_value(value);
-                }
-                list_builder.finish();
-            }
+            Variant::Object(obj) => self.try_append_object(metadata_builder, obj)?,
+            Variant::List(list) => self.try_append_list(metadata_builder, list)?,
         }
 
         Ok(())
