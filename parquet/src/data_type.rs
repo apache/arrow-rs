@@ -33,7 +33,7 @@ use crate::util::bit_util::FromBytes;
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Int96 {
     value: [u32; 3],
 }
@@ -119,13 +119,43 @@ impl Int96 {
     }
 
     #[inline]
+    fn get_days(&self) -> i32 {
+        self.data()[2] as i32
+    }
+
+    #[inline]
+    fn get_nanos(&self) -> i64 {
+        ((self.data()[1] as i64) << 32) + self.data()[0] as i64
+    }
+
+    #[inline]
     fn data_as_days_and_nanos(&self) -> (i32, i64) {
-        let day = self.data()[2] as i32;
-        let nanos = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
-        (day, nanos)
+        (self.get_days(), self.get_nanos())
     }
 }
 
+impl PartialOrd for Int96 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Int96 {
+    /// Order `Int96` correctly for (deprecated) timestamp types.
+    ///
+    /// Note: this is done even though the Int96 type is deprecated and the
+    /// [spec does not define the sort order]
+    /// because some engines, notably Spark and Databricks Photon still write
+    /// Int96 timestamps and rely on their order for optimization.
+    ///
+    /// [spec does not define the sort order]: https://github.com/apache/parquet-format/blob/cf943c197f4fad826b14ba0c40eb0ffdab585285/src/main/thrift/parquet.thrift#L1079
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.get_days().cmp(&other.get_days()) {
+            Ordering::Equal => self.get_nanos().cmp(&other.get_nanos()),
+            ord => ord,
+        }
+    }
+}
 impl From<Vec<u32>> for Int96 {
     fn from(buf: Vec<u32>) -> Self {
         assert_eq!(buf.len(), 3);
