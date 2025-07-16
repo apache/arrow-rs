@@ -15,97 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`VariantArray`] implementation
+//! [`VariantArray`] implementation with hybrid byte-level and high-level APIs
 
-use arrow::array::{Array, ArrayData, ArrayRef, AsArray, StructArray};
+use crate::field_operations::FieldOperations;
+use arrow::array::{Array, ArrayData, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
-use arrow_schema::{ArrowError, DataType};
-use parquet_variant::Variant;
+use arrow::datatypes::DataType;
+use arrow::error::ArrowError;
+use parquet_variant::{Variant, VariantMetadata};
 use std::any::Any;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum VariantPathElement {
-    /// Access a field in an object by name
-    Field(String),
-    /// Access an element in an array by index
-    Index(usize),
-}
-
-/// A path specification for accessing nested variant data
-#[derive(Debug, Clone, PartialEq)]
-pub struct VariantPath {
-    elements: Vec<VariantPathElement>,
-}
-
-impl VariantPath {
-    pub fn new() -> Self {
-        Self {
-            elements: Vec::new(),
-        }
-    }
-
-    /// Create a path from a single field name
-    pub fn field(name: impl Into<String>) -> Self {
-        Self {
-            elements: vec![VariantPathElement::Field(name.into())],
-        }
-    }
-
-    /// Create a path from a single array index
-    pub fn index(idx: usize) -> Self {
-        Self {
-            elements: vec![VariantPathElement::Index(idx)],
-        }
-    }
-
-    /// Add a field access to this path
-    pub fn push_field(mut self, name: impl Into<String>) -> Self {
-        self.elements.push(VariantPathElement::Field(name.into()));
-        self
-    }
-
-    /// Add an array index access to this path
-    pub fn push_index(mut self, idx: usize) -> Self {
-        self.elements.push(VariantPathElement::Index(idx));
-        self
-    }
-
-    /// Get the path elements
-    pub fn elements(&self) -> &[VariantPathElement] {
-        &self.elements
-    }
-
-    /// Check if this path is empty
-    pub fn is_empty(&self) -> bool {
-        self.elements.is_empty()
-    }
-}
-
-impl Default for VariantPath {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// An array of Parquet [`Variant`] values
-///
-/// A [`VariantArray`] wraps an Arrow [`StructArray`] that stores the underlying
-/// `metadata` and `value` fields, and adds convenience methods to access
-/// the `Variant`s
-///
-/// See [`VariantArrayBuilder`] for constructing a `VariantArray`.
-///
-/// [`VariantArrayBuilder`]: crate::VariantArrayBuilder
-///
-/// # Specification
-///
-/// 1. This code follows the conventions for storing variants in Arrow `StructArray`
-///    defined by [Extension Type for Parquet Variant arrow] and this [document].
-///    At the time of this writing, this is not yet a standardized Arrow extension type.
-///
-/// [Extension Type for Parquet Variant arrow]: https://github.com/apache/arrow/issues/46908
-/// [document]: https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?usp=sharing
+/// Array implementation for variant data with hybrid byte-level and high-level APIs
 #[derive(Debug)]
 pub struct VariantArray {
     /// StructArray of up to three fields:
@@ -132,29 +53,12 @@ pub struct VariantArray {
 }
 
 impl VariantArray {
-    /// Creates a new `VariantArray` from a [`StructArray`].
-    ///
-    /// # Arguments
-    /// - `inner` - The underlying [`StructArray`] that contains the variant data.
-    ///
-    /// # Returns
-    /// - A new instance of `VariantArray`.
-    ///
-    /// # Errors:
-    /// - If the `StructArray` does not contain the required fields
-    ///
-    /// # Current support
-    /// This structure does not (yet) support the full Arrow Variant Array specification.
-    ///
-    /// Only `StructArrays` with `metadata` and `value` fields that are
-    /// [`BinaryViewArray`] are supported. Shredded values are not currently supported
-    /// nor are using types other than `BinaryViewArray`
-    ///
-    /// [`BinaryViewArray`]: arrow::array::BinaryViewArray
-    pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
-        let Some(inner) = inner.as_struct_opt() else {
+    /// Create a new VariantArray from a StructArray
+    pub fn try_new(inner: Arc<StructArray>) -> Result<Self, ArrowError> {
+        // Validate that the struct has the expected format
+        if inner.num_columns() != 2 {
             return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: requires StructArray as input".to_string(),
+                "Expected struct with exactly 2 columns (metadata, value)".to_string(),
             ));
         };
         // Ensure the StructArray has a metadata field of BinaryView
@@ -254,127 +158,125 @@ impl VariantArray {
         // Start with the root variant
         let mut current = self.value(index);
         
-        // Navigate through the path elements
+        Ok(Self { inner })
+    }
+    
+    /// Get the metadata field as a BinaryViewArray
+    pub fn metadata_field(&self) -> &BinaryViewArray {
+        self.inner.column(0)
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .expect("Expected metadata field to be BinaryViewArray")
+    }
+    
+    /// Get the value field as a BinaryViewArray
+    pub fn value_field(&self) -> &BinaryViewArray {
+        self.inner.column(1)
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .expect("Expected value field to be BinaryViewArray")
+    }
+    
+    /// Get the metadata bytes for a specific index
+    pub fn metadata(&self, index: usize) -> &[u8] {
+        self.metadata_field().value(index).as_ref()
+    }
+    
+    /// Get the value bytes for a specific index
+    pub fn value_bytes(&self, index: usize) -> &[u8] {
+        self.value_field().value(index).as_ref()
+    }
+    
+    /// Get the parsed variant at a specific index
+    pub fn value(&self, index: usize) -> Variant {
+        if index >= self.len() {
+            panic!("Index {} out of bounds for array of length {}", index, self.len());
+        }
+        
+        if self.is_null(index) {
+            return Variant::Null;
+        }
+        
+        let metadata = self.metadata(index);
+        let value = self.value_bytes(index);
+        
+        let variant_metadata = VariantMetadata::try_new(metadata)
+            .expect("Failed to parse variant metadata");
+        Variant::try_new_with_metadata(variant_metadata, value)
+            .expect("Failed to create variant from metadata and value")
+    }
+    
+    /// Get value at a specific path for the variant at the given index
+    /// 
+    /// Uses high-level Variant API for convenience. Returns a Variant object that can be
+    /// directly used with standard variant operations.
+    pub fn get_path(&self, index: usize, path: &crate::field_operations::VariantPath) -> Option<parquet_variant::Variant> {
+        if index >= self.len() || self.is_null(index) {
+            return None;
+        }
+        
+        let mut current_variant = self.value(index);
+        
         for element in path.elements() {
             match element {
-                VariantPathElement::Field(field_name) => {
-                    current = current.get_object_field(field_name)?;
+                crate::field_operations::VariantPathElement::Field(field_name) => {
+                    current_variant = current_variant.get_object_field(field_name)?;
                 }
-                VariantPathElement::Index(idx) => {
-                    current = current.get_list_element(*idx)?;
+                crate::field_operations::VariantPathElement::Index(idx) => {
+                    current_variant = current_variant.get_list_element(*idx)?;
                 }
             }
         }
-
-        Some(current)
+        
+        Some(current_variant)
     }
-
-    /// Extract multiple fields from the variant at the specified row using paths.
-    ///
-    /// This method is more efficient than calling `get_path` multiple times
-    /// for the same row, as it avoids repeated work.
-    ///
-    /// # Arguments
-    /// * `index` - The row index in the array
-    /// * `paths` - The paths to the fields to extract
-    ///
-    /// # Returns
-    /// A vector of `Option<Variant>` where each element corresponds to the
-    /// field at the same index in the paths vector.
-    ///
-    /// # Example
-    /// ```
-    /// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantPath};
-    /// # use parquet_variant::VariantBuilder;
-    /// # let mut builder = VariantArrayBuilder::new(1);
-    /// # let mut variant_builder = VariantBuilder::new();
-    /// # let mut obj = variant_builder.new_object();
-    /// # obj.insert("name", "Alice");
-    /// # obj.insert("email", "alice@example.com");
-    /// # obj.insert("timestamp", 1234567890i64);
-    /// # obj.finish().unwrap();
-    /// # let (metadata, value) = variant_builder.finish();
-    /// # builder.append_variant_buffers(&metadata, &value);
-    /// # let variant_array = builder.build();
-    /// let paths = vec![
-    ///     VariantPath::field("name"),
-    ///     VariantPath::field("email"),
-    ///     VariantPath::field("timestamp"),
-    /// ];
-    /// let fields = variant_array.get_paths(0, &paths);
-    /// ```
-    pub fn get_paths(&self, index: usize, paths: &[VariantPath]) -> Vec<Option<Variant>> {
-        paths.iter().map(|path| self.get_path(index, path)).collect()
+    
+    /// Get values at multiple paths for the variant at the given index
+    /// 
+    /// Convenience method that applies `get_path()` to multiple paths at once.
+    /// Useful for extracting multiple fields from a single variant row.
+    pub fn get_paths(&self, index: usize, paths: &[crate::field_operations::VariantPath]) -> Vec<Option<parquet_variant::Variant>> {
+        let mut results = Vec::new();
+        for path in paths {
+            results.push(self.get_path(index, path));
+        }
+        results
     }
-
-    /// Extract a specific field from all rows in the array.
-    ///
-    /// This method is optimized for extracting the same field from many rows,
-    /// which is a common operation in analytical queries.
-    ///
-    /// # Arguments
-    /// * `path` - The path to the field to extract from all rows
-    ///
-    /// # Returns
-    /// A vector of `Option<Variant>` where each element corresponds to the
-    /// field value at the same row index.
-    ///
-    /// # Example
-    /// ```
-    /// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantPath};
-    /// # use parquet_variant::VariantBuilder;
-    /// # let mut builder = VariantArrayBuilder::new(1);
-    /// # let mut variant_builder = VariantBuilder::new();
-    /// # let mut obj = variant_builder.new_object();
-    /// # obj.insert("id", 123i32);
-    /// # obj.finish().unwrap();
-    /// # let (metadata, value) = variant_builder.finish();
-    /// # builder.append_variant_buffers(&metadata, &value);
-    /// # let variant_array = builder.build();
-    /// let path = VariantPath::field("id");
-    /// let user_ids = variant_array.extract_field(&path);
-    /// ```
-    pub fn extract_field(&self, path: &VariantPath) -> Vec<Option<Variant>> {
-        (0..self.len())
-            .map(|i| self.get_path(i, path))
-            .collect()
+    
+    /// Get the field names for an object at the given index
+    pub fn get_field_names(&self, index: usize) -> Vec<String> {
+        if index >= self.len() {
+            return vec![];
+        }
+        
+        if self.is_null(index) {
+            return vec![];
+        }
+        
+        let variant = self.value(index);
+        if let Some(obj) = variant.as_object() {
+            let mut paths = Vec::new();
+            for i in 0..obj.len() {
+                if let Some(field_name) = obj.field_name(i) {
+                    paths.push(field_name.to_string());
+                }
+            }
+            paths
+        } else {
+            vec![]
+        }
     }
-
-    /// Extract multiple fields from all rows in the array.
-    ///
-    /// This method is optimized for extracting multiple fields from many rows,
-    /// which is essential for efficient shredding operations.
-    ///
-    /// # Arguments
-    /// * `paths` - The paths to the fields to extract from all rows
-    ///
-    /// # Returns
-    /// A vector of vectors where the outer vector corresponds to rows and
-    /// the inner vector corresponds to the fields at the same index in paths.
-    ///
-    /// # Example
-    /// ```
-    /// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantPath};
-    /// # use parquet_variant::VariantBuilder;
-    /// # let mut builder = VariantArrayBuilder::new(1);
-    /// # let mut variant_builder = VariantBuilder::new();
-    /// # let mut obj = variant_builder.new_object();
-    /// # obj.insert("name", "Alice");
-    /// # obj.insert("age", 30i32);
-    /// # obj.finish().unwrap();
-    /// # let (metadata, value) = variant_builder.finish();
-    /// # builder.append_variant_buffers(&metadata, &value);
-    /// # let variant_array = builder.build();
-    /// let paths = vec![
-    ///     VariantPath::field("name"),
-    ///     VariantPath::field("age"),
-    /// ];
-    /// let extracted_data = variant_array.extract_fields(&paths);
-    /// ```
-    pub fn extract_fields(&self, paths: &[VariantPath]) -> Vec<Vec<Option<Variant>>> {
-        (0..self.len())
-            .map(|i| self.get_paths(i, paths))
-            .collect()
+    
+    /// Extract field values by path from all variants in the array
+    /// 
+    /// Applies `get_path()` to a single path across all rows in the array.
+    /// Useful for extracting a column of values from nested variant data.
+    pub fn extract_field_by_path(&self, path: &crate::field_operations::VariantPath) -> Vec<Option<parquet_variant::Variant>> {
+        let mut results = Vec::new();
+        for i in 0..self.len() {
+            results.push(self.get_path(i, path));
+        }
+        results
     }
 
     /// Return a reference to the metadata field of the [`StructArray`]
@@ -388,21 +290,70 @@ impl VariantArray {
         // spec says fields order is not guaranteed, so we search by name
         &self.value_ref
     }
+    
+    /// Create a new VariantArray with a field removed from all variants
+    pub fn with_field_removed(&self, field_name: &str) -> Result<Self, ArrowError> {
+        let mut builder = crate::variant_array_builder::VariantArrayBuilder::new(self.len());
+        
+        for i in 0..self.len() {
+            if self.is_null(i) {
+                builder.append_null();
+            } else {
+                match FieldOperations::remove_field_bytes(self.metadata(i), self.value_bytes(i), field_name)? {
+                    Some(new_value) => {
+                        builder.append_variant_buffers(self.metadata(i), &new_value);
+                    }
+                    None => {
+                        // Field didn't exist, use original value
+                        builder.append_variant_buffers(self.metadata(i), self.value_bytes(i));
+                    }
+                }
+            }
+        }
+        
+        Ok(builder.build())
+    }
+    
+    /// Create a new VariantArray with multiple fields removed from all variants
+    pub fn with_fields_removed(&self, field_names: &[&str]) -> Result<Self, ArrowError> {
+        let mut builder = crate::variant_array_builder::VariantArrayBuilder::new(self.len());
+        
+        for i in 0..self.len() {
+            if self.is_null(i) {
+                builder.append_null();
+            } else {
+                match FieldOperations::remove_fields_bytes(self.metadata(i), self.value_bytes(i), field_names)? {
+                    Some(new_value) => {
+                        builder.append_variant_buffers(self.metadata(i), &new_value);
+                    }
+                    None => {
+                        // No fields existed, use original value
+                        builder.append_variant_buffers(self.metadata(i), self.value_bytes(i));
+                    }
+                }
+            }
+        }
+        
+        Ok(builder.build())
+    }
 }
 
 impl Array for VariantArray {
     fn as_any(&self) -> &dyn Any {
         self
     }
-
+    
     fn to_data(&self) -> ArrayData {
         self.inner.to_data()
     }
-
+    
     fn into_data(self) -> ArrayData {
-        self.inner.into_data()
+        match Arc::try_unwrap(self.inner) {
+            Ok(inner) => inner.into_data(),
+            Err(inner) => inner.to_data(),
+        }
     }
-
+    
     fn data_type(&self) -> &DataType {
         self.inner.data_type()
     }
@@ -417,360 +368,152 @@ impl Array for VariantArray {
             value_ref: val,
         })
     }
-
+    
     fn len(&self) -> usize {
         self.inner.len()
     }
-
+    
     fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
-
-    fn offset(&self) -> usize {
-        self.inner.offset()
-    }
-
+    
     fn nulls(&self) -> Option<&NullBuffer> {
         self.inner.nulls()
     }
-
+    
+    fn offset(&self) -> usize {
+        self.inner.offset()
+    }
+    
     fn get_buffer_memory_size(&self) -> usize {
         self.inner.get_buffer_memory_size()
     }
-
+    
     fn get_array_memory_size(&self) -> usize {
         self.inner.get_array_memory_size()
     }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
-    use arrow::array::{BinaryArray, BinaryViewArray};
-    use arrow_schema::{Field, Fields};
-    use parquet_variant::{Variant, VariantBuilder};
+    use crate::variant_array_builder::VariantArrayBuilder;
+    use parquet_variant::VariantBuilder;
 
-    #[test]
-    fn invalid_not_a_struct_array() {
-        let array = make_binary_view_array();
-        // Should fail because the input is not a StructArray
-        let err = VariantArray::try_new(array);
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: requires StructArray as input"
-        );
+    fn create_test_variant_array() -> VariantArray {
+        let mut builder = VariantArrayBuilder::new(2);
+        
+        // Create variant 1: {"name": "Alice", "age": 30}
+        let mut builder1 = VariantBuilder::new();
+        {
+            let mut obj = builder1.new_object();
+            obj.insert("name", "Alice");
+            obj.insert("age", 30i32);
+            obj.finish().unwrap();
+        }
+        let (metadata1, value1) = builder1.finish();
+        builder.append_variant_buffers(&metadata1, &value1);
+        
+        // Create variant 2: {"name": "Bob", "age": 25, "city": "NYC"}
+        let mut builder2 = VariantBuilder::new();
+        {
+            let mut obj = builder2.new_object();
+            obj.insert("name", "Bob");
+            obj.insert("age", 25i32);
+            obj.insert("city", "NYC");
+            obj.finish().unwrap();
+        }
+        let (metadata2, value2) = builder2.finish();
+        builder.append_variant_buffers(&metadata2, &value2);
+        
+        builder.build()
     }
 
     #[test]
-    fn invalid_missing_metadata() {
-        let fields = Fields::from(vec![Field::new("value", DataType::BinaryView, true)]);
-        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
-        // Should fail because the StructArray does not contain a 'metadata' field
-        let err = VariantArray::try_new(Arc::new(array));
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'metadata' field"
-        );
+    fn test_variant_array_basic() {
+        let array = create_test_variant_array();
+        assert_eq!(array.len(), 2);
+        assert!(!array.is_empty());
+        
+        // Test accessing variants
+        let variant1 = array.value(0);
+        assert_eq!(variant1.get_object_field("name").unwrap().as_string(), Some("Alice"));
+        assert_eq!(variant1.get_object_field("age").unwrap().as_int32(), Some(30));
+        
+        let variant2 = array.value(1);
+        assert_eq!(variant2.get_object_field("name").unwrap().as_string(), Some("Bob"));
+        assert_eq!(variant2.get_object_field("age").unwrap().as_int32(), Some(25));
+        assert_eq!(variant2.get_object_field("city").unwrap().as_string(), Some("NYC"));
     }
 
     #[test]
-    fn invalid_missing_value() {
-        let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
-        let array = StructArray::new(fields, vec![make_binary_view_array()], None);
-        // Should fail because the StructArray does not contain a 'value' field
-        let err = VariantArray::try_new(Arc::new(array));
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'value' field"
-        );
+    fn test_get_field_names() {
+        let array = create_test_variant_array();
+        
+        let paths1 = array.get_field_names(0);
+        assert_eq!(paths1.len(), 2);
+        assert!(paths1.contains(&"name".to_string()));
+        assert!(paths1.contains(&"age".to_string()));
+        
+        let paths2 = array.get_field_names(1);
+        assert_eq!(paths2.len(), 3);
+        assert!(paths2.contains(&"name".to_string()));
+        assert!(paths2.contains(&"age".to_string()));
+        assert!(paths2.contains(&"city".to_string()));
     }
 
     #[test]
-    fn invalid_metadata_field_type() {
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::Binary, true), // Not yet supported
-            Field::new("value", DataType::BinaryView, true),
-        ]);
-        let array = StructArray::new(
-            fields,
-            vec![make_binary_array(), make_binary_view_array()],
-            None,
-        );
-        let err = VariantArray::try_new(Arc::new(array));
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Not yet implemented: VariantArray 'metadata' field must be BinaryView, got Binary"
-        );
-    }
-
-    #[test]
-    fn invalid_value_field_type() {
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, true),
-            Field::new("value", DataType::Binary, true), // Not yet supported
-        ]);
-        let array = StructArray::new(
-            fields,
-            vec![make_binary_view_array(), make_binary_array()],
-            None,
-        );
-        let err = VariantArray::try_new(Arc::new(array));
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Not yet implemented: VariantArray 'value' field must be BinaryView, got Binary"
-        );
-    }
-
-    #[test]
-    fn test_variant_path_creation() {
-        let path = VariantPath::field("user")
-            .push_field("profile")
-            .push_field("name");
+    fn test_get_path() {
+        let array = create_test_variant_array();
         
-        assert_eq!(path.elements().len(), 3);
-        assert_eq!(path.elements()[0], VariantPathElement::Field("user".to_string()));
-        assert_eq!(path.elements()[1], VariantPathElement::Field("profile".to_string()));
-        assert_eq!(path.elements()[2], VariantPathElement::Field("name".to_string()));
-    }
-
-    #[test]
-    fn test_variant_path_with_index() {
-        let path = VariantPath::field("users")
-            .push_index(0)
-            .push_field("name");
+        // Test field access
+        let name_path = crate::field_operations::VariantPath::field("name");
+        let alice_name = array.get_path(0, &name_path).unwrap();
+        assert_eq!(alice_name.as_string(), Some("Alice"));
         
-        assert_eq!(path.elements().len(), 3);
-        assert_eq!(path.elements()[0], VariantPathElement::Field("users".to_string()));
-        assert_eq!(path.elements()[1], VariantPathElement::Index(0));
-        assert_eq!(path.elements()[2], VariantPathElement::Field("name".to_string()));
-    }
-
-    #[test]
-    fn test_get_path_simple_field() {
-        let variant_array = create_test_variant_array();
-        
-        let path = VariantPath::field("name");
-        let result = variant_array.get_path(0, &path);
-        
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), Variant::from("Alice"));
-    }
-
-    #[test]
-    fn test_get_path_nested_field() {
-        let variant_array = create_test_variant_array();
-        
-        let path = VariantPath::field("details").push_field("age");
-        let result = variant_array.get_path(0, &path);
-        
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), Variant::from(30i32));
-    }
-
-    #[test]
-    fn test_get_path_array_index() {
-        let variant_array = create_test_variant_array();
-        
-        let path = VariantPath::field("hobbies").push_index(1);
-        let result = variant_array.get_path(0, &path);
-        
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), Variant::from("cooking"));
-    }
-
-    #[test]
-    fn test_get_path_nonexistent_field() {
-        let variant_array = create_test_variant_array();
-        
-        let path = VariantPath::field("nonexistent");
-        let result = variant_array.get_path(0, &path);
-        
+        // Test non-existent field
+        let nonexistent_path = crate::field_operations::VariantPath::field("nonexistent");
+        let result = array.get_path(0, &nonexistent_path);
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_get_path_empty_path() {
-        let variant_array = create_test_variant_array();
+    fn test_with_field_removed() {
+        let array = create_test_variant_array();
         
-        let path = VariantPath::new();
-        let result = variant_array.get_path(0, &path);
+        let new_array = array.with_field_removed("age").unwrap();
         
-        assert!(result.is_some());
-        // Should return the full variant
-        let variant = result.unwrap();
-        assert!(variant.as_object().is_some());
+        // Check that age field was removed from all variants
+        let variant1 = new_array.value(0);
+        let obj1 = variant1.as_object().unwrap();
+        assert_eq!(obj1.len(), 1);
+        assert!(obj1.get("name").is_some());
+        assert!(obj1.get("age").is_none());
+        
+        let variant2 = new_array.value(1);
+        let obj2 = variant2.as_object().unwrap();
+        assert_eq!(obj2.len(), 2);
+        assert!(obj2.get("name").is_some());
+        assert!(obj2.get("age").is_none());
+        assert!(obj2.get("city").is_some());
     }
 
     #[test]
-    fn test_get_paths_multiple() {
-        let variant_array = create_test_variant_array();
+    fn test_metadata_and_value_fields() {
+        let array = create_test_variant_array();
         
-        let paths = vec![
-            VariantPath::field("name"),
-            VariantPath::field("details").push_field("age"),
-            VariantPath::field("hobbies").push_index(0),
-        ];
+        let metadata_field = array.metadata_field();
+        let value_field = array.value_field();
         
-        let results = variant_array.get_paths(0, &paths);
+        // Check that we got the expected arrays
+        assert_eq!(metadata_field.len(), 2);
+        assert_eq!(value_field.len(), 2);
         
-        assert_eq!(results.len(), 3);
-        assert_eq!(results[0], Some(Variant::from("Alice")));
-        assert_eq!(results[1], Some(Variant::from(30i32)));
-        assert_eq!(results[2], Some(Variant::from("reading")));
-    }
-
-    #[test]
-    fn test_extract_field_all_rows() {
-        let variant_array = create_test_variant_array_multiple_rows();
-        
-        let path = VariantPath::field("name");
-        let results = variant_array.extract_field(&path);
-        
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0], Some(Variant::from("Alice")));
-        assert_eq!(results[1], Some(Variant::from("Bob")));
-    }
-
-    #[test]
-    fn test_extract_fields_all_rows() {
-        let variant_array = create_test_variant_array_multiple_rows();
-        
-        let paths = vec![
-            VariantPath::field("name"),
-            VariantPath::field("details").push_field("age"),
-        ];
-        
-        let results = variant_array.extract_fields(&paths);
-        
-        assert_eq!(results.len(), 2); // 2 rows
-        assert_eq!(results[0].len(), 2); // 2 fields per row
-        assert_eq!(results[1].len(), 2); // 2 fields per row
-        
-        // Row 0
-        assert_eq!(results[0][0], Some(Variant::from("Alice")));
-        assert_eq!(results[0][1], Some(Variant::from(30i32)));
-        
-        // Row 1
-        assert_eq!(results[1][0], Some(Variant::from("Bob")));
-        assert_eq!(results[1][1], Some(Variant::from(25i32)));
-    }
-
-    fn make_binary_view_array() -> ArrayRef {
-        Arc::new(BinaryViewArray::from(vec![b"test" as &[u8]]))
-    }
-
-    fn make_binary_array() -> ArrayRef {
-        Arc::new(BinaryArray::from(vec![b"test" as &[u8]]))
-    }
-
-    /// Create a test VariantArray with a single row containing:
-    /// {
-    ///   "name": "Alice",
-    ///   "details": {
-    ///     "age": 30,
-    ///     "city": "New York"
-    ///   },
-    ///   "hobbies": ["reading", "cooking", "hiking"]
-    /// }
-    fn create_test_variant_array() -> VariantArray {
-        let mut builder = VariantBuilder::new();
-        let mut obj = builder.new_object();
-        
-        obj.insert("name", "Alice");
-        
-        // Create details object
-        {
-            let mut details = obj.new_object("details");
-            details.insert("age", 30i32);
-            details.insert("city", "New York");
-            let _ = details.finish();
-        }
-        
-        // Create hobbies list
-        {
-            let mut hobbies = obj.new_list("hobbies");
-            hobbies.append_value("reading");
-            hobbies.append_value("cooking");
-            hobbies.append_value("hiking");
-            hobbies.finish();
-        }
-        
-        obj.finish().unwrap();
-        
-        let (metadata, value) = builder.finish();
-        
-        // Create VariantArray
-        let metadata_array = Arc::new(BinaryViewArray::from(vec![metadata.as_slice()]));
-        let value_array = Arc::new(BinaryViewArray::from(vec![value.as_slice()]));
-        
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, false),
-            Field::new("value", DataType::BinaryView, false),
-        ]);
-        
-        let struct_array = StructArray::new(fields, vec![metadata_array, value_array], None);
-        
-        VariantArray::try_new(Arc::new(struct_array)).unwrap()
-    }
-
-    /// Create a test VariantArray with multiple rows
-    fn create_test_variant_array_multiple_rows() -> VariantArray {
-        let mut metadata_vec = Vec::new();
-        let mut value_vec = Vec::new();
-        
-        // Row 0: Alice
-        {
-            let mut builder = VariantBuilder::new();
-            let mut obj = builder.new_object();
-            obj.insert("name", "Alice");
-            
-            // Create details object
-            {
-                let mut details = obj.new_object("details");
-                details.insert("age", 30i32);
-                let _ = details.finish();
-            }
-            
-            obj.finish().unwrap();
-            let (metadata, value) = builder.finish();
-            metadata_vec.push(metadata);
-            value_vec.push(value);
-        }
-        
-        // Row 1: Bob
-        {
-            let mut builder = VariantBuilder::new();
-            let mut obj = builder.new_object();
-            obj.insert("name", "Bob");
-            
-            // Create details object
-            {
-                let mut details = obj.new_object("details");
-                details.insert("age", 25i32);
-                let _ = details.finish();
-            }
-            
-            obj.finish().unwrap();
-            let (metadata, value) = builder.finish();
-            metadata_vec.push(metadata);
-            value_vec.push(value);
-        }
-        
-        // Create VariantArray
-        let metadata_array = Arc::new(BinaryViewArray::from(
-            metadata_vec.iter().map(|m| m.as_slice()).collect::<Vec<_>>()
-        ));
-        let value_array = Arc::new(BinaryViewArray::from(
-            value_vec.iter().map(|v| v.as_slice()).collect::<Vec<_>>()
-        ));
-        
-        let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, false),
-            Field::new("value", DataType::BinaryView, false),
-        ]);
-        
-        let struct_array = StructArray::new(fields, vec![metadata_array, value_array], None);
-        
-        VariantArray::try_new(Arc::new(struct_array)).unwrap()
+        // Check that metadata and value bytes are non-empty
+        assert!(!metadata_field.value(0).is_empty());
+        assert!(!value_field.value(0).is_empty());
+        assert!(!metadata_field.value(1).is_empty());
+        assert!(!value_field.value(1).is_empty());
     }
 }
+

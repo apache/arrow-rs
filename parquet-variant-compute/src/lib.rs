@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Suppress warnings from arrow dependencies
-#![allow(unknown_lints)]
-#![allow(clippy::transmute_int_to_float)]
+//! Parquet variant compute functions
 
-mod from_json;
-mod to_json;
-mod variant_array;
-mod variant_array_builder;
-pub mod variant_get;
+pub mod from_json;
+pub mod variant_parser;
+pub mod field_operations;
+pub mod variant_array;
+pub mod variant_array_builder;
+pub mod to_json;
 
-pub use variant_array::{VariantArray, VariantPath, VariantPathElement};
+pub use variant_array::VariantArray;
 pub use variant_array_builder::VariantArrayBuilder;
-
+pub use field_operations::{VariantPath, VariantPathElement};
 pub use from_json::batch_json_string_to_variant;
 pub use to_json::batch_variant_to_json_string;
