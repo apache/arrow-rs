@@ -2973,101 +2973,6 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)]
-    fn fuzz_test_without_utf8_validation() {
-        for _ in 0..100 {
-            let mut rng = rng();
-            let num_columns = rng.random_range(1..5);
-            let len = rng.random_range(5..100);
-            let arrays: Vec<_> = (0..num_columns).map(|_| generate_column(len)).collect();
-
-            let options: Vec<_> = (0..num_columns)
-                .map(|_| SortOptions {
-                    descending: rng.random_bool(0.5),
-                    nulls_first: rng.random_bool(0.5),
-                })
-                .collect();
-
-            let sort_columns: Vec<_> = options
-                .iter()
-                .zip(&arrays)
-                .map(|(o, c)| SortColumn {
-                    values: Arc::clone(c),
-                    options: Some(*o),
-                })
-                .collect();
-
-            let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
-
-            let columns: Vec<SortField> = options
-                .into_iter()
-                .zip(&arrays)
-                .map(|(o, a)| SortField::new_with_options(a.data_type().clone(), o))
-                .collect();
-
-            let converter = RowConverter::new(columns).unwrap();
-            let rows = converter.convert_columns(&arrays).unwrap();
-
-            for i in 0..len {
-                for j in 0..len {
-                    let row_i = rows.row(i);
-                    let row_j = rows.row(j);
-                    let row_cmp = row_i.cmp(&row_j);
-                    let lex_cmp = comparator.compare(i, j);
-                    assert_eq!(
-                        row_cmp,
-                        lex_cmp,
-                        "({:?} vs {:?}) vs ({:?} vs {:?}) for types {}",
-                        print_row(&sort_columns, i),
-                        print_row(&sort_columns, j),
-                        row_i,
-                        row_j,
-                        print_col_types(&sort_columns)
-                    );
-                }
-            }
-
-            let back = converter.convert_rows(&rows).unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
-            }
-
-            // Check that we can convert
-            let rows = rows.try_into_binary().expect("reasonable size");
-            let parser = converter.parser();
-            let back = converter
-                .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
-                .unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
-            }
-
-            // validate-utf8 false
-            assert_eq!(
-                rows.null_count(),
-                0,
-                "can't construct Rows instance from array with nulls"
-            );
-            let rows_from_binary = Rows {
-                buffer: rows.values().to_vec(),
-                offsets: rows.offsets().iter().map(|&i| i.as_usize()).collect(),
-                config: RowConfig {
-                    fields: Arc::clone(&converter.fields),
-                    validate_utf8: false,
-                },
-            };
-
-            let back = converter.convert_rows(&rows_from_binary).unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
-            }
-        }
-    }
-
-    #[test]
-    #[cfg_attr(miri, ignore)]
     fn fuzz_test() {
         for _ in 0..100 {
             let mut rng = rng();
@@ -3121,13 +3026,16 @@ mod tests {
                 }
             }
 
+            // Convert rows produced from convert_columns().
+            // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
             let back = converter.convert_rows(&rows).unwrap();
             for (actual, expected) in back.iter().zip(&arrays) {
                 actual.to_data().validate_full().unwrap();
                 dictionary_eq(actual, expected)
             }
 
-            // Check that we can convert
+            // Check that we can convert rows into ByteArray and then parse, convert it back to array
+            // Note: validate_utf8 is set to true since Row is initialized through RowParser
             let rows = rows.try_into_binary().expect("reasonable size");
             let parser = converter.parser();
             let back = converter
@@ -3138,7 +3046,6 @@ mod tests {
                 dictionary_eq(actual, expected)
             }
 
-            // validate-utf8 true
             let rows = converter.from_binary(rows);
             let back = converter.convert_rows(&rows).unwrap();
             for (actual, expected) in back.iter().zip(&arrays) {

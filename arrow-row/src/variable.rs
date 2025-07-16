@@ -313,10 +313,9 @@ fn decode_binary_view_inner_utf8_unchecked(
     unsafe { BinaryViewArray::from(builder.build_unchecked()) }
 }
 
-fn decode_binary_view_inner(
+fn decode_binary_view_inner_utf8_checked(
     rows: &mut [&[u8]],
     options: SortOptions,
-    check_utf8: bool,
 ) -> BinaryViewArray {
     let len = rows.len();
 
@@ -353,11 +352,9 @@ fn decode_binary_view_inner(
         *row = &row[offset..];
     }
 
-    if check_utf8 {
-        // the values contains all data, no matter if it is short or long
-        // we can validate utf8 in one go.
-        std::str::from_utf8(values.as_slice()).unwrap();
-    }
+    // the values contains all data, no matter if it is short or long
+    // we can validate utf8 in one go.
+    std::str::from_utf8(values.as_slice()).unwrap();
 
     let builder = ArrayDataBuilder::new(DataType::BinaryView)
         .len(len)
@@ -415,7 +412,7 @@ pub unsafe fn decode_string_view(
     let view = if !validate_utf8 {
         decode_binary_view_inner_utf8_unchecked(rows, options)
     } else {
-        decode_binary_view_inner(rows, options, validate_utf8)
+        decode_binary_view_inner_utf8_checked(rows, options)
     };
     view.to_string_view_unchecked()
 }
