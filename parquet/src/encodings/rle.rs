@@ -865,7 +865,7 @@ mod tests {
         let mut data: Vec<u8> = vec![
             (3 << 1) | 1, // bit-packed run of 3 * 8
         ];
-        data.extend(std::iter::repeat(0xFF).take(20));
+        data.extend(std::iter::repeat_n(0xFF, 20));
         let data: Bytes = data.into();
 
         let mut decoder = RleDecoder::new(8);

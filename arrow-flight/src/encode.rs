@@ -1695,9 +1695,9 @@ mod tests {
 
     #[tokio::test]
     async fn flight_data_size_even() {
-        let s1 = StringArray::from_iter_values(std::iter::repeat(".10 bytes.").take(1024));
+        let s1 = StringArray::from_iter_values(std::iter::repeat_n(".10 bytes.", 1024));
         let i1 = Int16Array::from_iter_values(0..1024);
-        let s2 = StringArray::from_iter_values(std::iter::repeat("6bytes").take(1024));
+        let s2 = StringArray::from_iter_values(std::iter::repeat_n("6bytes", 1024));
         let i2 = Int64Array::from_iter_values(0..1024);
 
         let batch = RecordBatch::try_from_iter(vec![

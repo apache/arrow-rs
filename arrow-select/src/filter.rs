@@ -1449,12 +1449,11 @@ mod tests {
     #[test]
     fn test_slices() {
         // takes up 2 u64s
-        let bools = std::iter::repeat(true)
-            .take(10)
-            .chain(std::iter::repeat(false).take(30))
-            .chain(std::iter::repeat(true).take(20))
-            .chain(std::iter::repeat(false).take(17))
-            .chain(std::iter::repeat(true).take(4));
+        let bools = std::iter::repeat_n(true, 10)
+            .chain(std::iter::repeat_n(false, 30))
+            .chain(std::iter::repeat_n(true, 20))
+            .chain(std::iter::repeat_n(false, 17))
+            .chain(std::iter::repeat_n(true, 4));
 
         let bool_array: BooleanArray = bools.map(Some).collect();
 

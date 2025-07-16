@@ -1791,7 +1791,7 @@ mod tests {
                     None => {
                         builder
                             .values()
-                            .extend(std::iter::repeat(None).take(fixed_length as usize));
+                            .extend(std::iter::repeat_n(None, fixed_length as usize));
                         builder.append(false);
                     }
                 }
