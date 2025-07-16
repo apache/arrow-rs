@@ -24,7 +24,6 @@ use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
 
-/// Path element for accessing nested variant fields
 #[derive(Debug, Clone, PartialEq)]
 pub enum VariantPathElement {
     /// Access a field in an object by name
@@ -40,7 +39,6 @@ pub struct VariantPath {
 }
 
 impl VariantPath {
-    /// Create a new empty path
     pub fn new() -> Self {
         Self {
             elements: Vec::new(),
