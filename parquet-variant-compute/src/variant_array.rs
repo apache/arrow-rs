@@ -119,7 +119,7 @@ impl VariantArray {
         Ok(Self {
             inner: cloned,
             metadata_ref: metadata_field,
-            value_ref: value_field
+            value_ref: value_field,
         })
     }
 
@@ -190,7 +190,7 @@ impl Array for VariantArray {
         Arc::new(Self {
             inner: slice,
             metadata_ref: met,
-            value_ref: val
+            value_ref: val,
         })
     }
 
