@@ -588,6 +588,7 @@ where
             .filter(|index| !index.is_empty())
             .map(|x| x[row_group_idx].as_slice());
 
+        // Reuse columns that are selected and used by the filters
         let cache_projection = match self.compute_cache_projection(&projection) {
             Some(projection) => projection,
             None => ProjectionMask::none(meta.columns().len()),
@@ -628,8 +629,6 @@ where
                     )
                     .await?;
 
-                let mut cache_projection = predicate.projection().clone();
-                cache_projection.intersect(&projection);
                 let array_reader = ArrayReaderBuilder::new(&row_group)
                     .build_array_reader_with_cache(
                         self.fields.as_deref(),
