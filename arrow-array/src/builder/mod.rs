@@ -450,6 +450,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::FixedSizeBinary(len) => {
             Box::new(FixedSizeBinaryBuilder::with_capacity(capacity, *len))
         }
+        DataType::BinaryView => Box::new(BinaryViewBuilder::with_capacity(capacity)),
         DataType::Decimal32(p, s) => Box::new(
             Decimal32Builder::with_capacity(capacity).with_data_type(DataType::Decimal32(*p, *s)),
         ),
@@ -464,6 +465,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         ),
         DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
         DataType::LargeUtf8 => Box::new(LargeStringBuilder::with_capacity(capacity, 1024)),
+        DataType::Utf8View => Box::new(StringViewBuilder::with_capacity(capacity)),
         DataType::Date32 => Box::new(Date32Builder::with_capacity(capacity)),
         DataType::Date64 => Box::new(Date64Builder::with_capacity(capacity)),
         DataType::Time32(TimeUnit::Second) => {
