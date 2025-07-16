@@ -62,7 +62,7 @@ fn main() {
         builder.append_variant_buffers(&metadata, &value);
     }
     
-    let variant_array = builder.build();
+    let variant_array = builder.finish();
     
     // Demonstrate path access functionality
     println!("=== Path Access Examples ===");
@@ -72,7 +72,7 @@ fn main() {
     let alice_name = variant_array.get_path(0, &name_path).unwrap();
     println!("Alice's name: {}", alice_name.as_string().unwrap());
     
-    // 2. Nested field access  
+    // 2. Nested field access
     let city_path = VariantPath::field("address").push_field("city");
     let alice_city = variant_array.get_path(0, &city_path).unwrap();
     let bob_city = variant_array.get_path(1, &city_path).unwrap();
@@ -92,19 +92,25 @@ fn main() {
         VariantPath::field("age"),
         VariantPath::field("address").push_field("city"),
     ];
-    
     let alice_data = variant_array.get_paths(0, &paths);
-    println!("Alice's data: name={}, age={}, city={}", 
-             alice_data[0].as_ref().unwrap().as_string().unwrap(),
-             alice_data[1].as_ref().unwrap().as_int32().unwrap(),
-             alice_data[2].as_ref().unwrap().as_string().unwrap());
+    print!("Alice's data: ");
+    for (i, path_result) in alice_data.iter().enumerate() {
+        if let Some(variant) = path_result {
+            if i == 0 {
+                print!("name={}", variant.as_string().unwrap());
+            } else if i == 1 {
+                print!(", age={}", variant.as_int32().unwrap());
+            } else if i == 2 {
+                print!(", city={}", variant.as_string().unwrap());
+            }
+        }
+    }
+    println!();
     
-    // 5. Column-wise extraction
-    let names = variant_array.extract_field(&VariantPath::field("name"));
-    println!("All names: {:?}", names.iter().map(|v| v.as_ref().unwrap().as_string().unwrap()).collect::<Vec<_>>());
-    
-    println!("=== Performance Benefit ===");
-    println!("✓ Direct field access without reconstructing entire variants");
-    println!("✓ Efficient batch operations for analytical workloads");
-    println!("✓ Foundation for shredding/unshredding operations");
+    // 5. Batch field extraction
+    let all_names = variant_array.extract_field_by_path(&VariantPath::field("name"));
+    let name_strings: Vec<String> = all_names.iter()
+        .filter_map(|opt| opt.as_ref().map(|v| v.as_string().unwrap().to_string()))
+        .collect();
+    println!("All names: {:?}", name_strings);
 } 
