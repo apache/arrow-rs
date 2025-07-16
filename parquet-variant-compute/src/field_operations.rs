@@ -346,13 +346,38 @@ impl FieldOperations {
         Ok(Some(current_value))
     }
     
+    /// Get the value at a specific path and return its type and data
+    pub fn get_path_with_type(
+        metadata_bytes: &[u8],
+        value_bytes: &[u8],
+        path: &VariantPath,
+    ) -> Result<Option<(crate::variant_parser::VariantType, Vec<u8>)>, ArrowError> {
+        if let Some(value_bytes) = Self::get_path_bytes(metadata_bytes, value_bytes, path)? {
+            if !value_bytes.is_empty() {
+                let variant_type = VariantParser::parse_variant_header(value_bytes[0])?;
+                return Ok(Some((variant_type, value_bytes)));
+            }
+        }
+        Ok(None)
+    }
+    
     /// Get field bytes from an object at the byte level
     fn get_field_bytes(
         metadata_bytes: &[u8],
         value_bytes: &[u8],
         field_name: &str,
     ) -> Result<Option<Vec<u8>>, ArrowError> {
-        Self::extract_field_bytes(metadata_bytes, value_bytes, field_name)
+        // Use the general dispatch parser to ensure we're dealing with an object
+        if !value_bytes.is_empty() {
+            match VariantParser::parse_variant_header(value_bytes[0])? {
+                crate::variant_parser::VariantType::Object(_) => {
+                    Self::extract_field_bytes(metadata_bytes, value_bytes, field_name)
+                }
+                _ => Ok(None), // Not an object, can't extract fields
+            }
+        } else {
+            Ok(None)
+        }
     }
     
     /// Get array element bytes at the byte level
@@ -361,72 +386,67 @@ impl FieldOperations {
         value_bytes: &[u8],
         index: usize,
     ) -> Result<Option<Vec<u8>>, ArrowError> {
-        // Check if this is an array
+        // Use the general dispatch parser to ensure we're dealing with an array
         if value_bytes.is_empty() {
             return Ok(None);
         }
         
-        let header_byte = value_bytes[0];
-        let basic_type = VariantParser::get_basic_type(header_byte);
-        
-        // Only handle arrays (basic_type == 3 according to variant spec)
-        if basic_type != 3 {
-            return Ok(None);
+        match VariantParser::parse_variant_header(value_bytes[0])? {
+            crate::variant_parser::VariantType::Array(array_header) => {
+                let num_elements = VariantParser::unpack_int(
+                    &value_bytes[1..], 
+                    array_header.num_elements_size
+                )?;
+                
+                // Check bounds
+                if index >= num_elements {
+                    return Ok(None);
+                }
+                
+                // Calculate array offsets
+                let offsets = VariantParser::calculate_array_offsets(&array_header, num_elements);
+                
+                // Get element offset
+                let element_offset_start = offsets.element_offsets_start + index * array_header.element_offset_size;
+                let element_offset_end = element_offset_start + array_header.element_offset_size;
+                
+                if element_offset_end > value_bytes.len() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Element offset exceeds value buffer".to_string()
+                    ));
+                }
+                
+                let element_offset = VariantParser::unpack_int(
+                    &value_bytes[element_offset_start..element_offset_end],
+                    array_header.element_offset_size
+                )?;
+                
+                // Get next element offset (or end of data)
+                let next_offset = if index + 1 < num_elements {
+                    let next_element_offset_start = offsets.element_offsets_start + (index + 1) * array_header.element_offset_size;
+                    let next_element_offset_end = next_element_offset_start + array_header.element_offset_size;
+                    VariantParser::unpack_int(
+                        &value_bytes[next_element_offset_start..next_element_offset_end],
+                        array_header.element_offset_size
+                    )?
+                } else {
+                    value_bytes.len()
+                };
+                
+                // Extract element bytes
+                let element_start = offsets.elements_start + element_offset;
+                let element_end = offsets.elements_start + next_offset;
+                
+                if element_end > value_bytes.len() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Element data exceeds value buffer".to_string()
+                    ));
+                }
+                
+                Ok(Some(value_bytes[element_start..element_end].to_vec()))
+            }
+            _ => Ok(None), // Not an array, can't extract elements
         }
-        
-        // Parse array header to get element count and offsets
-        let array_header = VariantParser::parse_array_header(header_byte)?;
-        let num_elements = VariantParser::unpack_int(
-            &value_bytes[1..], 
-            array_header.num_elements_size
-        )?;
-        
-        // Check bounds
-        if index >= num_elements {
-            return Ok(None);
-        }
-        
-        // Calculate array offsets
-        let offsets = VariantParser::calculate_array_offsets(&array_header, num_elements);
-        
-        // Get element offset
-        let element_offset_start = offsets.element_offsets_start + index * array_header.element_offset_size;
-        let element_offset_end = element_offset_start + array_header.element_offset_size;
-        
-        if element_offset_end > value_bytes.len() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Element offset exceeds value buffer".to_string()
-            ));
-        }
-        
-        let element_offset = VariantParser::unpack_int(
-            &value_bytes[element_offset_start..element_offset_end],
-            array_header.element_offset_size
-        )?;
-        
-        // Get next element offset (or end of data)
-        let next_offset = if index + 1 < num_elements {
-            let next_element_offset_start = offsets.element_offsets_start + (index + 1) * array_header.element_offset_size;
-            let next_element_offset_end = next_element_offset_start + array_header.element_offset_size;
-            VariantParser::unpack_int(
-                &value_bytes[next_element_offset_start..next_element_offset_end],
-                array_header.element_offset_size
-            )?
-        } else {
-            value_bytes.len()
-        };
-        
-        // Extract element bytes
-        let element_start = offsets.elements_start + element_offset;
-        let element_end = offsets.elements_start + next_offset;
-        
-        if element_end > value_bytes.len() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Element data exceeds value buffer".to_string()
-            ));
-        }
-        
-        Ok(Some(value_bytes[element_start..element_end].to_vec()))
     }
 }
 
