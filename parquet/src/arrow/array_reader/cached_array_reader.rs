@@ -107,7 +107,6 @@ impl CachedArrayReader {
         }
     }
 
-    
     fn get_batch_id_from_position(&self, row_id: usize) -> BatchID {
         BatchID {
             val: row_id / self.batch_size,
@@ -143,11 +142,11 @@ impl CachedArrayReader {
         // Store in both shared cache and local cache
         // The shared cache is used to reuse results between readers
         // The local cache ensures data is available for our consume_batch call
-        let _cached = self
-            .shared_cache
-            .lock()
-            .unwrap()
-            .insert(self.column_idx, batch_id, array.clone());
+        let _cached =
+            self.shared_cache
+                .lock()
+                .unwrap()
+                .insert(self.column_idx, batch_id, array.clone());
         // Note: if the shared cache is full (_cached == false), we continue without caching
         // The local cache will still store the data for this reader's use
 
@@ -198,7 +197,11 @@ impl ArrayReader for CachedArrayReader {
                 Some(array.clone())
             } else {
                 // If not in local cache, i.e., we are consumer, check shared cache
-                let cache_content = self.shared_cache.lock().unwrap().get(self.column_idx, batch_id);
+                let cache_content = self
+                    .shared_cache
+                    .lock()
+                    .unwrap()
+                    .get(self.column_idx, batch_id);
                 if let Some(array) = cache_content.as_ref() {
                     // Store in local cache for later use in consume_batch
                     self.local_cache.insert(batch_id, array.clone());
