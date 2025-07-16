@@ -69,10 +69,10 @@ mod test {
         ]);
         let array_ref: ArrayRef = Arc::new(input);
         let variant_array = batch_json_string_to_variant(&array_ref).unwrap();
-        
+
         let metadata_array = variant_array.metadata_field();
         let value_array = variant_array.value_field();
-        
+
         // Compare row 0
         assert!(!variant_array.is_null(0));
         assert_eq!(variant_array.value(0).as_int8(), Some(1));
@@ -101,7 +101,7 @@ mod test {
         assert!(!value_array.is_null(1));
         assert!(!metadata_array.is_null(4));
         assert!(!value_array.is_null(4));
-        
+
         // Null rows should have 0-length metadata and value
         assert_eq!(metadata_array.as_binary_view().value(1).len(), 0);
         assert_eq!(value_array.as_binary_view().value(1).len(), 0);
