@@ -224,27 +224,28 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 // Since the metadata dictionary has unique and sorted field names, we can also guarantee this object's field names
                 // are lexicographically sorted by their field id ordering
                 let dictionary_size = self.metadata.dictionary_size();
-                let mut current_id = field_ids_iter.next().unwrap_or(0);
 
-                for next_id in field_ids_iter {
+                if let Some(mut current_id) = field_ids_iter.next() {
+                    for next_id in field_ids_iter {
+                        if current_id >= dictionary_size {
+                            return Err(ArrowError::InvalidArgumentError(
+                                "field id is not valid".to_string(),
+                            ));
+                        }
+
+                        if next_id <= current_id {
+                            return Err(ArrowError::InvalidArgumentError(
+                                "field names not sorted".to_string(),
+                            ));
+                        }
+                        current_id = next_id;
+                    }
+
                     if current_id >= dictionary_size {
                         return Err(ArrowError::InvalidArgumentError(
                             "field id is not valid".to_string(),
                         ));
                     }
-
-                    if next_id <= current_id {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "field names not sorted".to_string(),
-                        ));
-                    }
-                    current_id = next_id;
-                }
-
-                if current_id >= dictionary_size {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "field id is not valid".to_string(),
-                    ));
                 }
             } else {
                 // The metadata dictionary can't guarantee uniqueness or sortedness, so we have to parse out the corresponding field names
