@@ -39,18 +39,20 @@ fn bench_concat_arrays(arrays: &[&dyn Array]) {
 fn add_benchmark(c: &mut Criterion) {
     let v1 = create_primitive_array::<Int32Type>(1024, 0.0);
     let v2 = create_primitive_array::<Int32Type>(1024, 0.0);
-    c.bench_function("concat i32 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
+    c.bench_function("concat i32 1024", |b| {
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
+    });
 
     let v1 = create_primitive_array::<Int32Type>(1024, 0.5);
     let v2 = create_primitive_array::<Int32Type>(1024, 0.5);
     c.bench_function("concat i32 nulls 1024", |b| {
-        b.iter(|| bench_concat(&v1, &v2))
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
     });
 
     let small_array = create_primitive_array::<Int32Type>(4, 0.0);
     let arrays: Vec<_> = (0..1024).map(|_| &small_array as &dyn Array).collect();
     c.bench_function("concat 1024 arrays i32 4", |b| {
-        b.iter(|| bench_concat_arrays(&arrays))
+        b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
     });
 
     {
@@ -59,7 +61,7 @@ fn add_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
         c.bench_function("concat i32 8192 over 100 arrays", |b| {
-            b.iter(|| bench_concat_arrays(&arrays))
+            b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
         });
     }
 
@@ -69,24 +71,26 @@ fn add_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
         c.bench_function("concat i32 nulls 8192 over 100 arrays", |b| {
-            b.iter(|| bench_concat_arrays(&arrays))
+            b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
         });
     }
 
     let v1 = create_boolean_array(1024, 0.0, 0.5);
     let v2 = create_boolean_array(1024, 0.0, 0.5);
-    c.bench_function("concat boolean 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
+    c.bench_function("concat boolean 1024", |b| {
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
+    });
 
     let v1 = create_boolean_array(1024, 0.5, 0.5);
     let v2 = create_boolean_array(1024, 0.5, 0.5);
     c.bench_function("concat boolean nulls 1024", |b| {
-        b.iter(|| bench_concat(&v1, &v2))
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
     });
 
     let small_array = create_boolean_array(4, 0.0, 0.5);
     let arrays: Vec<_> = (0..1024).map(|_| &small_array as &dyn Array).collect();
     c.bench_function("concat 1024 arrays boolean 4", |b| {
-        b.iter(|| bench_concat_arrays(&arrays))
+        b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
     });
 
     {
@@ -95,7 +99,7 @@ fn add_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
         c.bench_function("concat boolean 8192 over 100 arrays", |b| {
-            b.iter(|| bench_concat_arrays(&arrays))
+            b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
         });
     }
 
@@ -105,24 +109,26 @@ fn add_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
         c.bench_function("concat boolean nulls 8192 over 100 arrays", |b| {
-            b.iter(|| bench_concat_arrays(&arrays))
+            b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
         });
     }
 
     let v1 = create_string_array::<i32>(1024, 0.0);
     let v2 = create_string_array::<i32>(1024, 0.0);
-    c.bench_function("concat str 1024", |b| b.iter(|| bench_concat(&v1, &v2)));
+    c.bench_function("concat str 1024", |b| {
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
+    });
 
     let v1 = create_string_array::<i32>(1024, 0.5);
     let v2 = create_string_array::<i32>(1024, 0.5);
     c.bench_function("concat str nulls 1024", |b| {
-        b.iter(|| bench_concat(&v1, &v2))
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
     });
 
     let small_array = create_string_array::<i32>(4, 0.0);
     let arrays: Vec<_> = (0..1024).map(|_| &small_array as &dyn Array).collect();
     c.bench_function("concat 1024 arrays str 4", |b| {
-        b.iter(|| bench_concat_arrays(&arrays))
+        b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
     });
 
     {
@@ -131,7 +137,7 @@ fn add_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
         c.bench_function("concat str 8192 over 100 arrays", |b| {
-            b.iter(|| bench_concat_arrays(&arrays))
+            b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
         });
     }
 
@@ -141,7 +147,7 @@ fn add_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let arrays: Vec<_> = input.iter().map(|arr| arr as &dyn Array).collect();
         c.bench_function("concat str nulls 8192 over 100 arrays", |b| {
-            b.iter(|| bench_concat_arrays(&arrays))
+            b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
         });
     }
 
@@ -155,7 +161,9 @@ fn add_benchmark(c: &mut Criterion) {
             let id = format!(
                 "concat utf8_view {name} max_str_len={str_len} null_density={null_density}"
             );
-            c.bench_function(&id, |b| b.iter(|| bench_concat_arrays(&arrays)));
+            c.bench_function(&id, |b| {
+                b.iter_with_large_drop(|| bench_concat_arrays(&arrays))
+            });
         }
     }
 
@@ -164,7 +172,7 @@ fn add_benchmark(c: &mut Criterion) {
     let v2 = create_string_array_with_len::<i32>(10, 0.0, 20);
     let v2 = create_dict_from_values::<Int32Type>(1024, 0.0, &v2);
     c.bench_function("concat str_dict 1024", |b| {
-        b.iter(|| bench_concat(&v1, &v2))
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
     });
 
     let v1 = create_string_array_with_len::<i32>(1024, 0.0, 20);
@@ -172,7 +180,7 @@ fn add_benchmark(c: &mut Criterion) {
     let v2 = create_string_array_with_len::<i32>(1024, 0.0, 20);
     let v2 = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &v2, 30..40);
     c.bench_function("concat str_dict_sparse 1024", |b| {
-        b.iter(|| bench_concat(&v1, &v2))
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
     });
 
     let v1 = FixedSizeListArray::try_new(
@@ -190,7 +198,7 @@ fn add_benchmark(c: &mut Criterion) {
     )
     .unwrap();
     c.bench_function("concat fixed size lists", |b| {
-        b.iter(|| bench_concat(&v1, &v2))
+        b.iter_with_large_drop(|| bench_concat(&v1, &v2))
     });
 
     {
@@ -233,7 +241,7 @@ fn add_benchmark(c: &mut Criterion) {
 
         c.bench_function(
             &format!("concat struct with int32 and dicts size={batch_size} count={batch_count}"),
-            |b| b.iter(|| bench_concat_arrays(&array_refs)),
+            |b| b.iter_with_large_drop(|| bench_concat_arrays(&array_refs)),
         );
     }
 }
