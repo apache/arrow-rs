@@ -496,9 +496,9 @@ fn bench_iteration_performance(c: &mut Criterion) {
 }
 
 fn bench_extend_metadata_builder(c: &mut Criterion) {
-    let list = (0..u32::MAX).map(|i| format!("id_{i}")).collect::<Vec<_>>();
+    let list = (0..400_000).map(|i| format!("id_{i}")).collect::<Vec<_>>();
 
-    c.bench_function("bench_validate_large_nested_list", |b| {
+    c.bench_function("bench_extend_metadata_builder", |b| {
         b.iter(|| {
             std::hint::black_box(
                 VariantBuilder::new().with_field_names(list.iter().map(|s| s.as_str())),

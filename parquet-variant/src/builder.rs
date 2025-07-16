@@ -403,9 +403,9 @@ impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
 impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
     fn extend<T: IntoIterator<Item = S>>(&mut self, iter: T) {
         let iter = iter.into_iter();
-        let (min, max) = iter.size_hint();
+        let (min, _) = iter.size_hint();
 
-        self.field_names.reserve(max.unwrap_or(min));
+        self.field_names.reserve(min);
 
         for field_name in iter {
             self.upsert_field_name(field_name.as_ref());
@@ -768,10 +768,8 @@ impl VariantBuilder {
     /// This method reserves capacity for field names in the Variant metadata,
     /// which can improve performance when you know the approximate number of unique field
     /// names that will be used across all objects in the [`Variant`].
-    pub fn with_field_name_capacity(mut self, capacity: usize) -> Self {
+    pub fn reserve(&mut self, capacity: usize) {
         self.metadata_builder.field_names.reserve(capacity);
-
-        self
     }
 
     /// Adds a single field name to the field name directory in the Variant metadata.
