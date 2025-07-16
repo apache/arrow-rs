@@ -376,8 +376,6 @@ impl MetadataBuilder {
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
 
-        dbg!(new_entry);
-
         if new_entry {
             let n = self.num_field_names();
 
@@ -1070,7 +1068,6 @@ impl<'a> ObjectBuilder<'a> {
         let metadata_builder = self.parent_state.metadata_builder();
 
         let field_id = metadata_builder.upsert_field_name(key);
-        dbg!(field_id);
         let field_start = self.buffer.offset();
 
         if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
@@ -2486,8 +2483,6 @@ mod tests {
         let variant = Variant::new(&m1, &v1);
 
         let mut builder = VariantBuilder::new().with_metadata(VariantMetadata::new(&m1));
-
-        dbg!("building");
 
         builder.append_value(variant.clone());
 
