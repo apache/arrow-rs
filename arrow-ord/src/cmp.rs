@@ -24,16 +24,15 @@
 //!
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ByteArrayType, ByteViewType, Int16Type, Int32Type, Int64Type};
+use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::{
-    array, downcast_primitive_array, AnyDictionaryArray, Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, BooleanArray, Datum, FixedSizeBinaryArray, GenericByteArray, GenericByteViewArray, PrimitiveArray
+    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum, FixedSizeBinaryArray, GenericByteArray, GenericByteViewArray
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError};
 use arrow_select::take::take;
 use std::ops::Not;
-use std::sync::Arc;
 
 #[derive(Debug, Copy, Clone)]
 enum Op {
