@@ -181,10 +181,11 @@ where
 // partition indices into valid and null indices
 fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
     let len = array.len();
+    let null_count = array.null_count();
     match array.nulls() {
-        Some(nulls) if nulls.null_count() > 0 => {
-            let mut valid_indices = Vec::with_capacity(len - nulls.null_count());
-            let mut null_indices = Vec::with_capacity(nulls.null_count());
+        Some(nulls) if null_count > 0 => {
+            let mut valid_indices = Vec::with_capacity(len - null_count);
+            let mut null_indices = Vec::with_capacity(null_count);
 
             let valid_slice = valid_indices.spare_capacity_mut();
             let null_slice = null_indices.spare_capacity_mut();
