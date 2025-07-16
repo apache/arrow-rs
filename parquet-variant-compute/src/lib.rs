@@ -27,5 +27,6 @@ pub mod to_json;
 pub use variant_array::VariantArray;
 pub use variant_array_builder::VariantArrayBuilder;
 pub use field_operations::{VariantPath, VariantPathElement};
+pub use variant_parser::{VariantType, PrimitiveType, ShortStringHeader, ObjectHeader, ArrayHeader};
 pub use from_json::batch_json_string_to_variant;
 pub use to_json::batch_variant_to_json_string;
