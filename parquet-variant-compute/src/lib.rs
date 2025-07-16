@@ -19,6 +19,7 @@ mod from_json;
 mod to_json;
 mod variant_array;
 mod variant_array_builder;
+pub mod variant_get;
 
 pub use variant_array::VariantArray;
 pub use variant_array_builder::VariantArrayBuilder;

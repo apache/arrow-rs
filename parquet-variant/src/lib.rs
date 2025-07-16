@@ -29,6 +29,7 @@
 
 mod builder;
 mod decoder;
+pub mod path;
 mod utils;
 mod variant;
 
