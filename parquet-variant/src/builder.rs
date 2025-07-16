@@ -2314,6 +2314,18 @@ mod tests {
         assert_eq!(variant, Variant::new(&metadata, &value));
     }
 
+    /// make an object variant with field names in reverse lexicographical order
+    fn make_object() -> (Vec<u8>, Vec<u8>) {
+        let mut builder = VariantBuilder::new();
+
+        let mut obj = builder.new_object();
+
+        obj.insert("b", true);
+        obj.insert("a", false);
+        obj.finish().unwrap();
+        builder.finish()
+    }
+
     #[test]
     fn test_append_nested_object() {
         let (m1, v1) = make_nested_object();
@@ -2327,18 +2339,6 @@ mod tests {
         let result_variant = Variant::new(&metadata, &value);
 
         assert_eq!(variant, result_variant);
-    }
-
-    /// make an object variant with field names in reverse lexicographical order
-    fn make_object() -> (Vec<u8>, Vec<u8>) {
-        let mut builder = VariantBuilder::new();
-
-        let mut obj = builder.new_object();
-
-        obj.insert("b", true);
-        obj.insert("a", false);
-        obj.finish().unwrap();
-        builder.finish()
     }
 
     /// make a nested object variant
@@ -2377,6 +2377,32 @@ mod tests {
         list.append_value(1234);
         list.append_value("a string value");
         list.finish();
+        builder.finish()
+    }
+
+    #[test]
+    fn test_append_nested_list() {
+        let (m1, v1) = make_nested_list();
+        let variant = Variant::new(&m1, &v1);
+        let mut builder = VariantBuilder::new();
+        builder.append_value(variant.clone());
+        let (metadata, value) = builder.finish();
+        assert_eq!(variant, Variant::new(&metadata, &value));
+    }
+
+    fn make_nested_list() -> (Vec<u8>, Vec<u8>) {
+        let mut builder = VariantBuilder::new();
+        let mut list = builder.new_list();
+
+        let mut inner_list = list.new_list();
+
+        inner_list.append_value("the dog licked the oil");
+        inner_list.append_value(4.3);
+
+        inner_list.finish();
+
+        list.finish();
+
         builder.finish()
     }
 }
