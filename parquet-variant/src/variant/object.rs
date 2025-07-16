@@ -217,7 +217,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _,
             )?;
 
-            let mut field_ids_iter = map_bytes_to_offsets(field_id_buffer, self.header.field_id_size);
+            let mut field_ids_iter =
+                map_bytes_to_offsets(field_id_buffer, self.header.field_id_size);
             // Validate all field ids exist in the metadata dictionary and the corresponding field names are lexicographically sorted
             if self.metadata.is_sorted() {
                 // Since the metadata dictionary has unique and sorted field names, we can also guarantee this object's field names
@@ -256,7 +257,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 };
 
                 for field_id in field_ids_iter {
-                    let next_field_name  = self.metadata.get(field_id)?;
+                    let next_field_name = self.metadata.get(field_id)?;
 
                     if let Some(current_name) = current_field_name {
                         if next_field_name <= current_name {
