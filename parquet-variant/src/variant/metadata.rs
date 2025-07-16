@@ -127,7 +127,7 @@ impl VariantMetadataHeader {
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantMetadata<'m> {
-    bytes: &'m [u8],
+    pub(crate) bytes: &'m [u8],
     header: VariantMetadataHeader,
     dictionary_size: u32,
     first_value_byte: u32,

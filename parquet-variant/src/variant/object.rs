@@ -389,13 +389,15 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
 #[cfg(test)]
 mod tests {
+    use crate::VariantBuilder;
+
     use super::*;
 
     #[test]
     fn test_variant_object_simple() {
         // Create metadata with field names: "age", "name", "active" (sorted)
         // Header: version=1, sorted=1, offset_size=1 (offset_size_minus_one=0)
-        // So header byte = 00_0_1_0001 = 0x10
+        // So header byte = 00_0_1_0001 = 0x11
         let metadata_bytes = vec![
             0b0001_0001,
             3, // dictionary size
@@ -606,5 +608,114 @@ mod tests {
             err,
             ArrowError::InvalidArgumentError(ref msg) if msg.contains("Tried to extract byte(s) ..16 from 15-byte buffer")
         ));
+    }
+
+    fn test_variant_object_with_count(count: i32, expected_field_id_size: OffsetSizeBytes) {
+        let field_names: Vec<_> = (0..count).map(|val| val.to_string()).collect();
+        let mut builder =
+            VariantBuilder::new().with_field_names(field_names.iter().map(|s| s.as_str()));
+
+        let mut obj = builder.new_object();
+
+        for i in 0..count {
+            obj.insert(&field_names[i as usize], i);
+        }
+
+        obj.finish().unwrap();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::new(&metadata, &value);
+
+        if let Variant::Object(obj) = variant {
+            assert_eq!(obj.len(), count as usize);
+
+            assert_eq!(obj.get(&field_names[0]).unwrap(), Variant::Int32(0));
+            assert_eq!(
+                obj.get(&field_names[(count - 1) as usize]).unwrap(),
+                Variant::Int32(count - 1)
+            );
+            assert_eq!(
+                obj.header.field_id_size, expected_field_id_size,
+                "Expected {}-byte field IDs, got {}-byte field IDs",
+                expected_field_id_size as usize, obj.header.field_id_size as usize
+            );
+        } else {
+            panic!("Expected object variant");
+        }
+    }
+
+    #[test]
+    fn test_variant_object_257_elements() {
+        test_variant_object_with_count((1 << 8) + 1, OffsetSizeBytes::Two); // 2^8 + 1, expected 2-byte field IDs
+    }
+
+    #[test]
+    fn test_variant_object_65537_elements() {
+        test_variant_object_with_count((1 << 16) + 1, OffsetSizeBytes::Three);
+        // 2^16 + 1, expected 3-byte field IDs
+    }
+
+    /* Can't run this test now as it takes 45x longer than other tests
+    #[test]
+    fn test_variant_object_16777217_elements() {
+        test_variant_object_with_count((1 << 24) + 1, OffsetSizeBytes::Four);
+        // 2^24 + 1, expected 4-byte field IDs
+    }
+     */
+
+    #[test]
+    fn test_variant_object_small_sizes_255_elements() {
+        test_variant_object_with_count(255, OffsetSizeBytes::One);
+    }
+
+    fn test_variant_object_with_large_data(
+        data_size_per_field: usize,
+        expected_field_offset_size: OffsetSizeBytes,
+    ) {
+        let num_fields = 20;
+        let mut builder = VariantBuilder::new();
+        let mut obj = builder.new_object();
+
+        let str_val = "a".repeat(data_size_per_field);
+
+        for val in 0..num_fields {
+            let key = format!("id_{val}");
+            obj.insert(&key, str_val.as_str());
+        }
+
+        obj.finish().unwrap();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::new(&metadata, &value);
+
+        if let Variant::Object(obj) = variant {
+            assert_eq!(obj.len(), num_fields);
+            assert_eq!(
+                obj.header.field_offset_size, expected_field_offset_size,
+                "Expected {}-byte field offsets, got {}-byte field offsets",
+                expected_field_offset_size as usize, obj.header.field_offset_size as usize
+            );
+        } else {
+            panic!("Expected object variant");
+        }
+    }
+
+    #[test]
+    fn test_variant_object_child_data_0_byte_offsets_minus_one() {
+        test_variant_object_with_large_data(10, OffsetSizeBytes::One);
+    }
+
+    #[test]
+    fn test_variant_object_256_bytes_child_data_3_byte_offsets() {
+        test_variant_object_with_large_data(256 + 1, OffsetSizeBytes::Two); // 2^8 - 2^16 elements
+    }
+
+    #[test]
+    fn test_variant_object_16777216_bytes_child_data_4_byte_offsets() {
+        test_variant_object_with_large_data(65536 + 1, OffsetSizeBytes::Three); // 2^16 - 2^24 elements
+    }
+
+    #[test]
+    fn test_variant_object_65535_bytes_child_data_2_byte_offsets() {
+        test_variant_object_with_large_data(16777216 + 1, OffsetSizeBytes::Four);
+        // 2^24
     }
 }

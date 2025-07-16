@@ -60,7 +60,7 @@ jobs:
           cargo test -p arrow-flight --all-features
       - name: Test --examples
         run: |
-          cargo test -p arrow-flight  --features=flight-sql,tls --examples
+          cargo test -p arrow-flight  --features=flight-sql,tls-ring --examples
 
   vendor:
     name: Verify Vendored Code

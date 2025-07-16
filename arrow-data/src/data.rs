@@ -638,7 +638,7 @@ impl ArrayData {
                 ),
                 DataType::Union(f, mode) => {
                     let (id, _) = f.iter().next().unwrap();
-                    let ids = Buffer::from_iter(std::iter::repeat(id).take(len));
+                    let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
                     let buffers = match mode {
                         UnionMode::Sparse => vec![ids],
                         UnionMode::Dense => {

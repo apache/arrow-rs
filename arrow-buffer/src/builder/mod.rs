@@ -26,7 +26,7 @@ pub use null::*;
 pub use offset::*;
 
 use crate::{ArrowNativeType, Buffer, MutableBuffer};
-use std::{iter, marker::PhantomData};
+use std::marker::PhantomData;
 
 /// Builder for creating a [Buffer] object.
 ///
@@ -214,7 +214,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     #[inline]
     pub fn append_n(&mut self, n: usize, v: T) {
         self.reserve(n);
-        self.extend(iter::repeat(v).take(n))
+        self.extend(std::iter::repeat_n(v, n))
     }
 
     /// Appends `n`, zero-initialized values
