@@ -131,7 +131,7 @@ impl VariantArrayBuilder {
 
         VariantArray::try_new(Arc::new(inner)).expect("valid VariantArray by construction")
     }
-    
+
     /// Finish building the VariantArray (alias for build for compatibility)
     pub fn finish(self) -> VariantArray {
         self.build()

@@ -232,23 +232,27 @@ impl VariantArray {
     pub fn metadata(&self, index: usize) -> &[u8] {
         self.metadata_field().as_binary_view().value(index).as_ref()
     }
-    
+
     /// Get the value bytes for a specific index
     pub fn value_bytes(&self, index: usize) -> &[u8] {
         self.value_field().as_binary_view().value(index).as_ref()
     }
-    
+
     /// Get value at a specific path for the variant at the given index
-    /// 
+    ///
     /// Uses high-level Variant API for convenience. Returns a Variant object that can be
     /// directly used with standard variant operations.
-    pub fn get_path(&self, index: usize, path: &crate::field_operations::VariantPath) -> Option<parquet_variant::Variant> {
+    pub fn get_path(
+        &self,
+        index: usize,
+        path: &crate::field_operations::VariantPath,
+    ) -> Option<parquet_variant::Variant> {
         if index >= self.len() || self.is_null(index) {
             return None;
         }
-        
+
         let mut current_variant = self.value(index);
-        
+
         for element in path.elements() {
             match element {
                 crate::field_operations::VariantPathElement::Field(field_name) => {
@@ -259,32 +263,36 @@ impl VariantArray {
                 }
             }
         }
-        
+
         Some(current_variant)
     }
-    
+
     /// Get values at multiple paths for the variant at the given index
-    /// 
+    ///
     /// Convenience method that applies `get_path()` to multiple paths at once.
     /// Useful for extracting multiple fields from a single variant row.
-    pub fn get_paths(&self, index: usize, paths: &[crate::field_operations::VariantPath]) -> Vec<Option<parquet_variant::Variant>> {
+    pub fn get_paths(
+        &self,
+        index: usize,
+        paths: &[crate::field_operations::VariantPath],
+    ) -> Vec<Option<parquet_variant::Variant>> {
         let mut results = Vec::new();
         for path in paths {
             results.push(self.get_path(index, path));
         }
         results
     }
-    
+
     /// Get the field names for an object at the given index
     pub fn get_field_names(&self, index: usize) -> Vec<String> {
         if index >= self.len() {
             return vec![];
         }
-        
+
         if self.is_null(index) {
             return vec![];
         }
-        
+
         let variant = self.value(index);
         if let Some(obj) = variant.as_object() {
             let mut paths = Vec::new();
@@ -298,12 +306,15 @@ impl VariantArray {
             vec![]
         }
     }
-    
+
     /// Extract field values by path from all variants in the array
-    /// 
+    ///
     /// Applies `get_path()` to a single path across all rows in the array.
     /// Useful for extracting a column of values from nested variant data.
-    pub fn extract_field_by_path(&self, path: &crate::field_operations::VariantPath) -> Vec<Option<parquet_variant::Variant>> {
+    pub fn extract_field_by_path(
+        &self,
+        path: &crate::field_operations::VariantPath,
+    ) -> Vec<Option<parquet_variant::Variant>> {
         let mut results = Vec::new();
         for i in 0..self.len() {
             results.push(self.get_path(i, path));
@@ -326,12 +337,16 @@ impl VariantArray {
     /// Create a new VariantArray with a field removed from all variants
     pub fn with_field_removed(&self, field_name: &str) -> Result<Self, ArrowError> {
         let mut builder = crate::variant_array_builder::VariantArrayBuilder::new(self.len());
-        
+
         for i in 0..self.len() {
             if self.is_null(i) {
                 builder.append_null();
             } else {
-                match FieldOperations::remove_field_bytes(self.metadata(i), self.value_bytes(i), field_name)? {
+                match FieldOperations::remove_field_bytes(
+                    self.metadata(i),
+                    self.value_bytes(i),
+                    field_name,
+                )? {
                     Some(new_value) => {
                         builder.append_variant_buffers(self.metadata(i), &new_value);
                     }
@@ -342,19 +357,23 @@ impl VariantArray {
                 }
             }
         }
-        
+
         Ok(builder.build())
     }
-    
+
     /// Create a new VariantArray with multiple fields removed from all variants
     pub fn with_fields_removed(&self, field_names: &[&str]) -> Result<Self, ArrowError> {
         let mut builder = crate::variant_array_builder::VariantArrayBuilder::new(self.len());
-        
+
         for i in 0..self.len() {
             if self.is_null(i) {
                 builder.append_null();
             } else {
-                match FieldOperations::remove_fields_bytes(self.metadata(i), self.value_bytes(i), field_names)? {
+                match FieldOperations::remove_fields_bytes(
+                    self.metadata(i),
+                    self.value_bytes(i),
+                    field_names,
+                )? {
                     Some(new_value) => {
                         builder.append_variant_buffers(self.metadata(i), &new_value);
                     }
@@ -365,7 +384,7 @@ impl VariantArray {
                 }
             }
         }
-        
+
         Ok(builder.build())
     }
 }
@@ -504,7 +523,7 @@ mod test {
 
     fn create_test_variant_array() -> VariantArray {
         let mut builder = VariantArrayBuilder::new(2);
-        
+
         // Create variant 1: {"name": "Alice", "age": 30}
         let mut builder1 = VariantBuilder::new();
         {
@@ -515,7 +534,7 @@ mod test {
         }
         let (metadata1, value1) = builder1.finish();
         builder.append_variant_buffers(&metadata1, &value1);
-        
+
         // Create variant 2: {"name": "Bob", "age": 25, "city": "NYC"}
         let mut builder2 = VariantBuilder::new();
         {
@@ -527,7 +546,7 @@ mod test {
         }
         let (metadata2, value2) = builder2.finish();
         builder.append_variant_buffers(&metadata2, &value2);
-        
+
         builder.build()
     }
 
@@ -536,27 +555,42 @@ mod test {
         let array = create_test_variant_array();
         assert_eq!(array.len(), 2);
         assert!(!array.is_empty());
-        
+
         // Test accessing variants
         let variant1 = array.value(0);
-        assert_eq!(variant1.get_object_field("name").unwrap().as_string(), Some("Alice"));
-        assert_eq!(variant1.get_object_field("age").unwrap().as_int32(), Some(30));
-        
+        assert_eq!(
+            variant1.get_object_field("name").unwrap().as_string(),
+            Some("Alice")
+        );
+        assert_eq!(
+            variant1.get_object_field("age").unwrap().as_int32(),
+            Some(30)
+        );
+
         let variant2 = array.value(1);
-        assert_eq!(variant2.get_object_field("name").unwrap().as_string(), Some("Bob"));
-        assert_eq!(variant2.get_object_field("age").unwrap().as_int32(), Some(25));
-        assert_eq!(variant2.get_object_field("city").unwrap().as_string(), Some("NYC"));
+        assert_eq!(
+            variant2.get_object_field("name").unwrap().as_string(),
+            Some("Bob")
+        );
+        assert_eq!(
+            variant2.get_object_field("age").unwrap().as_int32(),
+            Some(25)
+        );
+        assert_eq!(
+            variant2.get_object_field("city").unwrap().as_string(),
+            Some("NYC")
+        );
     }
 
     #[test]
     fn test_get_field_names() {
         let array = create_test_variant_array();
-        
+
         let paths1 = array.get_field_names(0);
         assert_eq!(paths1.len(), 2);
         assert!(paths1.contains(&"name".to_string()));
         assert!(paths1.contains(&"age".to_string()));
-        
+
         let paths2 = array.get_field_names(1);
         assert_eq!(paths2.len(), 3);
         assert!(paths2.contains(&"name".to_string()));
@@ -567,12 +601,12 @@ mod test {
     #[test]
     fn test_get_path() {
         let array = create_test_variant_array();
-        
+
         // Test field access
         let name_path = crate::field_operations::VariantPath::field("name");
         let alice_name = array.get_path(0, &name_path).unwrap();
         assert_eq!(alice_name.as_string(), Some("Alice"));
-        
+
         // Test non-existent field
         let nonexistent_path = crate::field_operations::VariantPath::field("nonexistent");
         let result = array.get_path(0, &nonexistent_path);
@@ -582,16 +616,16 @@ mod test {
     #[test]
     fn test_with_field_removed() {
         let array = create_test_variant_array();
-        
+
         let new_array = array.with_field_removed("age").unwrap();
-        
+
         // Check that age field was removed from all variants
         let variant1 = new_array.value(0);
         let obj1 = variant1.as_object().unwrap();
         assert_eq!(obj1.len(), 1);
         assert!(obj1.get("name").is_some());
         assert!(obj1.get("age").is_none());
-        
+
         let variant2 = new_array.value(1);
         let obj2 = variant2.as_object().unwrap();
         assert_eq!(obj2.len(), 2);
@@ -603,14 +637,14 @@ mod test {
     #[test]
     fn test_metadata_and_value_fields() {
         let array = create_test_variant_array();
-        
+
         let metadata_field = array.metadata_field();
         let value_field = array.value_field();
-        
+
         // Check that we got the expected arrays
         assert_eq!(metadata_field.len(), 2);
         assert_eq!(value_field.len(), 2);
-        
+
         // Check that metadata and value bytes are non-empty
         assert!(!metadata_field.as_binary_view().value(0).is_empty());
         assert!(!value_field.as_binary_view().value(0).is_empty());
@@ -626,4 +660,3 @@ mod test {
         Arc::new(BinaryArray::from(vec![b"test" as &[u8]]))
     }
 }
-
