@@ -277,7 +277,7 @@ fn decode_binary_view_inner_utf8_unchecked(
     for row in rows {
         let start_offset = values.len();
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
-
+        let decoded_len = values.len() - start_offset;
         if row[0] == null_sentinel(options) {
             debug_assert_eq!(offset, 1);
             debug_assert_eq!(start_offset, values.len());
@@ -294,7 +294,7 @@ fn decode_binary_view_inner_utf8_unchecked(
             views.append(view);
 
             // truncate inline string in values buffer
-            if offset <= inline_str_max_len {
+            if decoded_len <= inline_str_max_len {
                 values.truncate(start_offset);
             }
         }
