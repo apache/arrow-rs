@@ -2007,8 +2007,7 @@ mod tests {
         let mut writer = crate::writer::FileWriter::try_new_with_options(
             &mut buf,
             batch.schema_ref(),
-            #[allow(deprecated)]
-            IpcWriteOptions::default().with_preserve_dict_id(false),
+            IpcWriteOptions::default(),
         )
         .unwrap();
         writer.write(&batch).unwrap();
@@ -2440,8 +2439,7 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        #[allow(deprecated)]
-        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
+        let mut dict_tracker = DictionaryTracker::new(false);
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2479,8 +2477,7 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        #[allow(deprecated)]
-        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
+        let mut dict_tracker = DictionaryTracker::new(false);
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2691,8 +2688,7 @@ mod tests {
             let mut writer = crate::writer::StreamWriter::try_new_with_options(
                 &mut buf,
                 batch.schema().as_ref(),
-                #[allow(deprecated)]
-                crate::writer::IpcWriteOptions::default().with_preserve_dict_id(false),
+                crate::writer::IpcWriteOptions::default(),
             )
             .expect("Failed to create StreamWriter");
             writer.write(&batch).expect("Failed to write RecordBatch");
