@@ -886,7 +886,7 @@ impl VariantBuilder {
             .append_variant(variant, &mut self.metadata_builder);
     }
 
-    /// Append a non-nested value to the builder.
+    /// Append a value to the builder.
     pub fn try_append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(
         &mut self,
         value: T,
