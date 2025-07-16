@@ -19,6 +19,15 @@
 
 use arrow::error::ArrowError;
 
+/// Basic variant type enumeration for the first 2 bits of header
+#[derive(Debug, Clone, PartialEq)]
+pub enum VariantBasicType {
+    Primitive = 0,
+    ShortString = 1,
+    Object = 2,
+    Array = 3,
+}
+
 /// Variant type enumeration covering all possible types
 #[derive(Debug, Clone, PartialEq)]
 pub enum VariantType {
@@ -94,16 +103,13 @@ pub struct VariantParser;
 impl VariantParser {
     /// General dispatch function to parse any variant header
     pub fn parse_variant_header(header_byte: u8) -> Result<VariantType, ArrowError> {
-        let basic_type = header_byte & 0x03;
+        let basic_type = Self::get_basic_type(header_byte);
         
         match basic_type {
-            0 => Ok(VariantType::Primitive(Self::parse_primitive_header(header_byte)?)),
-            1 => Ok(VariantType::ShortString(Self::parse_short_string_header(header_byte)?)),
-            2 => Ok(VariantType::Object(Self::parse_object_header(header_byte)?)),
-            3 => Ok(VariantType::Array(Self::parse_array_header(header_byte)?)),
-            _ => Err(ArrowError::InvalidArgumentError(
-                format!("Invalid basic type: {}", basic_type)
-            )),
+            VariantBasicType::Primitive => Ok(VariantType::Primitive(Self::parse_primitive_header(header_byte)?)),
+            VariantBasicType::ShortString => Ok(VariantType::ShortString(Self::parse_short_string_header(header_byte)?)),
+            VariantBasicType::Object => Ok(VariantType::Object(Self::parse_object_header(header_byte)?)),
+            VariantBasicType::Array => Ok(VariantType::Array(Self::parse_array_header(header_byte)?)),
         }
     }
     
@@ -236,8 +242,14 @@ impl VariantParser {
     }
     
     /// Get the basic type from header byte
-    pub fn get_basic_type(header_byte: u8) -> u8 {
-        header_byte & 0x03
+    pub fn get_basic_type(header_byte: u8) -> VariantBasicType {
+        match header_byte & 0x03 {
+            0 => VariantBasicType::Primitive,
+            1 => VariantBasicType::ShortString,
+            2 => VariantBasicType::Object,
+            3 => VariantBasicType::Array,
+            _ => panic!("Invalid basic type: {}", header_byte & 0x03),
+        }
     }
     
     /// Check if value bytes represent a primitive
@@ -245,7 +257,7 @@ impl VariantParser {
         if value_bytes.is_empty() {
             return false;
         }
-        Self::get_basic_type(value_bytes[0]) == 0
+        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Primitive
     }
     
     /// Check if value bytes represent a short string
@@ -253,7 +265,7 @@ impl VariantParser {
         if value_bytes.is_empty() {
             return false;
         }
-        Self::get_basic_type(value_bytes[0]) == 1
+        Self::get_basic_type(value_bytes[0]) == VariantBasicType::ShortString
     }
     
     /// Check if value bytes represent an object
@@ -261,7 +273,7 @@ impl VariantParser {
         if value_bytes.is_empty() {
             return false;
         }
-        Self::get_basic_type(value_bytes[0]) == 2
+        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Object
     }
     
     /// Check if value bytes represent an array
@@ -269,7 +281,7 @@ impl VariantParser {
         if value_bytes.is_empty() {
             return false;
         }
-        Self::get_basic_type(value_bytes[0]) == 3
+        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Array
     }
     
     /// Get the data length for a primitive type
