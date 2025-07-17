@@ -178,16 +178,124 @@ where
     }
 }
 
-// partition indices into valid and null indices
-fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
-    match array.null_count() {
-        // faster path
-        0 => ((0..(array.len() as u32)).collect(), vec![]),
-        _ => {
-            let indices = 0..(array.len() as u32);
-            indices.partition(|index| array.is_valid(*index as usize))
-        }
+/// Partition indices of an Arrow array into two categories:
+/// - `valid`: indices of non-null elements
+/// - `nulls`: indices of null elements
+///
+/// Optimized for performance with fast-path for all-valid arrays
+/// and bit-parallel scan for null-containing arrays.
+pub fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
+    let len = array.len();
+    let null_count = array.null_count();
+
+    // Fast path: if there are no nulls, all elements are valid
+    if null_count == 0 {
+        // Simply return a range of indices [0, len)
+        let valid = (0..len as u32).collect();
+        return (valid, Vec::new());
     }
+
+    // Slow path: null bitmap exists and some values are null
+    partition_validity_scan(array, len, null_count)
+}
+
+/// Scans the null bitmap and partitions valid/null indices efficiently.
+/// Uses bit-level operations to extract bit positions.
+/// This function is cold because it's only called when nulls exist.
+fn partition_validity_scan(
+    array: &dyn Array,
+    len: usize,
+    null_count: usize,
+) -> (Vec<u32>, Vec<u32>) {
+    // SAFETY: Guaranteed by caller that null_count > 0, so bitmap must exist
+    let bitmap = array.nulls().unwrap();
+    let buffer = bitmap.buffer(); // Raw byte slice of bitmap bits
+
+    // Preallocate result vectors with exact capacities (avoids reallocations)
+    let mut valid = Vec::with_capacity(len - null_count);
+    let mut nulls = Vec::with_capacity(null_count);
+
+    unsafe {
+        // Access spare capacity of vectors to write directly without bounds checks
+        let valid_slice = valid.spare_capacity_mut();
+        let null_slice = nulls.spare_capacity_mut();
+        let mut vi = 0; // index for writing into valid_slice
+        let mut ni = 0; // index for writing into null_slice
+
+        let mut base = 0; // bit index offset
+        let n_words = buffer.len() / 8; // number of 64-bit chunks in bitmap
+
+        // Process the bitmap in 64-bit (8 byte) chunks for efficiency
+        for word_idx in 0..n_words {
+            let start = word_idx * 8;
+            // Convert 8 bytes into a u64 word in little-endian order
+            let w = u64::from_le_bytes(buffer[start..start + 8].try_into().unwrap());
+
+            // --- Valid bits ---
+            // For every set bit (1) in w, write the corresponding index
+            let mut v = w;
+            while v != 0 {
+                let tz = v.trailing_zeros() as usize; // position of least-significant 1-bit
+                valid_slice[vi].write((base + tz) as u32);
+                vi += 1;
+                v &= v - 1; // clear the lowest set bit (Brian Kernighan's algorithm)
+            }
+
+            // --- Null bits ---
+            // Invert w to find null bits (0s become 1s), and iterate same way
+            let mut z = (!w) & u64::MAX; // ensure proper bit masking
+            while z != 0 {
+                let tz = z.trailing_zeros() as usize;
+                null_slice[ni].write((base + tz) as u32);
+                ni += 1;
+                z &= z - 1;
+            }
+
+            base += 64; // next 64 bits
+        }
+
+        // Handle remaining bits at the tail (less than 64 bits)
+        let rem = len - base;
+        if rem > 0 {
+            let mut last = 0u64;
+            // Build a u64 mask from the remaining bits manually
+            for i in 0..rem {
+                if bitmap.is_valid(base + i) {
+                    last |= 1 << i;
+                }
+            }
+
+            // Compute valid and null masks within the remaining bits
+            let valid_mask = last;
+            let null_mask = (!last) & ((1 << rem) - 1);
+
+            // Write valid indices from tail mask
+            let mut v = valid_mask;
+            while v != 0 {
+                let tz = v.trailing_zeros() as usize;
+                valid_slice[vi].write((base + tz) as u32);
+                vi += 1;
+                v &= v - 1;
+            }
+
+            // Write null indices from tail mask
+            let mut z = null_mask;
+            while z != 0 {
+                let tz = z.trailing_zeros() as usize;
+                null_slice[ni].write((base + tz) as u32);
+                ni += 1;
+                z &= z - 1;
+            }
+        }
+
+        // SAFETY: We wrote exactly `vi` and `ni` elements, as pre-allocated.
+        valid.set_len(vi);
+        nulls.set_len(ni);
+    }
+
+    debug_assert_eq!(valid.len(), len - null_count);
+    debug_assert_eq!(nulls.len(), null_count);
+    (valid, nulls)
 }
 
 /// Whether `sort_to_indices` can sort an array of given data type.
