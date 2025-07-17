@@ -48,12 +48,11 @@ mod struct_array;
 mod test_util;
 
 // Note that this crate is public under the `experimental` feature flag.
-pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
+pub use builder::{ArrayReaderBuilder, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use byte_view_array::make_byte_view_array_reader;
-pub use cached_array_reader::CacheRole;
 #[allow(unused_imports)] // Only used for benchmarks
 pub use fixed_len_byte_array::make_fixed_len_byte_array_reader;
 pub use fixed_size_list_array::FixedSizeListArrayReader;

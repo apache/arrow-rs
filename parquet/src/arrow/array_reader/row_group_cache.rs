@@ -79,7 +79,7 @@ impl RowGroupCache {
             DataType::Utf8View => {
                 use arrow_array::cast::AsArray;
                 let array = array.as_string_view();
-                array.len() * 16 + array.total_buffer_bytes_used() + std::mem::size_of_val(&array)
+                array.len() * 16 + array.total_buffer_bytes_used() + std::mem::size_of_val(array)
             }
             _ => array.get_array_memory_size(),
         };
