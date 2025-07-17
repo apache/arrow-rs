@@ -1084,21 +1084,58 @@ impl<'a> ObjectBuilder<'a> {
         key: &str,
         value: T,
     ) -> Result<(), ArrowError> {
-        // Get metadata_builder from parent state
-        let metadata_builder = self.parent_state.metadata_builder();
+        match &mut self.parent_state {
+            ParentState::Variant {
+                buffer,
+                metadata_builder,
+            } => {
+                let field_id = metadata_builder.upsert_field_name(key);
+                let field_start = buffer.offset() - self.object_start_offset;
 
-        let field_id = metadata_builder.upsert_field_name(key);
-        // field_start is a relevant offset from the buffer this object is being built in.
-        let field_start = self.parent_state.buffer().offset() - self.object_start_offset;
+                if self.fields.insert(field_id, field_start).is_some()
+                    && self.validate_unique_fields
+                {
+                    self.duplicate_fields.insert(field_id);
+                }
 
-        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
-            self.duplicate_fields.insert(field_id);
+                buffer.try_append_variant(value.into(), metadata_builder)?;
+                Ok(())
+            }
+            ParentState::List {
+                buffer,
+                metadata_builder,
+                ..
+            } => {
+                let field_id = metadata_builder.upsert_field_name(key);
+                let field_start = buffer.offset() - self.object_start_offset;
+
+                if self.fields.insert(field_id, field_start).is_some()
+                    && self.validate_unique_fields
+                {
+                    self.duplicate_fields.insert(field_id);
+                }
+
+                buffer.try_append_variant(value.into(), metadata_builder)?;
+                Ok(())
+            }
+            ParentState::Object {
+                buffer,
+                metadata_builder,
+                ..
+            } => {
+                let field_id = metadata_builder.upsert_field_name(key);
+                let field_start = buffer.offset() - self.object_start_offset;
+
+                if self.fields.insert(field_id, field_start).is_some()
+                    && self.validate_unique_fields
+                {
+                    self.duplicate_fields.insert(field_id);
+                }
+
+                buffer.try_append_variant(value.into(), metadata_builder)?;
+                Ok(())
+            }
         }
-
-        self.parent_state.buffer()
-            .try_append_variant(value.into(), metadata_builder)?;
-
-        Ok(())
     }
 
     /// Enables validation for unique field keys when inserting into this object.
@@ -1936,7 +1973,13 @@ mod tests {
         {
             "a": false,
             "c": {
-                "b": "a"
+                "b": "a",
+                "c": {
+                   "aa": "bb",
+                },
+                "d": {
+                    "cc": "dd"
+                }
             }
             "b": true,
         }
@@ -1951,6 +1994,18 @@ mod tests {
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
+
+                {
+                    let mut inner_inner_object_builder = inner_object_builder.new_object("c");
+                    inner_inner_object_builder.insert("aa", "bb");
+                    let _ = inner_inner_object_builder.finish();
+                }
+
+                {
+                    let mut inner_inner_object_builder = inner_object_builder.new_object("d");
+                    inner_inner_object_builder.insert("cc", "dd");
+                    let _ = inner_inner_object_builder.finish();
+                }
                 let _ = inner_object_builder.finish();
             }
 
@@ -1967,7 +2022,13 @@ mod tests {
             "a": false,
             "b": true,
             "c": {
-                "b": "a"
+                "b": "a",
+                "c": {
+                   "aa": "bb",
+                },
+                "d": {
+                    "cc": "dd"
+                }
             }
         }
         */
@@ -1985,9 +2046,21 @@ mod tests {
         let inner_object_variant = outer_object.field(2).unwrap();
         let inner_object = inner_object_variant.as_object().unwrap();
 
-        assert_eq!(inner_object.len(), 1);
+        assert_eq!(inner_object.len(), 3);
         assert_eq!(inner_object.field_name(0).unwrap(), "b");
         assert_eq!(inner_object.field(0).unwrap(), Variant::from("a"));
+
+        let inner_iner_object_variant_c = inner_object.field(1).unwrap();
+        let inner_inner_object_c = inner_iner_object_variant_c.as_object().unwrap();
+        assert_eq!(inner_inner_object_c.len(), 1);
+        assert_eq!(inner_inner_object_c.field_name(0).unwrap(), "aa");
+        assert_eq!(inner_inner_object_c.field(0).unwrap(), Variant::from("bb"));
+
+        let inner_iner_object_variant_d = inner_object.field(2).unwrap();
+        let inner_inner_object_d = inner_iner_object_variant_d.as_object().unwrap();
+        assert_eq!(inner_inner_object_d.len(), 1);
+        assert_eq!(inner_inner_object_d.field_name(0).unwrap(), "cc");
+        assert_eq!(inner_inner_object_d.field(0).unwrap(), Variant::from("dd"));
 
         assert_eq!(outer_object.field_name(1).unwrap(), "b");
         assert_eq!(outer_object.field(1).unwrap(), Variant::from(true));
