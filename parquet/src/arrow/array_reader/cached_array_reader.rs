@@ -659,12 +659,11 @@ mod tests {
         assert_eq!(array.len(), 3);
     }
 
-
     #[test]
     fn test_batch_id_calculation_with_incremental_reads() {
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let cache = Arc::new(Mutex::new(RowGroupCache::new(3, None))); // Batch size 3
-        
+
         // Create a producer to populate cache
         let mut producer = CachedArrayReader::new(
             Box::new(MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
@@ -672,28 +671,24 @@ mod tests {
             0,
             CacheRole::Producer,
         );
-        
+
         // Populate cache with first batch (1, 2, 3)
         producer.read_records(3).unwrap();
         producer.consume_batch().unwrap();
-        
+
         // Now create a consumer that will try to read from cache
-        let mut consumer = CachedArrayReader::new(
-            Box::new(mock_reader),
-            cache.clone(),
-            0,
-            CacheRole::Consumer,
-        );
-        
+        let mut consumer =
+            CachedArrayReader::new(Box::new(mock_reader), cache.clone(), 0, CacheRole::Consumer);
+
         // - We want to read 4 records starting from position 0
         // - First 3 records (positions 0-2) should come from cache (batch 0)
         // - The 4th record (position 3) should come from the next batch
         let records_read = consumer.read_records(4).unwrap();
         assert_eq!(records_read, 4);
-        
+
         let array = consumer.consume_batch().unwrap();
         assert_eq!(array.len(), 4);
-        
+
         let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(int32_array.values(), &[1, 2, 3, 4]);
     }
