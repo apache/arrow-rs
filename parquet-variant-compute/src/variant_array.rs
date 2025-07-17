@@ -91,9 +91,7 @@ impl VariantArray {
         };
         // Ensure the StructArray has a metadata field of BinaryView
 
-        let cloned = inner.clone();
-
-        let Some(metadata_field) = VariantArray::find_metadata_field(&cloned) else {
+        let Some(metadata_field) = VariantArray::find_metadata_field(&inner) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
             ));
@@ -104,7 +102,7 @@ impl VariantArray {
                 metadata_field.data_type()
             )));
         }
-        let Some(value_field) = VariantArray::find_value_field(&cloned) else {
+        let Some(value_field) = VariantArray::find_value_field(&inner) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
             ));
@@ -117,7 +115,7 @@ impl VariantArray {
         }
 
         Ok(Self {
-            inner: cloned,
+            inner: inner.clone(),
             metadata_ref: metadata_field,
             value_ref: value_field,
         })
@@ -185,8 +183,8 @@ impl Array for VariantArray {
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         let slice = self.inner.slice(offset, length);
-        let met = VariantArray::find_metadata_field(&slice).unwrap();
-        let val = VariantArray::find_value_field(&slice).unwrap();
+        let met = self.metadata_ref.slice(offset, length);
+        let val = self.value_ref.slice(offset, length);
         Arc::new(Self {
             inner: slice,
             metadata_ref: met,
