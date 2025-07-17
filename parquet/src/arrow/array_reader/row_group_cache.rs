@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::ArrayRef;
+use arrow_array::{Array, ArrayRef};
+use arrow_schema::DataType;
 use std::collections::HashMap;
 
 /// Starting row ID for this batch
@@ -72,7 +73,16 @@ impl RowGroupCache {
     /// Inserts an array into the cache for the given column and starting row ID
     /// Returns true if the array was inserted, false if it would exceed the cache size limit
     pub fn insert(&mut self, column_idx: usize, batch_id: BatchID, array: ArrayRef) -> bool {
-        let array_size = array.get_array_memory_size();
+        let array_size = match array.data_type() {
+            // TODO: this is temporary workaround. It's very difficult to measure the actual memory usage of one StringViewArray,
+            // because the underlying buffer is shared with multiple StringViewArrays.
+            DataType::Utf8View => {
+                use arrow_array::cast::AsArray;
+                let array = array.as_string_view();
+                array.len() * 16 + array.total_buffer_bytes_used() + std::mem::size_of_val(&array)
+            }
+            _ => array.get_array_memory_size(),
+        };
 
         // Check if adding this array would exceed the cache size limit
         if let Some(max_size) = self.max_cache_bytes {
