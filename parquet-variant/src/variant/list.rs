@@ -627,4 +627,22 @@ mod tests {
             assert_eq!(expected_list.get(i).unwrap(), item_str);
         }
     }
+
+    #[test]
+    fn items_are_equal_even_if_not_validated() {
+        use crate::Variant;
+        use crate::VariantBuilder;
+
+        let mut builder = VariantBuilder::new();
+
+        let mut list = builder.new_list();
+        list.append_value("hello2");
+        list.finish();
+
+        let (metadata, value) = builder.finish();
+
+        let variant1 = Variant::new(&metadata, &value);
+        let variant2 = Variant::new(&metadata, &value).with_full_validation().unwrap();
+        assert_eq!(variant1, variant2)
+    }
 }

@@ -356,9 +356,7 @@ impl<'m> VariantMetadata<'m> {
 impl<'m> PartialEq for VariantMetadata<'m> {
     fn eq(&self, other: &Self) -> bool {
         let is_equal = self.is_empty() == other.is_empty()
-            && self.is_fully_validated() == other.is_fully_validated()
-            && self.first_value_byte == other.first_value_byte
-            && self.validated == other.validated;
+            && self.first_value_byte == other.first_value_byte;
 
         let other_field_names: HashSet<&'m str> = HashSet::from_iter(other.iter());
 

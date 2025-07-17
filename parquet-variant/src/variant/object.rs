@@ -416,8 +416,7 @@ impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
             && self.header == other.header
             && self.num_elements == other.num_elements
             && self.first_field_offset_byte == other.first_field_offset_byte
-            && self.first_value_byte == other.first_value_byte
-            && self.validated == other.validated;
+            && self.first_value_byte == other.first_value_byte;
 
         // value validation
         let other_fields: HashMap<&str, Variant> = HashMap::from_iter(other.iter());
@@ -948,5 +947,24 @@ mod tests {
 
         // objects are still logically equal
         assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn items_are_equal_even_if_not_validated() {
+        use crate::Variant;
+        use crate::VariantBuilder;
+
+        let mut builder = VariantBuilder::new();
+        let mut obj = builder.new_object();
+        obj.insert("field1", "hello");
+        obj.insert("field2", 34);
+        obj.insert("field3", true);
+        obj.finish().unwrap();
+
+        let (metadata, value) = builder.finish();
+
+        let variant1 = Variant::new(&metadata, &value);
+        let variant2 = Variant::new(&metadata, &value).with_full_validation().unwrap();
+        assert_eq!(variant1, variant2)
     }
 }
