@@ -964,7 +964,9 @@ mod tests {
         let (metadata, value) = builder.finish();
 
         let variant1 = Variant::new(&metadata, &value);
-        let variant2 = Variant::new(&metadata, &value).with_full_validation().unwrap();
+        let variant2 = Variant::new(&metadata, &value)
+            .with_full_validation()
+            .unwrap();
         assert_eq!(variant1, variant2)
     }
 }

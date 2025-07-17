@@ -302,14 +302,13 @@ impl<'m, 'v> VariantList<'m, 'v> {
     }
 }
 
-
 impl<'m, 'v> PartialEq for VariantList<'m, 'v> {
     fn eq(&self, other: &Self) -> bool {
-        self.metadata == other.metadata &&
-        self.value == other.value &&
-        self.header == other.header &&
-        self.num_elements == other.num_elements &&
-        self.first_value_byte == other.first_value_byte
+        self.metadata == other.metadata
+            && self.value == other.value
+            && self.header == other.header
+            && self.num_elements == other.num_elements
+            && self.first_value_byte == other.first_value_byte
     }
 }
 
@@ -653,7 +652,9 @@ mod tests {
         let (metadata, value) = builder.finish();
 
         let variant1 = Variant::new(&metadata, &value);
-        let variant2 = Variant::new(&metadata, &value).with_full_validation().unwrap();
+        let variant2 = Variant::new(&metadata, &value)
+            .with_full_validation()
+            .unwrap();
         assert_eq!(variant1, variant2)
     }
 }

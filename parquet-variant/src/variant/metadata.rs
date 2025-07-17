@@ -355,8 +355,8 @@ impl<'m> VariantMetadata<'m> {
 // checks whether the dictionary entries are equal -- regardless of their sorting order
 impl<'m> PartialEq for VariantMetadata<'m> {
     fn eq(&self, other: &Self) -> bool {
-        let is_equal = self.is_empty() == other.is_empty()
-            && self.first_value_byte == other.first_value_byte;
+        let is_equal =
+            self.is_empty() == other.is_empty() && self.first_value_byte == other.first_value_byte;
 
         let other_field_names: HashSet<&'m str> = HashSet::from_iter(other.iter());
 
@@ -528,5 +528,16 @@ mod tests {
             matches!(err, ArrowError::InvalidArgumentError(_)),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn metadata_is_equal() {
+        let metadata_bytes = vec![0x11, 0, 0];
+        let metadata1 = VariantMetadata::try_new(&metadata_bytes).unwrap();
+        let metadata2 = VariantMetadata::try_new(&metadata_bytes)
+            .unwrap()
+            .with_full_validation()
+            .unwrap();
+        assert_eq!(metadata1, metadata2)
     }
 }
