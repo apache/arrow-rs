@@ -43,6 +43,19 @@ pub struct CacheKey {
     pub batch_id: BatchID,
 }
 
+fn get_array_memory_size_for_cache(array: &ArrayRef) -> usize {
+    match array.data_type() {
+        // TODO: this is temporary workaround. It's very difficult to measure the actual memory usage of one StringViewArray,
+        // because the underlying buffer is shared with multiple StringViewArrays.
+        DataType::Utf8View => {
+            use arrow_array::cast::AsArray;
+            let array = array.as_string_view();
+            array.len() * 16 + array.total_buffer_bytes_used() + std::mem::size_of_val(array)
+        }
+        _ => array.get_array_memory_size(),
+    }
+}
+
 /// Row group cache that stores decoded arrow arrays at batch granularity
 ///
 /// This cache is designed to avoid duplicate decoding when the same column
@@ -73,16 +86,7 @@ impl RowGroupCache {
     /// Inserts an array into the cache for the given column and starting row ID
     /// Returns true if the array was inserted, false if it would exceed the cache size limit
     pub fn insert(&mut self, column_idx: usize, batch_id: BatchID, array: ArrayRef) -> bool {
-        let array_size = match array.data_type() {
-            // TODO: this is temporary workaround. It's very difficult to measure the actual memory usage of one StringViewArray,
-            // because the underlying buffer is shared with multiple StringViewArrays.
-            DataType::Utf8View => {
-                use arrow_array::cast::AsArray;
-                let array = array.as_string_view();
-                array.len() * 16 + array.total_buffer_bytes_used() + std::mem::size_of_val(array)
-            }
-            _ => array.get_array_memory_size(),
-        };
+        let array_size = get_array_memory_size_for_cache(&array);
 
         // Check if adding this array would exceed the cache size limit
         if let Some(max_size) = self.max_cache_bytes {
@@ -125,7 +129,7 @@ impl RowGroupCache {
             batch_id,
         };
         if let Some(array) = self.cache.remove(&key) {
-            self.current_cache_size -= array.get_array_memory_size();
+            self.current_cache_size -= get_array_memory_size_for_cache(&array);
             true
         } else {
             false
