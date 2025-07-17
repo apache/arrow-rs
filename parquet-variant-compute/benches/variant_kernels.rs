@@ -28,16 +28,41 @@ use rand::SeedableRng;
 use std::fmt::Write;
 use std::sync::Arc;
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
-    let input_array = StringArray::from_iter_values(small_repeated_json_structure(8000));
+    let input_array = StringArray::from_iter_values(json_repeated_struct(8000));
     let array_ref: ArrayRef = Arc::new(input_array);
     c.bench_function(
-        "batch_json_string_to_variant small_repeated_json 8k string",
+        "batch_json_string_to_variant repeated_struct 8k string",
         |b| {
             b.iter(|| {
                 let _ = batch_json_string_to_variant(&array_ref).unwrap();
             });
         },
     );
+
+    let input_array = StringArray::from_iter_values(json_repeated_list(8000));
+    let array_ref: ArrayRef = Arc::new(input_array);
+    c.bench_function("batch_json_string_to_variant json_list 8k string", |b| {
+        b.iter(|| {
+            let _ = batch_json_string_to_variant(&array_ref).unwrap();
+        });
+    });
+
+    let input_array = StringArray::from_iter_values(random_json_structure(8000));
+    let total_input_bytes = input_array
+        .iter()
+        .flatten() // filter None
+        .map(|v| v.len())
+        .sum::<usize>();
+    let id = format!(
+        "batch_json_string_to_variant random_json({} bytes per document)",
+        total_input_bytes / input_array.len()
+    );
+    let array_ref: ArrayRef = Arc::new(input_array);
+    c.bench_function(&id, |b| {
+        b.iter(|| {
+            let _ = batch_json_string_to_variant(&array_ref).unwrap();
+        });
+    });
 
     let input_array = StringArray::from_iter_values(random_json_structure(8000));
     let total_input_bytes = input_array
@@ -95,7 +120,7 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
     variant_builder.build()
 }
 
-/// This function generates a vector of JSON strings, each representing a person
+/// Return an iterator off JSON strings, each representing a person
 /// with random first name, last name, and age.
 ///
 /// Example:
@@ -106,7 +131,7 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
 ///   "age": random_value_between_20_and_80,
 /// }
 /// ```
-fn small_repeated_json_structure(count: usize) -> impl Iterator<Item = String> {
+fn json_repeated_struct(count: usize) -> impl Iterator<Item = String> {
     let mut rng = seedable_rng();
     (0..count).map(move |_| {
         let first: String = (0..rng.random_range(1..=20))
@@ -117,6 +142,35 @@ fn small_repeated_json_structure(count: usize) -> impl Iterator<Item = String> {
             .collect();
         let age: u8 = rng.random_range(20..=80);
         format!("{{\"first\":\"{first}\",\"last\":\"{last}\",\"age\":{age}}}")
+    })
+}
+
+/// Return a vector of JSON strings, each representing a list of numbers
+///
+/// Example:
+/// ```json
+/// [1.0, 2.0, 3.0, 4.0, 5.0],
+/// [5.0],
+/// [],
+/// null,
+/// [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+/// ```
+fn json_repeated_list(count: usize) -> impl Iterator<Item = String> {
+    let mut rng = seedable_rng();
+    (0..count).map(move |_| {
+        let length = rng.random_range(0..=100);
+        let mut output = String::new();
+        output.push('[');
+        for i in 0..length {
+            let value: f64 = rng.random_range(0.0..10000.0);
+            write!(&mut output, "{value:.1}").unwrap();
+            if i < length - 1 {
+                output.push(',');
+            }
+        }
+
+        output.push(']');
+        output
     })
 }
 
