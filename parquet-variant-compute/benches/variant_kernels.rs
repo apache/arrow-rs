@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, StringArray};
+use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::util::test_util::seedable_rng;
 use criterion::{criterion_group, criterion_main, Criterion};
 use parquet_variant::{Variant, VariantBuilder};
@@ -27,39 +27,6 @@ use rand::Rng;
 use rand::SeedableRng;
 use std::fmt::Write;
 use std::sync::Arc;
-
-/// This function generates a vector of JSON strings, each representing a person
-/// with random first name, last name, and age.
-///
-/// Example:
-/// ```json
-/// {
-///   "first" : random_string_of_1_to_20_characters,
-///   "last" : random_string_of_1_to_20_characters,
-///   "age": random_value_between_20_and_80,
-/// }
-/// ```
-fn small_repeated_json_structure(count: usize) -> impl Iterator<Item = String> {
-    let mut rng = seedable_rng();
-    (0..count).map(move |_| {
-        let first: String = (0..rng.random_range(1..=20))
-            .map(|_| rng.sample(Alphanumeric) as char)
-            .collect();
-        let last: String = (0..rng.random_range(1..=20))
-            .map(|_| rng.sample(Alphanumeric) as char)
-            .collect();
-        let age: u8 = rng.random_range(20..=80);
-        format!("{{\"first\":\"{first}\",\"last\":\"{last}\",\"age\":{age}}}")
-    })
-}
-
-/// This function generates a vector of JSON strings which have many fields
-/// and a random structure (including field names)
-fn small_random_json_structure(count: usize) -> impl Iterator<Item = String> {
-    let mut generator = RandomJsonGenerator::new();
-    (0..count).map(move |_| generator.next().to_string())
-}
-
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let input_array = StringArray::from_iter_values(small_repeated_json_structure(8000));
     let array_ref: ArrayRef = Arc::new(input_array);
@@ -73,15 +40,21 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     );
 
     let input_array = StringArray::from_iter_values(small_random_json_structure(8000));
-    let array_ref: ArrayRef = Arc::new(input_array);
-    c.bench_function(
-        "batch_json_string_to_variant small_random_json 8k string",
-        |b| {
-            b.iter(|| {
-                let _ = batch_json_string_to_variant(&array_ref).unwrap();
-            });
-        },
+    let total_input_bytes = input_array
+        .iter()
+        .filter_map(|v| v)
+        .map(|v| v.len())
+        .sum::<usize>();
+    let id = format!(
+        "batch_json_string_to_variant random_json({} bytes per document)",
+        total_input_bytes / input_array.len()
     );
+    let array_ref: ArrayRef = Arc::new(input_array);
+    c.bench_function(&id, |b| {
+        b.iter(|| {
+            let _ = batch_json_string_to_variant(&array_ref).unwrap();
+        });
+    });
 }
 
 fn create_primitive_variant(size: usize) -> VariantArray {
@@ -120,6 +93,38 @@ criterion_group!(
     benchmark_batch_json_string_to_variant
 );
 criterion_main!(benches);
+
+/// This function generates a vector of JSON strings, each representing a person
+/// with random first name, last name, and age.
+///
+/// Example:
+/// ```json
+/// {
+///   "first" : random_string_of_1_to_20_characters,
+///   "last" : random_string_of_1_to_20_characters,
+///   "age": random_value_between_20_and_80,
+/// }
+/// ```
+fn small_repeated_json_structure(count: usize) -> impl Iterator<Item = String> {
+    let mut rng = seedable_rng();
+    (0..count).map(move |_| {
+        let first: String = (0..rng.random_range(1..=20))
+            .map(|_| rng.sample(Alphanumeric) as char)
+            .collect();
+        let last: String = (0..rng.random_range(1..=20))
+            .map(|_| rng.sample(Alphanumeric) as char)
+            .collect();
+        let age: u8 = rng.random_range(20..=80);
+        format!("{{\"first\":\"{first}\",\"last\":\"{last}\",\"age\":{age}}}")
+    })
+}
+
+/// This function generates a vector of JSON strings which have many fields
+/// and a random structure (including field names)
+fn small_random_json_structure(count: usize) -> impl Iterator<Item = String> {
+    let mut generator = RandomJsonGenerator::new();
+    (0..count).map(move |_| generator.next().to_string())
+}
 
 /// Creates JSON with random structure and fields.
 ///
