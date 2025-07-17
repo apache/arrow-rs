@@ -59,7 +59,11 @@ pub struct VariantArray {
     /// Dictionary-Encoded, preferably (but not required) with an index type of
     /// int8.
     inner: StructArray,
+
+    /// Reference to the metadata column of inner
     metadata_ref: ArrayRef,
+
+    /// Reference to the value column of inner
     value_ref: ArrayRef,
 }
 
