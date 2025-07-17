@@ -217,23 +217,31 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 self.header.field_ids_start_byte() as _..self.first_field_offset_byte as _,
             )?;
 
-            let field_ids = map_bytes_to_offsets(field_id_buffer, self.header.field_id_size)
-                .collect::<Vec<_>>();
-
+            let mut field_ids_iter =
+                map_bytes_to_offsets(field_id_buffer, self.header.field_id_size);
             // Validate all field ids exist in the metadata dictionary and the corresponding field names are lexicographically sorted
             if self.metadata.is_sorted() {
                 // Since the metadata dictionary has unique and sorted field names, we can also guarantee this object's field names
                 // are lexicographically sorted by their field id ordering
-                if !field_ids.is_sorted() {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "field names not sorted".to_string(),
-                    ));
-                }
+                let dictionary_size = self.metadata.dictionary_size();
 
-                // Since field ids are sorted, if the last field is smaller than the dictionary size,
-                // we also know all field ids are smaller than the dictionary size and in-bounds.
-                if let Some(&last_field_id) = field_ids.last() {
-                    if last_field_id >= self.metadata.dictionary_size() {
+                if let Some(mut current_id) = field_ids_iter.next() {
+                    for next_id in field_ids_iter {
+                        if current_id >= dictionary_size {
+                            return Err(ArrowError::InvalidArgumentError(
+                                "field id is not valid".to_string(),
+                            ));
+                        }
+
+                        if next_id <= current_id {
+                            return Err(ArrowError::InvalidArgumentError(
+                                "field names not sorted".to_string(),
+                            ));
+                        }
+                        current_id = next_id;
+                    }
+
+                    if current_id >= dictionary_size {
                         return Err(ArrowError::InvalidArgumentError(
                             "field id is not valid".to_string(),
                         ));
@@ -244,16 +252,22 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                 // to check lexicographical order
                 //
                 // Since we are probing the metadata dictionary by field id, this also verifies field ids are in-bounds
-                let are_field_names_sorted = field_ids
-                    .iter()
-                    .map(|&i| self.metadata.get(i))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .is_sorted();
+                let mut current_field_name = match field_ids_iter.next() {
+                    Some(field_id) => Some(self.metadata.get(field_id)?),
+                    None => None,
+                };
 
-                if !are_field_names_sorted {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "field names not sorted".to_string(),
-                    ));
+                for field_id in field_ids_iter {
+                    let next_field_name = self.metadata.get(field_id)?;
+
+                    if let Some(current_name) = current_field_name {
+                        if next_field_name <= current_name {
+                            return Err(ArrowError::InvalidArgumentError(
+                                "field names not sorted".to_string(),
+                            ));
+                        }
+                    }
+                    current_field_name = Some(next_field_name);
                 }
             }
 
