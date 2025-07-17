@@ -39,10 +39,10 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
         },
     );
 
-    let input_array = StringArray::from_iter_values(small_random_json_structure(8000));
+    let input_array = StringArray::from_iter_values(random_json_structure(8000));
     let total_input_bytes = input_array
         .iter()
-        .filter_map(|v| v)
+        .flatten() // filter None
         .map(|v| v.len())
         .sum::<usize>();
     let id = format!(
@@ -57,23 +57,8 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     });
 }
 
-fn create_primitive_variant(size: usize) -> VariantArray {
-    let mut rng = StdRng::seed_from_u64(42);
-
-    let mut variant_builder = VariantArrayBuilder::new(1);
-
-    for _ in 0..size {
-        let mut builder = VariantBuilder::new();
-        builder.append_value(rng.random::<i64>());
-        let (metadata, value) = builder.finish();
-        variant_builder.append_variant(Variant::try_new(&metadata, &value).unwrap());
-    }
-
-    variant_builder.build()
-}
-
 pub fn variant_get_bench(c: &mut Criterion) {
-    let variant_array = create_primitive_variant(8192);
+    let variant_array = create_primitive_variant_array(8192);
     let input: ArrayRef = Arc::new(variant_array);
 
     let options = GetOptions {
@@ -93,6 +78,22 @@ criterion_group!(
     benchmark_batch_json_string_to_variant
 );
 criterion_main!(benches);
+
+/// Creates a `VariantArray` with a specified number of Variant::Int64 values each with random value.
+fn create_primitive_variant_array(size: usize) -> VariantArray {
+    let mut rng = StdRng::seed_from_u64(42);
+
+    let mut variant_builder = VariantArrayBuilder::new(1);
+
+    for _ in 0..size {
+        let mut builder = VariantBuilder::new();
+        builder.append_value(rng.random::<i64>());
+        let (metadata, value) = builder.finish();
+        variant_builder.append_variant(Variant::try_new(&metadata, &value).unwrap());
+    }
+
+    variant_builder.build()
+}
 
 /// This function generates a vector of JSON strings, each representing a person
 /// with random first name, last name, and age.
@@ -121,50 +122,75 @@ fn small_repeated_json_structure(count: usize) -> impl Iterator<Item = String> {
 
 /// This function generates a vector of JSON strings which have many fields
 /// and a random structure (including field names)
-fn small_random_json_structure(count: usize) -> impl Iterator<Item = String> {
-    let mut generator = RandomJsonGenerator::new();
+fn random_json_structure(count: usize) -> impl Iterator<Item = String> {
+    let mut generator = RandomJsonGenerator {
+        null_weight: 5,
+        string_weight: 25,
+        number_weight: 25,
+        boolean_weight: 10,
+        object_weight: 25,
+        array_weight: 25,
+        max_fields: 10,
+        max_array_length: 10,
+        max_depth: 5,
+        ..Default::default()
+    };
     (0..count).map(move |_| generator.next().to_string())
 }
 
 /// Creates JSON with random structure and fields.
 ///
-/// Each type is created in a random proportion, controlled by the
-/// probabilities. The sum of all probabilities should be 1.0.
+/// Each type is created in proportion controlled by the
+/// weights
+#[derive(Debug)]
 struct RandomJsonGenerator {
     /// Random number generator
     rng: StdRng,
     /// the probability of generating a null value
-    null_probability: f64,
-    /// the probably of generating a string value
-    string_probability: f64,
-    /// the probably of generating a number value
-    number_probability: f64,
-    /// the probably of generating a boolean value
-    boolean_probability: f64,
-    /// the probably of generating an object value
-    object_probability: f64,
-    // probability of generating a JSON array is the remaining probability
+    null_weight: usize,
+    /// the probability of generating a string value
+    string_weight: usize,
+    /// the probability of generating a number value
+    number_weight: usize,
+    /// the probability of generating a boolean value
+    boolean_weight: usize,
+    /// the probability of generating an object value
+    object_weight: usize,
+    /// the probability of generating an array value
+    array_weight: usize,
+
+    /// The max number of fields in an object
+    max_fields: usize,
+    /// the max number of elements in an array
+    max_array_length: usize,
+
     /// The maximum depth of the generated JSON structure
     max_depth: usize,
     /// output buffer
     output_buffer: String,
 }
 
-impl RandomJsonGenerator {
-    fn new() -> Self {
+impl Default for RandomJsonGenerator {
+    fn default() -> Self {
         let rng = seedable_rng();
         Self {
             rng,
-            null_probability: 0.05,
-            string_probability: 0.25,
-            number_probability: 0.25,
-            boolean_probability: 0.10,
-            object_probability: 0.10,
-            max_depth: 5,
+            null_weight: 0,
+            string_weight: 0,
+            number_weight: 0,
+            boolean_weight: 0,
+            object_weight: 0,
+            array_weight: 0,
+            max_fields: 1,
+            max_array_length: 1,
+            max_depth: 1,
             output_buffer: String::new(),
         }
     }
+}
 
+impl RandomJsonGenerator {
+    // Generate the next random JSON string.
     fn next(&mut self) -> &str {
         self.output_buffer.clear();
         self.append_random_json(0);
@@ -173,47 +199,81 @@ impl RandomJsonGenerator {
 
     /// Appends a random JSON value to the output buffer.
     fn append_random_json(&mut self, current_depth: usize) {
-        if current_depth >= self.max_depth {
-            write!(&mut self.output_buffer, "\"max_depth reached\"").unwrap();
+        // use destructuring to ensure each field is used
+        let Self {
+            rng,
+            null_weight,
+            string_weight,
+            number_weight,
+            boolean_weight,
+            object_weight,
+            array_weight,
+            max_fields,
+            max_array_length,
+            max_depth,
+            output_buffer,
+        } = self;
+
+        if current_depth >= *max_depth {
+            write!(output_buffer, "\"max_depth reached\"").unwrap();
             return;
         }
-        // Generate a random number to determine the type
-        let random_value: f64 = self.rng.random();
-        if random_value < self.null_probability {
-            write!(&mut self.output_buffer, "null").unwrap();
-        } else if random_value < self.null_probability + self.string_probability {
-            // Generate a random string between 1 and 500 characters
-            let length = self.rng.random_range(1..=500);
-            let random_string: String = (0..length)
-                .map(|_| self.rng.sample(Alphanumeric) as char)
-                .collect();
-            write!(&mut self.output_buffer, "\"{random_string}\"",).unwrap();
-        } else if random_value
-            < self.null_probability + self.string_probability + self.number_probability
-        {
-            // Generate a random number
-            let random_number: f64 = self.rng.random_range(-1000.0..1000.0);
-            write!(&mut self.output_buffer, "{random_number}",).unwrap();
-        } else if random_value
-            < self.null_probability
-                + self.string_probability
-                + self.number_probability
-                + self.boolean_probability
-        {
-            // Generate a random boolean
-            let random_boolean: bool = self.rng.random();
-            write!(&mut self.output_buffer, "{random_boolean}",).unwrap();
-        } else if random_value
-            < self.null_probability
-                + self.string_probability
-                + self.number_probability
-                + self.boolean_probability
-                + self.object_probability
-        {
-            // Generate a random object
-            let num_fields = self.rng.random_range(1..=10);
 
-            write!(&mut self.output_buffer, "{{").unwrap();
+        let total_weight = *null_weight
+            + *string_weight
+            + *number_weight
+            + *boolean_weight
+            + *object_weight
+            + *array_weight;
+
+        // Generate a random number to determine the type
+        let mut random_value: usize = rng.random_range(0..total_weight);
+
+        if random_value <= *null_weight {
+            write!(output_buffer, "null").unwrap();
+            return;
+        }
+        random_value -= *null_weight;
+
+        if random_value <= *string_weight {
+            // Generate a random string between 1 and 20 characters
+            let length = rng.random_range(1..=20);
+            let random_string: String = (0..length)
+                .map(|_| rng.sample(Alphanumeric) as char)
+                .collect();
+            write!(output_buffer, "\"{random_string}\"",).unwrap();
+            return;
+        }
+        random_value -= *string_weight;
+
+        if random_value <= *number_weight {
+            // 50% chance of generating an integer or a float
+            if rng.random_bool(0.5) {
+                // Generate a random integer
+                let random_integer: i64 = rng.random_range(-1000..1000);
+                write!(output_buffer, "{random_integer}",).unwrap();
+            } else {
+                // Generate a random float
+                let random_float: f64 = rng.random_range(-1000.0..1000.0);
+                write!(output_buffer, "{random_float}",).unwrap();
+            }
+            return;
+        }
+        random_value -= *number_weight;
+
+        if random_value <= *boolean_weight {
+            // Generate a random boolean
+            let random_boolean: bool = rng.random();
+            write!(output_buffer, "{random_boolean}",).unwrap();
+            return;
+        }
+        random_value -= *boolean_weight;
+
+        if random_value <= *object_weight {
+            // Generate a random object
+            let num_fields = rng.random_range(1..=*max_fields);
+
+            write!(output_buffer, "{{").unwrap();
             for i in 0..num_fields {
                 let key_length = self.rng.random_range(1..=20);
                 let key: String = (0..key_length)
@@ -226,10 +286,14 @@ impl RandomJsonGenerator {
                 }
             }
             write!(&mut self.output_buffer, "}}").unwrap();
-        } else {
+            return;
+        }
+        random_value -= *object_weight;
+
+        if random_value <= *array_weight {
             // Generate a random array
-            let length = self.rng.random_range(1..=10);
-            write!(&mut self.output_buffer, "[").unwrap();
+            let length = rng.random_range(1..=*max_array_length);
+            write!(output_buffer, "[").unwrap();
             for i in 0..length {
                 self.append_random_json(current_depth + 1);
                 if i < length - 1 {
@@ -237,6 +301,9 @@ impl RandomJsonGenerator {
                 }
             }
             write!(&mut self.output_buffer, "]").unwrap();
+            return;
         }
+
+        panic!("Random value did not match any type");
     }
 }
