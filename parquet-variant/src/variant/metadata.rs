@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
+
 use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
 
@@ -125,7 +127,7 @@ impl VariantMetadataHeader {
 ///
 /// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct VariantMetadata<'m> {
     pub(crate) bytes: &'m [u8],
     header: VariantMetadataHeader,
@@ -346,6 +348,30 @@ impl<'m> VariantMetadata<'m> {
     }
 }
 
+// According to the spec, metadata dictionaries are not required to be in a specific order,
+// to enable flexibility when constructing Variant values
+//
+// Instead of comparing the raw bytes of 2 variant metadata instances, this implementation
+// checks whether the dictionary entries are equal -- regardless of their sorting order
+impl<'m> PartialEq for VariantMetadata<'m> {
+    fn eq(&self, other: &Self) -> bool {
+        let is_equal = self.is_empty() == other.is_empty()
+            && self.is_fully_validated() == other.is_fully_validated()
+            && self.first_value_byte == other.first_value_byte
+            && self.validated == other.validated;
+
+        let other_field_names: HashSet<&'m str> = HashSet::from_iter(other.iter());
+
+        for field_name in self.iter() {
+            if !other_field_names.contains(field_name) {
+                return false;
+            }
+        }
+
+        is_equal
+    }
+}
+
 /// Retrieves the ith dictionary entry, panicking if the index is out of bounds. Accessing
 /// [unvalidated] input could also panic if the underlying bytes are invalid.
 ///
@@ -360,6 +386,7 @@ impl std::ops::Index<usize> for VariantMetadata<'_> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     /// `"cat"`, `"dog"` – valid metadata

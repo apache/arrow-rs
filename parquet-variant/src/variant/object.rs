@@ -14,11 +14,13 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
 };
 use crate::variant::{Variant, VariantMetadata};
+use std::collections::HashMap;
 
 use arrow_schema::ArrowError;
 
@@ -114,7 +116,7 @@ impl VariantObjectHeader {
 ///
 /// [valid]: VariantMetadata#Validation
 /// [Variant spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-data-for-object-basic_type2
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct VariantObject<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
@@ -398,6 +400,38 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         let i = try_binary_search_range_by(0..self.len(), &name, |i| self.field_name(i))?.ok()?;
 
         self.field(i)
+    }
+}
+
+// Custom implementation of PartialEq for variant objects
+//
+// According to the spec, field values are not required to be in the same order as the field IDs,
+// to enable flexibility when constructing Variant values
+//
+// Instead of comparing the raw bytes of 2 variant objects, this implementation recursively
+// checks whether the field values are equal -- regardless of their order
+impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
+    fn eq(&self, other: &Self) -> bool {
+        let mut is_equal = self.metadata == other.metadata
+            && self.header == other.header
+            && self.num_elements == other.num_elements
+            && self.first_field_offset_byte == other.first_field_offset_byte
+            && self.first_value_byte == other.first_value_byte
+            && self.validated == other.validated;
+
+        // value validation
+        let other_fields: HashMap<&str, Variant> = HashMap::from_iter(other.iter());
+
+        for (field_name, variant) in self.iter() {
+            match other_fields.get(field_name as &str) {
+                Some(other_variant) => {
+                    is_equal = is_equal && variant == *other_variant;
+                }
+                None => return false,
+            }
+        }
+
+        is_equal
     }
 }
 
@@ -731,5 +765,188 @@ mod tests {
     fn test_variant_object_65535_bytes_child_data_2_byte_offsets() {
         test_variant_object_with_large_data(16777216 + 1, OffsetSizeBytes::Four);
         // 2^24
+    }
+
+    #[test]
+    fn test_objects_with_same_fields_are_equal() {
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("b", ());
+        o.insert("c", ());
+        o.insert("a", ());
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let v1 = Variant::try_new(&m, &v).unwrap();
+        let v2 = Variant::try_new(&m, &v).unwrap();
+
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_same_objects_with_different_builder_are_equal() {
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", ());
+        o.insert("b", false);
+
+        o.finish().unwrap();
+        let (m, v) = b.finish();
+
+        let v1 = Variant::try_new(&m, &v).unwrap();
+
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", ());
+        o.insert("b", false);
+
+        o.finish().unwrap();
+        let (m, v) = b.finish();
+
+        let v2 = Variant::try_new(&m, &v).unwrap();
+
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_objects_with_different_values_are_not_equal() {
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", ());
+        o.insert("b", 4.3);
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let v1 = Variant::try_new(&m, &v).unwrap();
+
+        // second object, same field name but different values
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", ());
+        let mut inner_o = o.new_object("b");
+        inner_o.insert("a", 3.3);
+        inner_o.finish().unwrap();
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let v2 = Variant::try_new(&m, &v).unwrap();
+
+        let m1 = v1.metadata().unwrap();
+        let m2 = v2.metadata().unwrap();
+
+        // metadata would be equal since they contain the same keys
+        assert_eq!(m1, m2);
+
+        // but the objects are not equal
+        assert_ne!(v1, v2);
+    }
+
+    #[test]
+    fn test_objects_with_different_field_names_are_not_equal() {
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", ());
+        o.insert("b", 4.3);
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let v1 = Variant::try_new(&m, &v).unwrap();
+
+        // second object, same field name but different values
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("aardvark", ());
+        o.insert("barracuda", 3.3);
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+        let v2 = Variant::try_new(&m, &v).unwrap();
+
+        assert_ne!(v1, v2);
+    }
+
+    #[test]
+    fn test_objects_with_different_insertion_order_are_equal() {
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("b", false);
+        o.insert("a", ());
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let v1 = Variant::try_new(&m, &v).unwrap();
+        assert!(!v1.metadata().unwrap().is_sorted());
+
+        // create another object pre-filled with field names, b and a
+        // but insert the fields in the order of a, b
+        let mut b = VariantBuilder::new().with_field_names(["b", "a"].into_iter());
+        let mut o = b.new_object();
+
+        o.insert("a", ());
+        o.insert("b", false);
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let v2 = Variant::try_new(&m, &v).unwrap();
+
+        // v2 should also have a unsorted dictionary
+        assert!(!v2.metadata().unwrap().is_sorted());
+
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_objects_with_differing_metadata_are_equal() {
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", ());
+        o.insert("b", 4.3);
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let v1 = Variant::try_new(&m, &v).unwrap();
+        // v1 is sorted
+        assert!(v1.metadata().unwrap().is_sorted());
+
+        // create a second object with different insertion order
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("b", 4.3);
+        o.insert("a", ());
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let v2 = Variant::try_new(&m, &v).unwrap();
+        // v2 is not sorted
+        assert!(!v2.metadata().unwrap().is_sorted());
+
+        // objects are still logically equal
+        assert_eq!(v1, v2);
     }
 }
