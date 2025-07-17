@@ -397,6 +397,10 @@ mod test {
     use crate::reader::vlq::VLQDecoder;
     use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
     use crate::test_util::arrow_test_data;
+    use arrow_array::builder::{
+        Float64Builder, Int32Builder, ListBuilder, MapBuilder, StringBuilder, StructBuilder,
+    };
+
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
     use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, Schema};
@@ -409,7 +413,6 @@ mod test {
     use std::io::{BufReader, Cursor, Read};
     use std::sync::Arc;
     use std::task::{ready, Poll};
-    use arrow_array::builder::{Float64Builder, Int32Builder, ListBuilder, MapBuilder, StringBuilder, StructBuilder};
 
     fn read_file(path: &str, batch_size: usize, utf8_view: bool) -> RecordBatch {
         let file = File::open(path).unwrap();
@@ -423,7 +426,11 @@ mod test {
         arrow::compute::concat_batches(&schema, &batches).unwrap()
     }
 
-    fn read_file_strict(path: &str, batch_size: usize, utf8_view: bool) -> Result<Reader<BufReader<File>>, ArrowError> {
+    fn read_file_strict(
+        path: &str,
+        batch_size: usize,
+        utf8_view: bool,
+    ) -> Result<Reader<BufReader<File>>, ArrowError> {
         let file = File::open(path).unwrap();
         ReaderBuilder::new()
             .with_batch_size(batch_size)
@@ -432,7 +439,7 @@ mod test {
             .build(BufReader::new(file))
     }
 
-    fn decode_stream<S: Stream<Item=Bytes> + Unpin>(
+    fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
         mut decoder: Decoder,
         mut input: S,
     ) -> impl Stream<Item = Result<RecordBatch, ArrowError>> {
@@ -953,7 +960,7 @@ mod test {
                                             Field::new("e", DataType::Int32, true),
                                             Field::new("f", DataType::Utf8, true),
                                         ]
-                                            .into(),
+                                        .into(),
                                     ),
                                     true,
                                 ))),
@@ -961,7 +968,7 @@ mod test {
                             ))),
                             true,
                         )]
-                            .into(),
+                        .into(),
                     ),
                     true,
                 )),
@@ -988,16 +995,16 @@ mod test {
                                                         ))),
                                                         true,
                                                     )]
-                                                        .into(),
+                                                    .into(),
                                                 ),
                                                 true,
                                             )]
-                                                .into(),
+                                            .into(),
                                         ),
                                         true,
                                     ),
                                 ]
-                                    .into(),
+                                .into(),
                             ),
                             false,
                         )),
@@ -1021,7 +1028,7 @@ mod test {
                                         Field::new("e", DataType::Int32, true),
                                         Field::new("f", DataType::Utf8, true),
                                     ]
-                                        .into(),
+                                    .into(),
                                 ),
                                 true,
                             ))),
@@ -1075,7 +1082,7 @@ mod test {
                                     ))),
                                     true,
                                 )]
-                                    .into(),
+                                .into(),
                             ),
                             true,
                         ))],
@@ -1141,7 +1148,7 @@ mod test {
             ("int_map_array", Arc::new(int_map_array_), true),
             ("nested_Struct", Arc::new(nested_struct), true),
         ])
-            .unwrap();
+        .unwrap();
         let batch_large = read_file(&file, 8, false);
         assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
         let batch_small = read_file(&file, 3, false);
@@ -1222,7 +1229,7 @@ mod test {
         );
         assert_eq!(a_array.value(6), 7, "Mismatch in nested_struct.A at row 6");
     }
-    
+
     #[test]
     fn test_nullable_impala_strict() {
         let file = arrow_test_data("avro/nullable.impala.avro");

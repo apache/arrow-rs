@@ -360,7 +360,7 @@ impl Decoder {
             Self::Nullable(order, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null();
-            },
+            }
         }
     }
 
@@ -449,25 +449,16 @@ impl Decoder {
             }
             Self::Nullable(order, nb, child) => {
                 let branch = buf.get_int()?;
-                match order {
-                    Nullability::NullFirst => {
-                        if branch == 0 {
-                            nb.append(false);
-                            child.append_null();
-                        } else {
-                            nb.append(true);
-                            child.decode(buf)?;
-                        }
-                    }
-                    Nullability::NullSecond => {
-                        if branch == 0 {
-                            nb.append(true);
-                            child.decode(buf)?;
-                        } else {
-                            nb.append(false);
-                            child.append_null();
-                        }
-                    }
+                let is_not_null = match order {
+                    Nullability::NullFirst => branch != 0,
+                    Nullability::NullSecond => branch == 0,
+                };
+
+                nb.append(is_not_null);
+                if is_not_null {
+                    child.decode(buf)?;
+                } else {
+                    child.append_null();
                 }
             }
         }
