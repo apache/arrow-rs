@@ -117,7 +117,7 @@ impl VariantListHeader {
 ///
 /// [valid]: VariantMetadata#Validation
 /// [Variant spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-data-for-array-basic_type3
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct VariantList<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
@@ -299,6 +299,17 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
         self.header.offset_size.unpack_u32(offset_bytes, index)
+    }
+}
+
+
+impl<'m, 'v> PartialEq for VariantList<'m, 'v> {
+    fn eq(&self, other: &Self) -> bool {
+        self.metadata == other.metadata &&
+        self.value == other.value &&
+        self.header == other.header &&
+        self.num_elements == other.num_elements &&
+        self.first_value_byte == other.first_value_byte
     }
 }
 
