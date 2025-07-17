@@ -190,7 +190,7 @@ impl ArrayReader for CachedArrayReader {
     fn read_records(&mut self, num_records: usize) -> Result<usize> {
         let mut read = 0;
         while read < num_records {
-            let batch_id = self.get_batch_id_from_position(self.outer_position + read);
+            let batch_id = self.get_batch_id_from_position(self.outer_position);
 
             // Check local cache first
             let cached = if let Some(array) = self.local_cache.get(&batch_id) {
@@ -212,14 +212,13 @@ impl ArrayReader for CachedArrayReader {
             match cached {
                 Some(array) => {
                     let array_len = array.len();
-                    if array_len + batch_id.val * self.batch_size - self.outer_position - read > 0 {
+                    if array_len + batch_id.val * self.batch_size > self.outer_position {
                         // the cache batch has some records that we can select
-                        let v =
-                            array_len + batch_id.val * self.batch_size - self.outer_position - read;
+                        let v = array_len + batch_id.val * self.batch_size - self.outer_position;
                         let select_cnt = std::cmp::min(num_records - read, v);
                         read += select_cnt;
-                        self.selections.append_n(select_cnt, true);
                         self.outer_position += select_cnt;
+                        self.selections.append_n(select_cnt, true);
                     } else {
                         // this is last batch and we have used all records from it
                         break;
@@ -236,8 +235,8 @@ impl ArrayReader for CachedArrayReader {
                         self.inner_position - self.outer_position,
                     );
                     read += select_from_this_batch;
-                    self.selections.append_n(select_from_this_batch, true);
                     self.outer_position += select_from_this_batch;
+                    self.selections.append_n(select_from_this_batch, true);
                     if read_from_inner < self.batch_size {
                         // this is last batch from inner reader
                         break;
