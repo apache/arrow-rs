@@ -225,11 +225,7 @@ impl ReaderBuilder {
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
             .build()?;
-        RecordDecoder::try_new_with_options(
-            root_field.data_type(),
-            self.utf8_view,
-            self.strict_mode,
-        )
+        RecordDecoder::try_new_with_options(root_field.data_type(), self.utf8_view)
     }
 
     fn build_impl<R: BufRead>(self, reader: &mut R) -> Result<(Header, Decoder), ArrowError> {
