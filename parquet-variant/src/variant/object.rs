@@ -554,6 +554,19 @@ mod tests {
     }
 
     #[test]
+    fn test_variant_object_empty_fields() {
+        let mut builder = VariantBuilder::new();
+        builder.new_object().with_field("", 42).finish().unwrap();
+        let (metadata, value) = builder.finish();
+
+        // Resulting object is valid and has a single empty field
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let variant_obj = variant.as_object().unwrap();
+        assert_eq!(variant_obj.len(), 1);
+        assert_eq!(variant_obj.get(""), Some(Variant::from(42)));
+    }
+
+    #[test]
     fn test_variant_object_empty() {
         // Create metadata with no fields
         let metadata_bytes = vec![

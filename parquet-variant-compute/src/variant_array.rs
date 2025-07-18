@@ -95,7 +95,7 @@ impl VariantArray {
         };
         // Ensure the StructArray has a metadata field of BinaryView
 
-        let Some(metadata_field) = VariantArray::find_metadata_field(&inner) else {
+        let Some(metadata_field) = VariantArray::find_metadata_field(inner) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
             ));
@@ -106,7 +106,7 @@ impl VariantArray {
                 metadata_field.data_type()
             )));
         }
-        let Some(value_field) = VariantArray::find_value_field(&inner) else {
+        let Some(value_field) = VariantArray::find_value_field(inner) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
             ));
