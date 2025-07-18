@@ -23,11 +23,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
-    builder::StringRunBuilder,
-    make_array,
-    run_iterator::RunArrayIter,
-    types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
-    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
+    builder::StringRunBuilder, cast::AsArray, make_array, run_iterator::RunArrayIter, types::{Int16Type, Int32Type, Int64Type, RunEndIndexType}, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, PrimitiveArray, Int16Array, Int32Array, Int64Array
 };
 
 /// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
@@ -251,6 +247,47 @@ impl<R: RunEndIndexType> RunArray<R> {
             values: self.values.clone(),
         }
     }
+    /// Expands the REE array to its logical form
+    pub fn expand_to_logical<T: ArrowPrimitiveType>(&self) -> Result<Box<dyn Array>, ArrowError> 
+    where
+        T::Native: Default,
+    {
+        let typed_ree = self.downcast::<PrimitiveArray<T>>()
+            .ok_or_else(|| ArrowError::InvalidArgumentError("Failed to downcast to typed REE".to_string()))?;
+        
+        let mut builder = PrimitiveArray::<T>::builder(typed_ree.len());
+        for i in 0..typed_ree.len() {
+            if typed_ree.is_null(i) {
+                builder.append_null();
+            } else {
+                builder.append_value(typed_ree.value(i));
+            }
+        }
+        Ok(Box::new(builder.finish()))
+    }
+    /// Unwraps a REE array into a logical array
+    pub fn unwrap_ree_array(array: &dyn Array) -> Option<Box<dyn Array>> {
+    match array.data_type() {
+        arrow_schema::DataType::RunEndEncoded(run_ends_field, _) => {
+            match run_ends_field.data_type() {
+                arrow_schema::DataType::Int16 => {
+                    array.as_run_opt::<Int16Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int16Type>().ok())
+                }
+                arrow_schema::DataType::Int32 => {
+                    array.as_run_opt::<Int32Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int32Type>().ok())
+                }
+                arrow_schema::DataType::Int64 => {
+                    array.as_run_opt::<Int64Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int64Type>().ok())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
 }
 
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
@@ -528,6 +565,29 @@ pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
     values: &'a V,
 }
 
+/// Unwraps a REE array into a logical array
+pub fn unwrap_ree_array(array: &dyn Array) -> Option<Box<dyn Array>> {
+    match array.data_type() {
+        arrow_schema::DataType::RunEndEncoded(run_ends_field, _) => {
+            match run_ends_field.data_type() {
+                arrow_schema::DataType::Int16 => {
+                    array.as_run_opt::<Int16Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int16Type>().ok())
+                }
+                arrow_schema::DataType::Int32 => {
+                    array.as_run_opt::<Int32Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int32Type>().ok())
+                }
+                arrow_schema::DataType::Int64 => {
+                    array.as_run_opt::<Int64Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int64Type>().ok())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
 // Manually implement `Clone` to avoid `V: Clone` type constraint
 impl<R: RunEndIndexType, V> Clone for TypedRunArray<'_, R, V> {
     fn clone(&self) -> Self {
@@ -659,6 +719,76 @@ where
         RunArrayIter::new(self)
     }
 }
+
+
+/// An AnyRunArray is a wrapper around a RunArray that can be used to aggregate over a RunEndEncodedArray
+/// This is used to avoid the need to downcast the RunEndEncodedArray to a specific type
+pub enum AnyRunArray<'a> {
+    /// A RunArray with Int64 run ends  
+    Int64(&'a RunArray<Int64Type>),
+    /// A RunArray with Int32 run ends
+    Int32(&'a RunArray<Int32Type>),
+    /// A RunArray with Int16 run ends  
+    Int16(&'a RunArray<Int16Type>),
+}
+
+impl<'a> AnyRunArray<'a> {
+    /// Creates a new [`AnyRunArray`] from a [`dyn Array`]
+    pub fn new(array: &'a dyn Array, run_ends_type: DataType) -> Option<Self> {
+        match run_ends_type {
+            DataType::Int64 => Some(AnyRunArray::Int64(array.as_run_opt::<Int64Type>().unwrap())),
+            DataType::Int32 => Some(AnyRunArray::Int32(array.as_run_opt::<Int32Type>().unwrap())),
+            DataType::Int16 => Some(AnyRunArray::Int16(array.as_run_opt::<Int16Type>().unwrap())),
+            _ => None,
+        }
+    }
+
+    /// Returns the run ends of this [`AnyRunArray`]
+    pub fn run_ends(&self) -> Arc<dyn Array> {
+        match self {
+            AnyRunArray::Int64(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int64Array::from_iter_values(values.iter().copied()))
+            }
+            AnyRunArray::Int32(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int32Array::from_iter_values(values.iter().copied()))
+            }
+            AnyRunArray::Int16(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int16Array::from_iter_values(values.iter().copied()))
+            }
+        }
+    }
+
+    /// Returns the values of this [`AnyRunArray`]
+    pub fn values(&self) -> &ArrayRef {
+        match self {
+            AnyRunArray::Int64(array) => array.values(),
+            AnyRunArray::Int32(array) => array.values(),
+            AnyRunArray::Int16(array) => array.values(),
+        }
+    }
+    /// Returns the run end value at the given index
+    pub fn run_ends_value(&self, i: usize) -> usize {
+        match self {
+            AnyRunArray::Int64(array) => array.run_ends().values()[i].as_usize(),
+            AnyRunArray::Int32(array) => array.run_ends().values()[i].as_usize(),
+            AnyRunArray::Int16(array) => array.run_ends().values()[i].as_usize(),
+        }
+    }
+    
+    /// Returns the length of run ends array
+    pub fn run_ends_len(&self) -> usize {
+        match self {
+            AnyRunArray::Int64(array) => array.values().len(),
+            AnyRunArray::Int32(array) => array.values().len(),
+            AnyRunArray::Int16(array) => array.values().len(),
+        }
+    }
+    
+}
+
 
 #[cfg(test)]
 mod tests {
