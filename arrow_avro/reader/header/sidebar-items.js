@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAGIC"],"enum":["HeaderDecoderState"],"struct":["Header","HeaderDecoder"]};

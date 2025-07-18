@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["read_header"],"mod":["block","cursor","header","record","vlq"],"struct":["Decoder","Reader","ReaderBuilder"]};

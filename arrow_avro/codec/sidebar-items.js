@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Codec","Nullability"],"fn":["make_data_type","parse_decimal_attributes","with_extension_type"],"struct":["AvroDataType","AvroField","Resolver"]};

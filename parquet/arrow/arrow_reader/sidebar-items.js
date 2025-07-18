@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["filter","read_plan","selection","statistics"],"struct":["ArrowPredicateFn","ArrowReaderBuilder","ArrowReaderMetadata","ArrowReaderOptions","ParquetRecordBatchReader","ReaderPageIterator","ReaderRowGroups","RowFilter","RowSelection","RowSelector"],"trait":["ArrowPredicate","RowGroups"],"type":["ParquetRecordBatchReaderBuilder"]};
