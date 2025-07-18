@@ -31,6 +31,8 @@ on:
   pull_request:
     paths:
       - parquet-variant/**
+      - parquet-variant-json/**
+      - parquet-variant-compute/**
       - .github/**
 
 jobs:
@@ -50,6 +52,8 @@ jobs:
         run: cargo test -p parquet-variant
       - name: Test parquet-variant-json
         run: cargo test -p parquet-variant-json
+      - name: Test parquet-variant-json
+        run: cargo test -p parquet-variant-compute
 
   # test compilation
   linux-features:
@@ -67,6 +71,8 @@ jobs:
         run: cargo check -p parquet-variant
       - name: Check compilation
         run: cargo check -p parquet-variant-json
+      - name: Check compilation
+        run: cargo check -p parquet-variant-compute
 
   clippy:
     name: Clippy
@@ -83,3 +89,5 @@ jobs:
         run: cargo clippy -p parquet-variant --all-targets --all-features -- -D warnings
       - name: Run clippy
         run: cargo clippy -p parquet-variant-json --all-targets --all-features -- -D warnings
+      - name: Run clippy
+        run: cargo clippy -p parquet-variant-compute --all-targets --all-features -- -D warnings
