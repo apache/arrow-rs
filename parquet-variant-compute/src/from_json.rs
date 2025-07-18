@@ -52,7 +52,7 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, Ar
 #[cfg(test)]
 mod test {
     use crate::batch_json_string_to_variant;
-    use arrow::array::{Array, ArrayRef, AsArray, StringArray};
+    use arrow::array::{Array, ArrayRef, StringArray};
     use arrow_schema::ArrowError;
     use parquet_variant::{Variant, VariantBuilder};
     use std::sync::Arc;
@@ -69,8 +69,8 @@ mod test {
         let array_ref: ArrayRef = Arc::new(input);
         let variant_array = batch_json_string_to_variant(&array_ref).unwrap();
 
-        let metadata_array = variant_array.metadata_field().as_binary_view();
-        let value_array = variant_array.value_field().as_binary_view();
+        let metadata_array = variant_array.metadata_field();
+        let value_array = variant_array.value_field().expect("value field");
 
         // Compare row 0
         assert!(!variant_array.is_null(0));

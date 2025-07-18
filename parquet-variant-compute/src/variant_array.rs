@@ -17,8 +17,9 @@
 
 //! [`VariantArray`] implementation
 
-use arrow::array::{Array, ArrayData, ArrayRef, AsArray, StructArray};
+use arrow::array::{Array, ArrayData, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
+use arrow::datatypes::Int32Type;
 use arrow_schema::{ArrowError, DataType};
 use parquet_variant::Variant;
 use std::any::Any;
@@ -44,27 +45,90 @@ use std::sync::Arc;
 /// [document]: https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?usp=sharing
 #[derive(Debug)]
 pub struct VariantArray {
-    /// StructArray of up to three fields:
-    ///
-    /// 1. A required field named `metadata` which is binary, large_binary, or
-    ///    binary_view
-    ///
-    /// 2. An optional field named `value` that is binary, large_binary, or
-    ///    binary_view
-    ///
-    /// 3. An optional field named `typed_value` which can be any primitive type
-    ///    or be a list, large_list, list_view or struct
-    ///
-    /// NOTE: It is also permissible for the metadata field to be
-    /// Dictionary-Encoded, preferably (but not required) with an index type of
-    /// int8.
+    /// Reference to the underlying StructArray
     inner: StructArray,
 
-    /// Reference to the metadata column of inner
-    metadata_ref: ArrayRef,
+    /// how is this variant array shredded?
+    shredding_state: ShreddingState,
+}
 
-    /// Reference to the value column of inner
-    value_ref: ArrayRef,
+/// Variant arrays can be shredded in one of three states, encoded here
+#[derive(Debug)]
+pub enum ShreddingState {
+    /// This variant has no typed_value field
+    Unshredded {
+        metadata: BinaryViewArray,
+        value: BinaryViewArray,
+    },
+    /// This variant has a typed_value field and no value field
+    /// meaning it is fully shredded (aka the value is stored in typed_value)
+    FullyShredded {
+        metadata: BinaryViewArray,
+        typed_value: ArrayRef,
+    },
+    /// This variant has both a value field and a typed_value field
+    /// meaning it is partially shredded: first the typed_value is used, and
+    /// if that is null, the value field is used.
+    PartiallyShredded {
+        metadata: BinaryViewArray,
+        value: BinaryViewArray,
+        typed_value: ArrayRef,
+    },
+}
+
+impl ShreddingState {
+    /// Return a reference to the metadata field
+    pub fn metadata_field(&self) -> &BinaryViewArray {
+        match self {
+            ShreddingState::Unshredded { metadata, .. } => metadata,
+            ShreddingState::FullyShredded { metadata, .. } => metadata,
+            ShreddingState::PartiallyShredded { metadata, .. } => metadata,
+        }
+    }
+
+    /// Return a reference to the value field, if present
+    pub fn value_field(&self) -> Option<&BinaryViewArray> {
+        match self {
+            ShreddingState::Unshredded { value, .. } => Some(value),
+            ShreddingState::FullyShredded { .. } => None,
+            ShreddingState::PartiallyShredded { value, .. } => Some(value),
+        }
+    }
+
+    /// Return a reference to the typed_value field, if present
+    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
+        match self {
+            ShreddingState::Unshredded { .. } => None,
+            ShreddingState::FullyShredded { typed_value, .. } => Some(typed_value),
+            ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
+        }
+    }
+
+    /// Slice all the underlying arrays
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        match self {
+            ShreddingState::Unshredded { metadata, value } => ShreddingState::Unshredded {
+                metadata: metadata.slice(offset, length),
+                value: value.slice(offset, length),
+            },
+            ShreddingState::FullyShredded {
+                metadata,
+                typed_value,
+            } => ShreddingState::FullyShredded {
+                metadata: metadata.slice(offset, length),
+                typed_value: typed_value.slice(offset, length),
+            },
+            ShreddingState::PartiallyShredded {
+                metadata,
+                value,
+                typed_value,
+            } => ShreddingState::PartiallyShredded {
+                metadata: metadata.slice(offset, length),
+                value: value.slice(offset, length),
+                typed_value: typed_value.slice(offset, length),
+            },
+        }
+    }
 }
 
 impl VariantArray {
@@ -79,12 +143,22 @@ impl VariantArray {
     /// # Errors:
     /// - If the `StructArray` does not contain the required fields
     ///
-    /// # Current support
-    /// This structure does not (yet) support the full Arrow Variant Array specification.
+    /// # Requirements of the `StructArray`
     ///
-    /// Only `StructArrays` with `metadata` and `value` fields that are
-    /// [`BinaryViewArray`] are supported. Shredded values are not currently supported
-    /// nor are using types other than `BinaryViewArray`
+    /// 1. A required field named `metadata` which is binary, large_binary, or
+    ///    binary_view
+    ///
+    /// 2. An optional field named `value` that is binary, large_binary, or
+    ///    binary_view
+    ///
+    /// 3. An optional field named `typed_value` which can be any primitive type
+    ///    or be a list, large_list, list_view or struct
+    ///
+    /// NOTE: It is also permissible for the metadata field to be
+    /// Dictionary-Encoded, preferably (but not required) with an index type of
+    /// int8.
+    ///
+    /// Currently, only  [`BinaryViewArray`] are supported.
     ///
     /// [`BinaryViewArray`]: arrow::array::BinaryViewArray
     pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
@@ -93,35 +167,64 @@ impl VariantArray {
                 "Invalid VariantArray: requires StructArray as input".to_string(),
             ));
         };
-        // Ensure the StructArray has a metadata field of BinaryView
 
-        let Some(metadata_field) = VariantArray::find_metadata_field(inner) else {
+        // Note the specification allows for any order so we must search by name
+
+        // Ensure the StructArray has a metadata field of BinaryView
+        let Some(metadata_field) = inner.column_by_name("metadata") else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
             ));
         };
-        if metadata_field.data_type() != &DataType::BinaryView {
+        let Some(metadata) = metadata_field.as_binary_view_opt() else {
             return Err(ArrowError::NotYetImplemented(format!(
                 "VariantArray 'metadata' field must be BinaryView, got {}",
                 metadata_field.data_type()
             )));
-        }
-        let Some(value_field) = VariantArray::find_value_field(inner) else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
-            ));
         };
-        if value_field.data_type() != &DataType::BinaryView {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "VariantArray 'value' field must be BinaryView, got {}",
-                value_field.data_type()
-            )));
-        }
+
+        // Find the value field, if present
+        let value_field = inner.column_by_name("value");
+        let value = value_field
+            .map(|v| match v.as_binary_view_opt() {
+                Some(bv) => Ok(bv),
+                None => Err(ArrowError::NotYetImplemented(format!(
+                    "VariantArray 'value' field must be BinaryView, got {}",
+                    v.data_type()
+                ))),
+            })
+            .transpose()?;
+
+        // Find the typed_value field, if present
+        let typed_value = inner.column_by_name("typed_value");
+
+        // Note these clones are cheap, they just bump the ref count
+        let inner = inner.clone();
+        let metadata = metadata.clone();
+        let value = value.cloned();
+        let typed_value = typed_value.cloned();
+
+        let shredding_state = match (metadata, value, typed_value) {
+            (metadata, Some(value), Some(typed_value)) => ShreddingState::PartiallyShredded {
+                metadata,
+                value,
+                typed_value,
+            },
+            (metadata, Some(value), None) => ShreddingState::Unshredded { metadata, value },
+            (metadata, None, Some(typed_value)) => ShreddingState::FullyShredded {
+                metadata,
+                typed_value,
+            },
+            (_metadata_field, None, None) => {
+                return Err(ArrowError::InvalidArgumentError(String::from(
+                    "VariantArray has neither value nor typed_value field",
+                )));
+            }
+        };
 
         Ok(Self {
-            inner: inner.clone(),
-            metadata_ref: metadata_field,
-            value_ref: value_field,
+            inner,
+            shredding_state,
         })
     }
 
@@ -135,36 +238,87 @@ impl VariantArray {
         self.inner
     }
 
+    /// Return the shredding state of this `VariantArray`
+    pub fn shredding_state(&self) -> &ShreddingState {
+        &self.shredding_state
+    }
+
     /// Return the [`Variant`] instance stored at the given row
     ///
-    /// Panics if the index is out of bounds.
+    /// Consistently with other Arrow arrays types, this API requires you to
+    /// check for nulls first using [`Self::is_valid`].
+    ///
+    /// # Panics
+    /// * if the index is out of bounds
+    /// * if the array value is null
+    ///
+    /// If this is a shredded variant but has no value at the shredded location, it
+    /// will return [`Variant::Null`].
+    ///
+    ///
+    /// # Performance Note
+    ///
+    /// This is certainly not the most efficient way to access values in a
+    /// `VariantArray`, but it is useful for testing and debugging.
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
     pub fn value(&self, index: usize) -> Variant {
-        let metadata = self.metadata_field().as_binary_view().value(index);
-        let value = self.value_field().as_binary_view().value(index);
-        Variant::new(metadata, value)
-    }
-
-    fn find_metadata_field(array: &StructArray) -> Option<ArrayRef> {
-        array.column_by_name("metadata").cloned()
-    }
-
-    fn find_value_field(array: &StructArray) -> Option<ArrayRef> {
-        array.column_by_name("value").cloned()
+        match &self.shredding_state {
+            ShreddingState::Unshredded { metadata, value } => {
+                Variant::new(metadata.value(index), value.value(index))
+            }
+            ShreddingState::FullyShredded {
+                metadata: _,
+                typed_value,
+            } => {
+                if typed_value.is_null(index) {
+                    Variant::Null
+                } else {
+                    typed_value_to_variant(typed_value, index)
+                }
+            }
+            ShreddingState::PartiallyShredded {
+                metadata,
+                value,
+                typed_value,
+            } => {
+                if typed_value.is_null(index) {
+                    Variant::new(metadata.value(index), value.value(index))
+                } else {
+                    typed_value_to_variant(typed_value, index)
+                }
+            }
+        }
     }
 
     /// Return a reference to the metadata field of the [`StructArray`]
-    pub fn metadata_field(&self) -> &ArrayRef {
-        // spec says fields order is not guaranteed, so we search by name
-        &self.metadata_ref
+    pub fn metadata_field(&self) -> &BinaryViewArray {
+        self.shredding_state.metadata_field()
     }
 
     /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> &ArrayRef {
-        // spec says fields order is not guaranteed, so we search by name
-        &self.value_ref
+    pub fn value_field(&self) -> Option<&BinaryViewArray> {
+        self.shredding_state.value_field()
+    }
+
+    /// Return a reference to the typed_value field of the `StructArray`, if present
+    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
+        self.shredding_state.typed_value_field()
+    }
+}
+
+/// returns the non-null element at index as a Variant
+fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant {
+    match typed_value.data_type() {
+        DataType::Int32 => {
+            let typed_value = typed_value.as_primitive::<Int32Type>();
+            Variant::from(typed_value.value(index))
+        }
+        // todo other types here
+        _ => {
+            todo!(); // Unsupported typed_value type
+        }
     }
 }
 
@@ -186,13 +340,11 @@ impl Array for VariantArray {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        let slice = self.inner.slice(offset, length);
-        let met = self.metadata_ref.slice(offset, length);
-        let val = self.value_ref.slice(offset, length);
+        let inner = self.inner.slice(offset, length);
+        let shredding_state = self.shredding_state.slice(offset, length);
         Arc::new(Self {
-            inner: slice,
-            metadata_ref: met,
-            value_ref: val,
+            inner,
+            shredding_state,
         })
     }
 
@@ -258,7 +410,7 @@ mod test {
         let err = VariantArray::try_new(Arc::new(array));
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'value' field"
+            "Invalid argument error: VariantArray has neither value nor typed_value field"
         );
     }
 
