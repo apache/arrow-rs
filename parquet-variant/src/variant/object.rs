@@ -221,6 +221,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 
             let mut field_ids_iter =
                 map_bytes_to_offsets(field_id_buffer, self.header.field_id_size);
+
             // Validate all field ids exist in the metadata dictionary and the corresponding field names are lexicographically sorted
             if self.metadata.is_sorted() {
                 // Since the metadata dictionary has unique and sorted field names, we can also guarantee this object's field names
@@ -263,7 +264,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
                     let next_field_name = self.metadata.get(field_id)?;
 
                     if let Some(current_name) = current_field_name {
-                        if next_field_name <= current_name {
+                        if next_field_name < current_name {
                             return Err(ArrowError::InvalidArgumentError(
                                 "field names not sorted".to_string(),
                             ));
@@ -416,8 +417,7 @@ impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
             && self.header == other.header
             && self.num_elements == other.num_elements
             && self.first_field_offset_byte == other.first_field_offset_byte
-            && self.first_value_byte == other.first_value_byte
-            && self.validated == other.validated;
+            && self.first_value_byte == other.first_value_byte;
 
         // value validation
         let other_fields: HashMap<&str, Variant> = HashMap::from_iter(other.iter());
@@ -960,6 +960,50 @@ mod tests {
         assert!(!v2.metadata().unwrap().is_sorted());
 
         // objects are still logically equal
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_compare_object_with_unsorted_dictionary_vs_sorted_dictionary() {
+        // create a sorted object
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", false);
+        o.insert("b", false);
+
+        o.finish().unwrap();
+
+        let (m, v) = b.finish();
+
+        let variant_metadata = VariantMetadata::new(&m);
+
+        dbg!(variant_metadata.iter().collect::<Vec<_>>());
+
+        let v1 = Variant::try_new(&m, &v).unwrap();
+
+        // Create metadata with an unsorted dictionary (field names are "a", "a", "b")
+        // Since field names are not unique, it is considered not sorted.
+        let metadata_bytes = vec![
+            0b0000_0001,
+            3, // dictionary size
+            0, // "a"
+            1, // "b"
+            2, // "a"
+            3,
+            b'a',
+            b'b',
+            b'a',
+        ];
+        let m = VariantMetadata::try_new(&metadata_bytes).unwrap();
+        assert!(!m.is_sorted());
+
+        dbg!(m.iter().collect::<Vec<_>>());
+        let v2 = Variant::new_with_metadata(m, &v);
+
+        dbg!(v1.as_object().unwrap().iter().collect::<Vec<_>>());
+        dbg!(v2.as_object().unwrap().iter().collect::<Vec<_>>());
+
         assert_eq!(v1, v2);
     }
 }
