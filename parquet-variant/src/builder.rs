@@ -552,6 +552,49 @@ impl ParentState<'_> {
             }
         }
     }
+
+    // returns the beginning offset of buffer for the parent if it is object builder, else 0.
+    // for object builder will reuse the buffer from the parent, this is needed for `finish`
+    // which needs the relative offset from the current variant.
+    fn object_start_offset(&self) -> usize {
+        match self {
+            ParentState::Object {
+                object_start_offset,
+                ..
+            } => *object_start_offset,
+            _ => 0,
+        }
+    }
+
+    /// Return mutable references to the buffer and metadata builder that this
+    /// parent state is using.
+    fn buffer_and_metadata_builder(&mut self) -> (&mut ValueBuffer, &mut MetadataBuilder) {
+        match self {
+            ParentState::Variant {
+                buffer,
+                metadata_builder,
+            } => (buffer, metadata_builder),
+            ParentState::List {
+                buffer,
+                metadata_builder,
+                ..
+            } => (buffer, metadata_builder),
+            ParentState::Object {
+                buffer,
+                metadata_builder,
+                ..
+            } => (buffer, metadata_builder),
+        }
+    }
+
+    // return the offset of the underlying buffer at the time of calling this method.
+    fn buffer_current_offset(&self) -> usize {
+        match self {
+            ParentState::Variant { buffer, .. } => buffer.offset(),
+            ParentState::Object { buffer, .. } => buffer.offset(),
+            ParentState::List { buffer, .. } => buffer.offset(),
+        }
+    }
 }
 
 /// Top level builder for [`Variant`] values
@@ -1000,13 +1043,7 @@ impl<'a> ListBuilder<'a> {
         let offset_size = int_size(data_size);
 
         // Get parent's buffer
-        let offset_shift = match &self.parent_state {
-            ParentState::Object {
-                object_start_offset,
-                ..
-            } => *object_start_offset,
-            _ => 0,
-        };
+        let offset_shift = self.parent_state.object_start_offset();
         let parent_buffer = self.parent_state.buffer();
         // as object builder has been reused the parent buffer,
         // we need to shift the offset by the starting offset of the parent object
@@ -1050,11 +1087,7 @@ pub struct ObjectBuilder<'a> {
 
 impl<'a> ObjectBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
-        let start_offset = match &parent_state {
-            ParentState::Variant { buffer, .. } => buffer.offset(),
-            ParentState::List { buffer, .. } => buffer.offset(),
-            ParentState::Object { buffer, .. } => buffer.offset(),
-        };
+        let start_offset = parent_state.buffer_current_offset();
         Self {
             parent_state,
             fields: IndexMap::new(),
@@ -1084,58 +1117,17 @@ impl<'a> ObjectBuilder<'a> {
         key: &str,
         value: T,
     ) -> Result<(), ArrowError> {
-        match &mut self.parent_state {
-            ParentState::Variant {
-                buffer,
-                metadata_builder,
-            } => {
-                let field_id = metadata_builder.upsert_field_name(key);
-                let field_start = buffer.offset() - self.object_start_offset;
+        let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
 
-                if self.fields.insert(field_id, field_start).is_some()
-                    && self.validate_unique_fields
-                {
-                    self.duplicate_fields.insert(field_id);
-                }
+        let field_id = metadata_builder.upsert_field_name(key);
+        let field_start = buffer.offset() - self.object_start_offset;
 
-                buffer.try_append_variant(value.into(), metadata_builder)?;
-                Ok(())
-            }
-            ParentState::List {
-                buffer,
-                metadata_builder,
-                ..
-            } => {
-                let field_id = metadata_builder.upsert_field_name(key);
-                let field_start = buffer.offset() - self.object_start_offset;
-
-                if self.fields.insert(field_id, field_start).is_some()
-                    && self.validate_unique_fields
-                {
-                    self.duplicate_fields.insert(field_id);
-                }
-
-                buffer.try_append_variant(value.into(), metadata_builder)?;
-                Ok(())
-            }
-            ParentState::Object {
-                buffer,
-                metadata_builder,
-                ..
-            } => {
-                let field_id = metadata_builder.upsert_field_name(key);
-                let field_start = buffer.offset() - self.object_start_offset;
-
-                if self.fields.insert(field_id, field_start).is_some()
-                    && self.validate_unique_fields
-                {
-                    self.duplicate_fields.insert(field_id);
-                }
-
-                buffer.try_append_variant(value.into(), metadata_builder)?;
-                Ok(())
-            }
+        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
+            self.duplicate_fields.insert(field_id);
         }
+
+        buffer.try_append_variant(value.into(), metadata_builder)?;
+        Ok(())
     }
 
     /// Enables validation for unique field keys when inserting into this object.
@@ -1151,49 +1143,16 @@ impl<'a> ObjectBuilder<'a> {
     fn parent_state<'b>(&'b mut self, key: &'b str) -> (ParentState<'b>, bool) {
         let validate_unique_fields = self.validate_unique_fields;
 
-        match &mut self.parent_state {
-            ParentState::Variant {
-                buffer,
-                metadata_builder,
-            } => {
-                let state = ParentState::Object {
-                    buffer,
-                    metadata_builder,
-                    fields: &mut self.fields,
-                    field_name: key,
-                    object_start_offset: self.object_start_offset,
-                };
-                (state, validate_unique_fields)
-            }
-            ParentState::List {
-                buffer,
-                metadata_builder,
-                ..
-            } => {
-                let state = ParentState::Object {
-                    buffer,
-                    metadata_builder,
-                    fields: &mut self.fields,
-                    field_name: key,
-                    object_start_offset: self.object_start_offset,
-                };
-                (state, validate_unique_fields)
-            }
-            ParentState::Object {
-                buffer,
-                metadata_builder,
-                ..
-            } => {
-                let state = ParentState::Object {
-                    buffer,
-                    metadata_builder,
-                    fields: &mut self.fields,
-                    field_name: key,
-                    object_start_offset: self.object_start_offset,
-                };
-                (state, validate_unique_fields)
-            }
-        }
+        let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
+
+        let state = ParentState::Object {
+            buffer,
+            metadata_builder,
+            fields: &mut self.fields,
+            field_name: key,
+            object_start_offset: self.object_start_offset,
+        };
+        (state, validate_unique_fields)
     }
 
     /// Returns an object builder that can be used to append a new (nested) object to this object.
@@ -1230,17 +1189,7 @@ impl<'a> ObjectBuilder<'a> {
             )));
         }
 
-        let metadata_builder = match &self.parent_state {
-            ParentState::Variant {
-                metadata_builder, ..
-            } => metadata_builder,
-            ParentState::List {
-                metadata_builder, ..
-            } => metadata_builder,
-            ParentState::Object {
-                metadata_builder, ..
-            } => metadata_builder,
-        };
+        let metadata_builder = self.parent_state.metadata_builder();
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
             let field_a_name = metadata_builder.field_name(field_a_id as usize);
@@ -1308,13 +1257,7 @@ impl<'a> ObjectBuilder<'a> {
         buffer[header_pos..header_pos + offset_size as usize]
             .copy_from_slice(&data_size_bytes[..offset_size as usize]);
 
-        let start_offset_shift = match &self.parent_state {
-            ParentState::Object {
-                object_start_offset,
-                ..
-            } => *object_start_offset,
-            _ => 0,
-        };
+        let start_offset_shift = self.parent_state.object_start_offset();
         self.parent_state
             .finish(starting_offset - start_offset_shift);
 
@@ -1980,8 +1923,13 @@ mod tests {
                 "d": {
                     "cc": "dd"
                 }
-            }
+            },
             "b": true,
+            "d": {
+               "e": 1,
+               "f": [1, true],
+               "g": ["tree", false],
+            }
         }
         */
 
@@ -2011,6 +1959,28 @@ mod tests {
 
             outer_object_builder.insert("b", true);
 
+            {
+                let mut inner_object_builder = outer_object_builder.new_object("d");
+                inner_object_builder.insert("e", 1);
+                {
+                    let mut inner_list_builder = inner_object_builder.new_list("f");
+                    inner_list_builder.append_value(1);
+                    inner_list_builder.append_value(true);
+
+                    inner_list_builder.finish();
+                }
+
+                {
+                    let mut inner_list_builder = inner_object_builder.new_list("g");
+                    inner_list_builder.append_value("tree");
+                    inner_list_builder.append_value(false);
+
+                    inner_list_builder.finish();
+                }
+
+                let _ = inner_object_builder.finish();
+            }
+
             let _ = outer_object_builder.finish();
         }
 
@@ -2029,6 +1999,11 @@ mod tests {
                 "d": {
                     "cc": "dd"
                 }
+            },
+            "d": {
+               "e": 1,
+               "f": [1, true],
+               "g": ["tree", false],
             }
         }
         */
@@ -2036,7 +2011,7 @@ mod tests {
         let variant = Variant::try_new(&metadata, &value).unwrap();
         let outer_object = variant.as_object().unwrap();
 
-        assert_eq!(outer_object.len(), 3);
+        assert_eq!(outer_object.len(), 4);
 
         assert_eq!(outer_object.field_name(0).unwrap(), "a");
         assert_eq!(outer_object.field(0).unwrap(), Variant::from(false));
@@ -2064,6 +2039,133 @@ mod tests {
 
         assert_eq!(outer_object.field_name(1).unwrap(), "b");
         assert_eq!(outer_object.field(1).unwrap(), Variant::from(true));
+
+        let out_object_variant_d = outer_object.field(3).unwrap();
+        let out_object_d = out_object_variant_d.as_object().unwrap();
+        assert_eq!(out_object_d.len(), 3);
+        assert_eq!("e", out_object_d.field_name(0).unwrap());
+        assert_eq!(Variant::from(1), out_object_d.field(0).unwrap());
+        assert_eq!("f", out_object_d.field_name(1).unwrap());
+
+        let first_inner_list_variant_f = out_object_d.field(1).unwrap();
+        let first_inner_list_f = first_inner_list_variant_f.as_list().unwrap();
+        assert_eq!(2, first_inner_list_f.len());
+        assert_eq!(Variant::from(1), first_inner_list_f.get(0).unwrap());
+        assert_eq!(Variant::from(true), first_inner_list_f.get(1).unwrap());
+
+        let second_inner_list_variant_g = out_object_d.field(2).unwrap();
+        let second_inner_list_g = second_inner_list_variant_g.as_list().unwrap();
+        assert_eq!(2, second_inner_list_g.len());
+        assert_eq!(Variant::from("tree"), second_inner_list_g.get(0).unwrap());
+        assert_eq!(Variant::from(false), second_inner_list_g.get(1).unwrap());
+    }
+
+    // this test wants to cover the logic for reuse parent buffer for list builder
+    // the builder looks like
+    // [ "apple", "false", [{"a": "b", "b": "c"}, {"c":"d", "d":"e"}], [[1, true], ["tree", false]], 1]
+    #[test]
+    fn test_nested_list_with_heterogeneous_fields_for_buffer_reuse() {
+        let mut builder = VariantBuilder::new();
+
+        {
+            let mut outer_list_builder = builder.new_list();
+
+            outer_list_builder.append_value("apple");
+            outer_list_builder.append_value(false);
+
+            {
+                // the list here wants to cover the logic object builder inside list builder
+                let mut inner_list_builder = outer_list_builder.new_list();
+
+                {
+                    let mut inner_object_builder = inner_list_builder.new_object();
+                    inner_object_builder.insert("a", "b");
+                    inner_object_builder.insert("b", "c");
+                    let _ = inner_object_builder.finish();
+                }
+
+                {
+                    // the seconde object builder here wants to cover the logic for
+                    // list builder resue the parent buffer.
+                    let mut inner_object_builder = inner_list_builder.new_object();
+                    inner_object_builder.insert("c", "d");
+                    inner_object_builder.insert("d", "e");
+                    let _ = inner_object_builder.finish();
+                }
+
+                inner_list_builder.finish();
+            }
+
+            {
+                // the list here wants to cover the logic list builder inside list builder
+                let mut inner_list_builder = outer_list_builder.new_list();
+
+                {
+                    let mut double_inner_list_builder = inner_list_builder.new_list();
+                    double_inner_list_builder.append_value(1);
+                    double_inner_list_builder.append_value(true);
+
+                    double_inner_list_builder.finish();
+                }
+
+                {
+                    let mut double_inner_list_builder = inner_list_builder.new_list();
+                    double_inner_list_builder.append_value("tree");
+                    double_inner_list_builder.append_value(false);
+
+                    double_inner_list_builder.finish();
+                }
+                inner_list_builder.finish();
+            }
+
+            outer_list_builder.append_value(1);
+
+            outer_list_builder.finish();
+        }
+
+        let (metadata, value) = builder.finish();
+
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let outer_list = variant.as_list().unwrap();
+
+        assert_eq!(5, outer_list.len());
+
+        // primitive value
+        assert_eq!(Variant::from("apple"), outer_list.get(0).unwrap());
+        assert_eq!(Variant::from(false), outer_list.get(1).unwrap());
+        assert_eq!(Variant::from(1), outer_list.get(4).unwrap());
+
+        // the first inner list [{"a": "b", "b": "c"}, {"c":"d", "d":"e"}]
+        let list1_variant = outer_list.get(2).unwrap();
+        let list1 = list1_variant.as_list().unwrap();
+        assert_eq!(2, list1.len());
+
+        let list1_obj1_variant = list1.get(0).unwrap();
+        let list1_obj1 = list1_obj1_variant.as_object().unwrap();
+        assert_eq!("a", list1_obj1.field_name(0).unwrap());
+        assert_eq!(Variant::from("b"), list1_obj1.field(0).unwrap());
+
+        assert_eq!("b", list1_obj1.field_name(1).unwrap());
+        assert_eq!(Variant::from("c"), list1_obj1.field(1).unwrap());
+
+        // the second inner list [[1, true], ["tree", false]]
+        let list2_variant = outer_list.get(3).unwrap();
+        let list2 = list2_variant.as_list().unwrap();
+        assert_eq!(2, list2.len());
+
+        // the list [1, true]
+        let list2_list1_variant = list2.get(0).unwrap();
+        let list2_list1 = list2_list1_variant.as_list().unwrap();
+        assert_eq!(2, list2_list1.len());
+        assert_eq!(Variant::from(1), list2_list1.get(0).unwrap());
+        assert_eq!(Variant::from(true), list2_list1.get(1).unwrap());
+
+        // the list ["true", false]
+        let list2_list2_variant = list2.get(1).unwrap();
+        let list2_list2 = list2_list2_variant.as_list().unwrap();
+        assert_eq!(2, list2_list2.len());
+        assert_eq!(Variant::from("tree"), list2_list2.get(0).unwrap());
+        assert_eq!(Variant::from(false), list2_list2.get(1).unwrap());
     }
 
     #[test]
