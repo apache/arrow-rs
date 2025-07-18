@@ -631,7 +631,7 @@ impl ParentState<'_> {
 /// let mut object_builder = builder.new_object();
 /// object_builder.insert("first_name", "Jiaying");
 /// object_builder.insert("last_name", "Li");
-/// object_builder.finish();
+/// object_builder.finish(); // call finish to finalize the object
 /// // Finish the builder to get the metadata and value
 /// let (metadata, value) = builder.finish();
 /// // use the Variant API to verify the result
@@ -647,6 +647,29 @@ impl ParentState<'_> {
 /// );
 /// ```
 ///
+///
+/// You can also use the [`ObjectBuilder::with_field`] to add fields to the
+/// object
+/// ```
+/// # use parquet_variant::{Variant, VariantBuilder};
+/// // build the same object as above
+/// let mut builder = VariantBuilder::new();
+/// builder.new_object()
+///   .with_field("first_name", "Jiaying")
+///   .with_field("last_name", "Li")
+///   .finish();
+/// let (metadata, value) = builder.finish();
+/// let variant = Variant::try_new(&metadata, &value).unwrap();
+/// let variant_object = variant.as_object().unwrap();
+/// assert_eq!(
+///   variant_object.get("first_name"),
+///   Some(Variant::from("Jiaying"))
+/// );
+/// assert_eq!(
+///   variant_object.get("last_name"),
+///   Some(Variant::from("Li"))
+/// );
+/// ```
 /// # Example: Create a [`Variant::List`] (an Array)
 ///
 /// This example shows how to create an array of integers: `[1, 2, 3]`.
@@ -846,6 +869,7 @@ impl VariantBuilder {
         }
     }
 
+    /// Create a new VariantBuilder with pre-existing [`VariantMetadata`].
     pub fn with_metadata(mut self, metadata: VariantMetadata) -> Self {
         self.metadata_builder.extend(metadata.iter());
 
@@ -1094,6 +1118,10 @@ impl<'a> ObjectBuilder<'a> {
 
     /// Add a field with key and value to the object
     ///
+    /// # See Also
+    /// - [`ObjectBuilder::try_insert`] for a fallible version.
+    /// - [`ObjectBuilder::with_field`] for a builder-style API.
+    ///
     /// # Panics
     ///
     /// This method will panic if the variant contains duplicate field names in objects
@@ -1104,7 +1132,12 @@ impl<'a> ObjectBuilder<'a> {
 
     /// Add a field with key and value to the object
     ///
-    /// Note: when inserting duplicate keys, the new value overwrites the previous mapping,
+    /// # See Also
+    /// - [`ObjectBuilder::insert`] for a infallabel version
+    /// - [`ObjectBuilder::try_with_field`] for a builder-style API.
+    ///
+    /// # Note
+    /// When inserting duplicate keys, the new value overwrites the previous mapping,
     /// but the old value remains in the buffer, resulting in a larger variant
     pub fn try_insert<'m, 'd, T: Into<Variant<'m, 'd>>>(
         &mut self,
@@ -1125,6 +1158,26 @@ impl<'a> ObjectBuilder<'a> {
             .try_append_variant(value.into(), metadata_builder)?;
 
         Ok(())
+    }
+
+    /// Builder style API for adding a field with key and value to the object
+    ///
+    /// Same as [`ObjectBuilder::insert`], but returns `self` for chaining.
+    pub fn with_field<'m, 'd, T: Into<Variant<'m, 'd>>>(mut self, key: &str, value: T) -> Self {
+        self.insert(key, value);
+        self
+    }
+
+    /// Builder style API for adding a field with key and value to the object
+    ///
+    /// Same as [`ObjectBuilder::try_insert`], but returns `self` for chaining.
+    pub fn try_with_field<'m, 'd, T: Into<Variant<'m, 'd>>>(
+        mut self,
+        key: &str,
+        value: T,
+    ) -> Result<Self, ArrowError> {
+        self.try_insert(key, value)?;
+        Ok(self)
     }
 
     /// Enables validation for unique field keys when inserting into this object.
@@ -1410,12 +1463,12 @@ mod tests {
     fn test_object() {
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut obj = builder.new_object();
-            obj.insert("name", "John");
-            obj.insert("age", 42i8);
-            let _ = obj.finish();
-        }
+        builder
+            .new_object()
+            .with_field("name", "John")
+            .with_field("age", 42i8)
+            .finish()
+            .unwrap();
 
         let (metadata, value) = builder.finish();
         assert!(!metadata.is_empty());
@@ -1426,13 +1479,13 @@ mod tests {
     fn test_object_field_ordering() {
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut obj = builder.new_object();
-            obj.insert("zebra", "stripes"); // ID = 0
-            obj.insert("apple", "red"); // ID = 1
-            obj.insert("banana", "yellow"); // ID = 2
-            let _ = obj.finish();
-        }
+        builder
+            .new_object()
+            .with_field("zebra", "stripes")
+            .with_field("apple", "red")
+            .with_field("banana", "yellow")
+            .finish()
+            .unwrap();
 
         let (_, value) = builder.finish();
 
@@ -1452,10 +1505,12 @@ mod tests {
     #[test]
     fn test_duplicate_fields_in_object() {
         let mut builder = VariantBuilder::new();
-        let mut object_builder = builder.new_object();
-        object_builder.insert("name", "Ron Artest");
-        object_builder.insert("name", "Metta World Peace");
-        let _ = object_builder.finish();
+        builder
+            .new_object()
+            .with_field("name", "Ron Artest")
+            .with_field("name", "Metta World Peace") // Duplicate field
+            .finish()
+            .unwrap();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1572,19 +1627,19 @@ mod tests {
 
         let mut list_builder = builder.new_list();
 
-        {
-            let mut object_builder = list_builder.new_object();
-            object_builder.insert("id", 1);
-            object_builder.insert("type", "Cauliflower");
-            let _ = object_builder.finish();
-        }
+        list_builder
+            .new_object()
+            .with_field("id", 1)
+            .with_field("type", "Cauliflower")
+            .finish()
+            .unwrap();
 
-        {
-            let mut object_builder = list_builder.new_object();
-            object_builder.insert("id", 2);
-            object_builder.insert("type", "Beets");
-            let _ = object_builder.finish();
-        }
+        list_builder
+            .new_object()
+            .with_field("id", 2)
+            .with_field("type", "Beets")
+            .finish()
+            .unwrap();
 
         list_builder.finish();
 
@@ -1621,17 +1676,17 @@ mod tests {
 
         let mut list_builder = builder.new_list();
 
-        {
-            let mut object_builder = list_builder.new_object();
-            object_builder.insert("a", 1);
-            let _ = object_builder.finish();
-        }
+        list_builder
+            .new_object()
+            .with_field("a", 1)
+            .finish()
+            .unwrap();
 
-        {
-            let mut object_builder = list_builder.new_object();
-            object_builder.insert("b", 2);
-            let _ = object_builder.finish();
-        }
+        list_builder
+            .new_object()
+            .with_field("b", 2)
+            .finish()
+            .unwrap();
 
         list_builder.finish();
 
