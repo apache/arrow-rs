@@ -301,23 +301,9 @@ impl Decoder {
             }
             Codec::Uuid => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
         };
-        let union_order = match data_type.nullability() {
-            None => None,
-            Some(Nullability::NullFirst) => Some(Nullability::NullFirst),
-            Some(Nullability::NullSecond) => {
-                if strict_mode {
-                    return Err(ArrowError::ParseError(
-                        "Found Avro union of the form ['T','null'], which is disallowed in strict_mode"
-                            .to_string(),
-                    ));
-                }
-                Some(Nullability::NullSecond)
-            }
-        };
-
-        Ok(match union_order {
-            Some(order) => Decoder::Nullable(
-                order,
+        Ok(match data_type.nullability() {
+            Some(nullability) => Self::Nullable(
+                nullability,
                 NullBufferBuilder::new(DEFAULT_CAPACITY),
                 Box::new(decoder),
             ),
