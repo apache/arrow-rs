@@ -1178,12 +1178,7 @@ mod test {
             .expect("id column should be an Int64Array");
         let expected_ids = [1, 2, 3, 4, 5, 6, 7];
         for (i, &expected_id) in expected_ids.iter().enumerate() {
-            assert_eq!(
-                id_array.value(i),
-                expected_id,
-                "Mismatch in id at row {}",
-                i
-            );
+            assert_eq!(id_array.value(i), expected_id, "Mismatch in id at row {i}",);
         }
         let int_array = batch
             .column(1)
