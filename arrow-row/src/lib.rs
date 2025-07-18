@@ -3026,13 +3026,16 @@ mod tests {
                 }
             }
 
+            // Convert rows produced from convert_columns().
+            // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
             let back = converter.convert_rows(&rows).unwrap();
             for (actual, expected) in back.iter().zip(&arrays) {
                 actual.to_data().validate_full().unwrap();
                 dictionary_eq(actual, expected)
             }
 
-            // Check that we can convert
+            // Check that we can convert rows into ByteArray and then parse, convert it back to array
+            // Note: validate_utf8 is set to true since Row is initialized through RowParser
             let rows = rows.try_into_binary().expect("reasonable size");
             let parser = converter.parser();
             let back = converter
