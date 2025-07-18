@@ -31,6 +31,8 @@ on:
   pull_request:
     paths:
       - parquet-variant/**
+      - parquet-variant-json/**
+      - parquet-variant-compute/**
       - .github/**
 
 jobs:
@@ -50,6 +52,8 @@ jobs:
         run: cargo test -p parquet-variant
       - name: Test parquet-variant-json
         run: cargo test -p parquet-variant-json
+      - name: Test parquet-variant-compute
+        run: cargo test -p parquet-variant-compute
 
   # test compilation
   linux-features:
@@ -63,10 +67,12 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Check compilation
+      - name: Check compilation (parquet-variant)
         run: cargo check -p parquet-variant
-      - name: Check compilation
+      - name: Check compilation (parquet-variant-json)
         run: cargo check -p parquet-variant-json
+      - name: Check compilation (parquet-variant-compute)
+        run: cargo check -p parquet-variant-compute
 
   clippy:
     name: Clippy
@@ -79,7 +85,9 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy
         run: rustup component add clippy
-      - name: Run clippy
+      - name: Run clippy (parquet-variant)
         run: cargo clippy -p parquet-variant --all-targets --all-features -- -D warnings
-      - name: Run clippy
+      - name: Run clippy (parquet-variant-json)
         run: cargo clippy -p parquet-variant-json --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant-compute)
+        run: cargo clippy -p parquet-variant-compute --all-targets --all-features -- -D warnings
