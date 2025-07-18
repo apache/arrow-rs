@@ -184,6 +184,7 @@ where
 ///
 /// Optimized for performance with fast-path for all-valid arrays
 /// and bit-parallel scan for null-containing arrays.
+#[inline(always)]
 pub fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
     let len = array.len();
     let null_count = array.null_count();
@@ -291,10 +292,11 @@ fn partition_validity_scan(
         // SAFETY: We wrote exactly `vi` and `ni` elements, as pre-allocated.
         valid.set_len(vi);
         nulls.set_len(ni);
+
     }
 
-    debug_assert_eq!(valid.len(), len - null_count);
-    debug_assert_eq!(nulls.len(), null_count);
+    assert_eq!(valid.len(), len - null_count);
+    assert_eq!(nulls.len(), null_count);
     (valid, nulls)
 }
 

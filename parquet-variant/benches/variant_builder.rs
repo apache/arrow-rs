@@ -495,6 +495,18 @@ fn bench_iteration_performance(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_extend_metadata_builder(c: &mut Criterion) {
+    let list = (0..400_000).map(|i| format!("id_{i}")).collect::<Vec<_>>();
+
+    c.bench_function("bench_extend_metadata_builder", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                VariantBuilder::new().with_field_names(list.iter().map(|s| s.as_str())),
+            );
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_object_field_names_reverse_order,
@@ -505,7 +517,8 @@ criterion_group!(
     bench_object_partially_same_schema,
     bench_object_list_partially_same_schema,
     bench_validation_validated_vs_unvalidated,
-    bench_iteration_performance
+    bench_iteration_performance,
+    bench_extend_metadata_builder
 );
 
 criterion_main!(benches);

@@ -22,6 +22,7 @@ pub use self::object::VariantObject;
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
+use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
 use std::ops::Deref;
 
@@ -941,6 +942,8 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Returns `Some(&VariantObject)` for object variants,
     /// `None` for non-object variants.
     ///
+    /// See [`Self::get_path`] to dynamically traverse objects
+    ///
     /// # Examples
     /// ```
     /// # use parquet_variant::{Variant, VariantBuilder, VariantObject};
@@ -997,6 +1000,8 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// Returns `Some(&VariantList)` for list variants,
     /// `None` for non-list variants.
+    ///
+    /// See [`Self::get_path`] to dynamically traverse lists
     ///
     /// # Examples
     /// ```
@@ -1062,6 +1067,46 @@ impl<'m, 'v> Variant<'m, 'v> {
             | Variant::List(VariantList { metadata, .. }) => Some(metadata),
             _ => None,
         }
+    }
+
+    /// Return a new Variant with the path followed.
+    ///
+    /// If the path is not found, `None` is returned.
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder, VariantObject, VariantPath};
+    /// # let mut builder = VariantBuilder::new();
+    /// # let mut obj = builder.new_object();
+    /// # let mut list = obj.new_list("foo");
+    /// # list.append_value("bar");
+    /// # list.append_value("baz");
+    /// # list.finish();
+    /// # obj.finish().unwrap();
+    /// # let (metadata, value) = builder.finish();
+    /// // given a variant like `{"foo": ["bar", "baz"]}`
+    /// let variant = Variant::new(&metadata, &value);
+    /// // Accessing a non existent path returns None
+    /// assert_eq!(variant.get_path(&VariantPath::from("non_existent")), None);
+    /// // Access obj["foo"]
+    /// let path = VariantPath::from("foo");
+    /// let foo = variant.get_path(&path).expect("field `foo` should exist");
+    /// assert!(foo.as_list().is_some(), "field `foo` should be a list");
+    /// // Access foo[0]
+    /// let path = VariantPath::from(0);
+    /// let bar = foo.get_path(&path).expect("element 0 should exist");
+    /// // bar is a string
+    /// assert_eq!(bar.as_string(), Some("bar"));
+    /// // You can also access nested paths
+    /// let path = VariantPath::from("foo").join(0);
+    /// assert_eq!(variant.get_path(&path).unwrap(), bar);
+    /// ```
+    pub fn get_path(&self, path: &VariantPath) -> Option<Variant> {
+        path.iter()
+            .try_fold(self.clone(), |output, element| match element {
+                VariantPathElement::Field { name } => output.get_object_field(name),
+                VariantPathElement::Index { index } => output.get_list_element(*index),
+            })
     }
 }
 
