@@ -169,11 +169,6 @@ pub struct AvroFieldBuilder<'a> {
     strict_mode: bool,
 }
 
-impl<'a> Default for AvroFieldBuilder<'a> {
-    fn default() -> Self {
-        panic!("AvroFieldBuilder requires a schema")
-    }
-}
 
 impl<'a> AvroFieldBuilder<'a> {
     /// Creates a new [`AvroFieldBuilder`]
