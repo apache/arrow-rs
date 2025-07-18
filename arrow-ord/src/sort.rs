@@ -196,13 +196,14 @@ pub fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
         return (valid, Vec::new());
     }
 
-    // Slow path: null bitmap exists and some values are null
+    // null bitmap exists and some values are null
     partition_validity_scan(array, len, null_count)
 }
 
 /// Scans the null bitmap and partitions valid/null indices efficiently.
 /// Uses bit-level operations to extract bit positions.
-/// This function is cold because it's only called when nulls exist.
+/// This function is only called when nulls exist.
+#[inline(always)]
 fn partition_validity_scan(
     array: &dyn Array,
     len: usize,
@@ -231,6 +232,16 @@ fn partition_validity_scan(
             let start = word_idx * 8;
             // Convert 8 bytes into a u64 word in little-endian order
             let w = u64::from_le_bytes(buffer[start..start + 8].try_into().unwrap());
+
+            // Iterate over each set bit in `z` (null mask) using a bit-parallel
+            // approach (Brian Kernighan’s algorithm):
+            // - `z.trailing_zeros()` finds the index of the least-significant 1-bit,
+            //   which corresponds to a null element’s position relative to `base`.
+            // - Writing `(base + tz)` records the absolute index of this null.
+            // - `z &= z - 1` clears that lowest set bit, so on next iteration we
+            //   process the next null bit without scanning through all bits one-by-one.
+            // This method avoids per-bit branching and runs in O(k) time for k nulls,
+            // making it much faster than checking every position, especially when nulls are sparse.
 
             // --- Valid bits ---
             // For every set bit (1) in w, write the corresponding index
