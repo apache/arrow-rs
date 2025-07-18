@@ -134,7 +134,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // Even if the column has an undefined sort order, such as INTERVAL, this
         // is still technically the defined TYPEORDER so it should still be set.
         let column_orders = (0..self.schema_descr.num_columns())
-            .map(|_| crate::format::ColumnOrder::TYPEORDER(crate::format::TypeDefinedOrder {}))
+            .map(|_| crate::format::ColumnOrder::newTYPE_ORDER())
             .collect();
         // This field is optional, perhaps in cases where no min/max fields are set
         // in any Statistics or ColumnIndex object in the whole file.
