@@ -117,7 +117,7 @@ impl VariantListHeader {
 ///
 /// [valid]: VariantMetadata#Validation
 /// [Variant spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#value-data-for-array-basic_type3
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct VariantList<'m, 'v> {
     pub metadata: VariantMetadata<'m>,
     pub value: &'v [u8],
@@ -299,6 +299,16 @@ impl<'m, 'v> VariantList<'m, 'v> {
         let byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let offset_bytes = slice_from_slice(self.value, byte_range)?;
         self.header.offset_size.unpack_u32(offset_bytes, index)
+    }
+}
+
+impl<'m, 'v> PartialEq for VariantList<'m, 'v> {
+    fn eq(&self, other: &Self) -> bool {
+        self.metadata == other.metadata
+            && self.value == other.value
+            && self.header == other.header
+            && self.num_elements == other.num_elements
+            && self.first_value_byte == other.first_value_byte
     }
 }
 
@@ -626,5 +636,25 @@ mod tests {
             let item_str = item.as_string().unwrap();
             assert_eq!(expected_list.get(i).unwrap(), item_str);
         }
+    }
+
+    #[test]
+    fn items_are_equal_even_if_not_validated() {
+        use crate::Variant;
+        use crate::VariantBuilder;
+
+        let mut builder = VariantBuilder::new();
+
+        let mut list = builder.new_list();
+        list.append_value("hello2");
+        list.finish();
+
+        let (metadata, value) = builder.finish();
+
+        let variant1 = Variant::new(&metadata, &value);
+        let variant2 = Variant::new(&metadata, &value)
+            .with_full_validation()
+            .unwrap();
+        assert_eq!(variant1, variant2)
     }
 }
