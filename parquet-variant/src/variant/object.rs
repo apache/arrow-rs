@@ -225,7 +225,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             if self.metadata.is_sorted() {
                 // Since the metadata dictionary has unique and sorted field names, we can also guarantee this object's field names
                 // are lexicographically sorted by their field id ordering
-                let dictionary_size = self.metadata.dictionary_size();
+                let dictionary_size = self.metadata.len();
 
                 if let Some(mut current_id) = field_ids_iter.next() {
                     for next_id in field_ids_iter {
