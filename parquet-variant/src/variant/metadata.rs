@@ -211,7 +211,7 @@ impl<'m> VariantMetadata<'m> {
 
     /// The number of metadata dictionary entries
     pub fn len(&self) -> usize {
-        self.dictionary_size()
+        self.dictionary_size as _
     }
 
     /// True if this metadata dictionary contains no entries
@@ -291,11 +291,6 @@ impl<'m> VariantMetadata<'m> {
     /// Whether the dictionary keys are sorted and unique
     pub fn is_sorted(&self) -> bool {
         self.header.is_sorted
-    }
-
-    /// Get the dictionary size
-    pub const fn dictionary_size(&self) -> usize {
-        self.dictionary_size as _
     }
 
     /// The variant protocol version
@@ -399,7 +394,7 @@ mod tests {
         ];
 
         let md = VariantMetadata::try_new(bytes).expect("should parse");
-        assert_eq!(md.dictionary_size(), 2);
+        assert_eq!(md.len(), 2);
         // Fields
         assert_eq!(&md[0], "cat");
         assert_eq!(&md[1], "dog");
@@ -434,7 +429,7 @@ mod tests {
         ];
 
         let working_md = VariantMetadata::try_new(bytes).expect("should parse");
-        assert_eq!(working_md.dictionary_size(), 2);
+        assert_eq!(working_md.len(), 2);
         assert_eq!(&working_md[0], "a");
         assert_eq!(&working_md[1], "b");
 
