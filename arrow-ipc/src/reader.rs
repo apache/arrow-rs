@@ -39,6 +39,9 @@ use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, Scalar
 use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
+use crate::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+use crate::Field as IpcField;
+
 use crate::compression::CompressionCodec;
 use crate::{Block, FieldNode, Message, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
@@ -80,6 +83,7 @@ impl RecordBatchDecoder<'_> {
     ///     - cast the 64-bit array to the appropriate data type
     fn create_array(
         &mut self,
+        ipc_field: IpcField,
         field: &Field,
         variadic_counts: &mut VecDeque<i64>,
     ) -> Result<ArrayRef, ArrowError> {
@@ -115,13 +119,21 @@ impl RecordBatchDecoder<'_> {
             List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?, self.next_buffer()?];
-                let values = self.create_array(list_field, variadic_counts)?;
+                let values = self.create_array(
+                    ipc_field.children().unwrap().get(0),
+                    list_field,
+                    variadic_counts,
+                )?;
                 self.create_list_array(list_node, data_type, &list_buffers, values)
             }
             FixedSizeList(ref list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?];
-                let values = self.create_array(list_field, variadic_counts)?;
+                let values = self.create_array(
+                    ipc_field.children().unwrap().get(0),
+                    list_field,
+                    variadic_counts,
+                )?;
                 self.create_list_array(list_node, data_type, &list_buffers, values)
             }
             Struct(struct_fields) => {
@@ -132,16 +144,22 @@ impl RecordBatchDecoder<'_> {
                 let mut struct_arrays = vec![];
                 // TODO investigate whether just knowing the number of buffers could
                 // still work
-                for struct_field in struct_fields {
-                    let child = self.create_array(struct_field, variadic_counts)?;
+                for (idx, struct_field) in struct_fields.iter().enumerate() {
+                    let child = self.create_array(
+                        ipc_field.children().unwrap().get(idx),
+                        struct_field,
+                        variadic_counts,
+                    )?;
                     struct_arrays.push(child);
                 }
                 self.create_struct_array(struct_node, null_buffer, struct_fields, struct_arrays)
             }
             RunEndEncoded(run_ends_field, values_field) => {
                 let run_node = self.next_node(field)?;
-                let run_ends = self.create_array(run_ends_field, variadic_counts)?;
-                let values = self.create_array(values_field, variadic_counts)?;
+                let children = ipc_field.children().unwrap();
+                let run_ends =
+                    self.create_array(children.get(0), run_ends_field, variadic_counts)?;
+                let values = self.create_array(children.get(1), values_field, variadic_counts)?;
 
                 let run_array_length = run_node.length() as usize;
                 let builder = ArrayData::builder(data_type.clone())
@@ -156,11 +174,7 @@ impl RecordBatchDecoder<'_> {
                 let index_node = self.next_node(field)?;
                 let index_buffers = [self.next_buffer()?, self.next_buffer()?];
 
-                #[allow(deprecated)]
-                let dict_id = field.dict_id().ok_or_else(|| {
-                    ArrowError::ParseError(format!("Field {field} does not have dict id"))
-                })?;
-
+                let dict_id = ipc_field.dictionary().unwrap().id();
                 let value_array = self.dictionaries_by_id.get(&dict_id).ok_or_else(|| {
                     ArrowError::ParseError(format!(
                         "Cannot find a dictionary batch with dict id: {dict_id}"
@@ -198,8 +212,11 @@ impl RecordBatchDecoder<'_> {
 
                 let mut children = Vec::with_capacity(fields.len());
 
-                for (_id, field) in fields.iter() {
-                    let child = self.create_array(field, variadic_counts)?;
+                let ipc_children = ipc_field.children().unwrap();
+                for i in 0..ipc_children.len() {
+                    let ipc_field = ipc_children.get(i);
+                    let field: Field = ipc_field.into();
+                    let child = self.create_array(ipc_field, &field, variadic_counts)?;
                     children.push(child);
                 }
 
@@ -371,6 +388,8 @@ struct RecordBatchDecoder<'a> {
     batch: crate::RecordBatch<'a>,
     /// The output schema
     schema: SchemaRef,
+    /// The schema as it is encoded in the IPC source
+    ipc_schema: crate::Schema<'a>,
     /// Decoded dictionaries indexed by dictionary id
     dictionaries_by_id: &'a HashMap<i64, ArrayRef>,
     /// Optional compression codec
@@ -400,6 +419,7 @@ impl<'a> RecordBatchDecoder<'a> {
     fn try_new(
         buf: &'a Buffer,
         batch: crate::RecordBatch<'a>,
+        ipc_schema: crate::Schema<'a>,
         schema: SchemaRef,
         dictionaries_by_id: &'a HashMap<i64, ArrayRef>,
         metadata: &'a MetadataVersion,
@@ -418,6 +438,7 @@ impl<'a> RecordBatchDecoder<'a> {
 
         Ok(Self {
             batch,
+            ipc_schema,
             schema,
             dictionaries_by_id,
             compression,
@@ -477,23 +498,28 @@ impl<'a> RecordBatchDecoder<'a> {
 
         let options = RecordBatchOptions::new().with_row_count(Some(self.batch.length() as usize));
 
-        let schema = Arc::clone(&self.schema);
         if let Some(projection) = self.projection {
             let mut arrays = vec![];
             // project fields
-            for (idx, field) in schema.fields().iter().enumerate() {
+            let ipc_fields = self.ipc_schema.fields().unwrap();
+            let ipc_fields_len = ipc_fields.len();
+            for idx in 0..ipc_fields_len {
                 // Create array for projected field
                 if let Some(proj_idx) = projection.iter().position(|p| p == &idx) {
-                    let child = self.create_array(field, &mut variadic_counts)?;
+                    let child = self.create_array(
+                        ipc_fields.get(idx),
+                        self.schema.clone().field(idx),
+                        &mut variadic_counts,
+                    )?;
                     arrays.push((proj_idx, child));
                 } else {
-                    self.skip_field(field, &mut variadic_counts)?;
+                    self.skip_field(self.schema.clone().field(idx), &mut variadic_counts)?;
                 }
             }
 
             arrays.sort_by_key(|t| t.0);
 
-            let schema = Arc::new(schema.project(projection)?);
+            let schema = Arc::new(self.schema.project(projection)?);
             let columns = arrays.into_iter().map(|t| t.1).collect::<Vec<_>>();
 
             if self.skip_validation.get() {
@@ -512,8 +538,14 @@ impl<'a> RecordBatchDecoder<'a> {
         } else {
             let mut children = vec![];
             // keep track of index as lists require more than one node
-            for field in schema.fields() {
-                let child = self.create_array(field, &mut variadic_counts)?;
+            let ipc_fields = self.ipc_schema.fields().unwrap();
+            let ipc_fields_len = ipc_fields.len();
+            for idx in 0..ipc_fields_len {
+                let child = self.create_array(
+                    ipc_fields.get(idx),
+                    self.schema.clone().field(idx),
+                    &mut variadic_counts,
+                )?;
                 children.push(child);
             }
 
@@ -521,14 +553,14 @@ impl<'a> RecordBatchDecoder<'a> {
                 // Safety: setting `skip_validation` requires `unsafe`, user assures data is valid
                 unsafe {
                     Ok(RecordBatch::new_unchecked(
-                        schema,
+                        self.schema,
                         children,
                         self.batch.length() as usize,
                     ))
                 }
             } else {
                 assert!(variadic_counts.is_empty());
-                RecordBatch::try_new_with_options(schema, children, &options)
+                RecordBatch::try_new_with_options(self.schema, children, &options)
             }
         }
     }
@@ -638,12 +670,13 @@ impl<'a> RecordBatchDecoder<'a> {
 pub fn read_record_batch(
     buf: &Buffer,
     batch: crate::RecordBatch,
+    ipc_schema: crate::Schema,
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
     metadata: &MetadataVersion,
 ) -> Result<RecordBatch, ArrowError> {
-    RecordBatchDecoder::try_new(buf, batch, schema, dictionaries_by_id, metadata)?
+    RecordBatchDecoder::try_new(buf, batch, ipc_schema, schema, dictionaries_by_id, metadata)?
         .with_projection(projection)
         .with_require_alignment(false)
         .read_record_batch()
@@ -654,14 +687,14 @@ pub fn read_record_batch(
 pub fn read_dictionary(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
-    schema: &Schema,
+    ipc_schema: crate::Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
 ) -> Result<(), ArrowError> {
     read_dictionary_impl(
         buf,
         batch,
-        schema,
+        ipc_schema,
         dictionaries_by_id,
         metadata,
         false,
@@ -669,10 +702,41 @@ pub fn read_dictionary(
     )
 }
 
+fn first_field_with_dict_id_from_schema(schema: crate::Schema, id: i64) -> Option<Field> {
+    let c_fields = schema.fields().unwrap();
+    let len = c_fields.len();
+    for i in 0..len {
+        let c_field: crate::Field = c_fields.get(i);
+        if let Some(field) = first_field_with_dict_id_from_field(c_field, id) {
+            return Some(field);
+        }
+    }
+
+    None
+}
+
+fn first_field_with_dict_id_from_field(field: crate::Field, id: i64) -> Option<Field> {
+    if let Some(dictionary) = field.dictionary() {
+        if dictionary.id() == id {
+            return Some(field.into());
+        }
+    }
+
+    if let Some(children) = field.children() {
+        for child in children.iter() {
+            if let Some(field) = first_field_with_dict_id_from_field(child, id) {
+                return Some(field);
+            }
+        }
+    }
+
+    None
+}
+
 fn read_dictionary_impl(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
-    schema: &Schema,
+    ipc_schema: crate::Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     metadata: &MetadataVersion,
     require_alignment: bool,
@@ -685,9 +749,7 @@ fn read_dictionary_impl(
     }
 
     let id = batch.id();
-    #[allow(deprecated)]
-    let fields_using_this_dictionary = schema.fields_with_dict_id(id);
-    let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
+    let first_field = first_field_with_dict_id_from_schema(ipc_schema, id).ok_or_else(|| {
         ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
@@ -699,10 +761,22 @@ fn read_dictionary_impl(
             // Make a fake schema for the dictionary batch.
             let value = value_type.as_ref().clone();
             let schema = Schema::new(vec![Field::new("", value, true)]);
+            let gen = IpcDataGenerator::default();
+            let mut dict_tracker = DictionaryTracker::new(false);
+            let data = gen.schema_to_bytes_with_dictionary_tracker(
+                &schema,
+                &mut dict_tracker,
+                &IpcWriteOptions::default(),
+            );
+            let message = crate::root_as_message(&data.ipc_message).map_err(|err| {
+                ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+            })?;
+            let ipc_schema = message.header_as_schema().unwrap();
             // Read a single column
             let record_batch = RecordBatchDecoder::try_new(
                 buf,
                 batch.data().unwrap(),
+                ipc_schema,
                 Arc::new(schema),
                 dictionaries_by_id,
                 metadata,
@@ -812,7 +886,7 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 /// let back = fb_to_schema(footer.schema().unwrap());
 /// assert_eq!(&back, schema.as_ref());
 ///
-/// let mut decoder = FileDecoder::new(schema, footer.version());
+/// let mut decoder = FileDecoder::new(buffer[trailer_start - footer_len..trailer_start].to_vec(), Default::default(), footer.version());
 ///
 /// // Read dictionaries
 /// for block in footer.dictionaries().iter().flatten() {
@@ -835,6 +909,8 @@ pub fn read_footer_length(buf: [u8; 10]) -> Result<usize, ArrowError> {
 #[derive(Debug)]
 pub struct FileDecoder {
     schema: SchemaRef,
+    footer_buffer: Vec<u8>,
+    verifier_options: VerifierOptions,
     dictionaries: HashMap<i64, ArrayRef>,
     version: MetadataVersion,
     projection: Option<Vec<usize>>,
@@ -844,9 +920,19 @@ pub struct FileDecoder {
 
 impl FileDecoder {
     /// Create a new [`FileDecoder`] with the given schema and version
-    pub fn new(schema: SchemaRef, version: MetadataVersion) -> Self {
+    pub fn new(
+        footer_buffer: Vec<u8>,
+        verifier_options: VerifierOptions,
+        version: MetadataVersion,
+    ) -> Self {
+        let footer =
+            crate::root_as_footer_with_opts(&verifier_options, &footer_buffer[..]).unwrap();
+        let ipc_schema = footer.schema().unwrap();
+        let schema = crate::convert::fb_to_schema(ipc_schema);
         Self {
-            schema,
+            schema: Arc::new(schema),
+            footer_buffer,
+            verifier_options,
             version,
             dictionaries: Default::default(),
             projection: None,
@@ -911,10 +997,16 @@ impl FileDecoder {
         match message.header_type() {
             crate::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().unwrap();
+                let footer = crate::root_as_footer_with_opts(
+                    &self.verifier_options,
+                    &self.footer_buffer[..],
+                )
+                .unwrap();
+                let ipc_schema = footer.schema().unwrap();
                 read_dictionary_impl(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
-                    &self.schema,
+                    ipc_schema,
                     &mut self.dictionaries,
                     &message.version(),
                     self.require_alignment,
@@ -942,10 +1034,17 @@ impl FileDecoder {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
+                let footer = crate::root_as_footer_with_opts(
+                    &self.verifier_options,
+                    &self.footer_buffer[..],
+                )
+                .unwrap();
+                let ipc_schema = footer.schema().unwrap();
                 // read the block that makes up the record batch into a buffer
                 RecordBatchDecoder::try_new(
                     &buf.slice(block.metaDataLength() as _),
                     batch,
+                    ipc_schema,
                     self.schema.clone(),
                     &self.dictionaries,
                     &message.version(),
@@ -1070,8 +1169,6 @@ impl FileReaderBuilder {
             ));
         }
 
-        let schema = crate::convert::fb_to_schema(ipc_schema);
-
         let mut custom_metadata = HashMap::new();
         if let Some(fb_custom_metadata) = footer.custom_metadata() {
             for kv in fb_custom_metadata.into_iter() {
@@ -1082,7 +1179,7 @@ impl FileReaderBuilder {
             }
         }
 
-        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
+        let mut decoder = FileDecoder::new(footer_data.clone(), verifier_options, footer.version());
         if let Some(projection) = self.projection {
             decoder = decoder.with_projection(projection)
         }
@@ -1334,6 +1431,10 @@ pub struct StreamReader<R> {
     /// The schema that is read from the stream's first message
     schema: SchemaRef,
 
+    /// The buffer that the IPC schema flatbuffer is stored in. This is needed to satify the
+    /// lifetime requirements of the flatbuffer reader.
+    schema_message_buffer: Vec<u8>,
+
     /// Optional dictionaries for each schema field.
     ///
     /// Dictionaries may be appended to in the streaming format.
@@ -1427,6 +1528,7 @@ impl<R: Read> StreamReader<R> {
         Ok(Self {
             reader,
             schema: Arc::new(schema),
+            schema_message_buffer: meta_buffer.to_vec(),
             finished: false,
             dictionaries_by_id,
             projection,
@@ -1510,10 +1612,20 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
+                let message =
+                    crate::root_as_message(&self.schema_message_buffer).map_err(|err| {
+                        ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+                    })?;
+                // message header is a Schema, so read it
+                let ipc_schema: crate::Schema = message.header_as_schema().ok_or_else(|| {
+                    ArrowError::ParseError("Unable to read IPC message as schema".to_string())
+                })?;
+
                 RecordBatchDecoder::try_new(
                     &buf.into(),
                     batch,
-                    self.schema(),
+                    ipc_schema,
+                    self.schema.clone(),
                     &self.dictionaries_by_id,
                     &message.version(),
                 )?
@@ -1533,10 +1645,19 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
                 self.reader.read_exact(&mut buf)?;
 
+                let message =
+                    crate::root_as_message(&self.schema_message_buffer).map_err(|err| {
+                        ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+                    })?;
+                // message header is a Schema, so read it
+                let ipc_schema: crate::Schema = message.header_as_schema().ok_or_else(|| {
+                    ArrowError::ParseError("Unable to read IPC message as schema".to_string())
+                })?;
+
                 read_dictionary_impl(
                     &buf.into(),
                     batch,
-                    &self.schema,
+                    ipc_schema,
                     &mut self.dictionaries_by_id,
                     &message.version(),
                     false,
@@ -1892,11 +2013,13 @@ mod tests {
         let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start])
             .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid footer: {e}")))?;
 
-        let schema = fb_to_schema(footer.schema().unwrap());
-
         let mut decoder = unsafe {
-            FileDecoder::new(Arc::new(schema), footer.version())
-                .with_skip_validation(skip_validation)
+            FileDecoder::new(
+                buffer[trailer_start - footer_len..trailer_start].to_vec(),
+                Default::default(),
+                footer.version(),
+            )
+            .with_skip_validation(skip_validation)
         };
         // Read dictionaries
         for block in footer.dictionaries().iter().flatten() {
@@ -2007,8 +2130,7 @@ mod tests {
         let mut writer = crate::writer::FileWriter::try_new_with_options(
             &mut buf,
             batch.schema_ref(),
-            #[allow(deprecated)]
-            IpcWriteOptions::default().with_preserve_dict_id(false),
+            IpcWriteOptions::default(),
         )
         .unwrap();
         writer.write(&batch).unwrap();
@@ -2440,8 +2562,16 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        #[allow(deprecated)]
-        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
+        let mut dict_tracker = DictionaryTracker::new(false);
+
+        let encoded_schema = gen.schema_to_bytes_with_dictionary_tracker(
+            &batch.schema(),
+            &mut dict_tracker,
+            &IpcWriteOptions::default(),
+        );
+        let schema_message = root_as_message(&encoded_schema.ipc_message).unwrap();
+        let ipc_schema = schema_message.header_as_schema().unwrap();
+
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2459,6 +2589,7 @@ mod tests {
         let roundtrip = RecordBatchDecoder::try_new(
             &b,
             ipc_batch,
+            ipc_schema,
             batch.schema(),
             &Default::default(),
             &message.version(),
@@ -2479,8 +2610,16 @@ mod tests {
         .unwrap();
 
         let gen = IpcDataGenerator {};
-        #[allow(deprecated)]
-        let mut dict_tracker = DictionaryTracker::new_with_preserve_dict_id(false, true);
+        let mut dict_tracker = DictionaryTracker::new(false);
+
+        let encoded_schema = gen.schema_to_bytes_with_dictionary_tracker(
+            &batch.schema(),
+            &mut dict_tracker,
+            &IpcWriteOptions::default(),
+        );
+        let schema_message = root_as_message(&encoded_schema.ipc_message).unwrap();
+        let ipc_schema = schema_message.header_as_schema().unwrap();
+
         let (_, encoded) = gen
             .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
@@ -2498,6 +2637,7 @@ mod tests {
         let result = RecordBatchDecoder::try_new(
             &b,
             ipc_batch,
+            ipc_schema,
             batch.schema(),
             &Default::default(),
             &message.version(),
@@ -2691,8 +2831,7 @@ mod tests {
             let mut writer = crate::writer::StreamWriter::try_new_with_options(
                 &mut buf,
                 batch.schema().as_ref(),
-                #[allow(deprecated)]
-                crate::writer::IpcWriteOptions::default().with_preserve_dict_id(false),
+                crate::writer::IpcWriteOptions::default(),
             )
             .expect("Failed to create StreamWriter");
             writer.write(&batch).expect("Failed to write RecordBatch");

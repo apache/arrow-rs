@@ -276,6 +276,7 @@ impl FlightDataDecoder {
 
                 self.state = Some(FlightStreamState {
                     schema: Arc::clone(&schema),
+                    schema_message: data.clone(),
                     dictionaries_by_field,
                 });
                 Ok(Some(DecodedFlightData::new_schema(data, schema)))
@@ -296,10 +297,15 @@ impl FlightDataDecoder {
                     )
                 })?;
 
+                let ipc_schema = arrow_ipc::root_as_message(&state.schema_message.data_header)
+                    .unwrap()
+                    .header_as_schema()
+                    .unwrap();
+
                 arrow_ipc::reader::read_dictionary(
                     &buffer,
                     dictionary_batch,
-                    &state.schema,
+                    ipc_schema,
                     &mut state.dictionaries_by_field,
                     &message.version(),
                 )
@@ -319,8 +325,14 @@ impl FlightDataDecoder {
                     ));
                 };
 
+                let ipc_schema = arrow_ipc::root_as_message(&state.schema_message.data_header)
+                    .unwrap()
+                    .header_as_schema()
+                    .unwrap();
+
                 let batch = flight_data_to_arrow_batch(
                     &data,
+                    ipc_schema,
                     Arc::clone(&state.schema),
                     &state.dictionaries_by_field,
                 )
@@ -376,6 +388,7 @@ impl futures::Stream for FlightDataDecoder {
 #[derive(Debug)]
 struct FlightStreamState {
     schema: SchemaRef,
+    schema_message: FlightData,
     dictionaries_by_field: HashMap<i64, ArrayRef>,
 }
 
