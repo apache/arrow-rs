@@ -15,13 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
+use crate::arrow::array_reader::cached_array_reader::CacheRole;
+use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
+use crate::arrow::array_reader::row_group_cache::RowGroupCache;
 use crate::arrow::array_reader::{
     make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
     FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
@@ -36,12 +39,69 @@ use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
 /// Builds [`ArrayReader`]s from parquet schema, projection mask, and RowGroups reader
 pub struct ArrayReaderBuilder<'a> {
+    /// Source of row group data
     row_groups: &'a dyn RowGroups,
+    /// Optional cache options for the array reader
+    cache_options: Option<&'a CacheOptions<'a>>,
+}
+
+/// Builder for [`CacheOptions`]
+#[derive(Debug, Clone)]
+pub struct CacheOptionsBuilder<'a> {
+    /// Projection mask to apply to the cache
+    pub projection_mask: &'a ProjectionMask,
+    /// Cache to use for storing row groups
+    pub cache: Arc<Mutex<RowGroupCache>>,
+}
+
+impl<'a> CacheOptionsBuilder<'a> {
+    /// create a new cache options builder
+    pub fn new(projection_mask: &'a ProjectionMask, cache: Arc<Mutex<RowGroupCache>>) -> Self {
+        Self {
+            projection_mask,
+            cache,
+        }
+    }
+
+    /// Return a new [`CacheOptions`] for producing (populating) the cache
+    pub fn producer(self) -> CacheOptions<'a> {
+        CacheOptions {
+            projection_mask: self.projection_mask,
+            cache: self.cache,
+            role: CacheRole::Producer,
+        }
+    }
+
+    /// return a new [`CacheOptions`] for consuming (reading) the cache
+    pub fn consumer(self) -> CacheOptions<'a> {
+        CacheOptions {
+            projection_mask: self.projection_mask,
+            cache: self.cache,
+            role: CacheRole::Consumer,
+        }
+    }
+}
+
+/// Cache options containing projection mask, cache, and role
+#[derive(Clone)]
+pub struct CacheOptions<'a> {
+    pub projection_mask: &'a ProjectionMask,
+    pub cache: Arc<Mutex<RowGroupCache>>,
+    pub role: CacheRole,
 }
 
 impl<'a> ArrayReaderBuilder<'a> {
     pub fn new(row_groups: &'a dyn RowGroups) -> Self {
-        Self { row_groups }
+        Self {
+            row_groups,
+            cache_options: None,
+        }
+    }
+
+    /// Add cache options to the builder
+    pub fn with_cache_options(mut self, cache_options: Option<&'a CacheOptions<'a>>) -> Self {
+        self.cache_options = cache_options;
+        self
     }
 
     /// Create [`ArrayReader`] from parquet schema, projection mask, and parquet file reader.
@@ -69,7 +129,25 @@ impl<'a> ArrayReaderBuilder<'a> {
         mask: &ProjectionMask,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         match field.field_type {
-            ParquetFieldType::Primitive { .. } => self.build_primitive_reader(field, mask),
+            ParquetFieldType::Primitive { col_idx, .. } => {
+                let Some(reader) = self.build_primitive_reader(field, mask)? else {
+                    return Ok(None);
+                };
+                let Some(cache_options) = self.cache_options.as_ref() else {
+                    return Ok(Some(reader));
+                };
+
+                if cache_options.projection_mask.leaf_included(col_idx) {
+                    Ok(Some(Box::new(CachedArrayReader::new(
+                        reader,
+                        Arc::clone(&cache_options.cache),
+                        col_idx,
+                        cache_options.role,
+                    ))))
+                } else {
+                    Ok(Some(reader))
+                }
+            }
             ParquetFieldType::Group { .. } => match &field.arrow_type {
                 DataType::Map(_, _) => self.build_map_reader(field, mask),
                 DataType::Struct(_) => self.build_struct_reader(field, mask),
