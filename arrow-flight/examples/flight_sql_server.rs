@@ -814,7 +814,7 @@ mod tests {
     async fn bind_tcp() -> (TcpIncoming, SocketAddr) {
         let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let incoming = TcpIncoming::from_listener(listener, true, None).unwrap();
+        let incoming = TcpIncoming::from(listener).with_nodelay(Some(true));
         (incoming, addr)
     }
 
