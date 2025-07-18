@@ -292,7 +292,6 @@ fn partition_validity_scan(
         // SAFETY: We wrote exactly `vi` and `ni` elements, as pre-allocated.
         valid.set_len(vi);
         nulls.set_len(ni);
-
     }
 
     assert_eq!(valid.len(), len - null_count);
