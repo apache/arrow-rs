@@ -86,7 +86,7 @@
 //! ```
 //!
 
-use crate::codec::AvroField;
+use crate::codec::AvroFieldBuilder;
 use crate::schema::Schema as AvroSchema;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
@@ -221,7 +221,10 @@ impl ReaderBuilder {
     }
 
     fn make_record_decoder(&self, schema: &AvroSchema<'_>) -> Result<RecordDecoder, ArrowError> {
-        let root_field = AvroField::try_from(schema)?;
+        let root_field = AvroFieldBuilder::new(schema)
+            .with_utf8view(self.utf8_view)
+            .with_strict_mode(self.strict_mode)
+            .build()?;
         RecordDecoder::try_new_with_options(
             root_field.data_type(),
             self.utf8_view,
