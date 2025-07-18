@@ -169,7 +169,6 @@ pub struct AvroFieldBuilder<'a> {
     strict_mode: bool,
 }
 
-
 impl<'a> AvroFieldBuilder<'a> {
     /// Creates a new [`AvroFieldBuilder`]
     pub fn new(schema: &'a Schema<'a>) -> Self {
