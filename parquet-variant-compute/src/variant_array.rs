@@ -59,6 +59,12 @@ pub struct VariantArray {
     /// Dictionary-Encoded, preferably (but not required) with an index type of
     /// int8.
     inner: StructArray,
+
+    /// Reference to the metadata column of inner
+    metadata_ref: ArrayRef,
+
+    /// Reference to the value column of inner
+    value_ref: ArrayRef,
 }
 
 impl VariantArray {
@@ -88,7 +94,8 @@ impl VariantArray {
             ));
         };
         // Ensure the StructArray has a metadata field of BinaryView
-        let Some(metadata_field) = inner.fields().iter().find(|f| f.name() == "metadata") else {
+
+        let Some(metadata_field) = VariantArray::find_metadata_field(&inner) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
             ));
@@ -99,7 +106,7 @@ impl VariantArray {
                 metadata_field.data_type()
             )));
         }
-        let Some(value_field) = inner.fields().iter().find(|f| f.name() == "value") else {
+        let Some(value_field) = VariantArray::find_value_field(&inner) else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
             ));
@@ -113,6 +120,8 @@ impl VariantArray {
 
         Ok(Self {
             inner: inner.clone(),
+            metadata_ref: metadata_field,
+            value_ref: value_field,
         })
     }
 
@@ -138,16 +147,24 @@ impl VariantArray {
         Variant::new(metadata, value)
     }
 
+    fn find_metadata_field(array: &StructArray) -> Option<ArrayRef> {
+        array.column_by_name("metadata").cloned()
+    }
+
+    fn find_value_field(array: &StructArray) -> Option<ArrayRef> {
+        array.column_by_name("value").cloned()
+    }
+
     /// Return a reference to the metadata field of the [`StructArray`]
     pub fn metadata_field(&self) -> &ArrayRef {
         // spec says fields order is not guaranteed, so we search by name
-        self.inner.column_by_name("metadata").unwrap()
+        &self.metadata_ref
     }
 
     /// Return a reference to the value field of the `StructArray`
     pub fn value_field(&self) -> &ArrayRef {
         // spec says fields order is not guaranteed, so we search by name
-        self.inner.column_by_name("value").unwrap()
+        &self.value_ref
     }
 }
 
@@ -169,8 +186,13 @@ impl Array for VariantArray {
     }
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        let slice = self.inner.slice(offset, length);
+        let met = self.metadata_ref.slice(offset, length);
+        let val = self.value_ref.slice(offset, length);
         Arc::new(Self {
-            inner: self.inner.slice(offset, length),
+            inner: slice,
+            metadata_ref: met,
+            value_ref: val,
         })
     }
 
