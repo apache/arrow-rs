@@ -332,7 +332,7 @@ impl Decoder {
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
             Self::Enum(indices, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
-            Self::Nullable(order, null_buffer, inner) => {
+            Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null();
             }
