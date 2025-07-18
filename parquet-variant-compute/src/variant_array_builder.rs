@@ -146,7 +146,7 @@ impl VariantArrayBuilder {
     }
 
     /// Append the [`Variant`] to the builder as the next row
-    pub fn append_variant(&mut self, variant: Variant) {
+    pub fn append_variant<'m, 'v>(&mut self, variant: impl Into<Variant<'m, 'v>>) {
         // TODO make this more efficient by avoiding the intermediate buffers
         let mut variant_builder = VariantBuilder::new();
         variant_builder.append_value(variant);
