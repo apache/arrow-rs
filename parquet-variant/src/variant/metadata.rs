@@ -250,13 +250,14 @@ impl<'m> VariantMetadata<'m> {
                 let mut current_offset = offsets.next().unwrap_or(0);
                 let mut prev_value: Option<&str> = None;
                 for next_offset in offsets {
-                    let current_value = value_buffer.get(current_offset..next_offset).ok_or_else(
-                        || {
-                            ArrowError::InvalidArgumentError(format!(
+                    let current_value =
+                        value_buffer
+                            .get(current_offset..next_offset)
+                            .ok_or_else(|| {
+                                ArrowError::InvalidArgumentError(format!(
                                 "range {current_offset}..{next_offset} is invalid or out of bounds"
                             ))
-                        },
-                    )?;
+                            })?;
 
                     if let Some(prev_val) = prev_value {
                         if current_value <= prev_val {
