@@ -422,18 +422,17 @@ impl Decoder {
                 let nanos = (millis as i64) * 1_000_000;
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
-            Self::Nullable(order, nb, child) => {
-                let branch = buf.get_int()?;
-                let is_not_null = match order {
+            Self::Nullable(order, nb, encoding) => {
+                let branch = buf.read_vlq()?;
+                let is_not_null = match *order {
                     Nullability::NullFirst => branch != 0,
                     Nullability::NullSecond => branch == 0,
                 };
-
                 nb.append(is_not_null);
                 if is_not_null {
-                    child.decode(buf)?;
+                    encoding.decode(buf)?;
                 } else {
-                    child.append_null();
+                    encoding.append_null();
                 }
             }
         }
