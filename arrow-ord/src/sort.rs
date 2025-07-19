@@ -211,98 +211,28 @@ fn partition_validity_scan(
 ) -> (Vec<u32>, Vec<u32>) {
     // SAFETY: Guaranteed by caller that null_count > 0, so bitmap must exist
     let bitmap = array.nulls().unwrap();
-    let buffer = bitmap.buffer(); // Raw byte slice of bitmap bits
 
     // Preallocate result vectors with exact capacities (avoids reallocations)
     let mut valid = Vec::with_capacity(len - null_count);
     let mut nulls = Vec::with_capacity(null_count);
 
     unsafe {
-        // Access spare capacity of vectors to write directly without bounds checks
+        // 1) Write valid indices (bits == 1)
         let valid_slice = valid.spare_capacity_mut();
+        for (i, idx) in bitmap.inner().set_indices_u32().enumerate() {
+            valid_slice[i].write(idx);
+        }
+
+        // 2) Write null indices by inverting
+        let inv_buf = !bitmap.inner();
         let null_slice = nulls.spare_capacity_mut();
-        let mut vi = 0; // index for writing into valid_slice
-        let mut ni = 0; // index for writing into null_slice
-
-        let mut base = 0; // bit index offset
-        let n_words = buffer.len() / 8; // number of 64-bit chunks in bitmap
-
-        // Process the bitmap in 64-bit (8 byte) chunks for efficiency
-        for word_idx in 0..n_words {
-            let start = word_idx * 8;
-            // Convert 8 bytes into a u64 word in little-endian order
-            let w = u64::from_le_bytes(buffer[start..start + 8].try_into().unwrap());
-
-            // Iterate over each set bit in `z` (null mask) using a bit-parallel
-            // approach (Brian Kernighan’s algorithm):
-            // - `z.trailing_zeros()` finds the index of the least-significant 1-bit,
-            //   which corresponds to a null element’s position relative to `base`.
-            // - Writing `(base + tz)` records the absolute index of this null.
-            // - `z &= z - 1` clears that lowest set bit, so on next iteration we
-            //   process the next null bit without scanning through all bits one-by-one.
-            // This method avoids per-bit branching and runs in O(k) time for k nulls,
-            // making it much faster than checking every position, especially when nulls are sparse.
-
-            // --- Valid bits ---
-            // For every set bit (1) in w, write the corresponding index
-            let mut v = w;
-            while v != 0 {
-                let tz = v.trailing_zeros() as usize; // position of least-significant 1-bit
-                valid_slice[vi].write((base + tz) as u32);
-                vi += 1;
-                v &= v - 1; // clear the lowest set bit (Brian Kernighan's algorithm)
-            }
-
-            // --- Null bits ---
-            // Invert w to find null bits (0s become 1s), and iterate same way
-            let mut z = (!w) & u64::MAX; // ensure proper bit masking
-            while z != 0 {
-                let tz = z.trailing_zeros() as usize;
-                null_slice[ni].write((base + tz) as u32);
-                ni += 1;
-                z &= z - 1;
-            }
-
-            base += 64; // next 64 bits
+        for (i, idx) in inv_buf.set_indices_u32().enumerate() {
+            null_slice[i].write(idx);
         }
 
-        // Handle remaining bits at the tail (less than 64 bits)
-        let rem = len - base;
-        if rem > 0 {
-            let mut last = 0u64;
-            // Build a u64 mask from the remaining bits manually
-            for i in 0..rem {
-                if bitmap.is_valid(base + i) {
-                    last |= 1 << i;
-                }
-            }
-
-            // Compute valid and null masks within the remaining bits
-            let valid_mask = last;
-            let null_mask = (!last) & ((1 << rem) - 1);
-
-            // Write valid indices from tail mask
-            let mut v = valid_mask;
-            while v != 0 {
-                let tz = v.trailing_zeros() as usize;
-                valid_slice[vi].write((base + tz) as u32);
-                vi += 1;
-                v &= v - 1;
-            }
-
-            // Write null indices from tail mask
-            let mut z = null_mask;
-            while z != 0 {
-                let tz = z.trailing_zeros() as usize;
-                null_slice[ni].write((base + tz) as u32);
-                ni += 1;
-                z &= z - 1;
-            }
-        }
-
-        // SAFETY: We wrote exactly `vi` and `ni` elements, as pre-allocated.
-        valid.set_len(vi);
-        nulls.set_len(ni);
+        // Finalize lengths
+        valid.set_len(len - null_count);
+        nulls.set_len(null_count);
     }
 
     assert_eq!(valid.len(), len - null_count);
@@ -4800,5 +4730,78 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&sorted[0], &expected_struct_array);
+    }
+
+    /// A simple, correct but slower reference implementation.
+    fn naive_partition(array: &BooleanArray) -> (Vec<u32>, Vec<u32>) {
+        let len = array.len();
+        let mut valid = Vec::with_capacity(len);
+        let mut nulls = Vec::with_capacity(len);
+        for i in 0..len {
+            if array.is_valid(i) {
+                valid.push(i as u32);
+            } else {
+                nulls.push(i as u32);
+            }
+        }
+        (valid, nulls)
+    }
+
+    #[test]
+    fn fuzz_partition_validity() {
+        let mut rng = StdRng::seed_from_u64(0xF00D_CAFE);
+        for _ in 0..1_000 {
+            // random length up to 512
+            let len = rng.random_range(0..512);
+            // build a random BooleanArray with some nulls
+            let mut builder = BooleanBuilder::new();
+            for _ in 0..len {
+                if rng.random_bool(0.2) {
+                    builder.append_null();
+                } else {
+                    builder.append_value(rng.random_bool(0.5));
+                }
+            }
+            let array = builder.finish();
+
+            // run both implementations
+            let (v1, n1) = partition_validity(&array);
+            let (v2, n2) = naive_partition(&array);
+
+            assert_eq!(v1, v2, "valid mismatch on random array {array:?}");
+            assert_eq!(n1, n2, "null  mismatch on random array {array:?}");
+
+            // also test a sliced view
+            if len >= 4 {
+                let slice = array.slice(2, len - 4);
+                let slice = slice.as_any().downcast_ref::<BooleanArray>().unwrap();
+                let (sv1, sn1) = partition_validity(slice);
+                let (sv2, sn2) = naive_partition(slice);
+                assert_eq!(sv1, sv2, "valid mismatch on sliced array {slice:?}");
+                assert_eq!(sn1, sn2, "null  mismatch on sliced array {slice:?}");
+            }
+        }
+    }
+
+    // A few small deterministic checks
+    #[test]
+    fn test_partition_edge_cases() {
+        // all valid
+        let array = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
+        let (valid, nulls) = partition_validity(&array);
+        assert_eq!(valid, vec![0, 1, 2]);
+        assert!(nulls.is_empty());
+
+        // all null
+        let array = BooleanArray::from(vec![None, None, None]);
+        let (valid, nulls) = partition_validity(&array);
+        assert!(valid.is_empty());
+        assert_eq!(nulls, vec![0, 1, 2]);
+
+        // alternating
+        let array = BooleanArray::from(vec![Some(true), None, Some(true), None]);
+        let (valid, nulls) = partition_validity(&array);
+        assert_eq!(valid, vec![0, 2]);
+        assert_eq!(nulls, vec![1, 3]);
     }
 }

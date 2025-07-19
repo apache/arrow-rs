@@ -231,6 +231,63 @@ impl Iterator for BitIndexIterator<'_> {
     }
 }
 
+/// An iterator of u32 whose index in a provided bitmask is true
+/// Respects arbitrary offsets and slice lead/trail padding exactly like BitIndexIterator
+#[derive(Debug)]
+pub struct BitIndexU32Iterator<'a> {
+    curr: u64,
+    chunk_offset: i64,
+    iter: UnalignedBitChunkIterator<'a>,
+}
+
+impl<'a> BitIndexU32Iterator<'a> {
+    /// Create a new [BitIndexU32Iterator] from the provided buffer,
+    /// offset and len in bits.
+    pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
+        // Build the aligned chunks (including prefix/suffix masked)
+        let chunks = UnalignedBitChunk::new(buffer, offset, len);
+        let mut iter = chunks.iter();
+
+        // First 64-bit word (masked for lead padding), or 0 if empty
+        let curr = iter.next().unwrap_or(0);
+        // Negative lead padding ensures the first bit in curr maps to index 0
+        let chunk_offset = -(chunks.lead_padding() as i64);
+
+        Self {
+            curr,
+            chunk_offset,
+            iter,
+        }
+    }
+}
+
+impl<'a> Iterator for BitIndexU32Iterator<'a> {
+    type Item = u32;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<u32> {
+        loop {
+            if self.curr != 0 {
+                // Position of least-significant set bit
+                let tz = self.curr.trailing_zeros();
+                // Clear that bit
+                self.curr &= self.curr - 1;
+                // Return global index = chunk_offset + tz
+                return Some((self.chunk_offset + tz as i64) as u32);
+            }
+            // Advance to next 64-bit chunk
+            match self.iter.next() {
+                Some(next_chunk) => {
+                    // Move offset forward by 64 bits
+                    self.chunk_offset += 64;
+                    self.curr = next_chunk;
+                }
+                None => return None,
+            }
+        }
+    }
+}
+
 /// Calls the provided closure for each index in the provided null mask that is set,
 /// using an adaptive strategy based on the null count
 ///
@@ -322,5 +379,50 @@ mod tests {
     fn test_bit_iterator_bounds() {
         let mask = &[223, 23];
         BitIterator::new(mask, 17, 0);
+    }
+
+    #[test]
+    fn test_bit_index_u32_iterator_basic() {
+        let mask = &[0b00010010, 0b00100011]; // bits from LSB: [0,1,0,0,1,0,0,0] + [1,1,0,0,0,1,0,0]
+                                              // full mask = [0,1,0,0,1,0,0,0, 1,1,0,0,0,1,0,0]
+
+        // offset = 0, len = 16
+        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
+        assert_eq!(result, vec![1, 4, 8, 9, 13]);
+
+        // offset = 4, len = 8 -> starting at bit 4
+        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 4, 8).collect();
+        assert_eq!(result, vec![0, 4, 5]);
+
+        // offset = 10, len = 4 -> bits: [0,0,0,1]
+        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 10, 4).collect();
+        assert_eq!(result, vec![3]);
+
+        // empty input
+        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 0).collect();
+        assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_bit_index_u32_iterator_all_set() {
+        let mask = &[0xFF, 0xFF]; // 16 bits all set
+        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
+        assert_eq!(result, (0..16).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_bit_index_u32_iterator_none_set() {
+        let mask = &[0x00, 0x00]; // 16 bits all unset
+        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
+        assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_bit_index_u32_iterator_unaligned_offset() {
+        let mask = &[0b01101100, 0b10100000]; // 16 bits
+                                              // bits = [0,0,1,1,0,1,1,0, 0,0,0,1,0,1,0,0]
+                                              // offset = 2, len = 12 → bits = [1,1,0,1,1,0,0,0,1,0,1,0]
+        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 2, 12).collect();
+        assert_eq!(result, vec![0, 1, 3, 4, 8, 10]);
     }
 }
