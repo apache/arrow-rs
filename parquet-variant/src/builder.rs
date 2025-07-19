@@ -1324,16 +1324,16 @@ impl Drop for ObjectBuilder<'_> {
 ///
 /// Allows users to append values to a [`VariantBuilder`], [`ListBuilder`] or
 /// [`ObjectBuilder`]. using the same interface.
-pub trait VariantBuilderExt<'m, 'v> {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>);
+pub trait VariantBuilderExt {
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
     fn new_list(&mut self) -> ListBuilder;
 
     fn new_object(&mut self) -> ObjectBuilder;
 }
 
-impl<'m, 'v> VariantBuilderExt<'m, 'v> for ListBuilder<'_> {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+impl VariantBuilderExt for ListBuilder<'_> {
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
 
@@ -1346,8 +1346,8 @@ impl<'m, 'v> VariantBuilderExt<'m, 'v> for ListBuilder<'_> {
     }
 }
 
-impl<'m, 'v> VariantBuilderExt<'m, 'v> for VariantBuilder {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+impl VariantBuilderExt for VariantBuilder {
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
 

@@ -18,21 +18,27 @@
 //! Module for parsing JSON strings as Variant
 
 use arrow_schema::ArrowError;
-use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
+use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
 use serde_json::{Number, Value};
 
-/// Converts a JSON string to Variant using [`VariantBuilder`]. The resulting `value` and `metadata`
-/// buffers can be extracted using `builder.finish()`
+/// Converts a JSON string to Variant to a [`VariantBuilderExt`], such as
+/// [`VariantBuilder`].
+///
+/// The resulting `value` and `metadata` buffers can be
+/// extracted using `builder.finish()`
 ///
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
 /// * `variant_builder` - Object of type `VariantBuilder` used to build the vatiant from the JSON
 ///   string
 ///
+///
 /// # Returns
 ///
 /// * `Ok(())` if successful
 /// * `Err` with error details if the conversion fails
+///
+/// [`VariantBuilder`]: parquet_variant::VariantBuilder
 ///
 /// ```rust
 /// # use parquet_variant::VariantBuilder;
@@ -62,7 +68,7 @@ use serde_json::{Number, Value};
 /// assert_eq!(json_result, serde_json::to_string(&json_value)?);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn json_to_variant(json: &str, builder: &mut VariantBuilder) -> Result<(), ArrowError> {
+pub fn json_to_variant(json: &str, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
     let json: Value = serde_json::from_str(json)
         .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
 
@@ -70,7 +76,7 @@ pub fn json_to_variant(json: &str, builder: &mut VariantBuilder) -> Result<(), A
     Ok(())
 }
 
-fn build_json(json: &Value, builder: &mut VariantBuilder) -> Result<(), ArrowError> {
+fn build_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
     append_json(json, builder)?;
     Ok(())
 }
@@ -99,10 +105,7 @@ fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError
     }
 }
 
-fn append_json<'m, 'v>(
-    json: &'v Value,
-    builder: &mut impl VariantBuilderExt<'m, 'v>,
-) -> Result<(), ArrowError> {
+fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
     match json {
         Value::Null => builder.append_value(Variant::Null),
         Value::Bool(b) => builder.append_value(*b),
@@ -137,8 +140,8 @@ struct ObjectFieldBuilder<'o, 'v, 's> {
     builder: &'o mut ObjectBuilder<'v>,
 }
 
-impl<'m, 'v> VariantBuilderExt<'m, 'v> for ObjectFieldBuilder<'_, '_, '_> {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.builder.insert(self.key, value);
     }
 
