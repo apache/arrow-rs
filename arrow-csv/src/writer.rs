@@ -418,8 +418,8 @@ mod tests {
 
     use crate::ReaderBuilder;
     use arrow_array::builder::{
-        BinaryBuilder, Decimal128Builder, Decimal256Builder, FixedSizeBinaryBuilder,
-        LargeBinaryBuilder,
+        BinaryBuilder, Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
+        FixedSizeBinaryBuilder, LargeBinaryBuilder,
     };
     use arrow_array::types::*;
     use arrow_buffer::i256;
@@ -496,25 +496,38 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
     #[test]
     fn test_write_csv_decimal() {
         let schema = Schema::new(vec![
-            Field::new("c1", DataType::Decimal128(38, 6), true),
-            Field::new("c2", DataType::Decimal256(76, 6), true),
+            Field::new("c1", DataType::Decimal32(9, 6), true),
+            Field::new("c2", DataType::Decimal64(17, 6), true),
+            Field::new("c3", DataType::Decimal128(38, 6), true),
+            Field::new("c4", DataType::Decimal256(76, 6), true),
         ]);
 
-        let mut c1_builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
+        let mut c1_builder = Decimal32Builder::new().with_data_type(DataType::Decimal32(9, 6));
         c1_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
         let c1 = c1_builder.finish();
 
-        let mut c2_builder = Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
-        c2_builder.extend(vec![
+        let mut c2_builder = Decimal64Builder::new().with_data_type(DataType::Decimal64(17, 6));
+        c2_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
+        let c2 = c2_builder.finish();
+
+        let mut c3_builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(38, 6));
+        c3_builder.extend(vec![Some(-3335724), Some(2179404), None, Some(290472)]);
+        let c3 = c3_builder.finish();
+
+        let mut c4_builder = Decimal256Builder::new().with_data_type(DataType::Decimal256(76, 6));
+        c4_builder.extend(vec![
             Some(i256::from_i128(-3335724)),
             Some(i256::from_i128(2179404)),
             None,
             Some(i256::from_i128(290472)),
         ]);
-        let c2 = c2_builder.finish();
+        let c4 = c4_builder.finish();
 
-        let batch =
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)]).unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
+        )
+        .unwrap();
 
         let mut file = tempfile::tempfile().unwrap();
 
@@ -530,15 +543,15 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        let expected = r#"c1,c2
--3.335724,-3.335724
-2.179404,2.179404
-,
-0.290472,0.290472
--3.335724,-3.335724
-2.179404,2.179404
-,
-0.290472,0.290472
+        let expected = r#"c1,c2,c3,c4
+-3.335724,-3.335724,-3.335724,-3.335724
+2.179404,2.179404,2.179404,2.179404
+,,,
+0.290472,0.290472,0.290472,0.290472
+-3.335724,-3.335724,-3.335724,-3.335724
+2.179404,2.179404,2.179404,2.179404
+,,,
+0.290472,0.290472,0.290472,0.290472
 "#;
         assert_eq!(expected, str::from_utf8(&buffer).unwrap());
     }
