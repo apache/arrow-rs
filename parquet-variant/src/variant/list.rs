@@ -307,6 +307,7 @@ mod tests {
     use super::*;
     use crate::VariantBuilder;
     use std::iter::repeat_n;
+    use std::ops::Range;
 
     #[test]
     fn test_variant_list_simple() {
@@ -626,5 +627,107 @@ mod tests {
             let item_str = item.as_string().unwrap();
             assert_eq!(expected_list.get(i).unwrap(), item_str);
         }
+    }
+
+    #[test]
+    fn test_variant_list_equality() {
+        // Create two lists with the same values (0..10)
+        let (metadata1, value1) = make_listi32(0..10);
+        let list1 = Variant::new(&metadata1, &value1);
+        let (metadata2, value2) = make_listi32(0..10);
+        let list2 = Variant::new(&metadata2, &value2);
+        // They should be equal
+        assert_eq!(list1, list2);
+    }
+
+    #[test]
+    fn test_variant_list_equality_different_length() {
+        // Create two lists with different lengths
+        let (metadata1, value1) = make_listi32(0..10);
+        let list1 = Variant::new(&metadata1, &value1);
+        let (metadata2, value2) = make_listi32(0..5);
+        let list2 = Variant::new(&metadata2, &value2);
+        // They should not be equal
+        assert_ne!(list1, list2);
+    }
+
+    #[test]
+    fn test_variant_list_equality_different_values() {
+        // Create two lists with different values
+        let (metadata1, value1) = make_listi32(0..10);
+        let list1 = Variant::new(&metadata1, &value1);
+        let (metadata2, value2) = make_listi32(5..15);
+        let list2 = Variant::new(&metadata2, &value2);
+        // They should not be equal
+        assert_ne!(list1, list2);
+    }
+
+    #[test]
+    fn test_variant_list_equality_different_types() {
+        // Create two lists with different types
+        let (metadata1, value1) = make_listi32(0i32..10i32);
+        let list1 = Variant::new(&metadata1, &value1);
+        let (metadata2, value2) = make_listi64(0..10);
+        let list2 = Variant::new(&metadata2, &value2);
+        // They should not be equal due to type mismatch
+        assert_ne!(list1, list2);
+    }
+
+    #[test]
+    fn test_variant_list_equality_slices() {
+        // Make an object like this and make sure equality works
+        // when the lists are sub fields
+        //
+        // {
+        //   "list1": [0, 1, 2, ..., 9],
+        //   "list2": [0, 1, 2, ..., 9],
+        //   "list3": [10, 11, 12, ..., 19],
+        //  }
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut object_builder = builder.new_object();
+            // list1 (0..10)
+            let (metadata1, value1) = make_listi32(0i32..10i32);
+            object_builder.insert("list1", Variant::new(&metadata1, &value1));
+
+            // list2 (0..10)
+            let (metadata2, value2) = make_listi32(0i32..10i32);
+            object_builder.insert("list2", Variant::new(&metadata2, &value2));
+
+            // list3 (10..20)
+            let (metadata3, value3) = make_listi32(10i32..20i32);
+            object_builder.insert("list3", Variant::new(&metadata3, &value3));
+            object_builder.finish().unwrap();
+            builder.finish()
+        };
+
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let object = variant.as_object().unwrap();
+        // Check that list1 and list2 are equal
+        assert_eq!(object.get("list1").unwrap(), object.get("list2").unwrap());
+        // Check that list1 and list3 are not equal
+        assert_ne!(object.get("list1").unwrap(), object.get("list3").unwrap());
+    }
+
+    /// return metadata/value for a simple variant list with values in a range
+    fn make_listi32(range: Range<i32>) -> (Vec<u8>, Vec<u8>) {
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        for i in range {
+            list_builder.append_value(i);
+        }
+        list_builder.finish();
+        variant_builder.finish()
+    }
+
+    /// return metadata/value for a simple variant list with values in a range
+    fn make_listi64(range: Range<i64>) -> (Vec<u8>, Vec<u8>) {
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+        for i in range {
+            list_builder.append_value(i);
+        }
+        list_builder.finish();
+        variant_builder.finish()
     }
 }

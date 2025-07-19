@@ -225,7 +225,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
             if self.metadata.is_sorted() {
                 // Since the metadata dictionary has unique and sorted field names, we can also guarantee this object's field names
                 // are lexicographically sorted by their field id ordering
-                let dictionary_size = self.metadata.dictionary_size();
+                let dictionary_size = self.metadata.len();
 
                 if let Some(mut current_id) = field_ids_iter.next() {
                     for next_id in field_ids_iter {
@@ -551,6 +551,19 @@ mod tests {
 
         assert_eq!(variant_obj.field_name(2), Some("name"));
         assert_eq!(variant_obj.field(2).unwrap().as_string(), Some("hello"));
+    }
+
+    #[test]
+    fn test_variant_object_empty_fields() {
+        let mut builder = VariantBuilder::new();
+        builder.new_object().with_field("", 42).finish().unwrap();
+        let (metadata, value) = builder.finish();
+
+        // Resulting object is valid and has a single empty field
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let variant_obj = variant.as_object().unwrap();
+        assert_eq!(variant_obj.len(), 1);
+        assert_eq!(variant_obj.get(""), Some(Variant::from(42)));
     }
 
     #[test]
