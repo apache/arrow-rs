@@ -383,46 +383,107 @@ mod tests {
 
     #[test]
     fn test_bit_index_u32_iterator_basic() {
-        let mask = &[0b00010010, 0b00100011]; // bits from LSB: [0,1,0,0,1,0,0,0] + [1,1,0,0,0,1,0,0]
-                                              // full mask = [0,1,0,0,1,0,0,0, 1,1,0,0,0,1,0,0]
+        let mask = &[0b00010010, 0b00100011];
 
-        // offset = 0, len = 16
         let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
-        assert_eq!(result, vec![1, 4, 8, 9, 13]);
+        let expected: Vec<u32> = BitIndexIterator::new(mask, 0, 16)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
 
-        // offset = 4, len = 8 -> starting at bit 4
         let result: Vec<u32> = BitIndexU32Iterator::new(mask, 4, 8).collect();
-        assert_eq!(result, vec![0, 4, 5]);
+        let expected: Vec<u32> = BitIndexIterator::new(mask, 4, 8)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
 
-        // offset = 10, len = 4 -> bits: [0,0,0,1]
         let result: Vec<u32> = BitIndexU32Iterator::new(mask, 10, 4).collect();
-        assert_eq!(result, vec![3]);
+        let expected: Vec<u32> = BitIndexIterator::new(mask, 10, 4)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
 
-        // empty input
         let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 0).collect();
-        assert_eq!(result, vec![]);
+        let expected: Vec<u32> = BitIndexIterator::new(mask, 0, 0)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
     }
 
     #[test]
     fn test_bit_index_u32_iterator_all_set() {
-        let mask = &[0xFF, 0xFF]; // 16 bits all set
+        let mask = &[0xFF, 0xFF];
         let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
-        assert_eq!(result, (0..16).collect::<Vec<_>>());
+        let expected: Vec<u32> = BitIndexIterator::new(mask, 0, 16)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
     }
 
     #[test]
     fn test_bit_index_u32_iterator_none_set() {
-        let mask = &[0x00, 0x00]; // 16 bits all unset
+        let mask = &[0x00, 0x00];
         let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
-        assert_eq!(result, vec![]);
+        let expected: Vec<u32> = BitIndexIterator::new(mask, 0, 16)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
     }
 
     #[test]
-    fn test_bit_index_u32_iterator_unaligned_offset() {
-        let mask = &[0b01101100, 0b10100000]; // 16 bits
-                                              // bits = [0,0,1,1,0,1,1,0, 0,0,0,1,0,1,0,0]
-                                              // offset = 2, len = 12 → bits = [1,1,0,1,1,0,0,0,1,0,1,0]
-        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 2, 12).collect();
-        assert_eq!(result, vec![0, 1, 3, 4, 8, 10]);
+    fn test_bit_index_u32_cross_chunk() {
+        let mut buf = vec![0u8; 16];
+        for bit in 60..68 {
+            let byte = (bit / 8) as usize;
+            let bit_in_byte = bit % 8;
+            buf[byte] |= 1 << bit_in_byte;
+        }
+        let offset = 58;
+        let len = 10;
+
+        let result: Vec<u32> = BitIndexU32Iterator::new(&buf, offset, len).collect();
+        let expected: Vec<u32> = BitIndexIterator::new(&buf, offset, len)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_bit_index_u32_unaligned_offset() {
+        let mask = &[0b0110_1100, 0b1010_0000];
+        let offset = 2;
+        let len = 12;
+
+        let result: Vec<u32> = BitIndexU32Iterator::new(mask, offset, len).collect();
+        let expected: Vec<u32> = BitIndexIterator::new(mask, offset, len)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_bit_index_u32_long_all_set() {
+        let len = 200;
+        let num_bytes = len / 8 + if len % 8 != 0 { 1 } else { 0 };
+        let bytes = vec![0xFFu8; num_bytes];
+
+        let result: Vec<u32> = BitIndexU32Iterator::new(&bytes, 0, len).collect();
+        let expected: Vec<u32> = BitIndexIterator::new(&bytes, 0, len)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_bit_index_u32_none_set() {
+        let len = 50;
+        let num_bytes = len / 8 + if len % 8 != 0 { 1 } else { 0 };
+        let bytes = vec![0u8; num_bytes];
+
+        let result: Vec<u32> = BitIndexU32Iterator::new(&bytes, 0, len).collect();
+        let expected: Vec<u32> = BitIndexIterator::new(&bytes, 0, len)
+            .map(|i| i as u32)
+            .collect();
+        assert_eq!(result, expected);
     }
 }
