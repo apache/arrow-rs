@@ -19,7 +19,7 @@
 
 use crate::{shredding::VariantSchema, VariantArray};
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
-use arrow_schema::{ArrowError, DataType, Field, Fields};
+use arrow_schema::{ArrowError, Fields};
 use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use std::sync::Arc;
 
@@ -119,7 +119,7 @@ impl VariantArrayBuilder {
 
         // The build the final struct array
         let inner = StructArray::new(
-            schema.inner(),
+            schema.into_inner(),
             vec![
                 Arc::new(metadata_array) as ArrayRef,
                 Arc::new(value_array) as ArrayRef,
@@ -358,6 +358,7 @@ fn binary_view_array_from_buffers(
 mod test {
     use super::*;
     use arrow::array::Array;
+    use arrow_schema::{DataType, Field};
 
     /// Test that both the metadata and value buffers are non nullable
     #[test]
@@ -379,7 +380,7 @@ mod test {
 
         // the metadata and value fields of non shredded variants should not be null
         assert!(variant_array.metadata_field().nulls().is_none());
-        assert!(variant_array.value_field().nulls().is_none());
+        assert!(variant_array.value_field().unwrap().nulls().is_none());
         let DataType::Struct(fields) = variant_array.data_type() else {
             panic!("Expected VariantArray to have Struct data type");
         };

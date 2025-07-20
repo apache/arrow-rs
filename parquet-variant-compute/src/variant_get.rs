@@ -49,7 +49,7 @@ pub fn variant_get(
         )));
     }
 
-    let mut builder = VariantArrayBuilder::try_new(variant_array.len(), shredded_schema).unwrap();
+    let mut builder = VariantArrayBuilder::try_new(variant_array.len(), shredded_schema)?;
     for i in 0..variant_array.len() {
         let new_variant = variant_array.value(i);
         // TODO: perf?

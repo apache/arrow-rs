@@ -22,7 +22,7 @@ pub const METADATA: &str = "metadata";
 pub const VALUE: &str = "value";
 pub const TYPED_VALUE: &str = "typed_value";
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ValueSchema {
     MissingValue,
     Value(usize),
@@ -33,7 +33,7 @@ pub enum ValueSchema {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VariantSchema {
     inner: Fields,
 
@@ -54,7 +54,7 @@ impl VariantSchema {
         let (metadata_idx, metadata_field) = fields
             .iter()
             .enumerate()
-            .find(|(i, f)| f.name() == METADATA)
+            .find(|(_, f)| f.name() == METADATA)
             .ok_or_else(|| {
                 ArrowError::InvalidArgumentError(
                     "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
@@ -165,32 +165,49 @@ impl VariantSchema {
         })
     }
 
-    pub fn inner(self) -> Fields {
+    pub fn inner(&self) -> &Fields {
+        &self.inner
+    }
+
+    pub fn into_inner(self) -> Fields {
         self.inner
+    }
+
+    pub fn metadata_idx(&self) -> usize {
+        self.metadata_idx
     }
 
     pub fn metadata(&self) -> &FieldRef {
         self.inner.get(self.metadata_idx).unwrap()
     }
 
-    pub fn value(&self) -> Option<&FieldRef> {
+    pub fn value_idx(&self) -> Option<usize> {
         match self.value_schema {
             ValueSchema::MissingValue => None,
             ValueSchema::ShreddedValue(_) => None,
-            ValueSchema::Value(value_idx) => self.inner.get(value_idx),
-            ValueSchema::PartiallyShredded { value_idx, .. } => self.inner.get(value_idx),
+            ValueSchema::Value(value_idx) => Some(value_idx),
+            ValueSchema::PartiallyShredded { value_idx, .. } => Some(value_idx),
+        }
+    }
+
+    pub fn value(&self) -> Option<&FieldRef> {
+        self.value_idx().map(|i| self.inner.get(i).unwrap())
+    }
+
+    pub fn shredded_value_idx(&self) -> Option<usize> {
+        match self.value_schema {
+            ValueSchema::MissingValue => None,
+            ValueSchema::Value(_) => None,
+            ValueSchema::ShreddedValue(shredded_idx) => Some(shredded_idx),
+            ValueSchema::PartiallyShredded {
+                shredded_value_idx, ..
+            } => Some(shredded_value_idx),
         }
     }
 
     pub fn shredded_value(&self) -> Option<&FieldRef> {
-        match self.value_schema {
-            ValueSchema::MissingValue => None,
-            ValueSchema::Value(_) => None,
-            ValueSchema::ShreddedValue(shredded_idx) => self.inner.get(shredded_idx),
-            ValueSchema::PartiallyShredded {
-                shredded_value_idx, ..
-            } => self.inner.get(shredded_value_idx),
-        }
+        self.shredded_value_idx()
+            .map(|i| self.inner.get(i).unwrap())
     }
 }
 
