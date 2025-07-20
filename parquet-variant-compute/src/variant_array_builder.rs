@@ -48,9 +48,10 @@ use std::sync::Arc;
 /// // append a pre-constructed metadata and value buffers
 /// let (metadata, value) = {
 ///   let mut vb = VariantBuilder::new();
-///   let mut obj = vb.new_object();
-///   obj.insert("foo", "bar");
-///   obj.finish().unwrap();
+///   vb.new_object()
+///     .with_field("foo", "bar")
+///     .finish()
+///     .unwrap();
 ///   vb.finish()
 /// };
 /// builder.append_variant_buffers(&metadata, &value);

@@ -449,13 +449,13 @@ mod tests {
 
     fn create_test_object() -> (Vec<u8>, Vec<u8>) {
         let mut builder = VariantBuilder::new();
-        {
-            let mut obj = builder.new_object();
-            obj.insert("name", "Alice");
-            obj.insert("age", 30i32);
-            obj.insert("city", "NYC");
-            obj.finish().unwrap();
-        }
+        builder
+            .new_object()
+            .with_field("name", "Alice")
+            .with_field("age", 30i32)
+            .with_field("city", "NYC")
+            .finish()
+            .unwrap();
         builder.finish()
     }
 

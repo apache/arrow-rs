@@ -394,24 +394,24 @@ mod test {
 
         // Create variant 1: {"name": "Alice", "age": 30}
         let mut builder1 = VariantBuilder::new();
-        {
-            let mut obj = builder1.new_object();
-            obj.insert("name", "Alice");
-            obj.insert("age", 30i32);
-            obj.finish().unwrap();
-        }
+        builder1
+            .new_object()
+            .with_field("name", "Alice")
+            .with_field("age", 30i32)
+            .finish()
+            .unwrap();
         let (metadata1, value1) = builder1.finish();
         builder.append_variant_buffers(&metadata1, &value1);
 
         // Create variant 2: {"name": "Bob", "age": 25, "city": "NYC"}
         let mut builder2 = VariantBuilder::new();
-        {
-            let mut obj = builder2.new_object();
-            obj.insert("name", "Bob");
-            obj.insert("age", 25i32);
-            obj.insert("city", "NYC");
-            obj.finish().unwrap();
-        }
+        builder2
+            .new_object()
+            .with_field("name", "Bob")
+            .with_field("age", 25i32)
+            .with_field("city", "NYC")
+            .finish()
+            .unwrap();
         let (metadata2, value2) = builder2.finish();
         builder.append_variant_buffers(&metadata2, &value2);
 
