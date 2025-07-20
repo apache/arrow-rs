@@ -413,13 +413,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 // checks whether the field values are equal -- regardless of their order
 impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
     fn eq(&self, other: &Self) -> bool {
-        let mut is_equal = self.metadata == other.metadata
-            && self.header == other.header
-            && self.num_elements == other.num_elements
-            && self.first_field_offset_byte == other.first_field_offset_byte
-            && self.first_value_byte == other.first_value_byte;
+        let mut is_equal = self.num_elements == other.num_elements;
 
-        // value validation
         let other_fields: HashMap<&str, Variant> = HashMap::from_iter(other.iter());
 
         for (field_name, variant) in self.iter() {
@@ -938,14 +933,14 @@ mod tests {
 
         o.finish().unwrap();
 
-        let (m, v) = b.finish();
+        let (meta1, value1) = b.finish();
 
-        let v1 = Variant::try_new(&m, &v).unwrap();
+        let v1 = Variant::try_new(&meta1, &value1).unwrap();
         // v1 is sorted
         assert!(v1.metadata().unwrap().is_sorted());
 
         // create a second object with different insertion order
-        let mut b = VariantBuilder::new();
+        let mut b = VariantBuilder::new().with_field_names(["d", "c", "b", "a"].into_iter());
         let mut o = b.new_object();
 
         o.insert("b", 4.3);
@@ -953,11 +948,14 @@ mod tests {
 
         o.finish().unwrap();
 
-        let (m, v) = b.finish();
+        let (meta2, value2) = b.finish();
 
-        let v2 = Variant::try_new(&m, &v).unwrap();
+        let v2 = Variant::try_new(&meta2, &value2).unwrap();
         // v2 is not sorted
         assert!(!v2.metadata().unwrap().is_sorted());
+
+        // object metadata are not the same
+        assert_ne!(v1.metadata(), v2.metadata());
 
         // objects are still logically equal
         assert_eq!(v1, v2);
@@ -975,10 +973,6 @@ mod tests {
         o.finish().unwrap();
 
         let (m, v) = b.finish();
-
-        let variant_metadata = VariantMetadata::new(&m);
-
-        dbg!(variant_metadata.iter().collect::<Vec<_>>());
 
         let v1 = Variant::try_new(&m, &v).unwrap();
 
@@ -998,12 +992,7 @@ mod tests {
         let m = VariantMetadata::try_new(&metadata_bytes).unwrap();
         assert!(!m.is_sorted());
 
-        dbg!(m.iter().collect::<Vec<_>>());
         let v2 = Variant::new_with_metadata(m, &v);
-
-        dbg!(v1.as_object().unwrap().iter().collect::<Vec<_>>());
-        dbg!(v2.as_object().unwrap().iter().collect::<Vec<_>>());
-
         assert_eq!(v1, v2);
     }
 }

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
-
 use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
 
@@ -127,7 +125,7 @@ impl VariantMetadataHeader {
 ///
 /// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantMetadata<'m> {
     pub(crate) bytes: &'m [u8],
     header: VariantMetadataHeader,
@@ -332,23 +330,6 @@ impl<'m> VariantMetadata<'m> {
     pub fn iter(&self) -> impl Iterator<Item = &'m str> + '_ {
         self.iter_try()
             .map(|result| result.expect("Invalid metadata dictionary entry"))
-    }
-}
-
-// Metadata dictionaries can be in any order per the spec to allow flexible Variant construction
-// This comparison checks for field name presence in both metadata instances rather than raw byte equality
-impl<'m> PartialEq for VariantMetadata<'m> {
-    fn eq(&self, other: &Self) -> bool {
-        self.is_empty() == other.is_empty()
-            && if self.is_sorted() && other.is_sorted() {
-                self.len() == other.len() && self.iter().eq(other.iter())
-            } else {
-                // can't guarantee neither field names are unique
-                let self_field_names: HashSet<&'m str> = HashSet::from_iter(self.iter());
-                let other_field_names: HashSet<&'m str> = HashSet::from_iter(other.iter());
-
-                self_field_names == other_field_names
-            }
     }
 }
 
@@ -586,42 +567,7 @@ mod tests {
         let m2 = VariantMetadata::try_new(&metadata_bytes).unwrap();
         assert!(!m2.is_sorted());
 
-        assert_eq!(m1, m2);
-    }
-
-    #[test]
-    fn test_compare_sorted_dictionary_with_unsorted_dictionary2() {
-        // create a sorted object
-        let mut b = VariantBuilder::new();
-        let mut o = b.new_object();
-
-        o.insert("a", false);
-        o.insert("b", false);
-
-        o.finish().unwrap();
-
-        let (m, _) = b.finish();
-
-        let m1 = VariantMetadata::new(&m);
-        assert!(m1.is_sorted());
-
-        // Create metadata with an unsorted dictionary (field names are "b", "b", "a")
-        // Since field names are not unique nor lexicographically ordered, it is considered not sorted.
-        let metadata_bytes = vec![
-            0b0000_0001,
-            3, // dictionary size
-            0, // "b"
-            1, // "b"
-            2, // "a"
-            3,
-            b'b',
-            b'b',
-            b'a',
-        ];
-        let m2 = VariantMetadata::try_new(&metadata_bytes).unwrap();
-        assert!(!m2.is_sorted());
-
-        assert_eq!(m1, m2);
+        assert_ne!(m1, m2);
     }
 
     #[test]
@@ -641,36 +587,5 @@ mod tests {
         let m2 = VariantMetadata::new(&m);
 
         assert_eq!(m1, m2);
-    }
-
-    #[test]
-    fn test_compare_sorted_dictionary_with_sorted_dictionary2() {
-        // create a sorted object
-        let mut b = VariantBuilder::new();
-        let mut o = b.new_object();
-
-        o.insert("a", false);
-        o.insert("b", false);
-
-        o.finish().unwrap();
-
-        let (m, _) = b.finish();
-
-        let m1 = VariantMetadata::new(&m);
-
-        // create a sorted object with different field names
-        let mut b = VariantBuilder::new();
-        let mut o = b.new_object();
-
-        o.insert("c", false);
-        o.insert("d", false);
-
-        o.finish().unwrap();
-
-        let (m, _) = b.finish();
-
-        let m2 = VariantMetadata::new(&m);
-
-        assert_ne!(m1, m2);
     }
 }
