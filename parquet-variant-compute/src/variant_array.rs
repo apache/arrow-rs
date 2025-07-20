@@ -24,8 +24,6 @@ use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::shredding::validate_shredded_schema;
-
 /// An array of Parquet [`Variant`] values
 ///
 /// A [`VariantArray`] wraps an Arrow [`StructArray`] that stores the underlying
@@ -95,8 +93,6 @@ impl VariantArray {
                 "Invalid VariantArray: requires StructArray as input".to_string(),
             ));
         };
-
-        validate_shredded_schema(inner.fields())?;
 
         // todo, remove this since we already do it in validate_shredded_schema
         let Some(metadata_field) = VariantArray::find_metadata_field(inner) else {

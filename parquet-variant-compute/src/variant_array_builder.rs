@@ -17,7 +17,7 @@
 
 //! [`VariantArrayBuilder`] implementation
 
-use crate::{shredding::validate_shredded_schema, VariantArray};
+use crate::{shredding::VariantSchema, VariantArray};
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
@@ -87,23 +87,18 @@ pub struct VariantArrayBuilder {
     /// (offset, len) pairs for locations of values in the buffer
     value_locations: Vec<(usize, usize)>,
     /// The fields of the final `StructArray`
-    ///
-    /// TODO: 1) Add extension type metadata
-    /// TODO: 2) Add support for shredding
-    fields: Fields,
+    schema: VariantSchema,
 }
 
 impl VariantArrayBuilder {
     pub fn try_new(row_capacity: usize, schema: Fields) -> Result<Self, ArrowError> {
-        validate_shredded_schema(&schema)?;
-
         Ok(Self {
             nulls: NullBufferBuilder::new(row_capacity),
             metadata_buffer: Vec::new(), // todo allocation capacity
             metadata_locations: Vec::with_capacity(row_capacity),
             value_buffer: Vec::new(),
             value_locations: Vec::with_capacity(row_capacity),
-            fields: schema,
+            schema: VariantSchema::try_new(schema)?,
         })
     }
 
@@ -115,7 +110,7 @@ impl VariantArrayBuilder {
             metadata_locations,
             value_buffer,
             value_locations,
-            fields,
+            schema,
         } = self;
 
         let metadata_array = binary_view_array_from_buffers(metadata_buffer, metadata_locations);
@@ -124,7 +119,7 @@ impl VariantArrayBuilder {
 
         // The build the final struct array
         let inner = StructArray::new(
-            fields,
+            schema.inner(),
             vec![
                 Arc::new(metadata_array) as ArrayRef,
                 Arc::new(value_array) as ArrayRef,
