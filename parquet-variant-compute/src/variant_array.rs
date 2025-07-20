@@ -155,66 +155,6 @@ impl VariantArray {
     fn find_value_field(array: &StructArray) -> Option<ArrayRef> {
         array.column_by_name("value").cloned()
     }
-    /// Extract a field from the variant at the specified row using a path.
-    ///
-    /// This method provides direct access to nested fields without reconstructing
-    /// the entire variant, which is critical for performance with shredded variants.
-    ///
-    /// # Arguments
-    /// * `index` - The row index in the array
-    /// * `path` - The path to the field to extract
-    ///
-    /// # Returns
-    /// * `Some(Variant)` if the field exists at the specified path
-    /// * `None` if the field doesn't exist or the path is invalid
-    ///
-    /// # Example
-    /// ```
-    /// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantPath};
-    /// # use parquet_variant::VariantBuilder;
-    /// # let mut builder = VariantArrayBuilder::new(1);
-    /// # let mut variant_builder = VariantBuilder::new();
-    /// # let mut obj = variant_builder.new_object();
-    /// # obj.insert("name", "Alice");
-    /// # obj.finish().unwrap();
-    /// # let (metadata, value) = variant_builder.finish();
-    /// # builder.append_variant_buffers(&metadata, &value);
-    /// # let variant_array = builder.build();
-    /// let path = VariantPath::field("name");
-    /// let name_variant = variant_array.get_path(0, &path);
-    /// ```
-    pub fn get_path(&self, index: usize, path: &VariantPath) -> Option<Variant> {
-        if path.is_empty() {
-            return Some(self.value(index));
-        }
-
-        // Start with the root variant
-        let mut current = self.value(index);
-        
-        Ok(Self { inner })
-    }
-
-    /// Returns a reference to the underlying [`StructArray`].
-    pub fn inner(&self) -> &StructArray {
-        &self.inner
-    }
-
-    /// Returns the inner [`StructArray`], consuming self
-    pub fn into_inner(self) -> StructArray {
-        self.inner
-    }
-
-    /// Return the [`Variant`] instance stored at the given row
-    ///
-    /// Panics if the index is out of bounds.
-    ///
-    /// Note: Does not do deep validation of the [`Variant`], so it is up to the
-    /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn value(&self, index: usize) -> Variant {
-        let metadata = self.metadata_field().as_binary_view().value(index);
-        let value = self.value_field().as_binary_view().value(index);
-        Variant::new(metadata, value)
-    }
 
     /// Return a reference to the metadata field of the [`StructArray`]
     pub fn metadata_field(&self) -> &ArrayRef {
@@ -238,51 +178,6 @@ impl VariantArray {
         self.value_field().as_binary_view().value(index).as_ref()
     }
 
-    /// Get value at a specific path for the variant at the given index
-    ///
-    /// Uses high-level Variant API for convenience. Returns a Variant object that can be
-    /// directly used with standard variant operations.
-    pub fn get_path(
-        &self,
-        index: usize,
-        path: &crate::field_operations::VariantPath,
-    ) -> Option<parquet_variant::Variant> {
-        if index >= self.len() || self.is_null(index) {
-            return None;
-        }
-
-        let mut current_variant = self.value(index);
-
-        for element in path.elements() {
-            match element {
-                crate::field_operations::VariantPathElement::Field(field_name) => {
-                    current_variant = current_variant.get_object_field(field_name)?;
-                }
-                crate::field_operations::VariantPathElement::Index(idx) => {
-                    current_variant = current_variant.get_list_element(*idx)?;
-                }
-            }
-        }
-
-        Some(current_variant)
-    }
-
-    /// Get values at multiple paths for the variant at the given index
-    ///
-    /// Convenience method that applies `get_path()` to multiple paths at once.
-    /// Useful for extracting multiple fields from a single variant row.
-    pub fn get_paths(
-        &self,
-        index: usize,
-        paths: &[crate::field_operations::VariantPath],
-    ) -> Vec<Option<parquet_variant::Variant>> {
-        let mut results = Vec::new();
-        for path in paths {
-            results.push(self.get_path(index, path));
-        }
-        results
-    }
-
     /// Get the field names for an object at the given index
     pub fn get_field_names(&self, index: usize) -> Vec<String> {
         if index >= self.len() {
@@ -295,45 +190,18 @@ impl VariantArray {
 
         let variant = self.value(index);
         if let Some(obj) = variant.as_object() {
-            let mut paths = Vec::new();
+            let mut field_names = Vec::new();
             for i in 0..obj.len() {
                 if let Some(field_name) = obj.field_name(i) {
-                    paths.push(field_name.to_string());
+                    field_names.push(field_name.to_string());
                 }
             }
-            paths
+            field_names
         } else {
             vec![]
         }
     }
 
-    /// Extract field values by path from all variants in the array
-    ///
-    /// Applies `get_path()` to a single path across all rows in the array.
-    /// Useful for extracting a column of values from nested variant data.
-    pub fn extract_field_by_path(
-        &self,
-        path: &crate::field_operations::VariantPath,
-    ) -> Vec<Option<parquet_variant::Variant>> {
-        let mut results = Vec::new();
-        for i in 0..self.len() {
-            results.push(self.get_path(i, path));
-        }
-        results
-    }
-
-    /// Return a reference to the metadata field of the [`StructArray`]
-    pub fn metadata_field(&self) -> &ArrayRef {
-        // spec says fields order is not guaranteed, so we search by name
-        &self.metadata_ref
-    }
-
-    /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> &ArrayRef {
-        // spec says fields order is not guaranteed, so we search by name
-        &self.value_ref
-    }
-    
     /// Create a new VariantArray with a field removed from all variants
     pub fn with_field_removed(&self, field_name: &str) -> Result<Self, ArrowError> {
         let mut builder = crate::variant_array_builder::VariantArrayBuilder::new(self.len());
@@ -598,20 +466,8 @@ mod test {
         assert!(paths2.contains(&"city".to_string()));
     }
 
-    #[test]
-    fn test_get_path() {
-        let array = create_test_variant_array();
-
-        // Test field access
-        let name_path = crate::field_operations::VariantPath::field("name");
-        let alice_name = array.get_path(0, &name_path).unwrap();
-        assert_eq!(alice_name.as_string(), Some("Alice"));
-
-        // Test non-existent field
-        let nonexistent_path = crate::field_operations::VariantPath::field("nonexistent");
-        let result = array.get_path(0, &nonexistent_path);
-        assert!(result.is_none());
-    }
+    // Note: test_get_path was removed as it tested the duplicate VariantPath implementation
+    // Use the official parquet_variant::VariantPath with variant_get functionality instead
 
     #[test]
     fn test_with_field_removed() {

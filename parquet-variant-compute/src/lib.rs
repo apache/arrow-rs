@@ -22,13 +22,14 @@ pub mod from_json;
 pub mod to_json;
 pub mod variant_array;
 pub mod variant_array_builder;
+pub mod variant_get;
 pub mod variant_parser;
 
-pub use field_operations::{VariantPath, VariantPathElement};
 pub use from_json::batch_json_string_to_variant;
 pub use to_json::batch_variant_to_json_string;
 pub use variant_array::VariantArray;
 pub use variant_array_builder::VariantArrayBuilder;
+pub use variant_get::{variant_get, GetOptions};
 pub use variant_parser::{
     ArrayHeader, ObjectHeader, PrimitiveType, ShortStringHeader, VariantBasicType, VariantType,
 };

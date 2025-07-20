@@ -29,9 +29,6 @@ keywords = ["arrow", "parquet", "variant"]
 edition = { workspace = true }
 rust-version = { workspace = true }
 
-[lints.rust]
-unknown_lints = "allow"
-
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }

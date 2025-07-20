@@ -19,48 +19,8 @@
 
 use crate::variant_parser::{ObjectHeader, ObjectOffsets, VariantParser};
 use arrow::error::ArrowError;
-use parquet_variant::VariantMetadata;
+use parquet_variant::{VariantMetadata, VariantPath, VariantPathElement};
 use std::collections::HashSet;
-
-/// Represents a path element in a variant path
-#[derive(Debug, Clone)]
-pub enum VariantPathElement {
-    Field(String),
-    Index(usize),
-}
-
-/// Represents a path through a variant object/array structure
-#[derive(Debug, Clone)]
-pub struct VariantPath {
-    elements: Vec<VariantPathElement>,
-}
-
-impl VariantPath {
-    /// Create a new path starting with a field
-    pub fn field(name: &str) -> Self {
-        Self {
-            elements: vec![VariantPathElement::Field(name.to_string())],
-        }
-    }
-
-    /// Add a field to the path
-    pub fn push_field(mut self, name: &str) -> Self {
-        self.elements
-            .push(VariantPathElement::Field(name.to_string()));
-        self
-    }
-
-    /// Add an index to the path
-    pub fn push_index(mut self, index: usize) -> Self {
-        self.elements.push(VariantPathElement::Index(index));
-        self
-    }
-
-    /// Get the elements of the path
-    pub fn elements(&self) -> &[VariantPathElement] {
-        &self.elements
-    }
-}
 
 /// Field operations for variant objects
 pub struct FieldOperations;
@@ -351,20 +311,20 @@ impl FieldOperations {
     ) -> Result<Option<Vec<u8>>, ArrowError> {
         let mut current_value = value_bytes.to_vec();
 
-        for element in path.elements() {
+        for element in path.iter() {
             match element {
-                VariantPathElement::Field(field_name) => {
+                VariantPathElement::Field { name } => {
                     if let Some(field_bytes) =
-                        Self::get_field_bytes(metadata_bytes, &current_value, field_name)?
+                        Self::get_field_bytes(metadata_bytes, &current_value, name)?
                     {
                         current_value = field_bytes;
                     } else {
                         return Ok(None);
                     }
                 }
-                VariantPathElement::Index(idx) => {
+                VariantPathElement::Index { index } => {
                     if let Some(element_bytes) =
-                        Self::get_array_element_bytes(metadata_bytes, &current_value, *idx)?
+                        Self::get_array_element_bytes(metadata_bytes, &current_value, *index)?
                     {
                         current_value = element_bytes;
                     } else {
