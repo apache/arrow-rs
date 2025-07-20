@@ -584,6 +584,21 @@ impl ParentState<'_> {
             | ParentState::List { buffer, .. } => buffer.offset(),
         }
     }
+
+    // return the current index of the undelying metadata buffer at the time of calling this method.
+    fn metadata_current_offset(&self) -> usize {
+        match self {
+            ParentState::Variant {
+                metadata_builder, ..
+            }
+            | ParentState::Object {
+                metadata_builder, ..
+            }
+            | ParentState::List {
+                metadata_builder, ..
+            } => metadata_builder.metadata_buffer.len(),
+        }
+    }
 }
 
 /// Top level builder for [`Variant`] values
@@ -1065,6 +1080,9 @@ pub struct ObjectBuilder<'a> {
     fields: IndexMap<u32, usize>, // (field_id, offset)
     /// the starting offset in the parent's buffer where this object starts
     object_start_offset: usize,
+    /// the starting offset in the parent's metadata buffer where this object starts
+    /// used to truncate the written fields in `drop` if the current object has not been finished
+    object_meta_start_offset: usize,
     /// whether the object has been finished, the written content of the current object
     /// will be truncated in `drop` if `has_been_finished` is false
     has_been_finished: bool,
@@ -1076,11 +1094,13 @@ pub struct ObjectBuilder<'a> {
 impl<'a> ObjectBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         let start_offset = parent_state.buffer_current_offset();
+        let meta_start_offset = parent_state.metadata_current_offset();
         Self {
             parent_state,
             fields: IndexMap::new(),
             object_start_offset: start_offset,
             has_been_finished: false,
+            object_meta_start_offset: meta_start_offset,
             validate_unique_fields,
             duplicate_fields: HashSet::new(),
         }
@@ -1269,6 +1289,11 @@ impl Drop for ObjectBuilder<'_> {
                 .buffer()
                 .inner_mut()
                 .truncate(self.object_start_offset);
+
+            self.parent_state
+                .metadata_builder()
+                .field_names
+                .truncate(self.object_meta_start_offset);
         }
     }
 }
@@ -2542,8 +2567,7 @@ mod tests {
         // The original builder should be unchanged
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(&metadata[0], "name"); // not rolled back
+        assert!(metadata.is_empty()); // rolled back
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         assert_eq!(variant, Variant::Int8(42));
@@ -2617,8 +2641,7 @@ mod tests {
         list_builder.finish();
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(&metadata[0], "name"); // not rolled back
+        assert!(metadata.is_empty());
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let list = variant.as_list().unwrap();
@@ -2646,8 +2669,8 @@ mod tests {
         // Only the second attempt should appear in the final variant
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(&metadata[0], "name"); // not rolled back
+        assert_eq!(metadata.len(), 1); // rolled back
+        assert_eq!(&metadata[0], "name");
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         assert_eq!(variant, Variant::Int8(2));
@@ -2700,9 +2723,7 @@ mod tests {
         // Only the second attempt should appear in the final variant
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 2);
-        assert_eq!(&metadata[0], "first");
-        assert_eq!(&metadata[1], "nested"); // not rolled back
+        assert!(metadata.is_empty()); // rolled back
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         assert_eq!(variant, Variant::Int8(2));
@@ -2725,15 +2746,12 @@ mod tests {
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 3);
-        assert_eq!(&metadata[0], "first");
-        assert_eq!(&metadata[1], "name"); // not rolled back
-        assert_eq!(&metadata[2], "second");
+        assert_eq!(metadata.len(), 1); // the fields of nested_object_builder has been rolled back
+        assert_eq!(&metadata[0], "second");
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let obj = variant.as_object().unwrap();
-        assert_eq!(obj.len(), 2);
-        assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
+        assert_eq!(obj.len(), 1);
         assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
     }
 
@@ -2756,10 +2774,7 @@ mod tests {
         // Only the second attempt should appear in the final variant
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 3);
-        assert_eq!(&metadata[0], "first"); // not rolled back
-        assert_eq!(&metadata[1], "name"); // not rolled back
-        assert_eq!(&metadata[2], "nested"); // not rolled back
+        assert_eq!(metadata.len(), 0); // rolled back
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         assert_eq!(variant, Variant::Int8(2));
