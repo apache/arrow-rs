@@ -545,24 +545,13 @@ impl ParentState<'_> {
                 metadata_builder,
                 fields,
                 field_name,
+                object_start_offset,
                 ..
             } => {
                 let field_id = metadata_builder.upsert_field_name(field_name);
-                fields.insert(field_id, starting_offset);
+                let shifted_start_offset = starting_offset - *object_start_offset;
+                fields.insert(field_id, shifted_start_offset);
             }
-        }
-    }
-
-    // returns the beginning offset of buffer for the parent if it is object builder, else 0.
-    // for object builder will reuse the buffer from the parent, this is needed for `finish`
-    // which needs the relative offset from the current variant.
-    fn object_start_offset(&self) -> usize {
-        match self {
-            ParentState::Object {
-                object_start_offset,
-                ..
-            } => *object_start_offset,
-            _ => 0,
         }
     }
 
@@ -573,13 +562,13 @@ impl ParentState<'_> {
             ParentState::Variant {
                 buffer,
                 metadata_builder,
-            } => (buffer, metadata_builder),
-            ParentState::List {
+            }
+            | ParentState::List {
                 buffer,
                 metadata_builder,
                 ..
-            } => (buffer, metadata_builder),
-            ParentState::Object {
+            }
+            | ParentState::Object {
                 buffer,
                 metadata_builder,
                 ..
@@ -590,9 +579,9 @@ impl ParentState<'_> {
     // return the offset of the underlying buffer at the time of calling this method.
     fn buffer_current_offset(&self) -> usize {
         match self {
-            ParentState::Variant { buffer, .. } => buffer.offset(),
-            ParentState::Object { buffer, .. } => buffer.offset(),
-            ParentState::List { buffer, .. } => buffer.offset(),
+            ParentState::Variant { buffer, .. }
+            | ParentState::Object { buffer, .. }
+            | ParentState::List { buffer, .. } => buffer.offset(),
         }
     }
 }
@@ -1043,11 +1032,10 @@ impl<'a> ListBuilder<'a> {
         let offset_size = int_size(data_size);
 
         // Get parent's buffer
-        let offset_shift = self.parent_state.object_start_offset();
         let parent_buffer = self.parent_state.buffer();
         // as object builder has been reused the parent buffer,
         // we need to shift the offset by the starting offset of the parent object
-        let starting_offset = parent_buffer.offset() - offset_shift;
+        let starting_offset = parent_buffer.offset();
 
         // Write header
         let header = array_header(is_large, offset_size);
@@ -1217,7 +1205,10 @@ impl<'a> ObjectBuilder<'a> {
 
         // Shift existing data to make room for the header
         let buffer = parent_buffer.inner_mut();
-        buffer.splice(starting_offset..starting_offset, vec![0u8; header_size]);
+        buffer.splice(
+            starting_offset..starting_offset,
+            std::iter::repeat_n(0u8, header_size),
+        );
 
         // Write header at the original start position
         let mut header_pos = starting_offset;
@@ -1237,15 +1228,15 @@ impl<'a> ObjectBuilder<'a> {
         }
 
         // Write field IDs
-        for (&field_id, _) in &self.fields {
-            let id_bytes = (field_id as usize).to_le_bytes();
+        for field_id in self.fields.keys() {
+            let id_bytes = field_id.to_le_bytes();
             buffer[header_pos..header_pos + id_size as usize]
                 .copy_from_slice(&id_bytes[..id_size as usize]);
             header_pos += id_size as usize;
         }
 
         // Write field offsets (adjusted for header)
-        for (_, &relative_offset) in &self.fields {
+        for relative_offset in self.fields.values() {
             let offset_bytes = relative_offset.to_le_bytes();
             buffer[header_pos..header_pos + offset_size as usize]
                 .copy_from_slice(&offset_bytes[..offset_size as usize]);
@@ -1257,9 +1248,7 @@ impl<'a> ObjectBuilder<'a> {
         buffer[header_pos..header_pos + offset_size as usize]
             .copy_from_slice(&data_size_bytes[..offset_size as usize]);
 
-        let start_offset_shift = self.parent_state.object_start_offset();
-        self.parent_state
-            .finish(starting_offset - start_offset_shift);
+        self.parent_state.finish(starting_offset);
 
         // mark that this object has been finished
         self.has_been_finished = true;
