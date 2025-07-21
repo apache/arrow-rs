@@ -159,13 +159,13 @@ impl VariantArray {
     /// Return a reference to the metadata field of the [`StructArray`]
     pub fn metadata_field(&self) -> &ArrayRef {
         // spec says fields order is not guaranteed, so we search by name
-        self.inner.column_by_name("metadata").unwrap()
+        &self.metadata_ref
     }
 
     /// Return a reference to the value field of the `StructArray`
     pub fn value_field(&self) -> &ArrayRef {
         // spec says fields order is not guaranteed, so we search by name
-        self.inner.column_by_name("value").unwrap()
+        &self.value_ref
     }
 
     /// Get the metadata bytes for a specific index
@@ -180,23 +180,13 @@ impl VariantArray {
 
     /// Get the field names for an object at the given index
     pub fn get_field_names(&self, index: usize) -> Vec<String> {
-        if index >= self.len() {
-            return vec![];
-        }
-
-        if self.is_null(index) {
+        if index >= self.len() || self.is_null(index) {
             return vec![];
         }
 
         let variant = self.value(index);
         if let Some(obj) = variant.as_object() {
-            let mut field_names = Vec::new();
-            for i in 0..obj.len() {
-                if let Some(field_name) = obj.field_name(i) {
-                    field_names.push(field_name.to_string());
-                }
-            }
-            field_names
+            Vec::from_iter((0..obj.len()).map(|i| obj.field_name(i).unwrap().to_string()))
         } else {
             vec![]
         }
