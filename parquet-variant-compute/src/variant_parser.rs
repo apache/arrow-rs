@@ -118,12 +118,7 @@ impl VariantParser {
         let length = (header_byte >> 2) as usize;
 
         // Short strings can be up to 64 bytes (6-bit value: 0-63)
-        if length > 63 {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Short string length {} exceeds maximum of 63",
-                length
-            )));
-        }
+        // Note: Since header_byte is u8, header_byte >> 2 can never exceed 63, so no bounds check needed
 
         Ok(ShortStringHeader { length })
     }
@@ -335,7 +330,7 @@ mod tests {
             ShortStringHeader { length: 63 }
         );
 
-        // Test that all values 0-63 are valid
+        // Test that all values 0-63 are valid (these are all possible values since u8 >> 2 max is 63)
         for length in 0..=63 {
             let header_byte = (length << 2) | 1; // short string type
             assert!(VariantParser::parse_short_string_header(header_byte as u8).is_ok());

@@ -17,7 +17,6 @@
 
 //! Parquet variant compute functions
 
-pub mod field_operations;
 pub mod from_json;
 pub mod to_json;
 pub mod variant_array;
