@@ -29,6 +29,7 @@ keywords = ["arrow", "parquet", "variant"]
 edition = { workspace = true }
 rust-version = { workspace = true }
 
+
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }

@@ -30,7 +30,6 @@ readme = "README.md"
 edition = { workspace = true }
 rust-version = { workspace = true }
 
-
 [dependencies]
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
