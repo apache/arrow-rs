@@ -169,7 +169,7 @@ impl VariantArray {
     }
 
     /// Get the metadata bytes for a specific index
-    pub fn metadata(&self, index: usize) -> &[u8] {
+    pub fn metadata_bytes(&self, index: usize) -> &[u8] {
         self.metadata_field().as_binary_view().value(index).as_ref()
     }
 
@@ -210,19 +210,15 @@ impl VariantArray {
             if self.is_null(i) {
                 builder.append_null();
             } else {
-                match FieldOperations::remove_field_bytes(
-                    self.metadata(i),
+                let new_value = FieldOperations::remove_field_bytes(
+                    self.metadata_bytes(i),
                     self.value_bytes(i),
                     field_name,
-                )? {
-                    Some(new_value) => {
-                        builder.append_variant_buffers(self.metadata(i), &new_value);
-                    }
-                    None => {
-                        // Field didn't exist, use original value
-                        builder.append_variant_buffers(self.metadata(i), self.value_bytes(i));
-                    }
-                }
+                )?;
+
+                // Use original value if the field didn't exist
+                let new_value = new_value.as_deref().unwrap_or_else(|| self.value_bytes(i));
+                builder.append_variant_buffers(self.metadata_bytes(i), new_value);
             }
         }
 
@@ -237,19 +233,15 @@ impl VariantArray {
             if self.is_null(i) {
                 builder.append_null();
             } else {
-                match FieldOperations::remove_fields_bytes(
-                    self.metadata(i),
+                let new_value = FieldOperations::remove_fields_bytes(
+                    self.metadata_bytes(i),
                     self.value_bytes(i),
                     field_names,
-                )? {
-                    Some(new_value) => {
-                        builder.append_variant_buffers(self.metadata(i), &new_value);
-                    }
-                    None => {
-                        // No fields existed, use original value
-                        builder.append_variant_buffers(self.metadata(i), self.value_bytes(i));
-                    }
-                }
+                )?;
+
+                // Use original value if no fields existed
+                let new_value = new_value.as_deref().unwrap_or_else(|| self.value_bytes(i));
+                builder.append_variant_buffers(self.metadata_bytes(i), new_value);
             }
         }
 

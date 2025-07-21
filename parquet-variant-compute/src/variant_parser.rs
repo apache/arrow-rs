@@ -28,15 +28,6 @@ pub enum VariantBasicType {
     Array = 3,
 }
 
-/// Variant type enumeration covering all possible types
-#[derive(Debug, Clone, PartialEq)]
-pub enum VariantType {
-    Primitive(PrimitiveType),
-    ShortString(ShortStringHeader),
-    Object(ObjectHeader),
-    Array(ArrayHeader),
-}
-
 /// Primitive type variants
 #[derive(Debug, Clone, PartialEq)]
 pub enum PrimitiveType {
@@ -57,6 +48,15 @@ pub enum PrimitiveType {
     Float,
     Binary,
     String,
+}
+
+/// Variant type enumeration covering all possible types
+#[derive(Debug, Clone, PartialEq)]
+pub enum VariantType {
+    Primitive(PrimitiveType),
+    ShortString(ShortStringHeader),
+    Object(ObjectHeader),
+    Array(ArrayHeader),
 }
 
 /// Short string header structure
@@ -149,6 +149,19 @@ impl VariantParser {
             ))),
         }
     }
+
+    /// Get the basic type from header byte
+    pub fn get_basic_type(header_byte: u8) -> VariantBasicType {
+        match header_byte & 0x03 {
+            0 => VariantBasicType::Primitive,
+            1 => VariantBasicType::ShortString,
+            2 => VariantBasicType::Object,
+            3 => VariantBasicType::Array,
+            _ => panic!("Invalid basic type: {}", header_byte & 0x03),
+        }
+    }
+
+
 
     /// Parse short string header
     pub fn parse_short_string_header(header_byte: u8) -> Result<ShortStringHeader, ArrowError> {
@@ -259,16 +272,7 @@ impl VariantParser {
         }
     }
 
-    /// Get the basic type from header byte
-    pub fn get_basic_type(header_byte: u8) -> VariantBasicType {
-        match header_byte & 0x03 {
-            0 => VariantBasicType::Primitive,
-            1 => VariantBasicType::ShortString,
-            2 => VariantBasicType::Object,
-            3 => VariantBasicType::Array,
-            _ => panic!("Invalid basic type: {}", header_byte & 0x03),
-        }
-    }
+
 
     /// Check if value bytes represent a primitive
     pub fn is_primitive(value_bytes: &[u8]) -> bool {
