@@ -413,20 +413,24 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 // checks whether the field values are equal -- regardless of their order
 impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
     fn eq(&self, other: &Self) -> bool {
-        let mut is_equal = self.num_elements == other.num_elements;
+        if self.num_elements != other.num_elements {
+            return false;
+        }
 
         let other_fields: HashMap<&str, Variant> = HashMap::from_iter(other.iter());
 
         for (field_name, variant) in self.iter() {
             match other_fields.get(field_name as &str) {
                 Some(other_variant) => {
-                    is_equal = is_equal && variant == *other_variant;
+                    if variant != *other_variant {
+                        return false;
+                    }
                 }
                 None => return false,
             }
         }
 
-        is_equal
+        true
     }
 }
 
