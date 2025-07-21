@@ -155,13 +155,8 @@ impl Decoder {
     /// Returns the number of bytes consumed.
     pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
         let mut total_consumed = 0usize;
-        while self.decoded_rows < self.batch_size {
-            let buffer = &data[total_consumed..];
-            if buffer.is_empty() {
-                // No more data to process.
-                break;
-            }
-            let consumed = self.record_decoder.decode(buffer, 1)?;
+        while total_consumed < data.len() && self.decoded_rows < self.batch_size {
+            let consumed = self.record_decoder.decode(&data[total_consumed..], 1)?;
             // A successful call to record_decoder.decode means one row was decoded.
             // If `consumed` is 0 on a non-empty buffer, it implies a valid zero-byte record.
             // We increment `decoded_rows` to mark progress and avoid an infinite loop.
