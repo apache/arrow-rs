@@ -167,9 +167,10 @@ impl VariantParser {
     pub fn parse_short_string_header(header_byte: u8) -> Result<ShortStringHeader, ArrowError> {
         let length = (header_byte >> 2) as usize;
 
-        if length > 13 {
+        // Short strings can be up to 64 bytes (6-bit value: 0-63)
+        if length > 63 {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Short string length {} exceeds maximum of 13",
+                "Short string length {} exceeds maximum of 63",
                 length
             )));
         }
@@ -307,22 +308,23 @@ impl VariantParser {
     }
 
     /// Get the data length for a primitive type
-    pub fn get_primitive_data_length(primitive_type: &PrimitiveType) -> usize {
+    /// Returns Some(len) for fixed-length types, None for variable-length types
+    pub fn get_primitive_data_length(primitive_type: &PrimitiveType) -> Option<usize> {
         match primitive_type {
-            PrimitiveType::Null | PrimitiveType::True | PrimitiveType::False => 0,
-            PrimitiveType::Int8 => 1,
-            PrimitiveType::Int16 => 2,
+            PrimitiveType::Null | PrimitiveType::True | PrimitiveType::False => Some(0),
+            PrimitiveType::Int8 => Some(1),
+            PrimitiveType::Int16 => Some(2),
             PrimitiveType::Int32
             | PrimitiveType::Float
             | PrimitiveType::Decimal4
-            | PrimitiveType::Date => 4,
+            | PrimitiveType::Date => Some(4),
             PrimitiveType::Int64
             | PrimitiveType::Double
             | PrimitiveType::Decimal8
             | PrimitiveType::TimestampNtz
-            | PrimitiveType::TimestampLtz => 8,
-            PrimitiveType::Decimal16 => 16,
-            PrimitiveType::Binary | PrimitiveType::String => 0, // Variable length, need to read from data
+            | PrimitiveType::TimestampLtz => Some(8),
+            PrimitiveType::Decimal16 => Some(16),
+            PrimitiveType::Binary | PrimitiveType::String => None, // Variable length, need to read from data
         }
     }
 
@@ -357,43 +359,41 @@ impl VariantParser {
         let primitive_type = Self::parse_primitive_header(value_bytes[0])?;
         let data_length = Self::get_primitive_data_length(&primitive_type);
 
-        if data_length == 0 {
-            // Handle variable length types and null/boolean
-            match primitive_type {
-                PrimitiveType::Null | PrimitiveType::True | PrimitiveType::False => Ok(&[]),
-                PrimitiveType::Binary | PrimitiveType::String => {
-                    // These require reading length from the data
-                    if value_bytes.len() < 5 {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "Not enough bytes for variable length primitive".to_string(),
-                        ));
-                    }
-                    let length = u32::from_le_bytes([
-                        value_bytes[1],
-                        value_bytes[2],
-                        value_bytes[3],
-                        value_bytes[4],
-                    ]) as usize;
-                    if value_bytes.len() < 5 + length {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "Variable length primitive data exceeds available bytes".to_string(),
-                        ));
-                    }
-                    Ok(&value_bytes[5..5 + length])
+        match data_length {
+            Some(0) => {
+                // Fixed-length 0-byte types (null/true/false)
+                Ok(&[])
+            }
+            Some(len) => {
+                // Fixed-length types with len bytes
+                if value_bytes.len() < 1 + len {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Fixed length primitive data length {} exceeds available bytes",
+                        len
+                    )));
                 }
-                _ => Err(ArrowError::InvalidArgumentError(format!(
-                    "Unhandled primitive type: {:?}",
-                    primitive_type
-                ))),
+                Ok(&value_bytes[1..1 + len])
             }
-        } else {
-            if value_bytes.len() < 1 + data_length {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Primitive data length {} exceeds available bytes",
-                    data_length
-                )));
+            None => {
+                // Variable-length types (binary/string) - read length from data
+                if value_bytes.len() < 5 {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Not enough bytes for variable length primitive".to_string(),
+                    ));
+                }
+                let length = u32::from_le_bytes([
+                    value_bytes[1],
+                    value_bytes[2],
+                    value_bytes[3],
+                    value_bytes[4],
+                ]) as usize;
+                if value_bytes.len() < 5 + length {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Variable length primitive data exceeds available bytes".to_string(),
+                    ));
+                }
+                Ok(&value_bytes[5..5 + length])
             }
-            Ok(&value_bytes[1..1 + data_length])
         }
     }
 
@@ -500,14 +500,17 @@ mod tests {
             ShortStringHeader { length: 5 }
         );
 
-        // Test 13-length short string (maximum)
+        // Test 63-length short string (maximum for 6-bit value)
         assert_eq!(
-            VariantParser::parse_short_string_header(0b00110101).unwrap(),
-            ShortStringHeader { length: 13 }
+            VariantParser::parse_short_string_header(0b11111101).unwrap(),
+            ShortStringHeader { length: 63 }
         );
 
-        // Test invalid length > 13
-        assert!(VariantParser::parse_short_string_header(0b00111001).is_err());
+        // Test that all values 0-63 are valid
+        for length in 0..=63 {
+            let header_byte = (length << 2) | 1; // short string type
+            assert!(VariantParser::parse_short_string_header(header_byte as u8).is_ok());
+        }
     }
 
     #[test]
@@ -564,50 +567,55 @@ mod tests {
 
     #[test]
     fn test_get_primitive_data_length() {
+        // Test fixed-length 0-byte types
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::Null),
-            0
+            Some(0)
         );
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::True),
-            0
+            Some(0)
         );
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::False),
-            0
+            Some(0)
         );
+        
+        // Test fixed-length types with specific byte counts
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::Int8),
-            1
+            Some(1)
         );
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::Int16),
-            2
+            Some(2)
         );
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::Int32),
-            4
+            Some(4)
         );
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::Int64),
-            8
+            Some(8)
         );
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::Double),
-            8
+            Some(8)
         );
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::Decimal16),
-            16
+            Some(16)
         );
+        
+        // Test variable-length types (should return None)
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::Binary),
-            0
-        ); // Variable length
+            None
+        );
         assert_eq!(
             VariantParser::get_primitive_data_length(&PrimitiveType::String),
-            0
-        ); // Variable length
+            None
+        );
     }
 
     #[test]
