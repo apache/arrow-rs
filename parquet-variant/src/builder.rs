@@ -1266,11 +1266,8 @@ impl<'a> ObjectBuilder<'a> {
             field_a_name.cmp(field_b_name)
         });
 
-        // the length of the metadata's field names is a very cheap to compute the upper bound.
-        // it will almost always be a tight upper bound as well -- it would take a pretty
-        // carefully crafted object to use only the early field ids of a large dictionary.
-        let max_id = metadata_builder.field_names.len();
-        let id_size = int_size(max_id);
+        let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
+        let id_size = int_size(max_id as usize);
 
         let parent_buffer = self.parent_state.buffer();
         let current_offset = parent_buffer.offset();
