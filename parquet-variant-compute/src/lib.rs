@@ -31,5 +31,5 @@ pub use variant_array::VariantArray;
 pub use variant_array_builder::VariantArrayBuilder;
 pub use variant_get::{variant_get, GetOptions};
 pub use variant_parser::{
-    ArrayHeader, ObjectHeader, PrimitiveType, ShortStringHeader, VariantBasicType, VariantType,
+    PrimitiveType, ShortStringHeader, VariantBasicType, VariantType,
 };

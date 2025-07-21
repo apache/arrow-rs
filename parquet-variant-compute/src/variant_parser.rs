@@ -55,8 +55,6 @@ pub enum PrimitiveType {
 pub enum VariantType {
     Primitive(PrimitiveType),
     ShortString(ShortStringHeader),
-    Object(ObjectHeader),
-    Array(ArrayHeader),
 }
 
 /// Short string header structure
@@ -65,61 +63,13 @@ pub struct ShortStringHeader {
     pub length: usize,
 }
 
-/// Object header structure for variant objects
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObjectHeader {
-    pub num_elements_size: usize,
-    pub field_id_size: usize,
-    pub field_offset_size: usize,
-    pub is_large: bool,
-}
 
-/// Array header structure for variant objects
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArrayHeader {
-    pub num_elements_size: usize,
-    pub element_offset_size: usize,
-    pub is_large: bool,
-}
-
-/// Object byte offsets structure
-#[derive(Debug, Clone)]
-pub struct ObjectOffsets {
-    pub field_ids_start: usize,
-    pub field_offsets_start: usize,
-    pub values_start: usize,
-}
-
-/// Array byte offsets structure
-#[derive(Debug, Clone)]
-pub struct ArrayOffsets {
-    pub element_offsets_start: usize,
-    pub elements_start: usize,
-}
 
 /// Low-level parser for variant binary format
 pub struct VariantParser;
 
 impl VariantParser {
-    /// General dispatch function to parse any variant header
-    pub fn parse_variant_header(header_byte: u8) -> Result<VariantType, ArrowError> {
-        let basic_type = Self::get_basic_type(header_byte);
 
-        match basic_type {
-            VariantBasicType::Primitive => Ok(VariantType::Primitive(
-                Self::parse_primitive_header(header_byte)?,
-            )),
-            VariantBasicType::ShortString => Ok(VariantType::ShortString(
-                Self::parse_short_string_header(header_byte)?,
-            )),
-            VariantBasicType::Object => {
-                Ok(VariantType::Object(Self::parse_object_header(header_byte)?))
-            }
-            VariantBasicType::Array => {
-                Ok(VariantType::Array(Self::parse_array_header(header_byte)?))
-            }
-        }
-    }
 
     /// Parse primitive type header
     pub fn parse_primitive_header(header_byte: u8) -> Result<PrimitiveType, ArrowError> {
@@ -178,40 +128,7 @@ impl VariantParser {
         Ok(ShortStringHeader { length })
     }
 
-    /// Parse object header from header byte
-    pub fn parse_object_header(header_byte: u8) -> Result<ObjectHeader, ArrowError> {
-        let value_header = header_byte >> 2;
-        let field_offset_size_minus_one = value_header & 0x03;
-        let field_id_size_minus_one = (value_header >> 2) & 0x03;
-        let is_large = (value_header & 0x10) != 0;
 
-        let num_elements_size = if is_large { 4 } else { 1 };
-        let field_id_size = (field_id_size_minus_one + 1) as usize;
-        let field_offset_size = (field_offset_size_minus_one + 1) as usize;
-
-        Ok(ObjectHeader {
-            num_elements_size,
-            field_id_size,
-            field_offset_size,
-            is_large,
-        })
-    }
-
-    /// Parse array header from header byte
-    pub fn parse_array_header(header_byte: u8) -> Result<ArrayHeader, ArrowError> {
-        let value_header = header_byte >> 2;
-        let element_offset_size_minus_one = value_header & 0x03;
-        let is_large = (value_header & 0x10) != 0;
-
-        let num_elements_size = if is_large { 4 } else { 1 };
-        let element_offset_size = (element_offset_size_minus_one + 1) as usize;
-
-        Ok(ArrayHeader {
-            num_elements_size,
-            element_offset_size,
-            is_large,
-        })
-    }
 
     /// Unpack integer from bytes
     pub fn unpack_int(bytes: &[u8], size: usize) -> Result<usize, ArrowError> {
@@ -273,40 +190,6 @@ impl VariantParser {
         }
     }
 
-
-
-    /// Check if value bytes represent a primitive
-    pub fn is_primitive(value_bytes: &[u8]) -> bool {
-        if value_bytes.is_empty() {
-            return false;
-        }
-        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Primitive
-    }
-
-    /// Check if value bytes represent a short string
-    pub fn is_short_string(value_bytes: &[u8]) -> bool {
-        if value_bytes.is_empty() {
-            return false;
-        }
-        Self::get_basic_type(value_bytes[0]) == VariantBasicType::ShortString
-    }
-
-    /// Check if value bytes represent an object
-    pub fn is_object(value_bytes: &[u8]) -> bool {
-        if value_bytes.is_empty() {
-            return false;
-        }
-        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Object
-    }
-
-    /// Check if value bytes represent an array
-    pub fn is_array(value_bytes: &[u8]) -> bool {
-        if value_bytes.is_empty() {
-            return false;
-        }
-        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Array
-    }
-
     /// Get the data length for a primitive type
     /// Returns Some(len) for fixed-length types, None for variable-length types
     pub fn get_primitive_data_length(primitive_type: &PrimitiveType) -> Option<usize> {
@@ -328,98 +211,44 @@ impl VariantParser {
         }
     }
 
-    /// Extract short string data from value bytes
-    pub fn extract_short_string_data(value_bytes: &[u8]) -> Result<&[u8], ArrowError> {
+
+
+    // Legacy type checking functions - kept for backwards compatibility but consider using Variant pattern matching instead
+    
+    /// Check if value bytes represent a primitive
+    /// NOTE: Consider using `matches!(variant, Variant::Int32(_) | Variant::String(_) | ...)` instead
+    pub fn is_primitive(value_bytes: &[u8]) -> bool {
         if value_bytes.is_empty() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Empty value bytes".to_string(),
-            ));
+            return false;
         }
-
-        let header = Self::parse_short_string_header(value_bytes[0])?;
-
-        if value_bytes.len() < 1 + header.length {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Short string data length {} exceeds available bytes",
-                header.length
-            )));
-        }
-
-        Ok(&value_bytes[1..1 + header.length])
+        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Primitive
     }
 
-    /// Extract primitive data from value bytes
-    pub fn extract_primitive_data(value_bytes: &[u8]) -> Result<&[u8], ArrowError> {
+    /// Check if value bytes represent a short string
+    /// NOTE: Consider using `matches!(variant, Variant::ShortString(_))` instead
+    pub fn is_short_string(value_bytes: &[u8]) -> bool {
         if value_bytes.is_empty() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Empty value bytes".to_string(),
-            ));
+            return false;
         }
-
-        let primitive_type = Self::parse_primitive_header(value_bytes[0])?;
-        let data_length = Self::get_primitive_data_length(&primitive_type);
-
-        match data_length {
-            Some(0) => {
-                // Fixed-length 0-byte types (null/true/false)
-                Ok(&[])
-            }
-            Some(len) => {
-                // Fixed-length types with len bytes
-                if value_bytes.len() < 1 + len {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Fixed length primitive data length {} exceeds available bytes",
-                        len
-                    )));
-                }
-                Ok(&value_bytes[1..1 + len])
-            }
-            None => {
-                // Variable-length types (binary/string) - read length from data
-                if value_bytes.len() < 5 {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Not enough bytes for variable length primitive".to_string(),
-                    ));
-                }
-                let length = u32::from_le_bytes([
-                    value_bytes[1],
-                    value_bytes[2],
-                    value_bytes[3],
-                    value_bytes[4],
-                ]) as usize;
-                if value_bytes.len() < 5 + length {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Variable length primitive data exceeds available bytes".to_string(),
-                    ));
-                }
-                Ok(&value_bytes[5..5 + length])
-            }
-        }
+        Self::get_basic_type(value_bytes[0]) == VariantBasicType::ShortString
     }
 
-    /// Calculate byte offsets for array elements
-    pub fn calculate_array_offsets(header: &ArrayHeader, num_elements: usize) -> ArrayOffsets {
-        let element_offsets_start = 1 + header.num_elements_size;
-        let elements_start =
-            element_offsets_start + ((num_elements + 1) * header.element_offset_size);
-
-        ArrayOffsets {
-            element_offsets_start,
-            elements_start,
+    /// Check if value bytes represent an object
+    /// NOTE: Consider using `variant.as_object().is_some()` instead
+    pub fn is_object(value_bytes: &[u8]) -> bool {
+        if value_bytes.is_empty() {
+            return false;
         }
+        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Object
     }
 
-    /// Calculate byte offsets for object fields
-    pub fn calculate_object_offsets(header: &ObjectHeader, num_elements: usize) -> ObjectOffsets {
-        let field_ids_start = 1 + header.num_elements_size;
-        let field_offsets_start = field_ids_start + (num_elements * header.field_id_size);
-        let values_start = field_offsets_start + ((num_elements + 1) * header.field_offset_size);
-
-        ObjectOffsets {
-            field_ids_start,
-            field_offsets_start,
-            values_start,
+    /// Check if value bytes represent an array
+    /// NOTE: Consider using `variant.as_list().is_some()` instead
+    pub fn is_array(value_bytes: &[u8]) -> bool {
+        if value_bytes.is_empty() {
+            return false;
         }
+        Self::get_basic_type(value_bytes[0]) == VariantBasicType::Array
     }
 }
 
@@ -513,36 +342,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_parse_variant_header_dispatch() {
-        // Test primitive dispatch
-        let primitive_header = 0b00000100; // True primitive
-        match VariantParser::parse_variant_header(primitive_header).unwrap() {
-            VariantType::Primitive(PrimitiveType::True) => {}
-            _ => panic!("Expected primitive True"),
-        }
 
-        // Test short string dispatch
-        let short_string_header = 0b00010101; // 5-length short string
-        match VariantParser::parse_variant_header(short_string_header).unwrap() {
-            VariantType::ShortString(ShortStringHeader { length: 5 }) => {}
-            _ => panic!("Expected short string with length 5"),
-        }
-
-        // Test object dispatch
-        let object_header = 0b00000010; // Basic object
-        match VariantParser::parse_variant_header(object_header).unwrap() {
-            VariantType::Object(_) => {}
-            _ => panic!("Expected object"),
-        }
-
-        // Test array dispatch
-        let array_header = 0b00000011; // Basic array
-        match VariantParser::parse_variant_header(array_header).unwrap() {
-            VariantType::Array(_) => {}
-            _ => panic!("Expected array"),
-        }
-    }
 
     #[test]
     fn test_basic_type_checks() {
@@ -618,52 +418,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_extract_short_string_data() {
-        // Test 0-length short string
-        let data = &[0b00000001]; // 0-length short string header
-        assert_eq!(
-            VariantParser::extract_short_string_data(data).unwrap(),
-            &[] as &[u8]
-        );
 
-        // Test 5-length short string
-        let data = &[0b00010101, b'H', b'e', b'l', b'l', b'o']; // 5-length short string + "Hello"
-        assert_eq!(
-            VariantParser::extract_short_string_data(data).unwrap(),
-            b"Hello"
-        );
-
-        // Test insufficient data
-        let data = &[0b00010101, b'H', b'i']; // Claims 5 bytes but only has 2
-        assert!(VariantParser::extract_short_string_data(data).is_err());
-    }
-
-    #[test]
-    fn test_extract_primitive_data() {
-        // Test null (no data)
-        let data = &[0b00000000]; // Null header
-        assert_eq!(
-            VariantParser::extract_primitive_data(data).unwrap(),
-            &[] as &[u8]
-        );
-
-        // Test true (no data)
-        let data = &[0b00000100]; // True header
-        assert_eq!(
-            VariantParser::extract_primitive_data(data).unwrap(),
-            &[] as &[u8]
-        );
-
-        // Test int32 (4 bytes)
-        let data = &[0b00010100, 0x2A, 0x00, 0x00, 0x00]; // Int32 header + 42 in little endian
-        assert_eq!(
-            VariantParser::extract_primitive_data(data).unwrap(),
-            &[0x2A, 0x00, 0x00, 0x00]
-        );
-
-        // Test insufficient data for int32
-        let data = &[0b00010100, 0x2A, 0x00]; // Int32 header but only 2 bytes
-        assert!(VariantParser::extract_primitive_data(data).is_err());
-    }
 }

@@ -17,7 +17,7 @@
 
 //! [`VariantArray`] implementation
 
-use crate::field_operations::FieldOperations;
+
 use arrow::array::{Array, ArrayData, ArrayRef, AsArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType};
@@ -204,44 +204,42 @@ impl VariantArray {
 
     /// Create a new VariantArray with a field removed from all variants
     pub fn with_field_removed(&self, field_name: &str) -> Result<Self, ArrowError> {
-        let mut builder = crate::variant_array_builder::VariantArrayBuilder::new(self.len());
-
-        for i in 0..self.len() {
-            if self.is_null(i) {
-                builder.append_null();
-            } else {
-                let new_value = FieldOperations::remove_field_bytes(
-                    self.metadata_bytes(i),
-                    self.value_bytes(i),
-                    field_name,
-                )?;
-
-                // Use original value if the field didn't exist
-                let new_value = new_value.as_deref().unwrap_or_else(|| self.value_bytes(i));
-                builder.append_variant_buffers(self.metadata_bytes(i), new_value);
-            }
-        }
-
-        Ok(builder.build())
+        self.with_fields_removed(&[field_name])
     }
 
     /// Create a new VariantArray with multiple fields removed from all variants
     pub fn with_fields_removed(&self, field_names: &[&str]) -> Result<Self, ArrowError> {
+        use parquet_variant::VariantBuilder;
+        use std::collections::HashSet;
+        
+        let fields_to_remove: HashSet<&str> = field_names.iter().copied().collect();
         let mut builder = crate::variant_array_builder::VariantArrayBuilder::new(self.len());
 
         for i in 0..self.len() {
             if self.is_null(i) {
                 builder.append_null();
             } else {
-                let new_value = FieldOperations::remove_fields_bytes(
-                    self.metadata_bytes(i),
-                    self.value_bytes(i),
-                    field_names,
-                )?;
-
-                // Use original value if no fields existed
-                let new_value = new_value.as_deref().unwrap_or_else(|| self.value_bytes(i));
-                builder.append_variant_buffers(self.metadata_bytes(i), new_value);
+                let variant = self.value(i);
+                
+                // If it's an object, create a new object without the specified fields
+                if let Some(obj) = variant.as_object() {
+                    let mut variant_builder = VariantBuilder::new();
+                    let mut object_builder = variant_builder.new_object();
+                    
+                    // Add all fields except the ones to remove
+                    for (field_name, field_value) in obj.iter() {
+                        if !fields_to_remove.contains(field_name) {
+                            object_builder.insert(field_name, field_value);
+                        }
+                    }
+                    
+                    object_builder.finish().unwrap();
+                    let (metadata, value) = variant_builder.finish();
+                    builder.append_variant_buffers(&metadata, &value);
+                } else {
+                    // Not an object, append as-is
+                    builder.append_variant(variant);
+                }
             }
         }
 
