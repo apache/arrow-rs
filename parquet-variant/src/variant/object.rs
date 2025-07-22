@@ -20,7 +20,6 @@ use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
 };
 use crate::variant::{Variant, VariantMetadata};
-use std::collections::HashMap;
 
 use arrow_schema::ArrowError;
 
@@ -417,16 +416,12 @@ impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
             return false;
         }
 
-        let other_fields: HashMap<&str, Variant> = HashMap::from_iter(other.iter());
-
-        for (field_name, variant) in self.iter() {
-            match other_fields.get(field_name as &str) {
-                Some(other_variant) => {
-                    if variant != *other_variant {
-                        return false;
-                    }
-                }
-                None => return false,
+        // IFF two objects are valid and logically equal, they will have the same
+        // field names in the same order, because the spec requires the object
+        // fields to be sorted lexicographically.
+        for ((name_a, value_a), (name_b, value_b)) in self.iter().zip(other.iter()) {
+            if name_a != name_b || value_a != value_b {
+                return false;
             }
         }
 
