@@ -1383,8 +1383,8 @@ impl<'a> ObjectBuilder<'a> {
 
     /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) -> Result<(), ArrowError> {
+        let metadata_builder = self.parent_state.metadata_builder();
         if self.validate_unique_fields && !self.duplicate_fields.is_empty() {
-            let metadata_builder = self.parent_state.metadata_builder();
             let mut names = self
                 .duplicate_fields
                 .iter()
@@ -1398,8 +1398,6 @@ impl<'a> ObjectBuilder<'a> {
                 "Duplicate field keys detected: [{joined}]",
             )));
         }
-
-        let metadata_builder = self.parent_state.metadata_builder();
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
             let field_a_name = metadata_builder.field_name(field_a_id as usize);
