@@ -17,8 +17,8 @@
 
 //! Tests for IO read patterns in the Parquet Reader
 //!
-//! These tests
-//! 1. Create a temporary Parquet file with a known row group structure
+//! Each test:
+//! 1. Creates a temporary Parquet file with a known row group structure
 //! 2. Reads data from that file using the Arrow Parquet Reader, recording the IO operations
 //! 3. Asserts the expected IO patterns based on the read operations
 
@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::io::Read;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 #[test]
 fn test_read_entire_file() {
@@ -448,6 +448,10 @@ fn test_read_single_row_filter_all() {
 /// Values of column "b" are 400..799
 /// Values of column "c" are alternating strings of length 12 and longer
 fn test_file() -> TestParquetFile {
+    TestParquetFile::new(TEST_FILE_DATA.clone())
+}
+
+static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     // Input batch has 400 rows, with 3 columns: "a", "b", "c"
     // Note c is a different types (so the data page sizes will be different)
     let a: ArrayRef = Arc::new(Int64Array::from_iter_values(0..400));
@@ -481,8 +485,8 @@ fn test_file() -> TestParquetFile {
         row_remain -= chunk_size;
     }
     writer.close().unwrap();
-    TestParquetFile::new(Bytes::from(output))
-}
+    Bytes::from(output)
+});
 
 /// A test parquet file and its layout.
 struct TestParquetFile {
