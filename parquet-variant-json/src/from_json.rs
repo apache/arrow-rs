@@ -29,7 +29,7 @@ use serde_json::{Number, Value};
 ///
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
-/// * `variant_builder` - Object of type `VariantBuilder` used to build the vatiant from the JSON
+/// * `variant_builder` - Object of type `VariantBuilder` used to build the variant from the JSON
 ///   string
 ///
 ///
