@@ -502,6 +502,11 @@ impl MetadataBuilder {
 
         metadata_buffer
     }
+
+    /// Return the inner buffer, without finalizing any in progress metadata.
+    pub(crate) fn take_buffer(self) -> Vec<u8> {
+        self.metadata_buffer
+    }
 }
 
 impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
@@ -1001,6 +1006,18 @@ impl VariantBuilder {
     /// Finish the builder and return the metadata and value buffers.
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
         (self.metadata_builder.finish(), self.buffer.into_inner())
+    }
+
+    /// Return the inner metadata buffers and value buffer.
+    ///
+    /// This can be used to get the underlying buffers provided via
+    /// [`VariantBuilder::new_with_buffers`] without finalizing the metadata or
+    /// values (for rolling back changes).
+    pub fn into_buffers(self) -> (Vec<u8>, Vec<u8>) {
+        (
+            self.metadata_builder.take_buffer(),
+            self.buffer.into_inner(),
+        )
     }
 }
 

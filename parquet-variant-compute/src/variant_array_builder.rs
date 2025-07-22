@@ -269,20 +269,11 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     /// underlying buffers will be rolled back.
     pub fn finish(mut self) {
         self.finished = true;
-        // Note: buffers are returned and replaced in the drop impl
-    }
-}
 
-impl<'a> Drop for VariantArrayVariantBuilder<'a> {
-    /// If the builder was not finished, roll back any changes made to the
-    /// underlying buffers (by truncating them)
-    fn drop(&mut self) {
         let metadata_offset = self.metadata_offset;
         let value_offset = self.value_offset;
-
         // get the buffers back from the variant builder
-        let (mut metadata_buffer, mut value_buffer) =
-            std::mem::take(&mut self.variant_builder).finish();
+        let (metadata_buffer, value_buffer) = std::mem::take(&mut self.variant_builder).finish();
 
         // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost)
         let metadata_len = metadata_buffer
@@ -294,24 +285,52 @@ impl<'a> Drop for VariantArrayVariantBuilder<'a> {
             .checked_sub(value_offset)
             .expect("value length decreased unexpectedly");
 
+        // commit the changes by putting the
+        // offsets and lengths into the parent array builder.
+        self.array_builder
+            .metadata_locations
+            .push((metadata_offset, metadata_len));
+        self.array_builder
+            .value_locations
+            .push((value_offset, value_len));
+        self.array_builder.nulls.append_non_null();
+        // put the buffers back into the array builder
+        self.array_builder.metadata_buffer = metadata_buffer;
+        self.array_builder.value_buffer = value_buffer;
+    }
+}
+
+impl<'a> Drop for VariantArrayVariantBuilder<'a> {
+    /// If the builder was not finished, roll back any changes made to the
+    /// underlying buffers (by truncating them)
+    fn drop(&mut self) {
         if self.finished {
-            // if the object was finished, commit the changes by putting the
-            // offsets and lengths into the parent array builder.
-            self.array_builder
-                .metadata_locations
-                .push((metadata_offset, metadata_len));
-            self.array_builder
-                .value_locations
-                .push((value_offset, value_len));
-            self.array_builder.nulls.append_non_null();
-        } else {
-            // if the object was not finished, truncate the buffers to the
-            // original offsets to roll back any changes. Note this is fast
-            // because truncate doesn't free any memory: it just has to drop
-            // elements (and u8 doesn't have a destructor)
-            metadata_buffer.truncate(metadata_offset);
-            value_buffer.truncate(value_offset);
+            return;
         }
+
+        // if the object was not finished, need to rollback any changes by
+        // truncating the buffers to the original offsets
+        let metadata_offset = self.metadata_offset;
+        let value_offset = self.value_offset;
+
+        // get the buffers back from the variant builder
+        let (mut metadata_buffer, mut value_buffer) =
+            std::mem::take(&mut self.variant_builder).into_buffers();
+
+        // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost) so panic immediately
+        metadata_buffer
+            .len()
+            .checked_sub(metadata_offset)
+            .expect("metadata length decreased unexpectedly");
+        value_buffer
+            .len()
+            .checked_sub(value_offset)
+            .expect("value length decreased unexpectedly");
+
+        // Note this truncate is fast because truncate doesn't free any memory:
+        // it just has to drop elements (and u8 doesn't have a destructor)
+        metadata_buffer.truncate(metadata_offset);
+        value_buffer.truncate(value_offset);
 
         // put the buffers back into the array builder
         self.array_builder.metadata_buffer = metadata_buffer;
