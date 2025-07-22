@@ -43,7 +43,6 @@ const DEFAULT_CAPACITY: usize = 1024;
 pub(crate) struct RecordDecoderBuilder<'a> {
     data_type: &'a AvroDataType,
     use_utf8view: bool,
-    strict_mode: bool,
 }
 
 impl<'a> RecordDecoderBuilder<'a> {
@@ -51,7 +50,6 @@ impl<'a> RecordDecoderBuilder<'a> {
         Self {
             data_type,
             use_utf8view: false,
-            strict_mode: false,
         }
     }
 
@@ -60,14 +58,9 @@ impl<'a> RecordDecoderBuilder<'a> {
         self
     }
 
-    pub(crate) fn with_strict_mode(mut self, strict_mode: bool) -> Self {
-        self.strict_mode = strict_mode;
-        self
-    }
-
     /// Builds the `RecordDecoder`.
     pub(crate) fn build(self) -> Result<RecordDecoder, ArrowError> {
-        RecordDecoder::try_new_with_options(self.data_type, self.use_utf8view, self.strict_mode)
+        RecordDecoder::try_new_with_options(self.data_type, self.use_utf8view)
     }
 }
 
@@ -77,7 +70,6 @@ pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     use_utf8view: bool,
-    strict_mode: bool,
 }
 
 impl RecordDecoder {
@@ -90,7 +82,6 @@ impl RecordDecoder {
     pub(crate) fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         RecordDecoderBuilder::new(data_type)
             .with_utf8_view(true)
-            .with_strict_mode(true)
             .build()
     }
 
@@ -109,14 +100,12 @@ impl RecordDecoder {
     pub(crate) fn try_new_with_options(
         data_type: &AvroDataType,
         use_utf8view: bool,
-        strict_mode: bool,
     ) -> Result<Self, ArrowError> {
         match Decoder::try_new(data_type)? {
             Decoder::Record(fields, encodings) => Ok(Self {
                 schema: Arc::new(ArrowSchema::new(fields)),
                 fields: encodings,
                 use_utf8view,
-                strict_mode,
             }),
             encoding => Err(ArrowError::ParseError(format!(
                 "Expected record got {encoding:?}"
@@ -331,7 +320,6 @@ impl Decoder {
             }
             Self::Array(_, offsets, e) => {
                 offsets.push_length(0);
-                e.append_null();
             }
             Self::Record(_, e) => e.iter_mut().for_each(|e| e.append_null()),
             Self::Map(_, _koff, moff, _, _) => {
@@ -344,7 +332,10 @@ impl Decoder {
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
             Self::Enum(indices, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
-            Self::Nullable(_, _, _) => unreachable!("Nulls cannot be nested"),
+            Self::Nullable(_, null_buffer, inner) => {
+                null_buffer.append(false);
+                inner.append_null();
+            }
         }
     }
 
@@ -431,12 +422,17 @@ impl Decoder {
                 let nanos = (millis as i64) * 1_000_000;
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
-            Self::Nullable(nullability, nulls, e) => {
-                let is_valid = buf.get_bool()? == matches!(nullability, Nullability::NullFirst);
-                nulls.append(is_valid);
-                match is_valid {
-                    true => e.decode(buf)?,
-                    false => e.append_null(),
+            Self::Nullable(order, nb, encoding) => {
+                let branch = buf.read_vlq()?;
+                let is_not_null = match *order {
+                    Nullability::NullFirst => branch != 0,
+                    Nullability::NullSecond => branch == 0,
+                };
+                nb.append(is_not_null);
+                if is_not_null {
+                    encoding.decode(buf)?;
+                } else {
+                    encoding.append_null();
                 }
             }
         }
