@@ -1949,7 +1949,7 @@ async fn test_float16() {
 
 #[tokio::test]
 async fn test_decimal32() {
-    // This creates a parquet file of 1 column "decimal32_col" with decimal data type and precicion 9, scale 2
+    // This creates a parquet file of 1 column "decimal32_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
         scenario: Scenario::Decimal32,
@@ -1982,7 +1982,7 @@ async fn test_decimal32() {
 }
 #[tokio::test]
 async fn test_decimal64() {
-    // This creates a parquet file of 1 column "decimal64_col" with decimal data type and precicion 9, scale 2
+    // This creates a parquet file of 1 column "decimal64_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
         scenario: Scenario::Decimal64,
@@ -2015,7 +2015,7 @@ async fn test_decimal64() {
 }
 #[tokio::test]
 async fn test_decimal128() {
-    // This creates a parquet file of 1 column "decimal128_col" with decimal data type and precicion 9, scale 2
+    // This creates a parquet file of 1 column "decimal128_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
         scenario: Scenario::Decimal128,
