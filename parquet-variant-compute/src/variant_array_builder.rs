@@ -45,24 +45,17 @@ use std::sync::Arc;
 /// builder.append_variant(Variant::from(42));
 /// // append a null row (note not a Variant::Null)
 /// builder.append_null();
-/// // append a pre-constructed metadata and value buffers
-/// let (metadata, value) = {
-///   let mut vb = VariantBuilder::new();
-///   let mut obj = vb.new_object();
-///   obj.insert("foo", "bar");
-///   obj.finish().unwrap();
-///   vb.finish()
-/// };
-/// builder.append_variant_buffers(&metadata, &value);
-///
-/// // Use `variant_builder` method to write values directly to the output array
+/// // append an object to the builder
 /// let mut vb = builder.variant_builder();
-/// vb.append_value("Hello, World!");
-/// vb.finish(); // Note: call finish to write the variant to the buffers
+/// vb.new_object()
+///   .with_field("foo", "bar")
+///   .finish()
+///   .unwrap();
+///  vb.finish(); // must call finish to write the variant to the buffers
 ///
 /// // create the final VariantArray
 /// let variant_array = builder.build();
-/// assert_eq!(variant_array.len(), 4);
+/// assert_eq!(variant_array.len(), 3);
 /// // // Access the values
 /// // row 1 is not null and is an integer
 /// assert!(!variant_array.is_null(0));
@@ -71,10 +64,9 @@ use std::sync::Arc;
 /// assert!(variant_array.is_null(1));
 /// // row 2 is not null and is an object
 /// assert!(!variant_array.is_null(2));
-/// assert!(variant_array.value(2).as_object().is_some());
-/// // row 3 is a string
-/// assert!(!variant_array.is_null(3));
-/// assert_eq!(variant_array.value(3), Variant::from("Hello, World!"));
+/// let value = variant_array.value(2);
+/// let obj = value.as_object().expect("expected object");
+/// assert_eq!(obj.get("foo"), Some(Variant::from("bar")));
 /// ```
 #[derive(Debug)]
 pub struct VariantArrayBuilder {
@@ -158,20 +150,6 @@ impl VariantArrayBuilder {
         let mut direct_builder = self.variant_builder();
         direct_builder.variant_builder.append_value(variant);
         direct_builder.finish()
-    }
-
-    /// Append a metadata and values buffer to the builder
-    pub fn append_variant_buffers(&mut self, metadata: &[u8], value: &[u8]) {
-        self.nulls.append_non_null();
-        let metadata_length = metadata.len();
-        let metadata_offset = self.metadata_buffer.len();
-        self.metadata_locations
-            .push((metadata_offset, metadata_length));
-        self.metadata_buffer.extend_from_slice(metadata);
-        let value_length = value.len();
-        let value_offset = self.value_buffer.len();
-        self.value_locations.push((value_offset, value_length));
-        self.value_buffer.extend_from_slice(value);
     }
 
     /// Return a `VariantArrayVariantBuilder` that writes directly to the
