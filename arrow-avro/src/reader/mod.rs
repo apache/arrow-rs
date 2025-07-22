@@ -157,9 +157,10 @@ impl Decoder {
         let mut total_consumed = 0usize;
         while total_consumed < data.len() && self.decoded_rows < self.batch_size {
             let consumed = self.record_decoder.decode(&data[total_consumed..], 1)?;
-            if consumed == 0 {
-                break;
-            }
+            // A successful call to record_decoder.decode means one row was decoded.
+            // If `consumed` is 0 on a non-empty buffer, it implies a valid zero-byte record.
+            // We increment `decoded_rows` to mark progress and avoid an infinite loop.
+            // We add `consumed` (which can be 0) to `total_consumed`.
             total_consumed += consumed;
             self.decoded_rows += 1;
         }
@@ -364,11 +365,7 @@ impl<R: BufRead> Reader<R> {
             }
             // Try to decode more rows from the current block.
             let consumed = self.decoder.decode(&self.block_data[self.block_cursor..])?;
-            if consumed == 0 && self.block_cursor < self.block_data.len() {
-                self.block_cursor = self.block_data.len();
-            } else {
-                self.block_cursor += consumed;
-            }
+            self.block_cursor += consumed;
         }
         self.decoder.flush()
     }
@@ -497,6 +494,29 @@ mod test {
             RecordBatch::try_from_iter(vec![("str_field", Arc::new(array) as ArrayRef)]).unwrap();
 
         assert!(batch.column(0).as_any().is::<StringViewArray>());
+    }
+
+    #[test]
+    fn test_read_zero_byte_avro_file() {
+        let batch = read_file("test/data/zero_byte.avro", 3, false);
+        let schema = batch.schema();
+        assert_eq!(schema.fields().len(), 1);
+        let field = schema.field(0);
+        assert_eq!(field.name(), "data");
+        assert_eq!(field.data_type(), &DataType::Binary);
+        assert!(field.is_nullable());
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 1);
+        let binary_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert!(binary_array.is_null(0));
+        assert!(binary_array.is_valid(1));
+        assert_eq!(binary_array.value(1), b"");
+        assert!(binary_array.is_valid(2));
+        assert_eq!(binary_array.value(2), b"some bytes");
     }
 
     #[test]
