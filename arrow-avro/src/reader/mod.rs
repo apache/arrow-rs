@@ -664,14 +664,12 @@ mod test {
         let batch_large = read_file(&file_path, 8, false);
         assert_eq!(
             batch_large, expected,
-            "Decoded RecordBatch does not match for file {}",
-            file
+            "Decoded RecordBatch does not match for file {file}"
         );
         let batch_small = read_file(&file_path, 3, false);
         assert_eq!(
             batch_small, expected,
-            "Decoded RecordBatch (batch size 3) does not match for file {}",
-            file
+            "Decoded RecordBatch (batch size 3) does not match for file {file}"
         );
     }
 
@@ -716,14 +714,12 @@ mod test {
         let batch_large = read_file(&file_path, 8, false);
         assert_eq!(
             batch_large, expected,
-            "Decoded RecordBatch does not match for file {}",
-            file
+            "Decoded RecordBatch does not match for file {file}"
         );
         let batch_small = read_file(&file_path, 3, false);
         assert_eq!(
             batch_small, expected,
-            "Decoded RecordBatch (batch size 3) does not match for file {}",
-            file
+            "Decoded RecordBatch (batch size 3) does not match for file {file}"
         );
     }
 
