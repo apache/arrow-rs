@@ -170,12 +170,12 @@ impl VariantArray {
 
     /// Get the metadata bytes for a specific index
     pub fn metadata_bytes(&self, index: usize) -> &[u8] {
-        self.metadata_field().as_binary_view().value(index).as_ref()
+        self.metadata_field().as_binary_view().value(index)
     }
 
     /// Get the value bytes for a specific index
     pub fn value_bytes(&self, index: usize) -> &[u8] {
-        self.value_field().as_binary_view().value(index).as_ref()
+        self.value_field().as_binary_view().value(index)
     }
 
     /// Get the field names for an object at the given index

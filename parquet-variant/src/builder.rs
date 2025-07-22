@@ -305,9 +305,9 @@ impl ValueBuffer {
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuffer::try_append_variant`]
-    fn append_variant<'m, 'd>(
+    fn append_variant(
         &mut self,
-        variant: Variant<'m, 'd>,
+        variant: Variant<'_, '_>,
         metadata_builder: &mut MetadataBuilder,
     ) {
         match variant {
@@ -335,9 +335,9 @@ impl ValueBuffer {
     }
 
     /// Appends a variant to the buffer
-    fn try_append_variant<'m, 'd>(
+    fn try_append_variant(
         &mut self,
-        variant: Variant<'m, 'd>,
+        variant: Variant<'_, '_>,
         metadata_builder: &mut MetadataBuilder,
     ) -> Result<(), ArrowError> {
         match variant {
