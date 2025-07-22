@@ -40,6 +40,8 @@ members = [
     "arrow-string",
     "parquet",
     "parquet-variant",
+    "parquet-variant-compute",
+    "parquet-variant-json",
     "parquet_derive",
     "parquet_derive_test",
 ]
@@ -55,6 +57,9 @@ members = [
 resolver = "2"
 
 exclude = [
+    # arrow-pyarrow-testing is excluded because it requires a Python interpreter with the pyarrow package installed,
+    # which makes running `cargo test --all` fail if the appropriate Python environment is not set up.
+    "arrow-pyarrow-testing",
     # arrow-pyarrow-integration-testing is excluded because it requires different compilation flags, thereby
     # significantly changing how it is compiled within the workspace, causing the whole workspace to be compiled from
     # scratch this way, this is a stand-alone package that compiles independently of the others.
@@ -76,7 +81,7 @@ include = [
     "NOTICE.txt",
 ]
 edition = "2021"
-rust-version = "1.81"
+rust-version = "1.84"
 
 [workspace.dependencies]
 arrow = { version = "55.2.0", path = "./arrow", default-features = false }
@@ -96,7 +101,14 @@ arrow-select = { version = "55.2.0", path = "./arrow-select" }
 arrow-string = { version = "55.2.0", path = "./arrow-string" }
 parquet = { version = "55.2.0", path = "./parquet", default-features = false }
 
+# These crates have not yet been released and thus do not use the workspace version
+parquet-variant = { version = "0.1.0", path = "./parquet-variant" }
+parquet-variant-json = { version = "0.1.0", path = "./parquet-variant-json" }
+parquet-variant-compute = { version = "0.1.0", path = "./parquet-variant-json" }
+
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
+
+simdutf8 = { version = "0.1.5", default-features = false }
 
 # release inherited profile keeping debug information and symbols
 # for mem/cpu profiling

@@ -2697,7 +2697,7 @@ mod tests {
             .infer_schema(&mut read, None);
         assert!(result.is_err());
         // Include line number in the error message to help locate and fix the issue
-        assert_eq!(result.err().unwrap().to_string(), "Csv error: Encountered unequal lengths between records on CSV file. Expected 2 records, found 3 records at line 3");
+        assert_eq!(result.err().unwrap().to_string(), "Csv error: Encountered unequal lengths between records on CSV file. Expected 3 records, found 2 records at line 3");
     }
 
     #[test]

@@ -48,7 +48,7 @@ prost = { version = "0.13.1", default-features = false, features = ["prost-deriv
 # For Timestamp type
 prost-types = { version = "0.13.1", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"], optional = true }
-tonic = { version = "0.12.3", default-features = false, features = ["transport", "codegen", "prost"] }
+tonic = { version = "0.13", default-features = false, features = ["transport", "codegen", "prost", "router"] }
 
 # CLI-related dependencies
 anyhow = { version = "1.0", optional = true }
@@ -64,9 +64,13 @@ default = []
 flight-sql = ["dep:arrow-arith", "dep:arrow-data", "dep:arrow-ord", "dep:arrow-row", "dep:arrow-select", "dep:arrow-string", "dep:once_cell", "dep:paste"]
 # TODO: Remove in the next release
 flight-sql-experimental = ["flight-sql"]
-tls = ["tonic/tls"]
+tls-aws-lc= ["tonic/tls-aws-lc"]
+tls-native-roots = ["tonic/tls-native-roots"]
+tls-ring = ["tonic/tls-ring"]
+tls-webpki-roots = ["tonic/tls-webpki-roots"]
+
 # Enable CLI tools
-cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-roots", "dep:anyhow", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber"]
+cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-roots", "dep:anyhow", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber", "dep:tokio"]
 
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }
@@ -85,18 +89,18 @@ uuid = { version = "1.10.0", features = ["v4"] }
 
 [[example]]
 name = "flight_sql_server"
-required-features = ["flight-sql", "tls"]
+required-features = ["flight-sql", "tls-ring"]
 
 [[bin]]
 name = "flight_sql_client"
-required-features = ["cli", "flight-sql", "tls"]
+required-features = ["cli", "flight-sql", "tls-ring"]
 
 [[test]]
 name = "flight_sql_client"
 path = "tests/flight_sql_client.rs"
-required-features = ["flight-sql", "tls"]
+required-features = ["flight-sql", "tls-ring"]
 
 [[test]]
 name = "flight_sql_client_cli"
 path = "tests/flight_sql_client_cli.rs"
-required-features = ["cli", "flight-sql", "tls"]
+required-features = ["cli", "flight-sql", "tls-ring"]

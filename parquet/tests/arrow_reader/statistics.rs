@@ -83,7 +83,7 @@ impl Int64Case {
                 Int64Array::from_iter(
                     v64.into_iter()
                         .map(Some)
-                        .chain(std::iter::repeat(None).take(self.null_values)),
+                        .chain(std::iter::repeat_n(None, self.null_values)),
                 )
                 .to_data(),
             )],

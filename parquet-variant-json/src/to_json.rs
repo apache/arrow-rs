@@ -21,7 +21,7 @@ use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
 use std::io::Write;
 
-use crate::variant::{Variant, VariantList, VariantObject};
+use parquet_variant::{Variant, VariantList, VariantObject};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -61,7 +61,8 @@ fn format_binary_base64(bytes: &[u8]) -> String {
 ///
 ///
 /// ```rust
-/// # use parquet_variant::{Variant, variant_to_json};
+/// # use parquet_variant::{Variant};
+/// # use parquet_variant_json::variant_to_json;
 /// # use arrow_schema::ArrowError;
 /// let variant = Variant::from("Hello, World!");
 /// let mut buffer = Vec::new();
@@ -72,7 +73,8 @@ fn format_binary_base64(bytes: &[u8]) -> String {
 ///
 /// # Example: Create a [`Variant::Object`] and convert to JSON
 /// ```rust
-/// # use parquet_variant::{Variant, VariantBuilder, variant_to_json};
+/// # use parquet_variant::{Variant, VariantBuilder};
+/// # use parquet_variant_json::variant_to_json;
 /// # use arrow_schema::ArrowError;
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
@@ -203,7 +205,8 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// # Examples
 ///
 /// ```rust
-/// # use parquet_variant::{Variant, variant_to_json_string};
+/// # use parquet_variant::{Variant};
+/// # use parquet_variant_json::variant_to_json_string;
 /// # use arrow_schema::ArrowError;
 /// let variant = Variant::Int32(42);
 /// let json = variant_to_json_string(&variant)?;
@@ -222,7 +225,8 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// ```
 ///
 /// ```rust
-/// # use parquet_variant::{Variant, VariantBuilder, variant_to_json_string};
+/// # use parquet_variant::{Variant, VariantBuilder};
+/// # use parquet_variant_json::variant_to_json_string;
 /// # use arrow_schema::ArrowError;
 /// let mut builder = VariantBuilder::new();
 /// // Create an object builder that will write fields to the object
@@ -263,7 +267,8 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
 /// # Examples
 ///
 /// ```rust
-/// # use parquet_variant::{Variant, variant_to_json_value};
+/// # use parquet_variant::{Variant};
+/// # use parquet_variant_json::variant_to_json_value;
 /// # use serde_json::Value;
 /// # use arrow_schema::ArrowError;
 /// let variant = Variant::from("hello");
@@ -366,8 +371,8 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
     use chrono::{DateTime, NaiveDate, Utc};
+    use parquet_variant::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
     #[test]
     fn test_decimal_edge_cases() -> Result<(), ArrowError> {
@@ -490,7 +495,7 @@ mod tests {
 
     #[test]
     fn test_short_string_to_json() -> Result<(), ArrowError> {
-        use crate::variant::ShortString;
+        use parquet_variant::ShortString;
         let short_string = ShortString::try_new("short")?;
         let variant = Variant::ShortString(short_string);
         let json = variant_to_json_string(&variant)?;
@@ -598,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_primitive_json_conversion() {
-        use crate::variant::ShortString;
+        use parquet_variant::ShortString;
 
         // Null
         JsonTest {
@@ -848,19 +853,19 @@ mod tests {
 
     #[test]
     fn test_simple_object_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         // Create a simple object with various field types
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut obj = builder.new_object();
-            obj.insert("name", "Alice");
-            obj.insert("age", 30i32);
-            obj.insert("active", true);
-            obj.insert("score", 95.5f64);
-            obj.finish();
-        }
+        builder
+            .new_object()
+            .with_field("name", "Alice")
+            .with_field("age", 30i32)
+            .with_field("active", true)
+            .with_field("score", 95.5f64)
+            .finish()
+            .unwrap();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -884,13 +889,13 @@ mod tests {
 
     #[test]
     fn test_empty_object_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
         {
             let obj = builder.new_object();
-            obj.finish();
+            obj.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();
@@ -906,17 +911,17 @@ mod tests {
 
     #[test]
     fn test_object_with_special_characters_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut obj = builder.new_object();
-            obj.insert("message", "Hello \"World\"\nWith\tTabs");
-            obj.insert("path", "C:\\Users\\Alice\\Documents");
-            obj.insert("unicode", "😀 Smiley");
-            obj.finish();
-        }
+        builder
+            .new_object()
+            .with_field("message", "Hello \"World\"\nWith\tTabs")
+            .with_field("path", "C:\\Users\\Alice\\Documents")
+            .with_field("unicode", "😀 Smiley")
+            .finish()
+            .unwrap();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -936,19 +941,18 @@ mod tests {
 
     #[test]
     fn test_simple_list_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut list = builder.new_list();
-            list.append_value(1i32);
-            list.append_value(2i32);
-            list.append_value(3i32);
-            list.append_value(4i32);
-            list.append_value(5i32);
-            list.finish();
-        }
+        builder
+            .new_list()
+            .with_value(1i32)
+            .with_value(2i32)
+            .with_value(3i32)
+            .with_value(4i32)
+            .with_value(5i32)
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -966,7 +970,7 @@ mod tests {
 
     #[test]
     fn test_empty_list_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -988,19 +992,18 @@ mod tests {
 
     #[test]
     fn test_mixed_type_list_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut list = builder.new_list();
-            list.append_value("hello");
-            list.append_value(42i32);
-            list.append_value(true);
-            list.append_value(()); // null
-            list.append_value(std::f64::consts::PI);
-            list.finish();
-        }
+        builder
+            .new_list()
+            .with_value("hello")
+            .with_value(42i32)
+            .with_value(true)
+            .with_value(()) // null
+            .with_value(std::f64::consts::PI)
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -1020,7 +1023,7 @@ mod tests {
 
     #[test]
     fn test_object_field_ordering_in_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -1030,7 +1033,7 @@ mod tests {
             obj.insert("zebra", "last");
             obj.insert("alpha", "first");
             obj.insert("beta", "second");
-            obj.finish();
+            obj.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();
@@ -1050,21 +1053,20 @@ mod tests {
 
     #[test]
     fn test_list_with_various_primitive_types_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut list = builder.new_list();
-            list.append_value("string_value");
-            list.append_value(42i32);
-            list.append_value(true);
-            list.append_value(std::f64::consts::PI);
-            list.append_value(false);
-            list.append_value(()); // null
-            list.append_value(100i64);
-            list.finish();
-        }
+        builder
+            .new_list()
+            .with_value("string_value")
+            .with_value(42i32)
+            .with_value(true)
+            .with_value(std::f64::consts::PI)
+            .with_value(false)
+            .with_value(()) // null
+            .with_value(100i64)
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -1086,7 +1088,7 @@ mod tests {
 
     #[test]
     fn test_object_with_various_primitive_types_to_json() -> Result<(), ArrowError> {
-        use crate::builder::VariantBuilder;
+        use parquet_variant::VariantBuilder;
 
         let mut builder = VariantBuilder::new();
 
@@ -1098,7 +1100,7 @@ mod tests {
             obj.insert("float_field", 2.71f64);
             obj.insert("null_field", ());
             obj.insert("long_field", 999i64);
-            obj.finish();
+            obj.finish().unwrap();
         }
 
         let (metadata, value) = builder.finish();

@@ -2666,7 +2666,7 @@ mod tests {
     #[test]
     fn binary_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
@@ -2676,7 +2676,7 @@ mod tests {
     #[test]
     fn binary_view_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
@@ -2717,7 +2717,7 @@ mod tests {
     #[test]
     fn binary_column_bloom_filter() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter));
@@ -2756,7 +2756,7 @@ mod tests {
     #[test]
     fn large_binary_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         // LargeBinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
