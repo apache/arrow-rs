@@ -2528,8 +2528,8 @@ mod tests {
         let stats = statistics_roundtrip::<Int96Type>(&input);
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Int96(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &Int96::from(vec![0, 20, 30]));
-            assert_eq!(stats.max_opt().unwrap(), &Int96::from(vec![3, 20, 10]));
+            assert_eq!(stats.min_opt().unwrap(), &Int96::from(vec![3, 20, 10]));
+            assert_eq!(stats.max_opt().unwrap(), &Int96::from(vec![2, 20, 30]));
         } else {
             panic!("expecting Statistics::Int96, got {stats:?}");
         }

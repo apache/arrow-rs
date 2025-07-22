@@ -209,9 +209,6 @@ pub fn from_thrift(
                     old_format,
                 ),
                 Type::INT96 => {
-                    // INT96 statistics may not be correct, because comparison is signed
-                    // byte-wise, not actual timestamps. It is recommended to ignore
-                    // min/max statistics for INT96 columns.
                     let min = if let Some(data) = min {
                         assert_eq!(data.len(), 12);
                         Some(Int96::try_from_le_slice(&data)?)
