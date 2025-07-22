@@ -451,6 +451,7 @@ fn test_file() -> TestParquetFile {
     TestParquetFile::new(TEST_FILE_DATA.clone())
 }
 
+/// Create a parquet file in memory for testing. See [`test_file`] for details.
 static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     // Input batch has 400 rows, with 3 columns: "a", "b", "c"
     // Note c is a different types (so the data page sizes will be different)
