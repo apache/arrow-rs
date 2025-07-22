@@ -61,7 +61,7 @@ impl DecimalCast for i32 {
 
 impl DecimalCast for i64 {
     fn to_i32(self) -> Option<i32> {
-        Some(self as i32)
+        i32::try_from(self).ok()
     }
 
     fn to_i64(self) -> Option<i64> {
@@ -87,11 +87,11 @@ impl DecimalCast for i64 {
 
 impl DecimalCast for i128 {
     fn to_i32(self) -> Option<i32> {
-        Some(self as i32)
+        i32::try_from(self).ok()
     }
 
     fn to_i64(self) -> Option<i64> {
-        Some(self as i64)
+        i64::try_from(self).ok()
     }
 
     fn to_i128(self) -> Option<i128> {
@@ -113,11 +113,11 @@ impl DecimalCast for i128 {
 
 impl DecimalCast for i256 {
     fn to_i32(self) -> Option<i32> {
-        self.to_i128().map(|x| x as i32)
+        self.to_i128().map(|x| i32::try_from(x).ok())?
     }
 
     fn to_i64(self) -> Option<i64> {
-        self.to_i128().map(|x| x as i64)
+        self.to_i128().map(|x| i64::try_from(x).ok())?
     }
 
     fn to_i128(self) -> Option<i128> {
