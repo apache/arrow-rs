@@ -19,6 +19,7 @@
 
 use arrow_buffer::Buffer;
 use arrow_schema::*;
+use core::panic;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, Verifiable, Verifier,
     VerifierOptions, WIPOffset,
@@ -125,12 +126,6 @@ impl<'a> IpcSchemaEncoder<'a> {
         }
         builder.finish()
     }
-}
-
-/// Serialize a schema in IPC format
-#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
-pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder<'_> {
-    IpcSchemaEncoder::new().schema_to_fb(schema)
 }
 
 /// Push a key-value metadata into a FlatBufferBuilder and return [WIPOffset]
@@ -530,24 +525,13 @@ pub(crate) fn build_field<'a>(
         match dictionary_tracker {
             Some(tracker) => Some(get_fb_dictionary(
                 index_type,
-                #[allow(deprecated)]
-                tracker.set_dict_id(field),
+                tracker.next_dict_id(),
                 field
                     .dict_is_ordered()
                     .expect("All Dictionary types have `dict_is_ordered`"),
                 fbb,
             )),
-            None => Some(get_fb_dictionary(
-                index_type,
-                #[allow(deprecated)]
-                field
-                    .dict_id()
-                    .expect("Dictionary type must have a dictionary id"),
-                field
-                    .dict_is_ordered()
-                    .expect("All Dictionary types have `dict_is_ordered`"),
-                fbb,
-            )),
+            None => panic!("IPC must no longer be used without dictionary tracker"),
         }
     } else {
         None

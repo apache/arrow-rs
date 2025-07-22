@@ -858,14 +858,14 @@ mod tests {
         // Create a simple object with various field types
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut obj = builder.new_object();
-            obj.insert("name", "Alice");
-            obj.insert("age", 30i32);
-            obj.insert("active", true);
-            obj.insert("score", 95.5f64);
-            obj.finish().unwrap();
-        }
+        builder
+            .new_object()
+            .with_field("name", "Alice")
+            .with_field("age", 30i32)
+            .with_field("active", true)
+            .with_field("score", 95.5f64)
+            .finish()
+            .unwrap();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -915,13 +915,13 @@ mod tests {
 
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut obj = builder.new_object();
-            obj.insert("message", "Hello \"World\"\nWith\tTabs");
-            obj.insert("path", "C:\\Users\\Alice\\Documents");
-            obj.insert("unicode", "😀 Smiley");
-            obj.finish().unwrap();
-        }
+        builder
+            .new_object()
+            .with_field("message", "Hello \"World\"\nWith\tTabs")
+            .with_field("path", "C:\\Users\\Alice\\Documents")
+            .with_field("unicode", "😀 Smiley")
+            .finish()
+            .unwrap();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -945,15 +945,14 @@ mod tests {
 
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut list = builder.new_list();
-            list.append_value(1i32);
-            list.append_value(2i32);
-            list.append_value(3i32);
-            list.append_value(4i32);
-            list.append_value(5i32);
-            list.finish();
-        }
+        builder
+            .new_list()
+            .with_value(1i32)
+            .with_value(2i32)
+            .with_value(3i32)
+            .with_value(4i32)
+            .with_value(5i32)
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -997,15 +996,14 @@ mod tests {
 
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut list = builder.new_list();
-            list.append_value("hello");
-            list.append_value(42i32);
-            list.append_value(true);
-            list.append_value(()); // null
-            list.append_value(std::f64::consts::PI);
-            list.finish();
-        }
+        builder
+            .new_list()
+            .with_value("hello")
+            .with_value(42i32)
+            .with_value(true)
+            .with_value(()) // null
+            .with_value(std::f64::consts::PI)
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -1059,17 +1057,16 @@ mod tests {
 
         let mut builder = VariantBuilder::new();
 
-        {
-            let mut list = builder.new_list();
-            list.append_value("string_value");
-            list.append_value(42i32);
-            list.append_value(true);
-            list.append_value(std::f64::consts::PI);
-            list.append_value(false);
-            list.append_value(()); // null
-            list.append_value(100i64);
-            list.finish();
-        }
+        builder
+            .new_list()
+            .with_value("string_value")
+            .with_value(42i32)
+            .with_value(true)
+            .with_value(std::f64::consts::PI)
+            .with_value(false)
+            .with_value(()) // null
+            .with_value(100i64)
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;

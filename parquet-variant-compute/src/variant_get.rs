@@ -22,7 +22,7 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, Field};
-use parquet_variant::path::VariantPath;
+use parquet_variant::VariantPath;
 
 use crate::{VariantArray, VariantArrayBuilder};
 
@@ -41,8 +41,7 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
 
     if let Some(as_type) = options.as_type {
         return Err(ArrowError::NotYetImplemented(format!(
-            "getting a {} from a VariantArray is not implemented yet",
-            as_type
+            "getting a {as_type} from a VariantArray is not implemented yet",
         )));
     }
 
@@ -91,7 +90,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{Array, ArrayRef, StringArray};
-    use parquet_variant::path::{VariantPath, VariantPathElement};
+    use parquet_variant::VariantPath;
 
     use crate::batch_json_string_to_variant;
     use crate::VariantArray;
@@ -133,29 +132,21 @@ mod test {
     fn get_primitive_variant_field() {
         single_variant_get_test(
             r#"{"some_field": 1234}"#,
-            vec![VariantPathElement::field("some_field".into())].into(),
+            VariantPath::from("some_field"),
             "1234",
         );
     }
 
     #[test]
     fn get_primitive_variant_list_index() {
-        single_variant_get_test(
-            "[1234, 5678]",
-            vec![VariantPathElement::index(0)].into(),
-            "1234",
-        );
+        single_variant_get_test("[1234, 5678]", VariantPath::from(0), "1234");
     }
 
     #[test]
     fn get_primitive_variant_inside_object_of_object() {
         single_variant_get_test(
             r#"{"top_level_field": {"inner_field": 1234}}"#,
-            vec![
-                VariantPathElement::field("top_level_field".into()),
-                VariantPathElement::field("inner_field".into()),
-            ]
-            .into(),
+            VariantPath::from("top_level_field").join("inner_field"),
             "1234",
         );
     }
@@ -164,11 +155,7 @@ mod test {
     fn get_primitive_variant_inside_list_of_object() {
         single_variant_get_test(
             r#"[{"some_field": 1234}]"#,
-            vec![
-                VariantPathElement::index(0),
-                VariantPathElement::field("some_field".into()),
-            ]
-            .into(),
+            VariantPath::from(0).join("some_field"),
             "1234",
         );
     }
@@ -177,11 +164,7 @@ mod test {
     fn get_primitive_variant_inside_object_of_list() {
         single_variant_get_test(
             r#"{"some_field": [1234]}"#,
-            vec![
-                VariantPathElement::field("some_field".into()),
-                VariantPathElement::index(0),
-            ]
-            .into(),
+            VariantPath::from("some_field").join(0),
             "1234",
         );
     }
@@ -190,7 +173,7 @@ mod test {
     fn get_complex_variant() {
         single_variant_get_test(
             r#"{"top_level_field": {"inner_field": 1234}}"#,
-            vec![VariantPathElement::field("top_level_field".into())].into(),
+            VariantPath::from("top_level_field"),
             r#"{"inner_field": 1234}"#,
         );
     }

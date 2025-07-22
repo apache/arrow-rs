@@ -395,8 +395,7 @@ mod tests {
             let mut writer = StreamWriter::try_new_with_options(
                 &mut buffer,
                 &schema,
-                #[allow(deprecated)]
-                IpcWriteOptions::default().with_preserve_dict_id(false),
+                IpcWriteOptions::default(),
             )
             .expect("Failed to create StreamWriter");
             writer.write(&batch).expect("Failed to write RecordBatch");

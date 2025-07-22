@@ -180,13 +180,41 @@ where
 
 // partition indices into valid and null indices
 fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
-    match array.null_count() {
-        // faster path
-        0 => ((0..(array.len() as u32)).collect(), vec![]),
-        _ => {
-            let indices = 0..(array.len() as u32);
-            indices.partition(|index| array.is_valid(*index as usize))
+    let len = array.len();
+    let null_count = array.null_count();
+    match array.nulls() {
+        Some(nulls) if null_count > 0 => {
+            let mut valid_indices = Vec::with_capacity(len - null_count);
+            let mut null_indices = Vec::with_capacity(null_count);
+
+            let valid_slice = valid_indices.spare_capacity_mut();
+            let null_slice = null_indices.spare_capacity_mut();
+            let mut valid_idx = 0;
+            let mut null_idx = 0;
+
+            nulls.into_iter().enumerate().for_each(|(i, v)| {
+                if v {
+                    valid_slice[valid_idx].write(i as u32);
+                    valid_idx += 1;
+                } else {
+                    null_slice[null_idx].write(i as u32);
+                    null_idx += 1;
+                }
+            });
+
+            assert_eq!(null_idx, null_count);
+            assert_eq!(valid_idx, len - null_count);
+            // Safety: The new lengths match the initial capacity as asserted above,
+            // the bounds checks while writing also ensure they less than or equal to the capacity.
+            unsafe {
+                valid_indices.set_len(valid_idx);
+                null_indices.set_len(null_idx);
+            }
+
+            (valid_indices, null_indices)
         }
+        // faster path
+        _ => ((0..(len as u32)).collect(), vec![]),
     }
 }
 
