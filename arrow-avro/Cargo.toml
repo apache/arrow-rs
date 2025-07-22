@@ -45,6 +45,7 @@ canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 arrow-schema = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-array = { workspace = true }
+arrow-data = { workspace = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.188", features = ["derive"] }
 flate2 = { version = "1.0", default-features = false, features = [
