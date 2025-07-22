@@ -193,10 +193,10 @@ impl VariantArrayBuilder {
     }
 }
 
-/// A `VariantBuilder` that writes directly to the buffers of a `VariantArrayBuilder`.
+/// A `VariantBuilderExt` that writes directly to the buffers of a `VariantArrayBuilder`.
 ///
-/// Note this struct implements [`VariantBuilderExt`], so it can be used
-/// as a drop-in replacement for [`VariantBuilder`] in most cases.
+// This struct implements [`VariantBuilderExt`], so in most cases it can be used as a
+// [`VariantBuilder`] to perform variant-related operations for [`VariantArrayBuilder`].
 ///
 /// If [`Self::finish`] is not called, any changes will be rolled back
 ///
