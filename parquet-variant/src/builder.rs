@@ -1140,7 +1140,7 @@ pub struct ObjectBuilder<'a> {
     parent_state: ParentState<'a>,
     fields: IndexMap<u32, usize>, // (field_id, offset)
     /// The starting offset in the parent's buffer where this object starts
-    parent_offset_base: usize,
+    parent_value_offset_base: usize,
     /// The starting offset in the parent's metadata buffer where this object starts
     /// used to truncate the written fields in `drop` if the current object has not been finished
     parent_metadata_offset_base: usize,
@@ -1159,7 +1159,7 @@ impl<'a> ObjectBuilder<'a> {
         Self {
             parent_state,
             fields: IndexMap::new(),
-            parent_offset_base: offset_base,
+            parent_value_offset_base: offset_base,
             has_been_finished: false,
             parent_metadata_offset_base: meta_offset_base,
             validate_unique_fields,
@@ -1189,7 +1189,7 @@ impl<'a> ObjectBuilder<'a> {
         let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
 
         let field_id = metadata_builder.upsert_field_name(key);
-        let field_start = buffer.offset() - self.parent_offset_base;
+        let field_start = buffer.offset() - self.parent_value_offset_base;
 
         if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
             self.duplicate_fields.insert(field_id);
@@ -1219,7 +1219,7 @@ impl<'a> ObjectBuilder<'a> {
             metadata_builder,
             fields: &mut self.fields,
             field_name: key,
-            parent_offset_base: self.parent_offset_base,
+            parent_offset_base: self.parent_value_offset_base,
         };
         (state, validate_unique_fields)
     }
@@ -1272,7 +1272,7 @@ impl<'a> ObjectBuilder<'a> {
         let parent_buffer = self.parent_state.buffer();
         let current_offset = parent_buffer.offset();
         // Current object starts from `object_start_offset`
-        let data_size = current_offset - self.parent_offset_base;
+        let data_size = current_offset - self.parent_value_offset_base;
         let offset_size = int_size(data_size);
 
         let num_fields = self.fields.len();
@@ -1283,7 +1283,7 @@ impl<'a> ObjectBuilder<'a> {
             (num_fields * id_size as usize) + // field IDs
             ((num_fields + 1) * offset_size as usize); // field offsets + data_size
 
-        let starting_offset = self.parent_offset_base;
+        let starting_offset = self.parent_value_offset_base;
 
         // Shift existing data to make room for the header
         let buffer = parent_buffer.inner_mut();
@@ -1341,7 +1341,7 @@ impl Drop for ObjectBuilder<'_> {
             self.parent_state
                 .buffer()
                 .inner_mut()
-                .truncate(self.parent_offset_base);
+                .truncate(self.parent_value_offset_base);
 
             self.parent_state
                 .metadata_builder()
