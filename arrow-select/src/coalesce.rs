@@ -793,7 +793,7 @@ mod tests {
         );
         let output_batches = Test::new()
             // First allocated buffer is 8kb.
-            // Appending five batches of 2800 bytes will use 2800 * 10 = 14kb (8kb, an 16kb and 32kbkb)
+            // Appending 10 batches of 2800 bytes will use 2800 * 10 = 14kb (8kb, an 16kb and 32kbkb)
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
@@ -875,7 +875,7 @@ mod tests {
 
         let output_batches = Test::new()
             // First allocated buffer is 8kb.
-            // Appending five batches of 5600 bytes will use 5600 * 5 = 28kb (8kb, an 16kb and 32kbkb)
+            // Appending five batches of 2800 bytes will use 2800 * 10 = 28kb (8kb, an 16kb and 32kbkb)
             .with_batch(mixed_batch.clone())
             .with_batch(mixed_batch.clone())
             .with_batch(all_large.clone())
