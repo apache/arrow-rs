@@ -127,7 +127,8 @@ impl VariantSchema {
                 | DataType::Utf8View
                 | DataType::BinaryView
                 | DataType::ListView(_)
-                | DataType::Struct(_) => {}
+                | DataType::Struct(_)
+                | DataType::Dictionary(_, _) => {}
                 foreign => {
                     return Err(ArrowError::NotYetImplemented(format!(
                         "Unsupported VariantArray 'typed_value' field, got {foreign}"
@@ -146,10 +147,35 @@ impl VariantSchema {
             }
             (Some(value_field), None) => Ok(ValueSchema::Value(value_field.0)),
             (None, Some(shredded_field)) => Ok(ValueSchema::ShreddedValue(shredded_field.0)),
-            (Some(_value_field), Some(_shredded_field)) => {
-                todo!("how does a shredded value look like?");
-                // ideally here, i would unpack the shredded_field
-                // and recursively call validate_value_and_typed_value with inside_shredded_object set to true
+            (Some((value_idx, _)), Some((shredded_value_idx, shredded_field))) => {
+                match shredded_field.data_type() {
+                    DataType::Struct(fields) => {
+                        let _ = Self::validate_value_and_typed_value(fields, false)?;
+
+                        Ok(ValueSchema::PartiallyShredded {
+                            value_idx,
+                            shredded_value_idx,
+                        })
+                    }
+                    DataType::Dictionary(_key, shredded_schema) => {
+                        if let DataType::Struct(fields) = shredded_schema.as_ref() {
+                            let _ = Self::validate_value_and_typed_value(fields, true)?;
+
+                            Ok(ValueSchema::PartiallyShredded {
+                                value_idx,
+                                shredded_value_idx,
+                            })
+                        } else {
+                            Err(ArrowError::InvalidArgumentError(
+                                "Invalid VariantArray: shredded fields must be of struct or list types".to_string(),
+                            ))
+                        }
+                    }
+                    _ => Err(ArrowError::InvalidArgumentError(
+                        "Invalid VariantArray: shredded fields must be of struct or list types"
+                            .to_string(),
+                    )),
+                }
             }
         }
     }

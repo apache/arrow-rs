@@ -160,7 +160,13 @@ impl VariantArrayBuilder {
     /// ```
     /// # use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
     /// # use parquet_variant_compute::{VariantArray, VariantArrayBuilder};
-    /// let mut array_builder = VariantArrayBuilder::new(10);
+    /// # use arrow_schema::{Field, Fields, DataType};
+    ///
+    /// let metadata_field = Field::new("metadata", DataType::BinaryView, false);
+    /// let value_field = Field::new("value", DataType::BinaryView, false);
+    /// let schema = Fields::from(vec![metadata_field, value_field]);
+    ///
+    /// let mut array_builder = VariantArrayBuilder::try_new(10, schema).unwrap();
     ///
     /// // First row has a string
     /// let mut variant_builder = array_builder.variant_builder();
@@ -396,7 +402,13 @@ mod test {
     /// Test using sub builders to append variants
     #[test]
     fn test_variant_array_builder_variant_builder() {
-        let mut builder = VariantArrayBuilder::new(10);
+        let metadata_field = Field::new("metadata", DataType::BinaryView, false);
+        let value_field = Field::new("value", DataType::BinaryView, false);
+
+        let schema = Fields::from(vec![metadata_field, value_field]);
+
+        let mut builder = VariantArrayBuilder::try_new(10, schema).unwrap();
+
         builder.append_null(); // should not panic
         builder.append_variant(Variant::from(42i32));
 
@@ -436,7 +448,12 @@ mod test {
     /// Test using non-finished sub builders to append variants
     #[test]
     fn test_variant_array_builder_variant_builder_reset() {
-        let mut builder = VariantArrayBuilder::new(10);
+        let metadata_field = Field::new("metadata", DataType::BinaryView, false);
+        let value_field = Field::new("value", DataType::BinaryView, false);
+
+        let schema = Fields::from(vec![metadata_field, value_field]);
+
+        let mut builder = VariantArrayBuilder::try_new(10, schema).unwrap();
 
         // make a sub-object in the first row
         let mut sub_builder = builder.variant_builder();
