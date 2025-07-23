@@ -96,7 +96,11 @@ mod test {
 
     use super::{variant_get, GetOptions};
 
-    fn single_variant_get_test(input_json: &str, path: parquet_variant::VariantPath, expected_json: &str) {
+    fn single_variant_get_test(
+        input_json: &str,
+        path: parquet_variant::VariantPath,
+        expected_json: &str,
+    ) {
         // Create input array from JSON string
         let input_array_ref: ArrayRef = Arc::new(StringArray::from(vec![Some(input_json)]));
         let input_variant_array_ref: ArrayRef =
@@ -138,7 +142,11 @@ mod test {
 
     #[test]
     fn get_primitive_variant_list_index() {
-        single_variant_get_test("[1234, 5678]", parquet_variant::VariantPath::from(0), "1234");
+        single_variant_get_test(
+            "[1234, 5678]",
+            parquet_variant::VariantPath::from(0),
+            "1234",
+        );
     }
 
     #[test]

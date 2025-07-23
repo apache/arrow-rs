@@ -17,7 +17,6 @@
 
 //! [`VariantArray`] implementation
 
-
 use arrow::array::{Array, ArrayData, ArrayRef, AsArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType};
@@ -168,16 +167,6 @@ impl VariantArray {
         &self.value_ref
     }
 
-    /// Get the metadata bytes for a specific index
-    pub fn metadata_bytes(&self, index: usize) -> &[u8] {
-        self.metadata_field().as_binary_view().value(index)
-    }
-
-    /// Get the value bytes for a specific index
-    pub fn value_bytes(&self, index: usize) -> &[u8] {
-        self.value_field().as_binary_view().value(index)
-    }
-
     /// Get the field names for an object at the given index
     pub fn get_field_names(&self, index: usize) -> Vec<String> {
         if index >= self.len() || self.is_null(index) {
@@ -201,7 +190,7 @@ impl VariantArray {
     pub fn with_fields_removed(&self, field_names: &[&str]) -> Result<Self, ArrowError> {
         use parquet_variant::VariantBuilder;
         use std::collections::HashSet;
-        
+
         let fields_to_remove: HashSet<&str> = field_names.iter().copied().collect();
         let mut builder = crate::variant_array_builder::VariantArrayBuilder::new(self.len());
 
@@ -210,19 +199,19 @@ impl VariantArray {
                 builder.append_null();
             } else {
                 let variant = self.value(i);
-                
+
                 // If it's an object, create a new object without the specified fields
                 if let Some(obj) = variant.as_object() {
                     let mut variant_builder = VariantBuilder::new();
                     let mut object_builder = variant_builder.new_object();
-                    
+
                     // Add all fields except the ones to remove
                     for (field_name, field_value) in obj.iter() {
                         if !fields_to_remove.contains(field_name) {
                             object_builder.insert(field_name, field_value);
                         }
                     }
-                    
+
                     object_builder.finish().unwrap();
                     let (metadata, value) = variant_builder.finish();
                     builder.append_variant_buffers(&metadata, &value);
