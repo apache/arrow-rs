@@ -68,9 +68,6 @@ mod run_array;
 
 pub use run_array::*;
 
-// Re-export the unwrap_ree_array function for public use
-pub use run_array::unwrap_ree_array;
-
 mod byte_view_array;
 
 pub use byte_view_array::*;

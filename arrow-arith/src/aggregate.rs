@@ -17,7 +17,7 @@
 
 //! Defines aggregations over Arrow arrays.
 
-use arrow_array::cast::{*};
+use arrow_array::cast::*;
 use arrow_array::iterator::ArrayIter;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
@@ -653,7 +653,7 @@ where
                 DataType::Int16 => AnyRunArray::new(&array, DataType::Int16),
                 _ => return Ok(None),
             };
-            
+
             if let Some(ree) = ree {
                 let mut sum = T::default_value();
 
@@ -666,7 +666,7 @@ where
                     let end = ree.run_ends_value(i);
                     let run_length = end - prev_end;
                     let run_length_native = T::Native::from_usize(run_length).unwrap();
-                    sum = sum.add_checked(values_data[i].mul_checked(run_length_native)?)?; 
+                    sum = sum.add_checked(values_data[i].mul_checked(run_length_native)?)?;
                     prev_end = end;
                 }
 
@@ -674,7 +674,6 @@ where
             } else {
                 Ok(None)
             }
-            
         }
         _ => sum_checked::<T>(as_primitive_array(&array)),
     }
@@ -712,9 +711,7 @@ where
 {
     match array.data_type() {
         DataType::Dictionary(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
-        DataType::RunEndEncoded(_, _) => {
-            min_max_helper::<T::Native, _, _>(array, cmp)
-        }
+        DataType::RunEndEncoded(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
         _ => m(as_primitive_array(&array)),
     }
 }
@@ -1773,8 +1770,8 @@ mod tests {
     }
     mod ree_aggregation {
         use super::*;
-        use arrow_array::{RunArray, Int32Array, Int64Array, Float64Array};
-        use arrow_array::types::{Int32Type, Int64Type, Float64Type};
+        use arrow_array::types::{Float64Type, Int32Type, Int64Type};
+        use arrow_array::{Float64Array, Int32Array, Int64Array, RunArray};
 
         #[test]
         fn test_ree_sum_array_basic() {
@@ -1783,7 +1780,6 @@ mod tests {
             let values = Int32Array::from(vec![10, 20, 30]);
             let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
 
-            
             let typed_array = run_array.downcast::<Int32Array>().unwrap();
 
             let result = sum_array::<Int32Type, _>(typed_array);
@@ -1794,12 +1790,24 @@ mod tests {
         fn test_ree_sum_array_with_nulls() {
             // REE array with nulls: [10, NULL, 20, NULL, 30]
             let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
-            let values = Int32Array::from(vec![10, 0, 20, 0, 30]); // 0 represents null
+            let values = Int32Array::from(vec![Some(10), None, Some(20), None, Some(30)]);
             let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
 
             let typed_array = run_array.downcast::<Int32Array>().unwrap();
             let result = sum_array::<Int32Type, _>(typed_array);
             assert_eq!(result, Some(60)); // 10+20+30 = 60 (nulls ignored)
+        }
+
+        #[test]
+        fn test_ree_sum_array_with_only_nulls() {
+            // REE array: [None, None, None, None, None] (logical length 5)
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![None, None, None, None, None]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+            let result = sum_array::<Int32Type, _>(typed_array);
+            assert_eq!(result, Some(0)); // 0
         }
 
         #[test]
