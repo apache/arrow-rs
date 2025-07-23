@@ -38,6 +38,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod bad_data;
+mod predicate_cache;
 #[cfg(feature = "crc")]
 mod checksum;
 mod statistics;
