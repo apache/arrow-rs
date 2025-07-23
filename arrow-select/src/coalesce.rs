@@ -785,21 +785,27 @@ mod tests {
 
     #[test]
     fn test_string_view_many_small_compact() {
-        // The strings are 28 long, so each batch has 400 * 28 = 5600 bytes
+        // 200 rows alternating long (28) and short (≤12) strings.
+        // Only the 100 long strings go into data buffers: 100 × 28 = 2800.
         let batch = stringview_batch_repeated(
-            400,
+            200,
             [Some("This string is 28 bytes long"), Some("small string")],
         );
         let output_batches = Test::new()
             // First allocated buffer is 8kb.
-            // Appending five batches of 5600 bytes will use 5600 * 5 = 28kb (8kb, an 16kb and 32kbkb)
+            // Appending 10 batches of 2800 bytes will use 2800 * 10 = 14kb (8kb, an 16kb and 32kbkb)
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch_size(8000)
-            .with_expected_output_sizes(vec![2000]) // only 2000 rows total
+            .with_expected_output_sizes(vec![2000]) // only 1000 rows total
             .run();
 
         // expect a nice even distribution of buffers
@@ -854,14 +860,14 @@ mod tests {
 
     #[test]
     fn test_string_view_large_small() {
-        // The strings are 37 bytes long, so each batch has 200 * 28 = 5600 bytes
+        // The strings are 37 bytes long, so each batch has 100 * 28 = 2800 bytes
         let mixed_batch = stringview_batch_repeated(
-            400,
+            200,
             [Some("This string is 28 bytes long"), Some("small string")],
         );
         // These strings aren't copied, this array has an 8k buffer
         let all_large = stringview_batch_repeated(
-            100,
+            50,
             [Some(
                 "This buffer has only large strings in it so there are no buffer copies",
             )],
@@ -869,7 +875,12 @@ mod tests {
 
         let output_batches = Test::new()
             // First allocated buffer is 8kb.
-            // Appending five batches of 5600 bytes will use 5600 * 5 = 28kb (8kb, an 16kb and 32kbkb)
+            // Appending five batches of 2800 bytes will use 2800 * 10 = 28kb (8kb, an 16kb and 32kbkb)
+            .with_batch(mixed_batch.clone())
+            .with_batch(mixed_batch.clone())
+            .with_batch(all_large.clone())
+            .with_batch(mixed_batch.clone())
+            .with_batch(all_large.clone())
             .with_batch(mixed_batch.clone())
             .with_batch(mixed_batch.clone())
             .with_batch(all_large.clone())
@@ -883,25 +894,16 @@ mod tests {
             col_as_string_view("c0", output_batches.first().unwrap()),
             vec![
                 ExpectedLayout {
-                    len: 8176,
+                    len: 8190,
                     capacity: 8192,
                 },
-                // this buffer was allocated but not used when the all_large batch was pushed
                 ExpectedLayout {
-                    len: 3024,
+                    len: 16366,
                     capacity: 16384,
                 },
                 ExpectedLayout {
-                    len: 7000,
-                    capacity: 8192,
-                },
-                ExpectedLayout {
-                    len: 5600,
+                    len: 6244,
                     capacity: 32768,
-                },
-                ExpectedLayout {
-                    len: 7000,
-                    capacity: 8192,
                 },
             ],
         );
