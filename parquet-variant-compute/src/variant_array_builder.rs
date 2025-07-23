@@ -48,9 +48,10 @@ use std::sync::Arc;
 /// // append a pre-constructed metadata and value buffers
 /// let (metadata, value) = {
 ///   let mut vb = VariantBuilder::new();
-///   let mut obj = vb.new_object();
-///   obj.insert("foo", "bar");
-///   obj.finish().unwrap();
+///   vb.new_object()
+///     .with_field("foo", "bar")
+///     .finish()
+///     .unwrap();
 ///   vb.finish()
 /// };
 /// builder.append_variant_buffers(&metadata, &value);
@@ -130,6 +131,11 @@ impl VariantArrayBuilder {
         // TODO add arrow extension type metadata
 
         VariantArray::try_new(Arc::new(inner)).expect("valid VariantArray by construction")
+    }
+
+    /// Finish building the VariantArray (alias for build for compatibility)
+    pub fn finish(self) -> VariantArray {
+        self.build()
     }
 
     /// Appends a null row to the builder.

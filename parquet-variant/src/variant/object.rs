@@ -410,7 +410,7 @@ impl<'m, 'v> VariantObject<'m, 'v> {
 //
 // Instead of comparing the raw bytes of 2 variant objects, this implementation recursively
 // checks whether the field values are equal -- regardless of their order
-impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
+impl PartialEq for VariantObject<'_, '_> {
     fn eq(&self, other: &Self) -> bool {
         if self.num_elements != other.num_elements {
             return false;

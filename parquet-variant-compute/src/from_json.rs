@@ -18,7 +18,8 @@
 //! Module for transforming a batch of JSON strings into a batch of Variants represented as
 //! STRUCT<metadata: BINARY, value: BINARY>
 
-use crate::{VariantArray, VariantArrayBuilder};
+use crate::variant_array::VariantArray;
+use crate::variant_array_builder::VariantArrayBuilder;
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow_schema::ArrowError;
 use parquet_variant::VariantBuilder;
@@ -47,7 +48,7 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, Ar
             variant_array_builder.append_variant_buffers(&metadata, &value);
         }
     }
-    Ok(variant_array_builder.build())
+    Ok(variant_array_builder.finish())
 }
 
 #[cfg(test)]
@@ -55,7 +56,6 @@ mod test {
     use crate::batch_json_string_to_variant;
     use arrow::array::{Array, ArrayRef, AsArray, StringArray};
     use arrow_schema::ArrowError;
-    use parquet_variant::{Variant, VariantBuilder};
     use std::sync::Arc;
 
     #[test]
@@ -70,12 +70,12 @@ mod test {
         let array_ref: ArrayRef = Arc::new(input);
         let variant_array = batch_json_string_to_variant(&array_ref).unwrap();
 
-        let metadata_array = variant_array.metadata_field().as_binary_view();
-        let value_array = variant_array.value_field().as_binary_view();
+        let metadata_array = variant_array.metadata_field();
+        let value_array = variant_array.value_field();
 
         // Compare row 0
         assert!(!variant_array.is_null(0));
-        assert_eq!(variant_array.value(0), Variant::Int8(1));
+        assert_eq!(variant_array.value(0).as_int8(), Some(1));
 
         // Compare row 1
         assert!(variant_array.is_null(1));
@@ -83,27 +83,30 @@ mod test {
         // Compare row 2
         assert!(!variant_array.is_null(2));
         {
-            let mut vb = VariantBuilder::new();
-            let mut ob = vb.new_object();
-            ob.insert("a", Variant::Int8(32));
-            ob.finish()?;
-            let (object_metadata, object_value) = vb.finish();
-            let expected = Variant::new(&object_metadata, &object_value);
-            assert_eq!(variant_array.value(2), expected);
+            let variant = variant_array.value(2);
+            let obj = variant.as_object().unwrap();
+            assert_eq!(obj.len(), 1);
+            assert_eq!(obj.get("a").unwrap().as_int8(), Some(32));
         }
 
         // Compare row 3 (Note this is a variant NULL, not a null row)
         assert!(!variant_array.is_null(3));
-        assert_eq!(variant_array.value(3), Variant::Null);
+        assert_eq!(variant_array.value(3).as_null(), Some(()));
 
         // Compare row 4
         assert!(variant_array.is_null(4));
 
-        // Ensure that the subfields are not nullable
+        // Ensure that the subfields are non-nullable but have 0-length entries for null rows
         assert!(!metadata_array.is_null(1));
         assert!(!value_array.is_null(1));
         assert!(!metadata_array.is_null(4));
         assert!(!value_array.is_null(4));
+
+        // Null rows should have 0-length metadata and value
+        assert_eq!(metadata_array.as_binary_view().value(1).len(), 0);
+        assert_eq!(value_array.as_binary_view().value(1).len(), 0);
+        assert_eq!(metadata_array.as_binary_view().value(4).len(), 0);
+        assert_eq!(value_array.as_binary_view().value(4).len(), 0);
         Ok(())
     }
 }

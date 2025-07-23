@@ -90,14 +90,17 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{Array, ArrayRef, StringArray};
-    use parquet_variant::VariantPath;
 
     use crate::batch_json_string_to_variant;
     use crate::VariantArray;
 
     use super::{variant_get, GetOptions};
 
-    fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
+    fn single_variant_get_test(
+        input_json: &str,
+        path: parquet_variant::VariantPath,
+        expected_json: &str,
+    ) {
         // Create input array from JSON string
         let input_array_ref: ArrayRef = Arc::new(StringArray::from(vec![Some(input_json)]));
         let input_variant_array_ref: ArrayRef =
@@ -132,21 +135,25 @@ mod test {
     fn get_primitive_variant_field() {
         single_variant_get_test(
             r#"{"some_field": 1234}"#,
-            VariantPath::from("some_field"),
+            parquet_variant::VariantPath::from("some_field"),
             "1234",
         );
     }
 
     #[test]
     fn get_primitive_variant_list_index() {
-        single_variant_get_test("[1234, 5678]", VariantPath::from(0), "1234");
+        single_variant_get_test(
+            "[1234, 5678]",
+            parquet_variant::VariantPath::from(0),
+            "1234",
+        );
     }
 
     #[test]
     fn get_primitive_variant_inside_object_of_object() {
         single_variant_get_test(
             r#"{"top_level_field": {"inner_field": 1234}}"#,
-            VariantPath::from("top_level_field").join("inner_field"),
+            parquet_variant::VariantPath::from("top_level_field").join("inner_field"),
             "1234",
         );
     }
@@ -155,7 +162,7 @@ mod test {
     fn get_primitive_variant_inside_list_of_object() {
         single_variant_get_test(
             r#"[{"some_field": 1234}]"#,
-            VariantPath::from(0).join("some_field"),
+            parquet_variant::VariantPath::from(0).join("some_field"),
             "1234",
         );
     }
@@ -164,7 +171,7 @@ mod test {
     fn get_primitive_variant_inside_object_of_list() {
         single_variant_get_test(
             r#"{"some_field": [1234]}"#,
-            VariantPath::from("some_field").join(0),
+            parquet_variant::VariantPath::from("some_field").join(0),
             "1234",
         );
     }
@@ -173,7 +180,7 @@ mod test {
     fn get_complex_variant() {
         single_variant_get_test(
             r#"{"top_level_field": {"inner_field": 1234}}"#,
-            VariantPath::from("top_level_field"),
+            parquet_variant::VariantPath::from("top_level_field"),
             r#"{"inner_field": 1234}"#,
         );
     }
