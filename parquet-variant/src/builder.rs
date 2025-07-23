@@ -565,6 +565,11 @@ impl MetadataBuilder {
 
         metadata_buffer
     }
+
+    /// Return the inner buffer, without finalizing any in progress metadata.
+    pub(crate) fn take_buffer(self) -> Vec<u8> {
+        self.metadata_buffer
+    }
 }
 
 impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
@@ -1113,6 +1118,18 @@ impl VariantBuilder {
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
         (self.metadata_builder.finish(), self.buffer.into_inner())
     }
+
+    /// Return the inner metadata buffers and value buffer.
+    ///
+    /// This can be used to get the underlying buffers provided via
+    /// [`VariantBuilder::new_with_buffers`] without finalizing the metadata or
+    /// values (for rolling back changes).
+    pub fn into_buffers(self) -> (Vec<u8>, Vec<u8>) {
+        (
+            self.metadata_builder.take_buffer(),
+            self.buffer.into_inner(),
+        )
+    }
 }
 
 /// A builder for creating [`Variant::List`] values.
@@ -1494,16 +1511,16 @@ impl Drop for ObjectBuilder<'_> {
 ///
 /// Allows users to append values to a [`VariantBuilder`], [`ListBuilder`] or
 /// [`ObjectBuilder`]. using the same interface.
-pub trait VariantBuilderExt<'m, 'v> {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>);
+pub trait VariantBuilderExt {
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
     fn new_list(&mut self) -> ListBuilder;
 
     fn new_object(&mut self) -> ObjectBuilder;
 }
 
-impl<'m, 'v> VariantBuilderExt<'m, 'v> for ListBuilder<'_> {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+impl VariantBuilderExt for ListBuilder<'_> {
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
 
@@ -1516,8 +1533,8 @@ impl<'m, 'v> VariantBuilderExt<'m, 'v> for ListBuilder<'_> {
     }
 }
 
-impl<'m, 'v> VariantBuilderExt<'m, 'v> for VariantBuilder {
-    fn append_value(&mut self, value: impl Into<Variant<'m, 'v>>) {
+impl VariantBuilderExt for VariantBuilder {
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
 

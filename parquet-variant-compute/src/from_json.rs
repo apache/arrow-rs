@@ -21,7 +21,6 @@
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow_schema::ArrowError;
-use parquet_variant::VariantBuilder;
 use parquet_variant_json::json_to_variant;
 
 /// Parse a batch of JSON strings into a batch of Variants represented as
@@ -41,10 +40,10 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, Ar
             // The subfields are expected to be non-nullable according to the parquet variant spec.
             variant_array_builder.append_null();
         } else {
-            let mut vb = VariantBuilder::new();
+            let mut vb = variant_array_builder.variant_builder();
+            // parse JSON directly to the variant builder
             json_to_variant(input_string_array.value(i), &mut vb)?;
-            let (metadata, value) = vb.finish();
-            variant_array_builder.append_variant_buffers(&metadata, &value);
+            vb.finish()
         }
     }
     Ok(variant_array_builder.build())
