@@ -4751,9 +4751,8 @@ mod tests {
     fn fuzz_partition_validity() {
         let mut rng = StdRng::seed_from_u64(0xF00D_CAFE);
         for _ in 0..1_000 {
-            // random length up to 512
-            let len = rng.random_range(0..512);
             // build a random BooleanArray with some nulls
+            let len = rng.random_range(0..512);
             let mut builder = BooleanBuilder::new();
             for _ in 0..len {
                 if rng.random_bool(0.2) {
@@ -4764,21 +4763,59 @@ mod tests {
             }
             let array = builder.finish();
 
-            // run both implementations
+            // Test both implementations on the full array
             let (v1, n1) = partition_validity(&array);
             let (v2, n2) = naive_partition(&array);
+            assert_eq!(v1, v2, "valid mismatch on full array");
+            assert_eq!(n1, n2, "null  mismatch on full array");
 
-            assert_eq!(v1, v2, "valid mismatch on random array {array:?}");
-            assert_eq!(n1, n2, "null  mismatch on random array {array:?}");
+            if len >= 8 {
+                // 1) Random slice within the array
+                let max_offset = len - 4;
+                let offset = rng.random_range(0..=max_offset);
+                let max_slice_len = len - offset;
+                let slice_len = rng.random_range(1..=max_slice_len);
 
-            // also test a sliced view
-            if len >= 4 {
-                let slice = array.slice(2, len - 4);
-                let slice = slice.as_any().downcast_ref::<BooleanArray>().unwrap();
+                // Bind the sliced ArrayRef to keep it alive
+                let sliced = array.slice(offset, slice_len);
+                let slice = sliced
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .expect("slice should be a BooleanArray");
+
                 let (sv1, sn1) = partition_validity(slice);
                 let (sv2, sn2) = naive_partition(slice);
-                assert_eq!(sv1, sv2, "valid mismatch on sliced array {slice:?}");
-                assert_eq!(sn1, sn2, "null  mismatch on sliced array {slice:?}");
+                assert_eq!(
+                    sv1, sv2,
+                    "valid mismatch on random slice at offset {offset} length {slice_len}",
+                );
+                assert_eq!(
+                    sn1, sn2,
+                    "null mismatch on random slice at offset {offset} length {slice_len}",
+                );
+
+                // 2) Ensure we test slices that start beyond one 64-bit chunk boundary
+                if len > 68 {
+                    let offset2 = rng.random_range(65..(len - 3));
+                    let len2 = rng.random_range(1..=(len - offset2));
+
+                    let sliced2 = array.slice(offset2, len2);
+                    let slice2 = sliced2
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .expect("slice2 should be a BooleanArray");
+
+                    let (sv3, sn3) = partition_validity(slice2);
+                    let (sv4, sn4) = naive_partition(slice2);
+                    assert_eq!(
+                        sv3, sv4,
+                        "valid mismatch on chunk-crossing slice at offset {offset2} length {len2}",
+                    );
+                    assert_eq!(
+                        sn3, sn4,
+                        "null mismatch on chunk-crossing slice at offset {offset2} length {len2}",
+                    );
+                }
             }
         }
     }
