@@ -219,15 +219,15 @@ fn partition_validity_scan(
     unsafe {
         // 1) Write valid indices (bits == 1)
         let valid_slice = valid.spare_capacity_mut();
-        for (i, idx) in bitmap.inner().set_indices_u32().enumerate() {
-            valid_slice[i].write(idx);
+        for (i, idx) in bitmap.inner().set_indices().enumerate() {
+            valid_slice[i].write(idx as u32);
         }
 
         // 2) Write null indices by inverting
         let inv_buf = !bitmap.inner();
         let null_slice = nulls.spare_capacity_mut();
-        for (i, idx) in inv_buf.set_indices_u32().enumerate() {
-            null_slice[i].write(idx);
+        for (i, idx) in inv_buf.set_indices().enumerate() {
+            null_slice[i].write(idx as u32);
         }
 
         // Finalize lengths

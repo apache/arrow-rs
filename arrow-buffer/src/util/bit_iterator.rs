@@ -216,7 +216,7 @@ impl<'a> BitIndexIterator<'a> {
 impl Iterator for BitIndexIterator<'_> {
     type Item = usize;
 
-    #[inline]
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if self.current_chunk != 0 {
@@ -227,63 +227,6 @@ impl Iterator for BitIndexIterator<'_> {
 
             self.current_chunk = self.iter.next()?;
             self.chunk_offset += 64;
-        }
-    }
-}
-
-/// An iterator of u32 whose index in a provided bitmask is true
-/// Respects arbitrary offsets and slice lead/trail padding exactly like BitIndexIterator
-#[derive(Debug)]
-pub struct BitIndexU32Iterator<'a> {
-    curr: u64,
-    chunk_offset: i64,
-    iter: UnalignedBitChunkIterator<'a>,
-}
-
-impl<'a> BitIndexU32Iterator<'a> {
-    /// Create a new [BitIndexU32Iterator] from the provided buffer,
-    /// offset and len in bits.
-    pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
-        // Build the aligned chunks (including prefix/suffix masked)
-        let chunks = UnalignedBitChunk::new(buffer, offset, len);
-        let mut iter = chunks.iter();
-
-        // First 64-bit word (masked for lead padding), or 0 if empty
-        let curr = iter.next().unwrap_or(0);
-        // Negative lead padding ensures the first bit in curr maps to index 0
-        let chunk_offset = -(chunks.lead_padding() as i64);
-
-        Self {
-            curr,
-            chunk_offset,
-            iter,
-        }
-    }
-}
-
-impl<'a> Iterator for BitIndexU32Iterator<'a> {
-    type Item = u32;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<u32> {
-        loop {
-            if self.curr != 0 {
-                // Position of least-significant set bit
-                let tz = self.curr.trailing_zeros();
-                // Clear that bit
-                self.curr &= self.curr - 1;
-                // Return global index = chunk_offset + tz
-                return Some((self.chunk_offset + tz as i64) as u32);
-            }
-            // Advance to next 64-bit chunk
-            match self.iter.next() {
-                Some(next_chunk) => {
-                    // Move offset forward by 64 bits
-                    self.chunk_offset += 64;
-                    self.curr = next_chunk;
-                }
-                None => return None,
-            }
         }
     }
 }
@@ -379,111 +322,5 @@ mod tests {
     fn test_bit_iterator_bounds() {
         let mask = &[223, 23];
         BitIterator::new(mask, 17, 0);
-    }
-
-    #[test]
-    fn test_bit_index_u32_iterator_basic() {
-        let mask = &[0b00010010, 0b00100011];
-
-        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(mask, 0, 16)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-
-        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 4, 8).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(mask, 4, 8)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-
-        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 10, 4).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(mask, 10, 4)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-
-        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 0).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(mask, 0, 0)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_bit_index_u32_iterator_all_set() {
-        let mask = &[0xFF, 0xFF];
-        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(mask, 0, 16)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_bit_index_u32_iterator_none_set() {
-        let mask = &[0x00, 0x00];
-        let result: Vec<u32> = BitIndexU32Iterator::new(mask, 0, 16).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(mask, 0, 16)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_bit_index_u32_cross_chunk() {
-        let mut buf = vec![0u8; 16];
-        for bit in 60..68 {
-            let byte = (bit / 8) as usize;
-            let bit_in_byte = bit % 8;
-            buf[byte] |= 1 << bit_in_byte;
-        }
-        let offset = 58;
-        let len = 10;
-
-        let result: Vec<u32> = BitIndexU32Iterator::new(&buf, offset, len).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(&buf, offset, len)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_bit_index_u32_unaligned_offset() {
-        let mask = &[0b0110_1100, 0b1010_0000];
-        let offset = 2;
-        let len = 12;
-
-        let result: Vec<u32> = BitIndexU32Iterator::new(mask, offset, len).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(mask, offset, len)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_bit_index_u32_long_all_set() {
-        let len = 200;
-        let num_bytes = len / 8 + if len % 8 != 0 { 1 } else { 0 };
-        let bytes = vec![0xFFu8; num_bytes];
-
-        let result: Vec<u32> = BitIndexU32Iterator::new(&bytes, 0, len).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(&bytes, 0, len)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_bit_index_u32_none_set() {
-        let len = 50;
-        let num_bytes = len / 8 + if len % 8 != 0 { 1 } else { 0 };
-        let bytes = vec![0u8; num_bytes];
-
-        let result: Vec<u32> = BitIndexU32Iterator::new(&bytes, 0, len).collect();
-        let expected: Vec<u32> = BitIndexIterator::new(&bytes, 0, len)
-            .map(|i| i as u32)
-            .collect();
-        assert_eq!(result, expected);
     }
 }
