@@ -102,6 +102,21 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 list.nulls().cloned(),
             )))
         }
+        DataType::RunEndEncoded(run_field, _) => {
+            let ree = match run_field.data_type() {
+                DataType::Int64 => AnyRunArray::new(array, DataType::Int64),
+                DataType::Int32 => AnyRunArray::new(array, DataType::Int32),
+                DataType::Int16 => AnyRunArray::new(array, DataType::Int16),
+                _ => return Err(ArrowError::ComputeError("Invalid run end type".to_string())),
+            };
+            if let Some(ree) = ree {
+                let value_lengths = length(ree.values().as_ref())?;
+                println!("value_lengths:{:?}", value_lengths);
+                Err(ArrowError::ComputeError("RunArray not supported".to_string()))
+            } else {
+                Err(ArrowError::ComputeError("Invalid run end type".to_string()))
+            }
+        }
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
         ))),
@@ -737,5 +752,37 @@ mod tests {
 
         let result = bit_length(&array).unwrap();
         assert_eq!(result.as_ref(), &Int32Array::from(vec![32; 4]));
+    }
+    mod run_array {
+        use super::*;
+        fn test_ree_length_patterns<R: RunEndIndexType>() {
+            let data = vec![
+                Some("hello"), Some("hello"), Some("hello"),  // 3 repeated
+                Some("world"), Some("world"),                 // 2 repeated  
+                None, None, None,                             // 3 nulls
+                Some("test"), Some("test"), Some("test"), Some("test"), // 4 repeated
+            ];
+    
+            let run_array: RunArray<R> = data.clone().into_iter().collect();
+            println!("run_array:{:?}", run_array);
+            let expected: Vec<Option<i32>> = data.iter().map(|opt| opt.map(|s| s.len() as i32)).collect();
+            
+            let result = length(&run_array).unwrap();
+            let result = result.as_any().downcast_ref::<RunArray<R>>().unwrap();
+            
+            println!("result:{:?}", result);
+        }
+        #[test]
+        fn test_ree_length_patterns_int64() {
+            test_ree_length_patterns::<Int64Type>();
+        }
+        #[test]
+        fn test_ree_length_patterns_int32() {
+            test_ree_length_patterns::<Int32Type>();
+        }
+        #[test]
+        fn test_ree_length_patterns_int16() {
+            test_ree_length_patterns::<Int16Type>();
+        }
     }
 }

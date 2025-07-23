@@ -23,11 +23,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
-    builder::StringRunBuilder,
-    make_array,
-    run_iterator::RunArrayIter,
-    types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
-    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
+    builder::StringRunBuilder, cast::AsArray, make_array, run_iterator::RunArrayIter, types::{Int16Type, Int32Type, Int64Type, RunEndIndexType}, Array, ArrayAccessor, ArrayRef, PrimitiveArray
 };
 
 /// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
@@ -657,6 +653,36 @@ where
 
     fn into_iter(self) -> Self::IntoIter {
         RunArrayIter::new(self)
+    }
+}
+
+/// Enum to wrap around runArrays
+pub enum AnyRunArray<'a> {
+    /// A RunArray with Int64 run ends  
+    Int64(&'a RunArray<Int64Type>),
+    /// A RunArray with Int32 run ends
+    Int32(&'a RunArray<Int32Type>),
+    /// A RunArray with Int16 run ends  
+    Int16(&'a RunArray<Int16Type>),
+}
+/// construct a AnyRunArray from a RunArray
+impl<'a> AnyRunArray<'a> {
+    /// Creates a new [`AnyRunArray`] from a [`dyn Array`]
+    pub fn new(array: &'a dyn Array, run_ends_type: DataType) -> Option<Self> {
+        match run_ends_type {
+            DataType::Int64 => Some(AnyRunArray::Int64(array.as_run_opt::<Int64Type>().unwrap())),
+            DataType::Int32 => Some(AnyRunArray::Int32(array.as_run_opt::<Int32Type>().unwrap())),
+            DataType::Int16 => Some(AnyRunArray::Int16(array.as_run_opt::<Int16Type>().unwrap())),
+            _ => None,
+        }
+    }
+    /// Returns the values of this [`AnyRunArray`]
+    pub fn values(&self) -> &ArrayRef {
+        match self {
+            AnyRunArray::Int64(array) => array.values(),
+            AnyRunArray::Int32(array) => array.values(),
+            AnyRunArray::Int16(array) => array.values(),
+        }
     }
 }
 
