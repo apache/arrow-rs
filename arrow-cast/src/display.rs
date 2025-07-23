@@ -40,6 +40,7 @@ type TimeFormat<'a> = Option<&'a str>;
 
 /// Format for displaying durations
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum DurationFormat {
     /// ISO 8601 - `P198DT72932.972880S`
@@ -54,6 +55,7 @@ pub enum DurationFormat {
 /// according to RFC3339
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]

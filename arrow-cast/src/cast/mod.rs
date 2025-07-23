@@ -70,10 +70,12 @@ use num::{NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CastOptions<'a> {
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     pub safe: bool,
     /// Formatting options when casting from temporal types to string
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub format_options: FormatOptions<'a>,
 }
 
