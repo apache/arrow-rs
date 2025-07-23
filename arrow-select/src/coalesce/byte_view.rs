@@ -284,7 +284,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 (false, 0)
             } else {
                 let ideal_buffer_size = s.total_buffer_bytes_used();
-                // We don't need to use get_buffer_memory_size here, because we gc is mainly for
+                // We don't use get_buffer_memory_size here, because gc is for the contents of the
                 // data buffers, not views and nulls.
                 let actual_buffer_size =
                     s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
