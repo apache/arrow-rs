@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["variant_get"],"struct":["GetOptions"]};
