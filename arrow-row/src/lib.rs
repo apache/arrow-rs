@@ -3166,4 +3166,43 @@ mod tests {
             Ok(_) => panic!("Expected NotYetImplemented error for map data type"),
         }
     }
+
+    #[test]
+    fn test_values_buffer_smaller_when_utf8_validation_disabled() {
+        // StringViewArray with inline strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("hello"), // short(5)
+            None,          // null
+            Some("short"), // short(5)
+            Some("tiny"),  // short(4)
+        ])) as ArrayRef;
+
+        // 1. Convert cols into rows
+        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8View)]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+
+        // 2a. Convert rows into colsa (validate_utf8 = false)
+        let converted_without_utf8_validation = converter.convert_rows(&rows).unwrap();
+
+        // 2b. Convert rows into cols (validate_utf8 = true since Row is initialized through RowParser)
+        let rows = rows.try_into_binary().expect("reasonable size");
+        let parser = converter.parser();
+        let converted_with_utf8_validation = converter
+            .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+            .unwrap();
+
+        assert!(converted_without_utf8_validation.len() == 1);
+        assert!(converted_with_utf8_validation.len() == 1);
+
+        let array_1 = &converted_without_utf8_validation[0];
+        let array_2 = &converted_with_utf8_validation[0];
+
+        let values_buffer_1 = &array_1.as_string_view().data_buffers()[0];
+        let values_buffer_2 = &array_2.as_string_view().data_buffers()[0];
+
+        // Since there are no long (>12) strings, len of values buffer is 0
+        assert_eq!(values_buffer_1.len(), 0);
+        // When utf8 validation enabled, values buffer includes inline strings (5+5+4)
+        assert_eq!(values_buffer_2.len(), 14);
+    }
 }
