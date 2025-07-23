@@ -63,6 +63,7 @@ pub use metadata::*;
 #[cfg(feature = "object_store")]
 mod store;
 
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
@@ -512,6 +513,8 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields: self.fields,
             limit: self.limit,
             offset: self.offset,
+            metrics: self.metrics,
+            max_predicate_cache_size: self.max_predicate_cache_size,
         };
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -562,6 +565,12 @@ struct ReaderFactory<T> {
 
     /// Offset to apply to the next
     offset: Option<usize>,
+
+    /// Metrics
+    metrics: ArrowReaderMetrics,
+
+    /// Maximum size of the predicate cache
+    max_predicate_cache_size: usize,
 }
 
 impl<T> ReaderFactory<T>
@@ -597,8 +606,7 @@ where
         };
         let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(
             batch_size,
-            // None,
-            Some(1024 * 1024 * 100),
+            self.max_predicate_cache_size,
         )));
 
         let mut row_group = InMemoryRowGroup {
@@ -636,7 +644,7 @@ where
                     )
                     .await?;
 
-                let array_reader = ArrayReaderBuilder::new(&row_group)
+                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_cache_options(Some(&cache_options))
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
@@ -691,7 +699,7 @@ where
         let plan = plan_builder.build();
 
         let cache_options = cache_options_builder.consumer();
-        let array_reader = ArrayReaderBuilder::new(&row_group)
+        let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
             .with_cache_options(Some(&cache_options))
             .build_array_reader(self.fields.as_deref(), &projection)?;
 
@@ -1928,6 +1936,8 @@ mod tests {
             filter: None,
             limit: None,
             offset: None,
+            metrics: ArrowReaderMetrics::disabled(),
+            max_predicate_cache_size: 0,
         };
 
         let mut skip = true;

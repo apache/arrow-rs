@@ -15,8 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`CachedArrayReader`] wrapper around [`ArrayReader`]
+
 use crate::arrow::array_reader::row_group_cache::BatchID;
 use crate::arrow::array_reader::{row_group_cache::RowGroupCache, ArrayReader};
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::errors::Result;
 use arrow_array::{new_empty_array, ArrayRef, BooleanArray};
 use arrow_buffer::BooleanBufferBuilder;
@@ -82,6 +85,8 @@ pub struct CachedArrayReader {
     /// Local cache to store batches between read_records and consume_batch calls
     /// This ensures data is available even if the shared cache evicts items
     local_cache: HashMap<BatchID, ArrayRef>,
+    /// Statistics to report on the Cache behavior
+    metrics: ArrowReaderMetrics,
 }
 
 impl CachedArrayReader {
@@ -91,6 +96,7 @@ impl CachedArrayReader {
         cache: Arc<Mutex<RowGroupCache>>,
         column_idx: usize,
         role: CacheRole,
+        metrics: ArrowReaderMetrics,
     ) -> Self {
         let batch_size = cache.lock().unwrap().batch_size();
 
@@ -104,6 +110,7 @@ impl CachedArrayReader {
             selections: BooleanBufferBuilder::new(0),
             role,
             local_cache: HashMap::new(),
+            metrics,
         }
     }
 
@@ -217,6 +224,7 @@ impl ArrayReader for CachedArrayReader {
                         let v = array_len + batch_id.val * self.batch_size - self.outer_position;
                         let select_cnt = std::cmp::min(num_records - read, v);
                         read += select_cnt;
+                        self.metrics.increment_cache_reads(select_cnt);
                         self.outer_position += select_cnt;
                         self.selections.append_n(select_cnt, true);
                     } else {
@@ -230,6 +238,7 @@ impl ArrayReader for CachedArrayReader {
                     if read_from_inner == 0 {
                         break;
                     }
+                    self.metrics.increment_inner_reads(read_from_inner);
                     let select_from_this_batch = std::cmp::min(
                         num_records - read,
                         self.inner_position - self.outer_position,
@@ -409,10 +418,16 @@ mod tests {
 
     #[test]
     fn test_cached_reader_basic() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, None))); // Batch size 3
-        let mut cached_reader =
-            CachedArrayReader::new(Box::new(mock_reader), cache, 0, CacheRole::Producer);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache,
+            0,
+            CacheRole::Producer,
+            metrics,
+        );
 
         // Read 3 records
         let records_read = cached_reader.read_records(3).unwrap();
@@ -431,10 +446,16 @@ mod tests {
 
     #[test]
     fn test_read_skip_pattern() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, None))); // Batch size 5
-        let mut cached_reader =
-            CachedArrayReader::new(Box::new(mock_reader), cache, 0, CacheRole::Consumer);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache,
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
 
         let read1 = cached_reader.read_records(2).unwrap();
         assert_eq!(read1, 2);
@@ -459,10 +480,16 @@ mod tests {
 
     #[test]
     fn test_multiple_reads_before_consume() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, None))); // Batch size 3
-        let mut cached_reader =
-            CachedArrayReader::new(Box::new(mock_reader), cache, 0, CacheRole::Consumer);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache,
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
 
         // Multiple reads should accumulate
         let read1 = cached_reader.read_records(2).unwrap();
@@ -480,10 +507,16 @@ mod tests {
 
     #[test]
     fn test_eof_behavior() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, None))); // Batch size 5
-        let mut cached_reader =
-            CachedArrayReader::new(Box::new(mock_reader), cache, 0, CacheRole::Consumer);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache,
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
 
         // Try to read more than available
         let read1 = cached_reader.read_records(5).unwrap();
@@ -502,7 +535,8 @@ mod tests {
 
     #[test]
     fn test_cache_sharing() {
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, None))); // Batch size 5
+        let metrics = ArrowReaderMetrics::disabled();
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, usize::MAX))); // Batch size 5
 
         // First reader - populate cache
         let mock_reader1 = MockArrayReader::new(vec![1, 2, 3, 4, 5]);
@@ -511,6 +545,7 @@ mod tests {
             cache.clone(),
             0,
             CacheRole::Producer,
+            metrics.clone(),
         );
 
         cached_reader1.read_records(3).unwrap();
@@ -524,6 +559,7 @@ mod tests {
             cache.clone(),
             1,
             CacheRole::Consumer,
+            metrics.clone(),
         );
 
         cached_reader2.read_records(2).unwrap();
@@ -537,10 +573,16 @@ mod tests {
 
     #[test]
     fn test_consumer_removes_batches() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, None))); // Batch size 3
-        let mut consumer_reader =
-            CachedArrayReader::new(Box::new(mock_reader), cache.clone(), 0, CacheRole::Consumer);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let mut consumer_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache.clone(),
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
 
         // Read first batch (positions 0-2, batch 0)
         let read1 = consumer_reader.read_records(3).unwrap();
@@ -584,10 +626,16 @@ mod tests {
 
     #[test]
     fn test_producer_keeps_batches() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, None))); // Batch size 3
-        let mut producer_reader =
-            CachedArrayReader::new(Box::new(mock_reader), cache.clone(), 0, CacheRole::Producer);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let mut producer_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache.clone(),
+            0,
+            CacheRole::Producer,
+            metrics,
+        );
 
         // Read first batch (positions 0-2)
         let read1 = producer_reader.read_records(3).unwrap();
@@ -611,10 +659,16 @@ mod tests {
 
     #[test]
     fn test_local_cache_protects_against_eviction() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, None))); // Batch size 3
-        let mut cached_reader =
-            CachedArrayReader::new(Box::new(mock_reader), cache.clone(), 0, CacheRole::Consumer);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache.clone(),
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
 
         // Read records which should populate both shared and local cache
         let records_read = cached_reader.read_records(3).unwrap();
@@ -642,10 +696,16 @@ mod tests {
 
     #[test]
     fn test_local_cache_is_cleared_properly() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, Some(0)))); // Batch size 3, cache 0
-        let mut cached_reader =
-            CachedArrayReader::new(Box::new(mock_reader), cache.clone(), 0, CacheRole::Consumer);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, 0))); // Batch size 3, cache 0
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache.clone(),
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
 
         // Read records which should populate both shared and local cache
         let records_read = cached_reader.read_records(1).unwrap();
@@ -661,8 +721,9 @@ mod tests {
 
     #[test]
     fn test_batch_id_calculation_with_incremental_reads() {
+        let metrics = ArrowReaderMetrics::disabled();
         let mock_reader = MockArrayReader::new(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, None))); // Batch size 3
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
 
         // Create a producer to populate cache
         let mut producer = CachedArrayReader::new(
@@ -670,6 +731,7 @@ mod tests {
             cache.clone(),
             0,
             CacheRole::Producer,
+            metrics.clone(),
         );
 
         // Populate cache with first batch (1, 2, 3)
@@ -677,8 +739,13 @@ mod tests {
         producer.consume_batch().unwrap();
 
         // Now create a consumer that will try to read from cache
-        let mut consumer =
-            CachedArrayReader::new(Box::new(mock_reader), cache.clone(), 0, CacheRole::Consumer);
+        let mut consumer = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache.clone(),
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
 
         // - We want to read 4 records starting from position 0
         // - First 3 records (positions 0-2) should come from cache (batch 0)

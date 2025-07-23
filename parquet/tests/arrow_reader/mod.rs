@@ -38,9 +38,10 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 
 mod bad_data;
-mod predicate_cache;
 #[cfg(feature = "crc")]
 mod checksum;
+#[cfg(feature = "async")]
+mod predicate_cache;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values

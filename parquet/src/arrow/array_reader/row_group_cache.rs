@@ -66,15 +66,15 @@ pub struct RowGroupCache {
     cache: HashMap<CacheKey, ArrayRef>,
     /// Cache granularity
     batch_size: usize,
-    /// Maximum cache size in bytes (None means unlimited)
-    max_cache_bytes: Option<usize>,
+    /// Maximum cache size in bytes
+    max_cache_bytes: usize,
     /// Current cache size in bytes
     current_cache_size: usize,
 }
 
 impl RowGroupCache {
     /// Creates a new empty row group cache
-    pub fn new(batch_size: usize, max_cache_bytes: Option<usize>) -> Self {
+    pub fn new(batch_size: usize, max_cache_bytes: usize) -> Self {
         Self {
             cache: HashMap::new(),
             batch_size,
@@ -89,10 +89,8 @@ impl RowGroupCache {
         let array_size = get_array_memory_size_for_cache(&array);
 
         // Check if adding this array would exceed the cache size limit
-        if let Some(max_size) = self.max_cache_bytes {
-            if self.current_cache_size + array_size > max_size {
-                return false; // Cache is full, don't insert
-            }
+        if self.current_cache_size + array_size > self.max_cache_bytes {
+            return false; // Cache is full, don't insert
         }
 
         let key = CacheKey {
@@ -145,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_cache_basic_operations() {
-        let mut cache = RowGroupCache::new(1000, None);
+        let mut cache = RowGroupCache::new(1000, usize::MAX);
 
         // Create test array
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
@@ -168,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_cache_remove() {
-        let mut cache = RowGroupCache::new(1000, None);
+        let mut cache = RowGroupCache::new(1000, usize::MAX);
 
         // Create test arrays
         let array1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));

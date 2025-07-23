@@ -17,42 +17,71 @@
 
 //! Test for predicate cache in Parquet Arrow reader
 
-
-
 use arrow::array::ArrayRef;
-use std::sync::Arc;
-use parquet::arrow::arrow_reader::ArrowReaderOptions;
-use std::sync::LazyLock;
 use arrow::array::Int64Array;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use bytes::Bytes;
+use arrow::compute::and;
+use arrow::compute::kernels::cmp::{gt, lt};
+use arrow_array::cast::AsArray;
+use arrow_array::types::Int64Type;
 use arrow_array::{RecordBatch, StringViewArray};
-use parquet::arrow::ArrowWriter;
+use bytes::Bytes;
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt};
+use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
+use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
+use std::ops::Range;
+use std::sync::Arc;
+use std::sync::LazyLock;
 
+// TODO file a ticket about the duplication here
 
-// 1. the predicate cache is not used when there are no filters
-#[test]
-fn test() {
-    let test = ParquetPredicateCacheTest::new()
-        .with_expected_cache_used(false);
-    let builder = test.sync_builder(ArrowReaderOptions::default());
-    test.run(builder);
+#[tokio::test]
+async fn test_default_read() {
+    // The cache is not used without predicates, so we expect 0 records read from cache
+    let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(0);
+    let sync_builder = test.sync_builder();
+    test.run_sync(sync_builder);
+    let async_builder = test.async_builder().await;
+    test.run_async(async_builder).await;
 }
 
+#[tokio::test]
+async fn test_cache_with_filters() {
+    let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(49);
+    // TODO The sync reader does not use the cache yet....
+    // let sync_builder = test.sync_builder();
+    // let sync_builder = test.add_project_ab_and_filter_b(sync_builder);
+    // test.run_sync(sync_builder);
 
-// Test:
-// 2. the predicate cache is used when there are filters but the cache size is 0
-// 3. the predicate cache is used when there are filters and the cache size is greater than 0
+    let async_builder = test.async_builder().await;
+    let async_builder = test.add_project_ab_and_filter_b(async_builder);
+    test.run_async(async_builder).await;
+}
 
+#[tokio::test]
+async fn test_cache_disabled_with_filters() {
+    // expect no records to be read from cache, because the cache is disabled
+    let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(0);
+    let sync_builder = test.sync_builder().with_max_predicate_cache_size(0);
+    let sync_builder = test.add_project_ab_and_filter_b(sync_builder);
+    test.run_sync(sync_builder);
 
+    let async_builder = test.async_builder().await.with_max_predicate_cache_size(0);
+    let async_builder = test.add_project_ab_and_filter_b(async_builder);
+    test.run_async(async_builder).await;
+}
 
-
+// --  Begin test infrastructure --
 
 /// A test parquet file
 struct ParquetPredicateCacheTest {
     bytes: Bytes,
-    expected_cache_used: bool,
+    expected_records_read_from_cache: usize,
 }
 impl ParquetPredicateCacheTest {
     /// Create a new `TestParquetFile` with:
@@ -64,44 +93,107 @@ impl ParquetPredicateCacheTest {
     /// Values of column "a" are 0..399
     /// Values of column "b" are 400..799
     /// Values of column "c" are alternating strings of length 12 and longer
-      fn new() -> Self {
+    fn new() -> Self {
         Self {
             bytes: TEST_FILE_DATA.clone(),
-            expected_cache_used: false,
+            expected_records_read_from_cache: 0,
         }
     }
 
-    /// Set whether the predicate cache is expected to be used
-    fn with_expected_cache_used(mut self, used: bool) -> Self{
-        self.expected_cache_used = used;
+    /// Set the expected number of records read from the cache
+    fn with_expected_records_read_from_cache(
+        mut self,
+        expected_records_read_from_cache: usize,
+    ) -> Self {
+        self.expected_records_read_from_cache = expected_records_read_from_cache;
         self
     }
 
     /// Return a [`ParquetRecordBatchReaderBuilder`] for reading this file
-    fn sync_builder(
-        &self,
-        options: ArrowReaderOptions,
-    ) -> ParquetRecordBatchReaderBuilder<Bytes> {
+    fn sync_builder(&self) -> ParquetRecordBatchReaderBuilder<Bytes> {
         let reader = self.bytes.clone();
-        ParquetRecordBatchReaderBuilder::try_new_with_options(reader, options)
+        ParquetRecordBatchReaderBuilder::try_new_with_options(reader, ArrowReaderOptions::default())
             .expect("ParquetRecordBatchReaderBuilder")
     }
 
+    /// Return a [`ParquetRecordBatchReaderBuilder`] for reading this file
+    async fn async_builder(&self) -> ParquetRecordBatchStreamBuilder<TestReader> {
+        let reader = TestReader::new(self.bytes.clone());
+        ParquetRecordBatchStreamBuilder::new_with_options(reader, ArrowReaderOptions::default())
+            .await
+            .unwrap()
+    }
+
+    /// Return a [`ParquetRecordBatchReaderBuilder`] for reading the file with
+    ///
+    /// 1. a projection selecting the "a" and "b" column
+    /// 2. a row_filter applied to "b": 575 < "b" < 625 (select 1 data page from each row group)
+    fn add_project_ab_and_filter_b<T>(
+        &self,
+        builder: ArrowReaderBuilder<T>,
+    ) -> ArrowReaderBuilder<T> {
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+        // "b" > 575 and "b" < 625
+        let row_filter = ArrowPredicateFn::new(
+            ProjectionMask::columns(&schema_descr, ["b"]),
+            |batch: RecordBatch| {
+                let scalar_575 = Int64Array::new_scalar(575);
+                let scalar_625 = Int64Array::new_scalar(625);
+                let column = batch.column(0).as_primitive::<Int64Type>();
+                and(&gt(column, &scalar_575)?, &lt(column, &scalar_625)?)
+            },
+        );
+
+        builder
+            .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b"]))
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter)]))
+    }
 
     /// Build the reader from the specified builder, reading all batches from it,
     /// and asserts the
-    fn run(
-        &self,
-        builder: ParquetRecordBatchReaderBuilder<Bytes>,
-    ) {
-        let reader = builder.build().unwrap();
+    fn run_sync(&self, builder: ParquetRecordBatchReaderBuilder<Bytes>) {
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let reader = builder.with_metrics(metrics.clone()).build().unwrap();
         for batch in reader {
             match batch {
                 Ok(_) => {}
                 Err(e) => panic!("Error reading batch: {e}"),
             }
         }
-        // TODO check if the cache was used
+        self.verify_metrics(metrics)
+    }
+
+    /// Build the reader from the specified builder, reading all batches from it,
+    /// and asserts the
+    async fn run_async(&self, builder: ParquetRecordBatchStreamBuilder<TestReader>) {
+        let metrics = ArrowReaderMetrics::enabled();
+
+        let mut stream = builder.with_metrics(metrics.clone()).build().unwrap();
+        while let Some(batch) = stream.next().await {
+            match batch {
+                Ok(_) => {}
+                Err(e) => panic!("Error reading batch: {e}"),
+            }
+        }
+        self.verify_metrics(metrics)
+    }
+
+    fn verify_metrics(&self, metrics: ArrowReaderMetrics) {
+        let Self {
+            bytes: _,
+            expected_records_read_from_cache,
+        } = self;
+
+        let read_from_cache = metrics
+            .records_read_from_cache()
+            .expect("Metrics enabled, so should have metrics");
+
+        assert_eq!(
+            &read_from_cache, expected_records_read_from_cache,
+                   "Expected {expected_records_read_from_cache} records read from cache, but got {read_from_cache}"
+        );
     }
 }
 
@@ -142,3 +234,42 @@ static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     writer.close().unwrap();
     Bytes::from(output)
 });
+
+/// Copy paste version of the `AsyncFileReader` trait for testing purposes 🤮
+/// TODO put this in a common place
+#[derive(Clone)]
+struct TestReader {
+    data: Bytes,
+    metadata: Option<Arc<ParquetMetaData>>,
+}
+
+impl TestReader {
+    fn new(data: Bytes) -> Self {
+        Self {
+            data,
+            metadata: Default::default(),
+        }
+    }
+}
+
+impl AsyncFileReader for TestReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        let range = range.clone();
+        futures::future::ready(Ok(self
+            .data
+            .slice(range.start as usize..range.end as usize)))
+        .boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        let metadata_reader =
+            ParquetMetaDataReader::new().with_page_indexes(options.is_some_and(|o| o.page_index()));
+        self.metadata = Some(Arc::new(
+            metadata_reader.parse_and_finish(&self.data).unwrap(),
+        ));
+        futures::future::ready(Ok(self.metadata.clone().unwrap().clone())).boxed()
+    }
+}
