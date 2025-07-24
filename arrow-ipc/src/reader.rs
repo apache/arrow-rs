@@ -732,8 +732,7 @@ fn read_dictionary_impl(
         ArrowError::InvalidArgumentError(format!("Failed to concat delta dictionary: {e}"))
     })?;
 
-    // There was an existing dictionary already
-    let _ = dictionaries_by_id.insert(id, combined);
+    dictionaries_by_id.insert(id, combined);
 
     Ok(())
 }
