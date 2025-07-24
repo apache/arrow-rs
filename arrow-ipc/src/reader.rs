@@ -26,6 +26,7 @@
 
 mod stream;
 
+use arrow_select::concat;
 pub use stream::*;
 
 use flatbuffers::{VectorIter, VerifierOptions};
@@ -678,12 +679,6 @@ fn read_dictionary_impl(
     require_alignment: bool,
     skip_validation: UnsafeFlag,
 ) -> Result<(), ArrowError> {
-    if batch.isDelta() {
-        return Err(ArrowError::InvalidArgumentError(
-            "delta dictionary batches not supported".to_string(),
-        ));
-    }
-
     let id = batch.id();
     #[allow(deprecated)]
     let fields_using_this_dictionary = schema.fields_with_dict_id(id);
@@ -719,10 +714,26 @@ fn read_dictionary_impl(
         ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
-    // We don't currently record the isOrdered field. This could be general
-    // attributes of arrays.
-    // Add (possibly multiple) array refs to the dictionaries array.
-    dictionaries_by_id.insert(id, dictionary_values.clone());
+    if !batch.isDelta() {
+        // We don't currently record the isOrdered field. This could be general
+        // attributes of arrays.
+        // Add (possibly multiple) array refs to the dictionaries array.
+        dictionaries_by_id.insert(id, dictionary_values.clone());
+        return Ok(());
+    }
+
+    let existing = dictionaries_by_id.get(&id).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(format!(
+            "No existing dictionary for delta dictionary with id '{id}'"
+        ))
+    })?;
+
+    let combined = concat::concat(&[existing, &dictionary_values]).map_err(|e| {
+        ArrowError::InvalidArgumentError(format!("Failed to concat delta dictionary: {e}"))
+    })?;
+
+    // There was an existing dictionary already
+    let _ = dictionaries_by_id.insert(id, combined);
 
     Ok(())
 }
