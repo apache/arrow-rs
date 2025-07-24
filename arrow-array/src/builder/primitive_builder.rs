@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::types::*;
 use crate::{Array, ArrayRef, PrimitiveArray};
 use arrow_buffer::NullBufferBuilder;
@@ -99,7 +99,7 @@ pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 /// Builder for [`PrimitiveArray`]
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
-    values_builder: BufferBuilder<T::Native>,
+    values_builder: Vec<T::Native>,
     null_buffer_builder: NullBufferBuilder,
     data_type: DataType,
 }
@@ -151,7 +151,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Creates a new primitive array builder with capacity no of items
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            values_builder: BufferBuilder::<T::Native>::new(capacity),
+            values_builder: Vec::with_capacity(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
             data_type: T::DATA_TYPE,
         }
@@ -162,7 +162,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         values_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
     ) -> Self {
-        let values_builder = BufferBuilder::<T::Native>::new_from_buffer(values_buffer);
+        let values_builder = Vec::from(values_buffer.typed_data::<T::Native>());
 
         let null_buffer_builder = null_buffer
             .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, values_builder.len()))
@@ -204,28 +204,29 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     #[inline]
     pub fn append_value(&mut self, v: T::Native) {
         self.null_buffer_builder.append_non_null();
-        self.values_builder.append(v);
+        self.values_builder.push(v);
     }
 
     /// Appends a value of type `T` into the builder `n` times
     #[inline]
     pub fn append_value_n(&mut self, v: T::Native, n: usize) {
         self.null_buffer_builder.append_n_non_nulls(n);
-        self.values_builder.append_n(n, v);
+        self.values_builder.extend(std::iter::repeat(v).take(n));
     }
 
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append_null();
-        self.values_builder.advance(1);
+        self.values_builder.push(T::Native::default());
     }
 
     /// Appends `n` no. of null's into the builder
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
         self.null_buffer_builder.append_n_nulls(n);
-        self.values_builder.advance(n);
+        self.values_builder
+            .extend(std::iter::repeat(T::Native::default()).take(n));
     }
 
     /// Appends an `Option<T>` into the builder
@@ -241,7 +242,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     #[inline]
     pub fn append_slice(&mut self, v: &[T::Native]) {
         self.null_buffer_builder.append_n_non_nulls(v.len());
-        self.values_builder.append_slice(v);
+        self.values_builder.extend_from_slice(v);
     }
 
     /// Appends values from a slice of type `T` and a validity boolean slice
@@ -257,7 +258,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             "Value and validity lengths must be equal"
         );
         self.null_buffer_builder.append_slice(is_valid);
-        self.values_builder.append_slice(values);
+        self.values_builder.extend_from_slice(values);
     }
 
     /// Appends array values and null to this builder as is
@@ -274,7 +275,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             "array data type mismatch"
         );
 
-        self.values_builder.append_slice(array.values());
+        self.values_builder.extend_from_slice(array.values());
         if let Some(null_buffer) = array.nulls() {
             self.null_buffer_builder.append_buffer(null_buffer);
         } else {
@@ -296,7 +297,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .expect("append_trusted_len_iter requires an upper bound");
 
         self.null_buffer_builder.append_n_non_nulls(len);
-        self.values_builder.append_trusted_len_iter(iter);
+        self.values_builder.extend(iter);
     }
 
     /// Builds the [`PrimitiveArray`] and reset this builder.
@@ -305,7 +306,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         let nulls = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
-            .add_buffer(self.values_builder.finish())
+            .add_buffer(Buffer::from_vec(std::mem::take(&mut self.values_builder)))
             .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
@@ -333,7 +334,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
     /// Returns the current values buffer as a mutable slice
     pub fn values_slice_mut(&mut self) -> &mut [T::Native] {
-        self.values_builder.as_slice_mut()
+        self.values_builder.as_mut_slice()
     }
 
     /// Returns the current null buffer as a slice
@@ -349,7 +350,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Returns the current values buffer and null buffer as a slice
     pub fn slices_mut(&mut self) -> (&mut [T::Native], Option<&mut [u8]>) {
         (
-            self.values_builder.as_slice_mut(),
+            self.values_builder.as_mut_slice(),
             self.null_buffer_builder.as_slice_mut(),
         )
     }
