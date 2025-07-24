@@ -112,10 +112,6 @@ impl ValueBuffer {
         self.0.push(primitive_header(primitive_type));
     }
 
-    fn inner(&self) -> &[u8] {
-        &self.0
-    }
-
     fn into_inner(self) -> Vec<u8> {
         self.into()
     }
@@ -366,36 +362,6 @@ impl ValueBuffer {
         Ok(())
     }
 
-    /// Writes out the header byte for a variant object or list
-    fn append_header(&mut self, header_byte: u8, is_large: bool, num_items: usize) {
-        let buf = self.inner_mut();
-        buf.push(header_byte);
-
-        if is_large {
-            let num_items = num_items as u32;
-            buf.extend_from_slice(&num_items.to_le_bytes());
-        } else {
-            let num_items = num_items as u8;
-            buf.push(num_items);
-        };
-    }
-
-    /// Writes out the offsets for an array of offsets, including the final offset (data size).
-    fn append_offset_array(
-        &mut self,
-        offsets: impl IntoIterator<Item = usize>,
-        data_size: Option<usize>,
-        nbytes: u8,
-    ) {
-        let buf = self.inner_mut();
-        for offset in offsets {
-            write_offset(buf, offset, nbytes);
-        }
-        if let Some(data_size) = data_size {
-            write_offset(buf, data_size, nbytes);
-        }
-    }
-
     /// Writes out the header byte for a variant object or list, from the starting position
     /// of the buffer, will return the position after this write
     fn append_header_start_from_buf_pos(
@@ -609,6 +575,7 @@ enum ParentState<'a> {
     List {
         buffer: &'a mut ValueBuffer,
         metadata_builder: &'a mut MetadataBuilder,
+        parent_value_offset_base: usize,
         offsets: &'a mut Vec<usize>,
     },
     Object {
@@ -616,7 +583,7 @@ enum ParentState<'a> {
         metadata_builder: &'a mut MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
         field_name: &'a str,
-        parent_offset_base: usize,
+        parent_value_offset_base: usize,
     },
 }
 
@@ -650,16 +617,20 @@ impl ParentState<'_> {
     fn finish(&mut self, starting_offset: usize) {
         match self {
             ParentState::Variant { .. } => (),
-            ParentState::List { offsets, .. } => offsets.push(starting_offset),
+            ParentState::List {
+                offsets,
+                parent_value_offset_base,
+                ..
+            } => offsets.push(starting_offset - *parent_value_offset_base),
             ParentState::Object {
                 metadata_builder,
                 fields,
                 field_name,
-                parent_offset_base: object_start_offset,
+                parent_value_offset_base,
                 ..
             } => {
                 let field_id = metadata_builder.upsert_field_name(field_name);
-                let shifted_start_offset = starting_offset - *object_start_offset;
+                let shifted_start_offset = starting_offset - *parent_value_offset_base;
                 fields.insert(field_id, shifted_start_offset);
             }
         }
@@ -1115,22 +1086,75 @@ impl VariantBuilder {
     }
 }
 
+/// An iterator that yields the bytes of a packed u32 iterator.
+/// Will yield the first `packed_bytes` bytes of each item in the iterator.
+struct PackedU32Iterator<T: Iterator<Item = [u8; 4]>> {
+    packed_bytes: usize,
+    iterator: T,
+    current_item: [u8; 4],
+    current_byte: usize, // 0..3
+}
+
+impl<T: Iterator<Item = [u8; 4]>> PackedU32Iterator<T> {
+    fn new(packed_bytes: usize, iterator: T) -> Self {
+        // eliminate corner cases in `next` by initializing with a fake already-consumed "first" item
+        Self {
+            packed_bytes,
+            iterator,
+            current_item: [0; 4],
+            current_byte: packed_bytes,
+        }
+    }
+}
+
+impl<T: Iterator<Item = [u8; 4]>> Iterator for PackedU32Iterator<T> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        if self.current_byte >= self.packed_bytes {
+            let next_item = self.iterator.next()?;
+            self.current_item = next_item;
+            self.current_byte = 0;
+        }
+        let rval = self.current_item[self.current_byte];
+        self.current_byte += 1;
+        Some(rval)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let lower = (self.packed_bytes - self.current_byte)
+            + self.packed_bytes * self.iterator.size_hint().0;
+        (lower, None)
+    }
+}
+
 /// A builder for creating [`Variant::List`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
 pub struct ListBuilder<'a> {
     parent_state: ParentState<'a>,
     offsets: Vec<usize>,
-    buffer: ValueBuffer,
+    /// The starting offset in the parent's buffer where this list starts
+    parent_value_offset_base: usize,
+    /// The starting offset in the parent's metadata buffer where this list starts
+    /// used to truncate the written fields in `drop` if the current list has not been finished
+    parent_metadata_offset_base: usize,
+    /// Whether the list has been finished, the written content of the current list
+    /// will be truncated in `drop` if `has_been_finished` is false
+    has_been_finished: bool,
     validate_unique_fields: bool,
 }
 
 impl<'a> ListBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+        let offset_base = parent_state.buffer_current_offset();
+        let meta_offset_base = parent_state.metadata_current_offset();
         Self {
             parent_state,
             offsets: vec![],
-            buffer: ValueBuffer::default(),
+            parent_value_offset_base: offset_base,
+            has_been_finished: false,
+            parent_metadata_offset_base: meta_offset_base,
             validate_unique_fields,
         }
     }
@@ -1146,9 +1170,12 @@ impl<'a> ListBuilder<'a> {
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
     fn parent_state(&mut self) -> (ParentState, bool) {
+        let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
+
         let state = ParentState::List {
-            buffer: &mut self.buffer,
-            metadata_builder: self.parent_state.metadata_builder(),
+            buffer,
+            metadata_builder,
+            parent_value_offset_base: self.parent_value_offset_base,
             offsets: &mut self.offsets,
         };
         (state, self.validate_unique_fields)
@@ -1185,9 +1212,12 @@ impl<'a> ListBuilder<'a> {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        self.offsets.push(self.buffer.offset());
-        self.buffer
-            .try_append_variant(value.into(), self.parent_state.metadata_builder())?;
+        let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
+
+        let offset = buffer.offset() - self.parent_value_offset_base;
+        self.offsets.push(offset);
+
+        buffer.try_append_variant(value.into(), metadata_builder)?;
 
         Ok(())
     }
@@ -1216,24 +1246,46 @@ impl<'a> ListBuilder<'a> {
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) {
-        let data_size = self.buffer.offset();
+        let buffer = self.parent_state.buffer();
+
+        let data_size = buffer.offset() - self.parent_value_offset_base;
+
         let num_elements = self.offsets.len();
         let is_large = num_elements > u8::MAX as usize;
         let offset_size = int_size(data_size);
 
-        // Get parent's buffer
-        let parent_buffer = self.parent_state.buffer();
-        let starting_offset = parent_buffer.offset();
+        let starting_offset = self.parent_value_offset_base;
 
         // Write header
         let header = array_header(is_large, offset_size);
-        parent_buffer.append_header(header, is_large, num_elements);
 
-        // Write out the offset array followed by the value bytes
-        let offsets = std::mem::take(&mut self.offsets);
-        parent_buffer.append_offset_array(offsets, Some(data_size), offset_size);
-        parent_buffer.append_slice(self.buffer.inner());
+        let num_elements_bytes =
+            num_elements
+                .to_le_bytes()
+                .into_iter()
+                .take(if is_large { 4 } else { 1 });
+        let offsets = PackedU32Iterator::new(
+            offset_size as usize,
+            self.offsets
+                .clone()
+                .into_iter()
+                .map(|offset| (offset as u32).to_le_bytes()),
+        );
+        let data_size_bytes = data_size
+            .to_le_bytes()
+            .into_iter()
+            .take(offset_size as usize);
+        let bytes_to_splice = std::iter::once(header)
+            .chain(num_elements_bytes)
+            .chain(offsets)
+            .chain(data_size_bytes);
+
+        buffer
+            .inner_mut()
+            .splice(starting_offset..starting_offset, bytes_to_splice);
+
         self.parent_state.finish(starting_offset);
+        self.has_been_finished = true;
     }
 }
 
@@ -1242,7 +1294,18 @@ impl<'a> ListBuilder<'a> {
 /// This is to ensure that the list is always finalized before its parent builder
 /// is finalized.
 impl Drop for ListBuilder<'_> {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        if !self.has_been_finished {
+            self.parent_state
+                .buffer()
+                .inner_mut()
+                .truncate(self.parent_value_offset_base);
+            self.parent_state
+                .metadata_builder()
+                .field_names
+                .truncate(self.parent_metadata_offset_base);
+        }
+    }
 }
 
 /// A builder for creating [`Variant::Object`] values.
@@ -1360,7 +1423,7 @@ impl<'a> ObjectBuilder<'a> {
             metadata_builder,
             fields: &mut self.fields,
             field_name: key,
-            parent_offset_base: self.parent_value_offset_base,
+            parent_value_offset_base: self.parent_value_offset_base,
         };
         (state, validate_unique_fields)
     }
@@ -2861,8 +2924,7 @@ mod tests {
         // Only the second attempt should appear in the final variant
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(&metadata[0], "name"); // not rolled back
+        assert!(metadata.is_empty()); // rolled back
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         assert_eq!(variant, Variant::Int8(2));
@@ -2885,14 +2947,12 @@ mod tests {
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 2);
-        assert_eq!(&metadata[0], "first");
-        assert_eq!(&metadata[1], "second");
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(&metadata[0], "second");
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let obj = variant.as_object().unwrap();
-        assert_eq!(obj.len(), 2);
-        assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
+        assert_eq!(obj.len(), 1);
         assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
     }
 
