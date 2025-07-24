@@ -1052,6 +1052,7 @@ impl ParquetMetaDataReader {
                             );
                             res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
                         }
+                        _ => res.push(ColumnOrder::UNDEFINED),
                     }
                 }
                 Ok(Some(res))
@@ -1088,6 +1089,7 @@ fn get_file_decryptor(
         EncryptionAlgorithm::AESGCMCTRV1(_) => Err(nyi_err!(
             "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
         )),
+        EncryptionAlgorithm::__UNKNOWN__ { .. } => Err(nyi_err!("Unknown encryption algorithm")),
     }
 }
 
