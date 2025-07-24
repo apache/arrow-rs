@@ -25,7 +25,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::transform::MutableArrayData;
 use arrow_data::ByteView;
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError, DataType, Fields};
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -104,6 +104,7 @@ pub fn interleave(
             k.as_ref() => (dict_helper, values, indices),
             _ => unreachable!("illegal dictionary key type {k}")
         },
+        DataType::Struct(fields) => interleave_struct(fields, values, indices),
         _ => interleave_fallback(values, indices)
     }
 }
@@ -278,6 +279,31 @@ fn interleave_views<T: ByteViewType>(
     Ok(Arc::new(array))
 }
 
+fn interleave_struct(
+    fields: &Fields,
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, StructArray>::new(values, indices);
+
+    let mut struct_fields_array = vec![];
+
+    for i in 0..fields.len() {
+        let field_values: Vec<&dyn Array> = interleaved
+            .arrays
+            .iter()
+            .map(|x| x.column(i).as_ref())
+            .collect();
+        let interleaved = interleave(&field_values, indices)?;
+        struct_fields_array.push(interleaved);
+    }
+
+    let struct_array =
+        StructArray::try_new(fields.clone(), struct_fields_array, interleaved.nulls)?;
+
+    Ok(Arc::new(struct_array))
+}
+
 /// Fallback implementation of interleave using [`MutableArrayData`]
 fn interleave_fallback(
     values: &[&dyn Array],
@@ -378,6 +404,7 @@ mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder, PrimitiveRunBuilder};
     use arrow_array::Int32RunArray;
+    use arrow_schema::Field;
 
     #[test]
     fn test_primitive() {
@@ -515,6 +542,199 @@ mod tests {
         let expected = expected.finish();
 
         assert_eq!(v, &expected);
+    }
+
+    #[test]
+    fn test_struct_without_nulls() {
+        let fields = Fields::from(vec![
+            Field::new("number_col", DataType::Int32, false),
+            Field::new("string_col", DataType::Utf8, false),
+        ]);
+        let a = {
+            let number_col = Int32Array::from_iter_values([1, 2, 3, 4]);
+            let string_col = StringArray::from_iter_values(["a", "b", "c", "d"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let b = {
+            let number_col = Int32Array::from_iter_values([5, 6, 7]);
+            let string_col = StringArray::from_iter_values(["hello", "world", "foo"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let c = {
+            let number_col = Int32Array::from_iter_values([8, 9, 10]);
+            let string_col = StringArray::from_iter_values(["x", "y", "z"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let values = interleave(&[&a, &b, &c], &[(0, 3), (0, 3), (2, 2), (2, 0), (1, 1)]).unwrap();
+        let values_struct = values.as_struct();
+        assert_eq!(values_struct.data_type(), &DataType::Struct(fields));
+        assert_eq!(values_struct.null_count(), 0);
+
+        let values_number = values_struct.column(0).as_primitive::<Int32Type>();
+        assert_eq!(values_number.values(), &[4, 4, 10, 8, 6]);
+        let values_string = values_struct.column(1).as_string::<i32>();
+        let values_string: Vec<_> = values_string.into_iter().collect();
+        assert_eq!(
+            &values_string,
+            &[Some("d"), Some("d"), Some("z"), Some("x"), Some("world")]
+        );
+    }
+
+    #[test]
+    fn test_struct_with_nulls_in_values() {
+        let fields = Fields::from(vec![
+            Field::new("number_col", DataType::Int32, true),
+            Field::new("string_col", DataType::Utf8, true),
+        ]);
+        let a = {
+            let number_col = Int32Array::from_iter_values([1, 2, 3, 4]);
+            let string_col = StringArray::from_iter_values(["a", "b", "c", "d"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let b = {
+            let number_col = Int32Array::from_iter([Some(1), Some(4), None]);
+            let string_col = StringArray::from(vec![Some("hello"), None, Some("foo")]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let values = interleave(&[&a, &b], &[(0, 1), (1, 2), (1, 2), (0, 3), (1, 1)]).unwrap();
+        let values_struct = values.as_struct();
+        assert_eq!(values_struct.data_type(), &DataType::Struct(fields));
+
+        // The struct itself has no nulls, but the values do
+        assert_eq!(values_struct.null_count(), 0);
+
+        let values_number: Vec<_> = values_struct
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .into_iter()
+            .collect();
+        assert_eq!(values_number, &[Some(2), None, None, Some(4), Some(4)]);
+
+        let values_string = values_struct.column(1).as_string::<i32>();
+        let values_string: Vec<_> = values_string.into_iter().collect();
+        assert_eq!(
+            &values_string,
+            &[Some("b"), Some("foo"), Some("foo"), Some("d"), None]
+        );
+    }
+
+    #[test]
+    fn test_struct_with_nulls() {
+        let fields = Fields::from(vec![
+            Field::new("number_col", DataType::Int32, false),
+            Field::new("string_col", DataType::Utf8, false),
+        ]);
+        let a = {
+            let number_col = Int32Array::from_iter_values([1, 2, 3, 4]);
+            let string_col = StringArray::from_iter_values(["a", "b", "c", "d"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let b = {
+            let number_col = Int32Array::from_iter_values([5, 6, 7]);
+            let string_col = StringArray::from_iter_values(["hello", "world", "foo"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                Some(NullBuffer::from(&[true, false, true])),
+            )
+            .unwrap()
+        };
+
+        let c = {
+            let number_col = Int32Array::from_iter_values([8, 9, 10]);
+            let string_col = StringArray::from_iter_values(["x", "y", "z"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let values = interleave(&[&a, &b, &c], &[(0, 3), (0, 3), (2, 2), (1, 1), (2, 0)]).unwrap();
+        let values_struct = values.as_struct();
+        assert_eq!(values_struct.data_type(), &DataType::Struct(fields));
+
+        let validity: Vec<bool> = {
+            let null_buffer = values_struct.nulls().expect("should_have_nulls");
+
+            null_buffer.iter().collect()
+        };
+        assert_eq!(validity, &[true, true, true, false, true]);
+        let values_number = values_struct.column(0).as_primitive::<Int32Type>();
+        assert_eq!(values_number.values(), &[4, 4, 10, 6, 8]);
+        let values_string = values_struct.column(1).as_string::<i32>();
+        let values_string: Vec<_> = values_string.into_iter().collect();
+        assert_eq!(
+            &values_string,
+            &[Some("d"), Some("d"), Some("z"), Some("world"), Some("x"),]
+        );
+    }
+
+    #[test]
+    fn test_struct_empty() {
+        let fields = Fields::from(vec![
+            Field::new("number_col", DataType::Int32, false),
+            Field::new("string_col", DataType::Utf8, false),
+        ]);
+        let a = {
+            let number_col = Int32Array::from_iter_values([1, 2, 3, 4]);
+            let string_col = StringArray::from_iter_values(["a", "b", "c", "d"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+        let v = interleave(&[&a], &[]).unwrap();
+        assert!(v.is_empty());
+        assert_eq!(v.data_type(), &DataType::Struct(fields));
     }
 
     #[test]
