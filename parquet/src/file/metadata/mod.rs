@@ -40,8 +40,8 @@
 //! metadata into parquet files. To work with metadata directly,
 //! the following APIs are available:
 //!
-//! * [`ParquetMetaDataReader`] for reading
-//! * [`ParquetMetaDataWriter`] for writing.
+//! * Reading: [`ParquetMetaDataReader`] (pull API), and [`ParquetMetaDataPushDecoder`] (push API)
+//! * Writing: [`ParquetMetaDataWriter`]
 //!
 //! [`ParquetMetaDataReader`]: https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html
 //! [`ParquetMetaDataWriter`]: https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataWriter.html
@@ -92,6 +92,7 @@
 //!                         * Same name, different struct
 //! ```
 mod memory;
+mod push_decoder;
 pub(crate) mod reader;
 mod writer;
 
@@ -120,6 +121,7 @@ use crate::schema::types::{
 };
 #[cfg(feature = "encryption")]
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+pub use push_decoder::ParquetMetaDataPushDecoder;
 pub use reader::{FooterTail, ParquetMetaDataReader};
 use std::ops::Range;
 use std::sync::Arc;
