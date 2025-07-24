@@ -821,6 +821,20 @@ impl ToPrimitive for i256 {
         }
     }
 
+    fn to_f64(&self) -> Option<f64> {
+        let mag = if let Some(u) = self.checked_abs() {
+            let (low, high) = u.to_parts();
+            (high as f64) * 2_f64.powi(128) + (low as f64)
+        } else {
+            // self == MIN
+            2_f64.powi(255)
+        };
+        if *self < i256::ZERO {
+            Some(-mag)
+        } else {
+            Some(mag)
+        }
+    }
     fn to_u64(&self) -> Option<u64> {
         let as_i128 = self.low as i128;
 
