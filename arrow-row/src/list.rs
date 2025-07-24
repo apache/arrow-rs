@@ -27,7 +27,7 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
     rows: &Rows,
     array: &GenericListArray<O>,
 ) {
-    let shift = array.value_offsets().first().map_or(0, |o| o.as_usize());
+    let shift = array.value_offsets()[0].as_usize();
 
     let offsets = array.value_offsets().windows(2);
     lengths
@@ -63,7 +63,7 @@ pub fn encode<O: OffsetSizeTrait>(
     opts: SortOptions,
     array: &GenericListArray<O>,
 ) {
-    let shift = array.value_offsets().first().map_or(0, |o| o.as_usize());
+    let shift = array.value_offsets()[0].as_usize();
 
     offsets
         .iter_mut()
