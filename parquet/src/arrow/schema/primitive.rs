@@ -230,7 +230,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             }
             ParquetTimeUnit::MICROS(_) => Ok(DataType::Time64(TimeUnit::Microsecond)),
             ParquetTimeUnit::NANOS(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
-            _ => return Err(general_err!("unknown time unit")),
+            _ => Err(general_err!("unknown time unit")),
         },
         (
             Some(LogicalType::Timestamp {
