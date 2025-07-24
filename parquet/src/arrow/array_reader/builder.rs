@@ -30,20 +30,13 @@ use crate::arrow::array_reader::{
     FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
     PrimitiveArrayReader, RowGroups, StructArrayReader,
 };
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
-
-/// Builds [`ArrayReader`]s from parquet schema, projection mask, and RowGroups reader
-pub struct ArrayReaderBuilder<'a> {
-    /// Source of row group data
-    row_groups: &'a dyn RowGroups,
-    /// Optional cache options for the array reader
-    cache_options: Option<&'a CacheOptions<'a>>,
-}
 
 /// Builder for [`CacheOptions`]
 #[derive(Debug, Clone)]
@@ -90,11 +83,22 @@ pub struct CacheOptions<'a> {
     pub role: CacheRole,
 }
 
+/// Builds [`ArrayReader`]s from parquet schema, projection mask, and RowGroups reader
+pub struct ArrayReaderBuilder<'a> {
+    /// Source of row group data
+    row_groups: &'a dyn RowGroups,
+    /// Optional cache options for the array reader
+    cache_options: Option<&'a CacheOptions<'a>>,
+    /// metrics
+    metrics: &'a ArrowReaderMetrics,
+}
+
 impl<'a> ArrayReaderBuilder<'a> {
-    pub fn new(row_groups: &'a dyn RowGroups) -> Self {
+    pub fn new(row_groups: &'a dyn RowGroups, metrics: &'a ArrowReaderMetrics) -> Self {
         Self {
             row_groups,
             cache_options: None,
+            metrics,
         }
     }
 
@@ -143,6 +147,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                         Arc::clone(&cache_options.cache),
                         col_idx,
                         cache_options.role,
+                        self.metrics.clone(), // cheap clone
                     ))))
                 } else {
                     Ok(Some(reader))
@@ -453,7 +458,8 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader = ArrayReaderBuilder::new(&file_reader)
+        let metrics = ArrowReaderMetrics::disabled();
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 

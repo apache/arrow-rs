@@ -17,6 +17,7 @@
 
 use arrow::util::pretty::print_batches;
 use bytes::{Buf, Bytes};
+use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, RowGroups, RowSelection};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{parquet_to_arrow_field_levels, ProjectionMask};
@@ -38,7 +39,11 @@ async fn main() -> Result<()> {
     let metadata = file.get_metadata(None).await?;
 
     for rg in metadata.row_groups() {
-        let mut rowgroup = InMemoryRowGroup::create(rg.clone(), ProjectionMask::all());
+        let mut rowgroup = InMemoryRowGroup::create(
+            rg.clone(),
+            ProjectionMask::all(),
+            ArrowReaderMetrics::disabled(),
+        );
         rowgroup.async_fetch_data(&mut file, None).await?;
         let reader = rowgroup.build_reader(1024, None)?;
 
@@ -103,6 +108,7 @@ pub struct InMemoryRowGroup {
     pub metadata: RowGroupMetaData,
     mask: ProjectionMask,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
+    metrics: ArrowReaderMetrics,
 }
 
 impl RowGroups for InMemoryRowGroup {
@@ -132,13 +138,18 @@ impl RowGroups for InMemoryRowGroup {
 }
 
 impl InMemoryRowGroup {
-    pub fn create(metadata: RowGroupMetaData, mask: ProjectionMask) -> Self {
+    pub fn create(
+        metadata: RowGroupMetaData,
+        mask: ProjectionMask,
+        metrics: ArrowReaderMetrics,
+    ) -> Self {
         let column_chunks = metadata.columns().iter().map(|_| None).collect::<Vec<_>>();
 
         Self {
             metadata,
             mask,
             column_chunks,
+            metrics,
         }
     }
 
@@ -153,7 +164,13 @@ impl InMemoryRowGroup {
             None,
         )?;
 
-        ParquetRecordBatchReader::try_new_with_row_groups(&levels, self, batch_size, selection)
+        ParquetRecordBatchReader::try_new_with_row_groups(
+            &levels,
+            self,
+            batch_size,
+            selection,
+            &self.metrics,
+        )
     }
 
     /// fetch data from a reader in sync mode
