@@ -230,6 +230,7 @@ impl LimitedReadPlanBuilder {
 /// A plan reading specific rows from a Parquet Row Group.
 ///
 /// See [`ReadPlanBuilder`] to create `ReadPlan`s
+#[derive(Debug)]
 pub(crate) struct ReadPlan {
     /// The number of rows to read in each batch
     batch_size: usize,

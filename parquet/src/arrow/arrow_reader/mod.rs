@@ -40,6 +40,7 @@ use crate::schema::types::SchemaDescriptor;
 
 pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
 
+pub mod decoder;
 mod filter;
 mod read_plan;
 mod selection;
