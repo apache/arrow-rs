@@ -449,19 +449,19 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             BloomFilterAlgorithm::BLOCK(_) => {
                 // this match exists to future proof the singleton algorithm enum
             }
-            _ => panic!("unknown filter algo"),
+            _ => return Err(general_err!("unknown filter algo")),
         }
         match header.compression {
             BloomFilterCompression::UNCOMPRESSED(_) => {
                 // this match exists to future proof the singleton compression enum
             }
-            _ => panic!("unknown compression"),
+            _ => return Err(general_err!("unknown compression")),
         }
         match header.hash {
             BloomFilterHash::XXHASH(_) => {
                 // this match exists to future proof the singleton hash enum
             }
-            _ => panic!("unknown hash"),
+            _ => return Err(general_err!("unknown hash")),
         }
 
         let bitset = match column_metadata.bloom_filter_length() {
