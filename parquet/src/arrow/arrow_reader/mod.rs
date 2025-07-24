@@ -344,7 +344,7 @@ impl<T> ArrowReaderBuilder<T> {
         Self { metrics, ..self }
     }
 
-    /// Set the maximum size of the predicate cache in bytes.
+    /// Set the maximum size (per row group) of the predicate cache in bytes.
     ///
     /// Defaults to 100MB
     ///
