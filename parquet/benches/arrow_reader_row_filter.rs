@@ -62,7 +62,6 @@ use arrow_array::StringViewArray;
 use arrow_cast::pretty::pretty_format_batches;
 use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
@@ -75,6 +74,11 @@ use parquet::file::properties::WriterProperties;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::ops::Range;
 use std::sync::Arc;
+
+#[cfg(feature = "async-no-send")]
+type MaybeLocalBoxFuture<'a, T> = futures::future::LocalBoxFuture<'a, T>;
+#[cfg(not(feature = "async-no-send"))]
+type MaybeLocalBoxFuture<'a, T> = futures::future::BoxFuture<'a, T>;
 
 /// Generates a random string. Has a 50% chance to generate a short string (3–11 characters)
 /// or a long string (13–20 characters).
@@ -571,7 +575,10 @@ impl InMemoryReader {
 }
 
 impl AsyncFileReader for InMemoryReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(
+        &mut self,
+        range: Range<u64>,
+    ) -> MaybeLocalBoxFuture<'_, parquet::errors::Result<Bytes>> {
         let data = self.inner.slice(range.start as usize..range.end as usize);
         async move { Ok(data) }.boxed()
     }
@@ -579,7 +586,7 @@ impl AsyncFileReader for InMemoryReader {
     fn get_metadata<'a>(
         &'a mut self,
         _options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    ) -> MaybeLocalBoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let metadata = Arc::clone(&self.metadata);
         async move { Ok(metadata) }.boxed()
     }
