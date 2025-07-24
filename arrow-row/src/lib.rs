@@ -518,12 +518,33 @@ impl Codec {
             }
             Codec::List(converter) => {
                 let values = match array.data_type() {
-                    DataType::List(_) => as_list_array(array).values(),
-                    DataType::LargeList(_) => as_large_list_array(array).values(),
-                    DataType::FixedSizeList(_, _) => as_fixed_size_list_array(array).values(),
+                    DataType::List(_) => {
+                        let list_array = as_list_array(array);
+                        let first_offset = list_array.offsets()[0] as usize;
+                        let last_offset =
+                            list_array.offsets()[list_array.offsets().len() - 1] as usize;
+
+                        list_array
+                            .values()
+                            .slice(first_offset, last_offset - first_offset)
+                    }
+                    DataType::LargeList(_) => {
+                        let list_array = as_large_list_array(array);
+
+                        let first_offset = list_array.offsets()[0] as usize;
+                        let last_offset =
+                            list_array.offsets()[list_array.offsets().len() - 1] as usize;
+
+                        list_array
+                            .values()
+                            .slice(first_offset, last_offset - first_offset)
+                    }
+                    DataType::FixedSizeList(_, _) => {
+                        as_fixed_size_list_array(array).values().clone()
+                    }
                     _ => unreachable!(),
                 };
-                let rows = converter.convert_columns(&[values.clone()])?;
+                let rows = converter.convert_columns(&[values])?;
                 Ok(Encoder::List(rows))
             }
             Codec::RunEndEncoded(converter) => {
