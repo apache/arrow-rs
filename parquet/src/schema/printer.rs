@@ -275,11 +275,12 @@ impl<'a> Printer<'a> {
 }
 
 #[inline]
-fn print_timeunit(unit: &TimeUnit) -> &str {
+fn print_timeunit(unit: &TimeUnit) -> String {
     match unit {
-        TimeUnit::MILLIS(_) => "MILLIS",
-        TimeUnit::MICROS(_) => "MICROS",
-        TimeUnit::NANOS(_) => "NANOS",
+        TimeUnit::MILLIS(_) => "MILLIS".to_string(),
+        TimeUnit::MICROS(_) => "MICROS".to_string(),
+        TimeUnit::NANOS(_) => "NANOS".to_string(),
+        TimeUnit::__UNKNOWN__ { field_id } => format!("Unknown({field_id})"),
     }
 }
 

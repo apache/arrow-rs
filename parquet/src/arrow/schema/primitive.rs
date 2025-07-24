@@ -230,6 +230,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             }
             ParquetTimeUnit::MICROS(_) => Ok(DataType::Time64(TimeUnit::Microsecond)),
             ParquetTimeUnit::NANOS(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
+            _ => return Err(general_err!("unknown time unit")),
         },
         (
             Some(LogicalType::Timestamp {
@@ -242,6 +243,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
                 ParquetTimeUnit::MILLIS(_) => TimeUnit::Millisecond,
                 ParquetTimeUnit::MICROS(_) => TimeUnit::Microsecond,
                 ParquetTimeUnit::NANOS(_) => TimeUnit::Nanosecond,
+                _ => return Err(general_err!("unknown time unit")),
             },
             if is_adjusted_to_u_t_c {
                 Some("UTC".into())

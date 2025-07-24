@@ -17,6 +17,7 @@
 
 //! Column chunk encryption metadata
 
+use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::format::{
     ColumnCryptoMetaData as TColumnCryptoMetaData,
@@ -55,6 +56,9 @@ pub fn try_from_thrift(
                 path_in_schema: encryption_with_column_key.path_in_schema.clone(),
                 key_metadata: encryption_with_column_key.key_metadata.clone(),
             })
+        }
+        &crate::format::ColumnCryptoMetaData::__UNKNOWN__ { .. } => {
+            return Err(general_err!("unknown encryption metadata"))
         }
     };
     Ok(crypto_metadata)

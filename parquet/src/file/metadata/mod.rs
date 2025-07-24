@@ -652,6 +652,12 @@ impl RowGroupMetaData {
                     Some(TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
                         decryptor.get_footer_decryptor()?
                     }
+                    Some(&crate::format::ColumnCryptoMetaData::__UNKNOWN__ { .. }) => {
+                        return Err(general_err!(
+                            "Unknown decryptor is set for column '{}', which has encrypted metadata",
+                            d.path().string()
+                        ));
+                    }
                 };
 
                 let column_aad = create_module_aad(
