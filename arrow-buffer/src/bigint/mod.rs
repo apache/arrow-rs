@@ -821,6 +821,20 @@ impl ToPrimitive for i256 {
         }
     }
 
+    fn to_f64(&self) -> Option<f64> {
+        let mag = if let Some(u) = self.checked_abs() {
+            let (low, high) = u.to_parts();
+            (high as f64) * 2_f64.powi(128) + (low as f64)
+        } else {
+            // self == MIN
+            2_f64.powi(255)
+        };
+        if *self < i256::ZERO {
+            Some(-mag)
+        } else {
+            Some(mag)
+        }
+    }
     fn to_u64(&self) -> Option<u64> {
         let as_i128 = self.low as i128;
 
@@ -1263,5 +1277,30 @@ mod tests {
                 test_reference_op(il, ir)
             }
         }
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_typical_values() {
+        let v = i256::from_i128(42_i128);
+        assert_eq!(v.to_f64().unwrap(), 42.0);
+
+        let v = i256::from_i128(-123456789012345678i128);
+        assert_eq!(v.to_f64().unwrap(), -123456789012345678.0);
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_large_positive_value() {
+        let max_f = f64::MAX;
+        let big = i256::from_f64(max_f * 2.0).unwrap_or(i256::MAX);
+        let out = big.to_f64().unwrap();
+        assert!(out.is_finite() && out.is_sign_positive());
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_large_negative_value() {
+        let max_f = f64::MAX;
+        let big_neg = i256::from_f64(-(max_f * 2.0)).unwrap_or(i256::MIN);
+        let out = big_neg.to_f64().unwrap();
+        assert!(out.is_finite() && out.is_sign_negative());
     }
 }
