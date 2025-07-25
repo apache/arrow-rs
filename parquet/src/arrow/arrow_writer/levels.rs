@@ -138,7 +138,7 @@ enum LevelInfoBuilder {
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
     fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
-        if field.data_type() != array.data_type() {
+        if !Self::types_compatible(field.data_type(), array.data_type()) {
             return Err(arrow_err!(format!(
                 "Incompatible type. Field '{}' has type {}, array has type {}",
                 field.name(),
@@ -543,7 +543,25 @@ impl LevelInfoBuilder {
             }
         }
     }
+
+    /// Determine if the fields are compatible for purposes of constructing `LevelBuilderInfo`.
+    ///
+    /// Fields are compatible if they're the same type. Otherwise if one of them is a dictionary
+    /// and the other is a native array, the dictionary values must have the same type as the
+    /// native array
+    fn types_compatible(a: &DataType, b: &DataType) -> bool {
+        if a == b {
+            return true;
+        }
+
+        match (a, b) {
+            (DataType::Dictionary(_, v), b) => v.as_ref() == b,
+            (a, DataType::Dictionary(_, v)) => a == v.as_ref(),
+            _ => false,
+        }
+    }
 }
+
 /// The data necessary to write a primitive Arrow array to parquet, taking into account
 /// any non-primitive parents it may have in the arrow representation
 #[derive(Debug, Clone)]
