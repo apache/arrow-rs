@@ -139,6 +139,22 @@ impl AvroField {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// Performs schema resolution between a writer and reader schema.
+    ///
+    /// This is the primary entry point for handling schema evolution. It produces an
+    /// `AvroField` that contains all the necessary information to read data written
+    /// with the `writer` schema as if it were written with the `reader` schema.
+    pub fn resolve_from_writer_and_reader<'a>(
+        writer: &'a Schema<'a>,
+        reader: &'a Schema<'a>,
+        use_utf8view: bool,
+        strict_mode: bool,
+    ) -> Result<Self, ArrowError> {
+        Err(ArrowError::NotYetImplemented(
+            "Resolving schema from a writer and reader schema is not yet implemented".to_string(),
+        ))
+    }
 }
 
 impl<'a> TryFrom<&Schema<'a>> for AvroField {
@@ -164,19 +180,31 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
 /// Builder for an [`AvroField`]
 #[derive(Debug)]
 pub struct AvroFieldBuilder<'a> {
-    schema: &'a Schema<'a>,
+    writer_schema: &'a Schema<'a>,
+    reader_schema: Option<&'a Schema<'a>>,
     use_utf8view: bool,
     strict_mode: bool,
 }
 
 impl<'a> AvroFieldBuilder<'a> {
-    /// Creates a new [`AvroFieldBuilder`]
-    pub fn new(schema: &'a Schema<'a>) -> Self {
+    /// Creates a new [`AvroFieldBuilder`] for a given writer schema.
+    pub fn new(writer_schema: &'a Schema<'a>) -> Self {
         Self {
-            schema,
+            writer_schema,
+            reader_schema: None,
             use_utf8view: false,
             strict_mode: false,
         }
+    }
+
+    /// Sets the reader schema for schema resolution.
+    ///
+    /// If a reader schema is provided, the builder will produce a resolved `AvroField`
+    /// that can handle differences between the writer's and reader's schemas.
+    #[inline]
+    pub fn with_reader_schema(mut self, reader_schema: &'a Schema<'a>) -> Self {
+        self.reader_schema = Some(reader_schema);
+        self
     }
 
     /// Enable or disable Utf8View support
@@ -193,11 +221,11 @@ impl<'a> AvroFieldBuilder<'a> {
 
     /// Build an [`AvroField`] from the builder
     pub fn build(self) -> Result<AvroField, ArrowError> {
-        match self.schema {
+        match self.writer_schema {
             Schema::Complex(ComplexType::Record(r)) => {
                 let mut resolver = Resolver::default();
                 let data_type = make_data_type(
-                    self.schema,
+                    self.writer_schema,
                     None,
                     &mut resolver,
                     self.use_utf8view,
@@ -210,7 +238,7 @@ impl<'a> AvroFieldBuilder<'a> {
             }
             _ => Err(ArrowError::ParseError(format!(
                 "Expected a Record schema to build an AvroField, but got {:?}",
-                self.schema
+                self.writer_schema
             ))),
         }
     }
