@@ -1019,9 +1019,10 @@ impl ParquetRecordBatchReader {
         row_groups: &dyn RowGroups,
         batch_size: usize,
         selection: Option<RowSelection>,
-        metrics: &ArrowReaderMetrics,
     ) -> Result<Self> {
-        let array_reader = ArrayReaderBuilder::new(row_groups, metrics)
+        // note metrics are not supported in this API
+        let metrics = ArrowReaderMetrics::disabled();
+        let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
             .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
         let read_plan = ReadPlanBuilder::new(batch_size)
