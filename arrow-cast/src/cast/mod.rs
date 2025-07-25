@@ -2022,10 +2022,7 @@ where
 /// assert_eq!(result, 123456789.0);
 /// ```
 pub fn decimal256_to_f64(val: i256) -> f64 {
-    match val.to_f64() {
-        Some(v) => v,
-        None => unreachable!("All i256 values fit in f64"),
-    }
+    val.to_f64().expect("All i256 values fit in f64")
 }
 
 fn cast_to_decimal<D, M>(
