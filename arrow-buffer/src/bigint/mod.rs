@@ -1278,4 +1278,29 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_decimal256_to_f64_typical_values() {
+        let v = i256::from_i128(42_i128);
+        assert_eq!(v.to_f64().unwrap(), 42.0);
+
+        let v = i256::from_i128(-123456789012345678i128);
+        assert_eq!(v.to_f64().unwrap(), -123456789012345678.0);
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_large_positive_value() {
+        let max_f = f64::MAX;
+        let big = i256::from_f64(max_f * 2.0).unwrap_or(i256::MAX);
+        let out = big.to_f64().unwrap();
+        assert!(out.is_finite() && out.is_sign_positive());
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_large_negative_value() {
+        let max_f = f64::MAX;
+        let big_neg = i256::from_f64(-(max_f * 2.0)).unwrap_or(i256::MIN);
+        let out = big_neg.to_f64().unwrap();
+        assert!(out.is_finite() && out.is_sign_negative());
+    }
 }

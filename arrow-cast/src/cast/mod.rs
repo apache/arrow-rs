@@ -893,7 +893,7 @@ pub fn cast_with_options(
                 scale,
                 from_type,
                 to_type,
-                |x: i256| decimal256_to_f64(x),
+                |x: i256| x.to_f64().expect("All i256 values fit in f64"),
                 cast_options,
             )
         }
@@ -1993,36 +1993,6 @@ where
             "Casting from {from_type:?} to {to_type:?} not supported"
         ))),
     }
-}
-
-/// Converts a 256-bit signed integer to a 64-bit floating point number.
-///
-/// This function is primarily used for converting Decimal256 values to f64,
-/// where the Decimal256 is represented as an i256 (256-bit signed integer).
-///
-/// # Arguments
-///
-/// * `val` - The 256-bit signed integer value to convert
-///
-/// # Returns
-///
-/// Returns the floating point representation of the input value.
-///
-/// All `i256` values are within the representable range of `f64`. The
-/// conversion therefore cannot overflow, although large values may lose
-/// precision.
-///
-/// # Examples
-////// ```
-/// use arrow_buffer::i256;
-/// use arrow_cast::cast::decimal256_to_f64;
-///
-/// let val = i256::from(123456789);
-/// let result = decimal256_to_f64(val);
-/// assert_eq!(result, 123456789.0);
-/// ```
-pub fn decimal256_to_f64(val: i256) -> f64 {
-    val.to_f64().expect("All i256 values fit in f64")
 }
 
 fn cast_to_decimal<D, M>(
@@ -8742,32 +8712,6 @@ mod tests {
         assert_eq!("1123450", decimal_arr.value_as_string(0));
         assert_eq!("2123460", decimal_arr.value_as_string(1));
         assert_eq!("3123460", decimal_arr.value_as_string(2));
-    }
-
-    #[test]
-    fn test_decimal256_to_f64_typical_values() {
-        let v = i256::from_i128(42_i128);
-        assert_eq!(decimal256_to_f64(v), 42.0);
-
-        let v = i256::from_i128(-123456789012345678i128);
-        assert_eq!(decimal256_to_f64(v), -123456789012345678.0);
-    }
-
-    #[test]
-    fn test_decimal256_to_f64_large_positive_value() {
-        // Choose a value with magnitude > f64::MAX: e.g. f64::MAX * 2 as i256
-        let max_f = f64::MAX;
-        let big = i256::from_f64(max_f * 2.0).unwrap_or(i256::MAX);
-        let out = decimal256_to_f64(big);
-        assert!(out.is_finite() && out.is_sign_positive());
-    }
-
-    #[test]
-    fn test_decimal256_to_f64_large_negative_value() {
-        let max_f = f64::MAX;
-        let big_neg = i256::from_f64(-(max_f * 2.0)).unwrap_or(i256::MIN);
-        let out = decimal256_to_f64(big_neg);
-        assert!(out.is_finite() && out.is_sign_negative());
     }
 
     #[test]
