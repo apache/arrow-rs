@@ -788,7 +788,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             limit,
             offset,
             metrics,
-            // TODO: need to implement this for the sync reader
+            // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
         } = self;
 
