@@ -835,6 +835,16 @@ pub struct ParquetRecordBatchReader {
     read_plan: ReadPlan,
 }
 
+impl Debug for ParquetRecordBatchReader {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParquetRecordBatchReader")
+            .field("array_reader", &"...")
+            .field("schema", &self.schema)
+            .field("read_plan", &self.read_plan)
+            .finish()
+    }
+}
+
 impl Iterator for ParquetRecordBatchReader {
     type Item = Result<RecordBatch, ArrowError>;
 

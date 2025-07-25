@@ -19,17 +19,21 @@
 //! with data provided by the caller (rather than directly read from an
 //! underlying reader).
 
-use crate::arrow::arrow_reader::{ReadPlan, RowSelection};
+mod buffers;
+mod row_group;
+
+use crate::arrow::arrow_reader::decoder::row_group::{RowGroupReaderBuilder, RowGroupReaderResult};
+use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ReadPlan, RowSelection};
+use crate::arrow::ProjectionMask;
 use crate::errors::ParquetError;
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, Length};
 use arrow_array::RecordBatch;
+use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
-use arrow_schema::SchemaRef;
-use crate::arrow::ProjectionMask;
 
 /// A builder for [`ParquetDecoder`].
 #[derive(Debug)]
@@ -52,8 +56,10 @@ impl ParquetDecoderBuilder {
     pub fn build(self) -> Result<ParquetDecoder, ParquetError> {
         let Self { file_len } = self;
         // Initialize the decoder with the configured options
+        let rg_reader_builder = RowGroupReaderBuilder::new(file_len);
+
         Ok(ParquetDecoder {
-            state: ParquetDecoderState::Start { file_len },
+            state: ParquetDecoderState::Start { rg_reader_builder },
         })
     }
 }
@@ -119,19 +125,25 @@ impl ParquetDecoder {
 #[derive(Debug)]
 enum ParquetDecoderState {
     /// Starting State (reading footer)
-    Start { file_len: u64 },
+    Start {
+        rg_reader_builder: RowGroupReaderBuilder,
+    },
     /// The decoder is reading the footer of the Parquet file
     DecodingMetadata {
-        file_len: u64,
-        buffers: Buffers,
-        metadata_decoder: ParquetMetaDataReader,
+        metadata_reader: ParquetMetaDataReader,
+        rg_reader_builder: RowGroupReaderBuilder,
+    },
+    /// Reading data needed to decode the next RowGroup
+    ReadingRowGroup {
+        /// Builder
+        rg_reader_builder: RowGroupReaderBuilder,
     },
     /// The decoder is actively decoding a RowGroup
     DecodingRowGroup {
-        row_group_decoder: RowGroupDecoder,
-
-        // Row groups to decode after this one
-        remaining_row_groups: VecDeque<RowGroupDecoder>,
+        /// Current active reader
+        record_batch_reader: ParquetRecordBatchReader,
+        /// Row groups to decode after this one
+        rg_reader_builder: RowGroupReaderBuilder,
     },
     /// The decoder has finished processing all data
     Finished,
@@ -143,7 +155,8 @@ impl ParquetDecoderState {
     /// This is the main state machine logic for the ParquetDecoder.
     fn try_transition(self) -> Result<(Self, DecodeResult), ParquetError> {
         match self {
-            Self::Start { file_len } => {
+            Self::Start { rg_reader_builder } => {
+                let file_len = rg_reader_builder.file_len();
                 let Some(start_offset) = file_len.checked_sub(8) else {
                     return Err(ParquetError::General(format!(
                         "Parquet files are at least 8 bytes long, but file length is {file_len}"
@@ -152,37 +165,32 @@ impl ParquetDecoderState {
 
                 // stay in the same state, and ask for data
                 Ok((
-                    ParquetDecoderState::Start { file_len },
+                    ParquetDecoderState::Start { rg_reader_builder },
                     DecodeResult::NeedsData {
                         ranges: vec![start_offset..file_len],
                     },
                 ))
             }
             Self::DecodingMetadata {
-                file_len,
-                buffers,
-                mut metadata_decoder,
+                rg_reader_builder,
+                mut metadata_reader,
             } => {
-                match metadata_decoder.try_parse_sized(&buffers, file_len) {
+                let maybe_metadata = metadata_reader
+                    .try_parse_sized(rg_reader_builder.buffers(), rg_reader_builder.file_len());
+
+                match maybe_metadata {
                     Ok(()) => {
                         // Metadata successfully parsed, proceed to decode the row groups
-                        let metadata = metadata_decoder.finish()?;
+                        let metadata = metadata_reader.finish()?;
 
-                        let mut row_group_decoders = create_row_group_decoders(file_len, Arc::new(metadata));
-                        // no row groups to decode, done
-                        let Some(row_group_decoder) = row_group_decoders.pop_front() else {
-                            return Ok((Self::Finished, DecodeResult::Finished));
-                        };
+                        let rg_reader_builder = rg_reader_builder.with_metadata(Arc::new(metadata));
 
-                        // row groups are setup, try and decode the first one
-                        Self::DecodingRowGroup {
-                            row_group_decoder,
-                            remaining_row_groups: row_group_decoders,
-                        }
-                            .try_transition()
+                        // Metadata is ready, now start creating RowGroupDecoders
+                        Self::ReadingRowGroup { rg_reader_builder }.try_transition()
                     }
                     Err(ParquetError::NeedMoreData(needed)) => {
                         let needed = needed as u64;
+                        let file_len = rg_reader_builder.file_len();
                         let Some(start_offset) = file_len.checked_sub(needed) else {
                             return Err(ParquetError::General(format!(
                                 "Parquet metadata reader needs at least {needed} bytes, but file length is only {file_len}"
@@ -190,9 +198,8 @@ impl ParquetDecoderState {
                         };
                         let needed_range = start_offset..start_offset + needed;
                         let next_state = Self::DecodingMetadata {
-                            file_len,
-                            buffers,
-                            metadata_decoder,
+                            metadata_reader,
+                            rg_reader_builder,
                         };
                         // needs bytes at the end of the file
                         let result = DecodeResult::NeedsData {
@@ -201,6 +208,32 @@ impl ParquetDecoderState {
                         Ok((next_state, result))
                     }
                     Err(e) => Err(e), // pass through other errors
+                }
+            }
+            Self::ReadingRowGroup {
+                mut rg_reader_builder,
+            } => {
+                match rg_reader_builder.try_next_reader()? {
+                    // If we have a next reader, we can transition to decoding it
+                    RowGroupReaderResult::Ready {
+                        record_batch_reader,
+                    } => {
+                        // Transition to decoding the row group
+                        return Self::DecodingRowGroup {
+                            record_batch_reader,
+                            rg_reader_builder,
+                        }
+                        .try_transition();
+                    }
+                    // If there are no more readers, we are finished
+                    RowGroupReaderResult::NeedsData { ranges } => {
+                        // If we need more data, we return the ranges needed and stay in Reading
+                        // RowGroup state
+                        return Ok((
+                            Self::ReadingRowGroup { rg_reader_builder },
+                            DecodeResult::NeedsData { ranges },
+                        ));
+                    }
                 }
             }
             Self::DecodingRowGroup { .. } => {
@@ -219,21 +252,21 @@ impl ParquetDecoderState {
         data: Vec<Bytes>,
     ) -> Result<Self, ParquetError> {
         match self {
-            ParquetDecoderState::Start { file_len } => {
-                let buffers = Buffers {
-                    file_len,
-                    offset: 0,
-                    ranges,
-                    buffers: data,
-                };
+            // it is ok to get data before we asked for it
+            ParquetDecoderState::Start { rg_reader_builder } => {
+                let metadata_reader = ParquetMetaDataReader::new();
                 Ok(ParquetDecoderState::DecodingMetadata {
-                    file_len,
-                    buffers,
-                    metadata_decoder: ParquetMetaDataReader::new(), // Initialize the metadata decoder
+                    rg_reader_builder,
+                    metadata_reader,
                 })
             }
             ParquetDecoderState::DecodingMetadata { .. } => {
                 todo!()
+            }
+            ParquetDecoderState::ReadingRowGroup { rg_reader_builder } => {
+                // Push data to the RowGroupReaderBuilder
+                rg_reader_builder.buffers_mut().push_ranges(ranges, data);
+                Ok(ParquetDecoderState::ReadingRowGroup { rg_reader_builder })
             }
             ParquetDecoderState::DecodingRowGroup { .. } => {
                 todo!()
@@ -242,115 +275,5 @@ impl ParquetDecoderState {
                 "Cannot push data to a finished decoder".to_string(),
             )),
         }
-    }
-}
-
-/// Sets up the initial state for decoding RowGroups
-fn create_row_group_decoders(
-    file_len: u64,
-    parquet_metadata: Arc<ParquetMetaData>,
-) -> VecDeque<RowGroupDecoder> {
-    todo!()
-}
-
-/// State required for decoding a RowGroup
-///
-/// The idea is eventually these could be decoded in parallel so keep all the
-/// decoding logic in a single struct.
-#[derive(Debug)]
-struct RowGroupDecoder {
-    file_len: u64,
-    current_plan: ReadPlan,
-    current_row_group: usize,
-}
-
-/// Holds multiple buffers of data that have been requested by the ParquetDecoder
-///
-/// This is the in-memory buffer for the ParquetDecoder
-///
-/// Features it has:
-/// 1. Zero copy as much as possible
-/// 2. Keeps non contiguous ranges of bytes
-///
-/// Features it should have:
-/// 1. Maybe(??) coalsecing
-/// 1. Release buffers that are no longer used (like once metadata scanning is done, can release any just footer data)
-/// 2. A way for users to more carefully control what is in the cache (don't clear, for example??)
-#[derive(Debug, Clone)]
-pub struct Buffers {
-    /// the virtual "offset" of this buffers (added to any request)
-    offset: u64,
-    /// The total length of the file being decoded
-    file_len: u64,
-    /// The ranges of data that are available for decoding (not adjusted for offset)
-    ranges: Vec<Range<u64>>,
-    /// The buffers of data that can be used to decode the Parquet file
-    buffers: Vec<Bytes>,
-}
-
-impl Buffers {
-    fn iter(&self) -> impl Iterator<Item = (&Range<u64>, &Bytes)> {
-        self.ranges.iter().zip(self.buffers.iter())
-    }
-
-    /// Specify a new offset
-    pub fn with_offset(mut self, offset: u64) -> Self {
-        self.offset = offset;
-        self
-    }
-}
-
-impl Length for Buffers {
-    fn len(&self) -> u64 {
-        self.file_len
-    }
-}
-
-/// less efficinet implementation of Read for Buffers
-impl std::io::Read for Buffers {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        // Find the range that contains the start offset
-        let mut found = false;
-        for (range, data) in self.iter() {
-            if range.start <= self.offset && range.end >= self.offset + buf.len() as u64 {
-                // Found the range, figure out the starting offset in the buffer
-                let start_offset = (self.offset - range.start) as usize;
-                let end_offset = start_offset + buf.len();
-                let slice = data.slice(start_offset..end_offset);
-                buf.copy_from_slice(slice.as_ref());
-                found = true;
-            }
-        }
-        if found {
-            // If we found the range, we can return the number of bytes read
-            // advance our offset
-            self.offset += buf.len() as u64;
-            Ok(buf.len())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "No data available",
-            ))
-        }
-    }
-}
-
-impl ChunkReader for Buffers {
-    type T = Self;
-
-    fn get_read(&self, start: u64) -> Result<Self::T, ParquetError> {
-        Ok(self.clone().with_offset(self.offset + start))
-    }
-
-    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes, ParquetError> {
-        // find the range that contains the start offset
-        for (range, data) in self.iter() {
-            if range.start <= start && range.end >= start + length as u64 {
-                // Found the range, figure out the starting offset in the buffer
-                let start_offset = (start - range.start) as usize;
-                return Ok(data.slice(start_offset..start_offset + length));
-            }
-        }
-        todo!("Handle case where requests span ranges");
     }
 }
