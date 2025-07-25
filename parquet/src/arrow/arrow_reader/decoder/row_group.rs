@@ -55,6 +55,9 @@ impl RowGroupReaderBuilder {
     }
 
     /// return a mutable reference to the inner Buffers
+    pub fn buffers_mut(&mut self) -> &mut Buffers {
+        &mut self.buffers
+    }
 
     /// Return what additional ranges, if any, are needed to create the next
     /// RowGroupDecoder

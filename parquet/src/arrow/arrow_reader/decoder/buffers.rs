@@ -38,6 +38,29 @@ impl Buffers {
         }
     }
 
+    /// Push all the ranges and buffers
+    pub fn push_ranges(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) {
+        assert_eq!(
+            ranges.len(),
+            buffers.len(),
+            "Number of ranges must match number of buffers"
+        );
+        for (range, buffer) in ranges.into_iter().zip(buffers.into_iter()) {
+            self.push_range(range, buffer);
+        }
+    }
+
+    /// Push a new range and its associated buffer
+    pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) {
+        assert_eq!(
+            (range.end - range.start) as usize,
+            buffer.len(),
+            "Range length must match buffer length"
+        );
+        self.ranges.push(range);
+        self.buffers.push(buffer);
+    }
+
     fn iter(&self) -> impl Iterator<Item = (&Range<u64>, &Bytes)> {
         self.ranges.iter().zip(self.buffers.iter())
     }

@@ -23,15 +23,11 @@ mod buffers;
 mod row_group;
 
 use crate::arrow::arrow_reader::decoder::row_group::{RowGroupReaderBuilder, RowGroupReaderResult};
-use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ReadPlan, RowSelection};
-use crate::arrow::ProjectionMask;
+use crate::arrow::arrow_reader::ParquetRecordBatchReader;
 use crate::errors::ParquetError;
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
-use crate::file::reader::{ChunkReader, Length};
+use crate::file::metadata::ParquetMetaDataReader;
 use arrow_array::RecordBatch;
-use arrow_schema::SchemaRef;
 use bytes::Bytes;
-use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -253,23 +249,43 @@ impl ParquetDecoderState {
     ) -> Result<Self, ParquetError> {
         match self {
             // it is ok to get data before we asked for it
-            ParquetDecoderState::Start { rg_reader_builder } => {
+            ParquetDecoderState::Start {
+                mut rg_reader_builder,
+            } => {
+                rg_reader_builder.buffers_mut().push_ranges(ranges, data);
                 let metadata_reader = ParquetMetaDataReader::new();
                 Ok(ParquetDecoderState::DecodingMetadata {
                     rg_reader_builder,
                     metadata_reader,
                 })
             }
-            ParquetDecoderState::DecodingMetadata { .. } => {
-                todo!()
+            ParquetDecoderState::DecodingMetadata {
+                mut metadata_reader,
+                mut rg_reader_builder,
+            } => {
+                rg_reader_builder.buffers_mut().push_ranges(ranges, data);
+                Ok(ParquetDecoderState::DecodingMetadata {
+                    metadata_reader,
+                    rg_reader_builder,
+                })
             }
-            ParquetDecoderState::ReadingRowGroup { rg_reader_builder } => {
+            ParquetDecoderState::ReadingRowGroup {
+                mut rg_reader_builder,
+            } => {
                 // Push data to the RowGroupReaderBuilder
                 rg_reader_builder.buffers_mut().push_ranges(ranges, data);
                 Ok(ParquetDecoderState::ReadingRowGroup { rg_reader_builder })
             }
-            ParquetDecoderState::DecodingRowGroup { .. } => {
-                todo!()
+            // it is ok to get data before we asked for it
+            ParquetDecoderState::DecodingRowGroup {
+                record_batch_reader,
+                mut rg_reader_builder,
+            } => {
+                rg_reader_builder.buffers_mut().push_ranges(ranges, data);
+                Ok(ParquetDecoderState::DecodingRowGroup {
+                    record_batch_reader,
+                    rg_reader_builder,
+                })
             }
             ParquetDecoderState::Finished => Err(ParquetError::General(
                 "Cannot push data to a finished decoder".to_string(),
