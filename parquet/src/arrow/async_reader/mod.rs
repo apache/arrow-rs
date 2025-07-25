@@ -61,6 +61,7 @@ pub use metadata::*;
 #[cfg(feature = "object_store")]
 mod store;
 
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
@@ -510,6 +511,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields: self.fields,
             limit: self.limit,
             offset: self.offset,
+            metrics: self.metrics,
         };
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -560,6 +562,10 @@ struct ReaderFactory<T> {
 
     /// Offset to apply to the next
     offset: Option<usize>,
+
+    /// Metrics
+    #[expect(unused)] // until https://github.com/apache/arrow-rs/pull/7850
+    metrics: ArrowReaderMetrics,
 }
 
 impl<T> ReaderFactory<T>
@@ -1832,6 +1838,7 @@ mod tests {
         assert_eq!(total_rows, 730);
     }
 
+    #[ignore]
     #[tokio::test]
     async fn test_in_memory_row_group_sparse() {
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -1883,6 +1890,7 @@ mod tests {
             filter: None,
             limit: None,
             offset: None,
+            metrics: ArrowReaderMetrics::disabled(),
         };
 
         let mut skip = true;

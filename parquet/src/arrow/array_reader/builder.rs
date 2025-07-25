@@ -375,7 +375,8 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader = ArrayReaderBuilder::new(&file_reader)
+        let metrics = ArrowReaderMetrics::disabled();
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 
