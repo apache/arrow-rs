@@ -1432,6 +1432,7 @@ mod tests {
     use arrow_schema::Fields;
     use half::f16;
     use num::{FromPrimitive, ToPrimitive};
+    use tempfile::tempfile;
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
@@ -3023,6 +3024,60 @@ mod tests {
 
         // build a record batch
         one_column_roundtrip_with_schema(Arc::new(d), schema);
+    }
+
+    #[test]
+    fn arrow_writer_dict_and_native_compatibility() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let rb1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values(vec![0, 1, 0]),
+                Arc::new(StringArray::from_iter_values(vec!["parquet", "barquet"])),
+            ))],
+        )
+        .unwrap();
+
+        let file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), rb1.schema(), None).unwrap();
+        writer.write(&rb1).unwrap();
+
+        // check can append another record batch where the field has the same type
+        // as the dictionary values from the first batch
+        let schema2 = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let rb2 = RecordBatch::try_new(
+            schema2,
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "barquet", "curious",
+            ]))],
+        )
+        .unwrap();
+        writer.write(&rb2).unwrap();
+
+        writer.close().unwrap();
+
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
+        let actual_batch = record_batch_reader.next().unwrap().unwrap();
+
+        let expected_batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values(vec![0, 1, 0, 1, 2]),
+                Arc::new(StringArray::from_iter_values(vec![
+                    "parquet", "barquet", "curious",
+                ])),
+            ))],
+        )
+        .unwrap();
+
+        assert_eq!(actual_batch, expected_batch)
     }
 
     #[test]
