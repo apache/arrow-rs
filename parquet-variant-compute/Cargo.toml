@@ -42,7 +42,7 @@ bench = false
 
 [dev-dependencies]
 rand = "0.9.1"
-criterion = { version = "0.6", default-features = false }
+criterion = { version = "0.7", default-features = false }
 arrow = { workspace = true, features = ["test_utils"] }
 
 
