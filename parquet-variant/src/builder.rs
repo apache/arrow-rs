@@ -1267,9 +1267,8 @@ impl<'a> ListBuilder<'a> {
         let offsets = PackedU32Iterator::new(
             offset_size as usize,
             self.offsets
-                .clone()
-                .into_iter()
-                .map(|offset| (offset as u32).to_le_bytes()),
+                .iter()
+                .map(|&offset| (offset as u32).to_le_bytes()),
         );
         let data_size_bytes = data_size
             .to_le_bytes()
