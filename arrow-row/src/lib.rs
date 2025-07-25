@@ -3169,7 +3169,26 @@ mod tests {
 
     #[test]
     fn test_values_buffer_smaller_when_utf8_validation_disabled() {
-        // StringViewArray with inline strings
+        fn get_values_buffer_len(col: ArrayRef) -> (usize, usize) {
+            // 1. Convert cols into rows
+            let converter = RowConverter::new(vec![SortField::new(DataType::Utf8View)]).unwrap();
+
+            // 2a. Convert rows into colsa (validate_utf8 = false)
+            let rows = converter.convert_columns(&[col]).unwrap();
+            let converted = converter.convert_rows(&rows).unwrap();
+            let unchecked_values_len = converted[0].as_string_view().data_buffers()[0].len();
+
+            // 2b. Convert rows into cols (validate_utf8 = true since Row is initialized through RowParser)
+            let rows = rows.try_into_binary().expect("reasonable size");
+            let parser = converter.parser();
+            let converted = converter
+                .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+                .unwrap();
+            let checked_values_len = converted[0].as_string_view().data_buffers()[0].len();
+            (unchecked_values_len, checked_values_len)
+        }
+
+        // Case1. StringViewArray with inline strings
         let col = Arc::new(StringViewArray::from_iter([
             Some("hello"), // short(5)
             None,          // null
@@ -3177,32 +3196,34 @@ mod tests {
             Some("tiny"),  // short(4)
         ])) as ArrayRef;
 
-        // 1. Convert cols into rows
-        let converter = RowConverter::new(vec![SortField::new(DataType::Utf8View)]).unwrap();
-        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
-
-        // 2a. Convert rows into colsa (validate_utf8 = false)
-        let converted_without_utf8_validation = converter.convert_rows(&rows).unwrap();
-
-        // 2b. Convert rows into cols (validate_utf8 = true since Row is initialized through RowParser)
-        let rows = rows.try_into_binary().expect("reasonable size");
-        let parser = converter.parser();
-        let converted_with_utf8_validation = converter
-            .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
-            .unwrap();
-
-        assert!(converted_without_utf8_validation.len() == 1);
-        assert!(converted_with_utf8_validation.len() == 1);
-
-        let array_1 = &converted_without_utf8_validation[0];
-        let array_2 = &converted_with_utf8_validation[0];
-
-        let values_buffer_1 = &array_1.as_string_view().data_buffers()[0];
-        let values_buffer_2 = &array_2.as_string_view().data_buffers()[0];
-
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
         // Since there are no long (>12) strings, len of values buffer is 0
-        assert_eq!(values_buffer_1.len(), 0);
+        assert_eq!(unchecked_values_len, 0);
         // When utf8 validation enabled, values buffer includes inline strings (5+5+4)
-        assert_eq!(values_buffer_2.len(), 14);
+        assert_eq!(checked_values_len, 14);
+
+        // Case2. StringViewArray with long(>12) strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("this is a very long string over 12 bytes"),
+            Some("another long string to test the buffer"),
+        ])) as ArrayRef;
+
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        // Since there are no inline strings, expected length of values buffer is the same
+        assert!(unchecked_values_len > 0);
+        assert_eq!(unchecked_values_len, checked_values_len);
+
+        // Case3. StringViewArray with both short and long strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("tiny"),          // 4 (short)
+            Some("thisisexact13"), // 13 (long)
+            None,
+            Some("short"), // 5 (short)
+        ])) as ArrayRef;
+
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        // Since there is single long string, len of values buffer is 13
+        assert_eq!(unchecked_values_len, 13);
+        assert!(checked_values_len > unchecked_values_len);
     }
 }
