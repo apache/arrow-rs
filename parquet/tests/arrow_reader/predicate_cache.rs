@@ -38,8 +38,6 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::LazyLock;
 
-// TODO file a ticket about the duplication here
-
 #[tokio::test]
 async fn test_default_read() {
     // The cache is not used without predicates, so we expect 0 records read from cache
@@ -51,16 +49,22 @@ async fn test_default_read() {
 }
 
 #[tokio::test]
-async fn test_cache_with_filters() {
+async fn test_async_cache_with_filters() {
     let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(49);
-    // TODO The sync reader does not use the cache yet....
-    // let sync_builder = test.sync_builder();
-    // let sync_builder = test.add_project_ab_and_filter_b(sync_builder);
-    // test.run_sync(sync_builder);
-
     let async_builder = test.async_builder().await;
     let async_builder = test.add_project_ab_and_filter_b(async_builder);
     test.run_async(async_builder).await;
+}
+
+#[tokio::test]
+async fn test_sync_cache_with_filters() {
+    let test = ParquetPredicateCacheTest::new()
+        // The sync reader does not use the cache. See https://github.com/apache/arrow-rs/issues/8000
+        .with_expected_records_read_from_cache(0);
+
+    let sync_builder = test.sync_builder();
+    let sync_builder = test.add_project_ab_and_filter_b(sync_builder);
+    test.run_sync(sync_builder);
 }
 
 #[tokio::test]

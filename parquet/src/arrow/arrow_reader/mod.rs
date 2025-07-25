@@ -344,14 +344,20 @@ impl<T> ArrowReaderBuilder<T> {
         Self { metrics, ..self }
     }
 
-    /// Set the maximum size (per row group) of the predicate cache in bytes.
+    /// Set the maximum size (per row group) of the predicate cache in bytes for
+    /// the async decoder.
     ///
-    /// Defaults to 100MB
+    /// Defaults to 100MB (across all columns). Set to `usize::MAX` to use
+    /// unlimited cache size.
     ///
     /// This cache is used to store decoded arrays that are used in
     /// predicate evaluation ([`Self::with_row_filter`]).
     ///
-    /// Set to `usize::MAX` to use unlimited cache size.
+    /// This cache is only used for the "async" decoder, [`ParquetRecordBatchStream`]. See
+    /// [this ticket] for more details and alternatives.
+    ///
+    /// [`ParquetRecordBatchStream`]: https://docs.rs/parquet/latest/parquet/arrow/async_reader/struct.ParquetRecordBatchStream.html
+    /// [this ticket]: https://github.com/apache/arrow-rs/issues/8000
     pub fn with_max_predicate_cache_size(self, max_predicate_cache_size: usize) -> Self {
         Self {
             max_predicate_cache_size,
@@ -782,7 +788,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             limit,
             offset,
             metrics,
-            // TODO: need to implement this for the sync reader
+            // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
         } = self;
 
