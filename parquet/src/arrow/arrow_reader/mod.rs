@@ -40,6 +40,7 @@ use crate::schema::types::SchemaDescriptor;
 
 pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
 
+pub mod decoder;
 mod filter;
 mod read_plan;
 mod selection;
@@ -832,6 +833,16 @@ pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     read_plan: ReadPlan,
+}
+
+impl Debug for ParquetRecordBatchReader {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParquetRecordBatchReader")
+            .field("array_reader", &"...")
+            .field("schema", &self.schema)
+            .field("read_plan", &self.read_plan)
+            .finish()
+    }
 }
 
 impl Iterator for ParquetRecordBatchReader {
