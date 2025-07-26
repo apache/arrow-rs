@@ -3213,7 +3213,4 @@ mod tests {
             Ok(_) => panic!("Expected NotYetImplemented error for map data type"),
         }
     }
-
-    // #[test]
-    // fn
 }
