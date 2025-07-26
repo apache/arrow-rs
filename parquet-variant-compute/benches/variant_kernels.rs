@@ -17,6 +17,7 @@
 
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::util::test_util::seedable_rng;
+use arrow_schema::{DataType, Field, Fields};
 use criterion::{criterion_group, criterion_main, Criterion};
 use parquet_variant::{Variant, VariantBuilder};
 use parquet_variant_compute::variant_get::{variant_get, GetOptions};
@@ -27,6 +28,14 @@ use rand::Rng;
 use rand::SeedableRng;
 use std::fmt::Write;
 use std::sync::Arc;
+
+fn unshredded_schema_fields() -> Fields {
+    let metadata_field = Field::new("metadata", DataType::BinaryView, false);
+    let value_field = Field::new("value", DataType::BinaryView, false);
+
+    Fields::from(vec![metadata_field, value_field])
+}
+
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let input_array = StringArray::from_iter_values(json_repeated_struct(8000));
     let array_ref: ArrayRef = Arc::new(input_array);
@@ -93,7 +102,7 @@ pub fn variant_get_bench(c: &mut Criterion) {
     };
 
     c.bench_function("variant_get_primitive", |b| {
-        b.iter(|| variant_get(&input.clone(), options.clone()))
+        b.iter(|| variant_get(&input.clone(), options.clone(), unshredded_schema_fields()))
     });
 }
 
@@ -108,7 +117,7 @@ criterion_main!(benches);
 fn create_primitive_variant_array(size: usize) -> VariantArray {
     let mut rng = StdRng::seed_from_u64(42);
 
-    let mut variant_builder = VariantArrayBuilder::new(1);
+    let mut variant_builder = VariantArrayBuilder::try_new(1, unshredded_schema_fields()).unwrap();
 
     for _ in 0..size {
         let mut builder = VariantBuilder::new();
