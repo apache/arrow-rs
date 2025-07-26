@@ -18,8 +18,7 @@
 use crate::builder::ArrayBuilder;
 use crate::types::*;
 use crate::{Array, ArrayRef, PrimitiveArray};
-use arrow_buffer::NullBufferBuilder;
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_buffer::{Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -162,7 +161,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         values_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
     ) -> Self {
-        let values_builder = Vec::from(values_buffer.typed_data::<T::Native>());
+        let values_builder: Vec<T::Native> = ScalarBuffer::<T::Native>::from(values_buffer).into();
 
         let null_buffer_builder = null_buffer
             .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, values_builder.len()))
@@ -211,7 +210,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     #[inline]
     pub fn append_value_n(&mut self, v: T::Native, n: usize) {
         self.null_buffer_builder.append_n_non_nulls(n);
-        self.values_builder.extend(std::iter::repeat(v).take(n));
+        self.values_builder.extend(std::iter::repeat_n(v, n));
     }
 
     /// Appends a null slot into the builder
@@ -226,7 +225,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn append_nulls(&mut self, n: usize) {
         self.null_buffer_builder.append_n_nulls(n);
         self.values_builder
-            .extend(std::iter::repeat(T::Native::default()).take(n));
+            .extend(std::iter::repeat_n(T::Native::default(), n));
     }
 
     /// Appends an `Option<T>` into the builder
@@ -306,7 +305,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         let nulls = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
-            .add_buffer(Buffer::from_vec(std::mem::take(&mut self.values_builder)))
+            .add_buffer(std::mem::take(&mut self.values_builder).into())
             .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };

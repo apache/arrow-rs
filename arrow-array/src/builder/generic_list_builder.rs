@@ -275,7 +275,7 @@ where
     pub fn append_nulls(&mut self, n: usize) {
         let next_offset = self.next_offset();
         self.offsets_builder
-            .extend(std::iter::repeat(next_offset).take(n));
+            .extend(std::iter::repeat_n(next_offset, n));
         self.null_buffer_builder.append_n_nulls(n);
     }
 

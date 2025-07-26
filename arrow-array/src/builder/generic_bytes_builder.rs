@@ -18,8 +18,7 @@
 use crate::builder::ArrayBuilder;
 use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait};
-use arrow_buffer::NullBufferBuilder;
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ArrayDataBuilder;
 use std::any::Any;
 use std::sync::Arc;
@@ -67,8 +66,9 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         value_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
     ) -> Self {
-        let offsets_builder = Vec::from(offsets_buffer.typed_data::<T::Offset>());
-        let value_builder = Vec::from(value_buffer.as_slice());
+        let offsets_builder: Vec<T::Offset> =
+            ScalarBuffer::<T::Offset>::from(offsets_buffer).into();
+        let value_builder: Vec<u8> = ScalarBuffer::<u8>::from(value_buffer).into();
 
         let null_buffer_builder = null_buffer
             .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, offsets_builder.len() - 1))
@@ -136,7 +136,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         self.null_buffer_builder.append_n_nulls(n);
         let next_offset = self.next_offset();
         self.offsets_builder
-            .extend(std::iter::repeat(next_offset).take(n));
+            .extend(std::iter::repeat_n(next_offset, n));
     }
 
     /// Appends array values and null to this builder as is
@@ -186,8 +186,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         let array_type = T::DATA_TYPE;
         let array_builder = ArrayDataBuilder::new(array_type)
             .len(self.len())
-            .add_buffer(Buffer::from_vec(std::mem::take(&mut self.offsets_builder)))
-            .add_buffer(Buffer::from_vec(std::mem::take(&mut self.value_builder)))
+            .add_buffer(std::mem::take(&mut self.offsets_builder).into())
+            .add_buffer(std::mem::take(&mut self.value_builder).into())
             .nulls(self.null_buffer_builder.finish());
 
         self.offsets_builder.push(self.next_offset());
