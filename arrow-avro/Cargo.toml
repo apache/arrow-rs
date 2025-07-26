@@ -58,6 +58,7 @@ crc = { version = "3.0", optional = true }
 uuid = "1.17"
 
 [dev-dependencies]
+arrow-data = { workspace = true }
 rand = { version = "0.9.1", default-features = false, features = [
     "std",
     "std_rng",

@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
-
 use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
 use crate::utils::{first_byte_from_slice, overflow_error, slice_from_slice, string_from_slice};
 
@@ -127,7 +125,7 @@ impl VariantMetadataHeader {
 ///
 /// [`Variant`]: crate::Variant
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantMetadata<'m> {
     pub(crate) bytes: &'m [u8],
     header: VariantMetadataHeader,
@@ -335,30 +333,6 @@ impl<'m> VariantMetadata<'m> {
     }
 }
 
-// According to the spec, metadata dictionaries are not required to be in a specific order,
-// to enable flexibility when constructing Variant values
-//
-// Instead of comparing the raw bytes of 2 variant metadata instances, this implementation
-// checks whether the dictionary entries are equal -- regardless of their sorting order
-impl<'m> PartialEq for VariantMetadata<'m> {
-    fn eq(&self, other: &Self) -> bool {
-        let is_equal = self.is_empty() == other.is_empty()
-            && self.is_fully_validated() == other.is_fully_validated()
-            && self.first_value_byte == other.first_value_byte
-            && self.validated == other.validated;
-
-        let other_field_names: HashSet<&'m str> = HashSet::from_iter(other.iter());
-
-        for field_name in self.iter() {
-            if !other_field_names.contains(field_name) {
-                return false;
-            }
-        }
-
-        is_equal
-    }
-}
-
 /// Retrieves the ith dictionary entry, panicking if the index is out of bounds. Accessing
 /// [unvalidated] input could also panic if the underlying bytes are invalid.
 ///
@@ -373,6 +347,8 @@ impl std::ops::Index<usize> for VariantMetadata<'_> {
 
 #[cfg(test)]
 mod tests {
+
+    use crate::VariantBuilder;
 
     use super::*;
 
@@ -557,5 +533,59 @@ mod tests {
             matches!(err, ArrowError::InvalidArgumentError(_)),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_compare_sorted_dictionary_with_unsorted_dictionary() {
+        // create a sorted object
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", false);
+        o.insert("b", false);
+
+        o.finish().unwrap();
+
+        let (m, _) = b.finish();
+
+        let m1 = VariantMetadata::new(&m);
+        assert!(m1.is_sorted());
+
+        // Create metadata with an unsorted dictionary (field names are "a", "a", "b")
+        // Since field names are not unique, it is considered not sorted.
+        let metadata_bytes = vec![
+            0b0000_0001,
+            3, // dictionary size
+            0, // "a"
+            1, // "a"
+            2, // "b"
+            3,
+            b'a',
+            b'a',
+            b'b',
+        ];
+        let m2 = VariantMetadata::try_new(&metadata_bytes).unwrap();
+        assert!(!m2.is_sorted());
+
+        assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn test_compare_sorted_dictionary_with_sorted_dictionary() {
+        // create a sorted object
+        let mut b = VariantBuilder::new();
+        let mut o = b.new_object();
+
+        o.insert("a", false);
+        o.insert("b", false);
+
+        o.finish().unwrap();
+
+        let (m, _) = b.finish();
+
+        let m1 = VariantMetadata::new(&m);
+        let m2 = VariantMetadata::new(&m);
+
+        assert_eq!(m1, m2);
     }
 }
