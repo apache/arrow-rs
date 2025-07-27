@@ -70,9 +70,9 @@ fn write_offset_at_pos(buf: &mut [u8], start_pos: usize, value: usize, nbytes: u
     buf[start_pos..start_pos + nbytes as usize].copy_from_slice(&bytes[..nbytes as usize]);
 }
 
-/// Append `value_bytes` of given `value` into `dest`.
-fn append_packed_u32(dest: &mut Vec<u8>, value: u32, value_bytes: usize) {
-    let n = dest.len() + value_bytes;
+/// Append `value_size` bytes of given `value` into `dest`.
+fn append_packed_u32(dest: &mut Vec<u8>, value: u32, value_size: usize) {
+    let n = dest.len() + value_size;
     dest.extend(value.to_le_bytes());
     dest.truncate(n);
 }
@@ -1112,14 +1112,14 @@ pub struct ListBuilder<'a> {
 
 impl<'a> ListBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
-        let offset_base = parent_state.buffer_current_offset();
-        let meta_offset_base = parent_state.metadata_current_offset();
+        let parent_value_offset_base = parent_state.buffer_current_offset();
+        let parent_metadata_offset_base = parent_state.metadata_current_offset();
         Self {
             parent_state,
             offsets: vec![],
-            parent_value_offset_base: offset_base,
+            parent_value_offset_base,
             has_been_finished: false,
-            parent_metadata_offset_base: meta_offset_base,
+            parent_metadata_offset_base,
             validate_unique_fields,
         }
     }
@@ -1213,7 +1213,10 @@ impl<'a> ListBuilder<'a> {
     pub fn finish(mut self) {
         let buffer = self.parent_state.buffer();
 
-        let data_size = buffer.offset() - self.parent_value_offset_base;
+        let data_size = buffer
+            .offset()
+            .checked_sub(self.parent_value_offset_base)
+            .expect("Data size overflowed usize");
 
         let num_elements = self.offsets.len();
         let is_large = num_elements > u8::MAX as usize;
@@ -1221,9 +1224,11 @@ impl<'a> ListBuilder<'a> {
 
         let starting_offset = self.parent_value_offset_base;
 
-        let header_size = 1 +      // header
-            if is_large { 4 } else { 1 } +  // is_large
-            (self.offsets.len() + 1) * offset_size as usize; // offsets and data size
+        let num_elements_size = if is_large { 4 } else { 1 }; // is_large: 4 bytes, else 1 byte.
+        let num_elements = self.offsets.len();
+        let header_size = 1 +      // header (i.e., `array_header`)
+            num_elements_size +  // num_element_size
+            (num_elements + 1) * offset_size as usize; // offsets and data size
 
         // Calculated header size becomes a hint; being wrong only risks extra allocations.
         // Make sure to reserve enough capacity to handle the extra bytes we'll truncate.
@@ -1232,11 +1237,7 @@ impl<'a> ListBuilder<'a> {
         let header = array_header(is_large, offset_size);
         bytes_to_splice.push(header);
 
-        append_packed_u32(
-            &mut bytes_to_splice,
-            num_elements as u32,
-            if is_large { 4 } else { 1 },
-        );
+        append_packed_u32(&mut bytes_to_splice, num_elements as u32, num_elements_size);
 
         for offset in &self.offsets {
             append_packed_u32(&mut bytes_to_splice, *offset as u32, offset_size as usize);
