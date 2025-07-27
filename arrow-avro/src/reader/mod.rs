@@ -284,23 +284,15 @@ impl Decoder {
         let batch = self.active_decoder.flush()?;
         self.decoded_rows = 0;
         // Apply a pending schema switch if one is staged
-        match (self.pending_decoder.take(), self.pending_fp.take()) {
-            (Some(new_dec), Some(new_fp)) => {
-                // Cache the old decoder before replacing it
-                if let Some(old_fp) = self.active_fp.replace(new_fp) {
-                    let old_decoder = std::mem::replace(&mut self.active_decoder, new_dec);
-                    self.cache.insert(old_fp, old_decoder);
-                    self.touch_cache_key(old_fp);
-                } else {
-                    self.active_decoder = new_dec;
-                }
+        if let Some((new_dec, new_fp)) = self.pending_schema.take() {
+            // Cache the old decoder before replacing it
+            if let Some(old_fp) = self.active_fp.replace(new_fp) {
+                let old_decoder = std::mem::replace(&mut self.active_decoder, new_dec);
+                self.cache.insert(old_fp, old_decoder);
+                self.touch_cache_key(old_fp);
+            } else {
+                self.active_decoder = new_dec;
             }
-            (Some(_), None) => {
-                return Err(ArrowError::InvalidArgumentError(
-                    "Inconsistent state: pending decoder without a pending fingerprint".into(),
-                ));
-            }
-            (None, _) => {}
         }
         self.evict_cache();
         Ok(Some(batch))
