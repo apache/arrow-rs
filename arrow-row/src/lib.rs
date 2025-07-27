@@ -524,6 +524,8 @@ impl Codec {
                         let last_offset =
                             list_array.offsets()[list_array.offsets().len() - 1] as usize;
 
+                        // values can include more data than referenced in the ListArray, only encode
+                        // the referenced values.
                         list_array
                             .values()
                             .slice(first_offset, last_offset - first_offset)
@@ -535,6 +537,8 @@ impl Codec {
                         let last_offset =
                             list_array.offsets()[list_array.offsets().len() - 1] as usize;
 
+                        // values can include more data than referenced in the LargeListArray, only encode
+                        // the referenced values.
                         list_array
                             .values()
                             .slice(first_offset, last_offset - first_offset)
