@@ -164,10 +164,9 @@ pub struct Decoder {
     static_store_mode: bool,
     /// If true, schema resolution errors will cause a failure.
     strict_mode: bool,
-    /// The fingerprint of a schema to switch to after the current batch is flushed.
-    pending_fp: Option<Fingerprint>,
-    /// A `RecordDecoder` for a new schema, staged to become active after the current batch.
-    pending_decoder: Option<RecordDecoder>,
+    /// The fingerprint and decoder for a new schema, staged to become active once
+    /// the current batch is flushed.
+    pending_schema: Option<(Fingerprint, RecordDecoder)>,
 }
 
 impl Decoder {
