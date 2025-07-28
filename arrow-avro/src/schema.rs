@@ -18,8 +18,8 @@
 use arrow_schema::ArrowError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 /// The metadata key used for storing the JSON encoded [`Schema`]
 pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
@@ -29,10 +29,10 @@ pub const SINGLE_OBJECT_MAGIC: [u8; 2] = [0xC3, 0x01];
 
 /// Compare two Avro schemas for equality (identical schemas).
 /// Returns true if the schemas have the same parsing canonical form (i.e., logically identical).
-pub fn compare_schemas(writer: &Schema, reader: &Schema) -> bool {
-    let canon_writer = generate_canonical_form(writer);
-    let canon_reader = generate_canonical_form(reader);
-    canon_writer == canon_reader
+pub fn compare_schemas(writer: &Schema, reader: &Schema) -> Result<bool, ArrowError> {
+    let canon_writer = generate_canonical_form(writer)?;
+    let canon_reader = generate_canonical_form(reader)?;
+    Ok(canon_writer == canon_reader)
 }
 
 /// Either a [`PrimitiveType`] or a reference to a previously defined named type
@@ -311,10 +311,14 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
 pub(crate) fn generate_fingerprint(
     schema: &Schema,
     hash_type: FingerprintAlgorithm,
-) -> Fingerprint {
-    let canonical = generate_canonical_form(schema);
+) -> Result<Fingerprint, ArrowError> {
+    let canonical = generate_canonical_form(schema).map_err(|e| {
+        ArrowError::ComputeError(format!("Failed to generate canonical form for schema: {e}"))
+    })?;
     match hash_type {
-        FingerprintAlgorithm::Rabin => Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)),
+        FingerprintAlgorithm::Rabin => {
+            Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
+        }
     }
 }
 
@@ -326,7 +330,7 @@ pub(crate) fn generate_fingerprint(
 /// # Returns
 /// A `Fingerprint::Rabin` variant containing the 64-bit fingerprint.
 #[inline]
-pub fn generate_fingerprint_rabin(schema: &Schema) -> Fingerprint {
+pub fn generate_fingerprint_rabin(schema: &Schema) -> Result<Fingerprint, ArrowError> {
     generate_fingerprint(schema, FingerprintAlgorithm::Rabin)
 }
 
@@ -341,8 +345,8 @@ pub fn generate_fingerprint_rabin(schema: &Schema) -> Fingerprint {
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas>
 #[inline]
-pub fn generate_canonical_form(schema: &Schema) -> String {
-    serde_json::to_string(&parse_canonical_json(schema)).unwrap()
+pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
+    build_canonical(schema, None)
 }
 
 /// An in-memory cache of Avro schemas, indexed by their fingerprint.
@@ -372,7 +376,7 @@ pub fn generate_canonical_form(schema: &Schema) -> String {
 /// // Register the schema to get its fingerprint.
 /// let fingerprint = store.register(schema.clone()).unwrap();
 /// // Use the fingerprint to look up the schema.
-/// let retrieved_schema = store.lookup(&fingerprint);
+/// let retrieved_schema = store.lookup(&fingerprint).cloned();
 /// assert_eq!(retrieved_schema, Some(schema));
 /// ```
 #[derive(Debug, Clone)]
@@ -428,8 +432,19 @@ impl<'a> SchemaStore<'a> {
     /// A `Result` containing the `Fingerprint` of the schema if successful,
     /// or an `ArrowError` on failure.
     pub fn register(&mut self, schema: Schema<'a>) -> Result<Fingerprint, ArrowError> {
-        let fp = generate_fingerprint(&schema, self.fingerprint_algorithm);
-        self.schemas.entry(fp).or_insert(schema);
+        let fp = generate_fingerprint(&schema, self.fingerprint_algorithm)?;
+        match self.schemas.entry(fp) {
+            Entry::Occupied(entry) => {
+                if entry.get() != &schema {
+                    return Err(ArrowError::ComputeError(format!(
+                        "Schema fingerprint collision detected for fingerprint {fp:?}"
+                    )));
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(schema);
+            }
+        }
         Ok(fp)
     }
 
@@ -442,8 +457,8 @@ impl<'a> SchemaStore<'a> {
     /// # Returns
     ///
     /// An `Option` containing a clone of the `Schema` if found, otherwise `None`.
-    pub fn lookup(&self, fp: &Fingerprint) -> Option<Schema<'a>> {
-        self.schemas.get(fp).cloned()
+    pub fn lookup(&self, fp: &Fingerprint) -> Option<&Schema<'a>> {
+        self.schemas.get(fp)
     }
 
     /// Returns the `FingerprintAlgorithm` used by the `SchemaStore` for fingerprinting.
@@ -452,49 +467,112 @@ impl<'a> SchemaStore<'a> {
     }
 }
 
-fn parse_canonical_json(schema: &Schema) -> Value {
-    match schema {
+/// Internal helper to quote a JSON string using serde for correctness
+#[inline]
+fn quote(s: &str) -> Result<String, ArrowError> {
+    serde_json::to_string(s)
+        .map_err(|e| ArrowError::ComputeError(format!("Failed to quote string: {e}")))
+}
+
+fn make_fullname(name: &str, namespace_attr: Option<&str>, enclosing_ns: Option<&str>) -> String {
+    match namespace_attr.or(enclosing_ns) {
+        Some(ns) if !name.contains('.') => format!("{ns}.{name}"),
+        _ => name.to_string(),
+    }
+}
+
+fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String, ArrowError> {
+    /// Map a primitive enum variant to its canonical lowercase string.
+    #[inline]
+    fn prim_str(pt: &PrimitiveType) -> &'static str {
+        match pt {
+            PrimitiveType::Null => "null",
+            PrimitiveType::Boolean => "boolean",
+            PrimitiveType::Int => "int",
+            PrimitiveType::Long => "long",
+            PrimitiveType::Float => "float",
+            PrimitiveType::Double => "double",
+            PrimitiveType::Bytes => "bytes",
+            PrimitiveType::String => "string",
+        }
+    }
+
+    Ok(match schema {
         Schema::TypeName(tn) => match tn {
-            TypeName::Primitive(pt) => serde_json::to_value(pt).unwrap(),
-            TypeName::Ref(name) => serde_json::to_value(name).unwrap(),
-        },
-        Schema::Union(schemas) => Value::Array(schemas.iter().map(parse_canonical_json).collect()),
-        Schema::Complex(ct) => match ct {
-            ComplexType::Record(r) => {
-                let full_name = r
-                    .namespace
-                    .map_or_else(|| r.name.to_string(), |ns| format!("{ns}.{}", r.name));
-                let fields: Vec<Value> = r
-                    .fields
-                    .iter()
-                    .map(|f| json!({ "name": f.name, "type": parse_canonical_json(&f.r#type) }))
-                    .collect();
-                json!({ "type": "record", "name": full_name, "fields": fields })
-            }
-            ComplexType::Enum(e) => {
-                let full_name = e
-                    .namespace
-                    .map_or_else(|| e.name.to_string(), |ns| format!("{ns}.{}", e.name));
-                json!({ "type": "enum", "name": full_name, "symbols": e.symbols })
-            }
-            ComplexType::Array(a) => {
-                json!({ "type": "array", "items": parse_canonical_json(&a.items) })
-            }
-            ComplexType::Map(m) => {
-                json!({ "type": "map", "values": parse_canonical_json(&m.values) })
-            }
-            ComplexType::Fixed(f) => {
-                let full_name = f
-                    .namespace
-                    .map_or_else(|| f.name.to_string(), |ns| format!("{ns}.{}", f.name));
-                json!({ "type": "fixed", "name": full_name, "size": f.size })
+            TypeName::Primitive(pt) => quote(prim_str(pt))?,
+            TypeName::Ref(name) => {
+                let full = make_fullname(name, None, enclosing_ns);
+                quote(&full)?
             }
         },
         Schema::Type(t) => match &t.r#type {
-            TypeName::Primitive(pt) => serde_json::to_value(pt).unwrap(),
-            TypeName::Ref(name) => serde_json::to_value(name).unwrap(),
+            TypeName::Primitive(pt) => quote(prim_str(pt))?,
+            TypeName::Ref(name) => {
+                let full = make_fullname(name, None, enclosing_ns);
+                quote(&full)?
+            }
         },
-    }
+        Schema::Union(branches) => {
+            let parts: Vec<String> = branches
+                .iter()
+                .map(|b| build_canonical(b, enclosing_ns))
+                .collect::<Result<_, _>>()?;
+            format!("[{}]", parts.join(","))
+        }
+        Schema::Complex(ct) => match ct {
+            ComplexType::Record(r) => {
+                let fullname = make_fullname(r.name, r.namespace, enclosing_ns);
+                let ns_for_children = fullname.rsplit_once('.').map(|(ns, _)| ns.to_string());
+                let fields: Vec<String> = r
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let field_type = build_canonical(
+                            &f.r#type,
+                            ns_for_children.as_deref().or(enclosing_ns),
+                        )?;
+                        let field_name = quote(f.name)?;
+                        Ok(format!("{{\"name\":{field_name},\"type\":{field_type}}}"))
+                    })
+                    .collect::<Result<_, ArrowError>>()?;
+
+                let fn_json = quote(&fullname)?;
+                format!(
+                    "{{\"name\":{fn_json},\"type\":\"record\",\"fields\":[{}]}}",
+                    fields.join(",")
+                )
+            }
+            ComplexType::Enum(e) => {
+                let fullname = make_fullname(e.name, e.namespace, enclosing_ns);
+                let symbols: Vec<String> = e
+                    .symbols
+                    .iter()
+                    .map(|s| quote(s))
+                    .collect::<Result<_, _>>()?;
+                let fn_json = quote(&fullname)?;
+                format!(
+                    "{{\"name\":{fn_json},\"type\":\"enum\",\"symbols\":[{}]}}",
+                    symbols.join(",")
+                )
+            }
+            ComplexType::Array(arr) => {
+                let items = build_canonical(&arr.items, enclosing_ns)?;
+                format!("{{\"type\":\"array\",\"items\":{items}}}")
+            }
+            ComplexType::Map(map) => {
+                let values = build_canonical(&map.values, enclosing_ns)?;
+                format!("{{\"type\":\"map\",\"values\":{values}}}")
+            }
+            ComplexType::Fixed(f) => {
+                let fullname = make_fullname(f.name, f.namespace, enclosing_ns);
+                let fn_json = quote(&fullname)?;
+                format!(
+                    "{{\"name\":{fn_json},\"type\":\"fixed\",\"size\":{}}}",
+                    f.size
+                )
+            }
+        },
+    })
 }
 
 /// 64‑bit Rabin fingerprint as described in the Avro spec.
@@ -522,7 +600,7 @@ const fn build_table() -> [u64; 256] {
     table
 }
 
-/// The pre‑computed table (no OnceLock, no atomics).
+/// The pre‑computed table.
 static FINGERPRINT_TABLE: [u64; 256] = build_table();
 
 /// Computes the 64-bit Rabin fingerprint for a given canonical schema string.
@@ -531,7 +609,7 @@ static FINGERPRINT_TABLE: [u64; 256] = build_table();
 pub(crate) fn compute_fingerprint_rabin(canonical_form: &str) -> u64 {
     let mut fp = EMPTY;
     for &byte in canonical_form.as_bytes() {
-        let idx = ((fp as u8) ^ byte) as usize; // cheaper mask
+        let idx = ((fp as u8) ^ byte) as usize;
         fp = (fp >> 8) ^ FINGERPRINT_TABLE[idx];
     }
     fp
@@ -879,10 +957,10 @@ mod tests {
         let schemas = vec![int_schema(), record_schema()];
         let store = SchemaStore::try_from(schemas.as_slice()).unwrap();
         let record_fp = Fingerprint::Rabin(compute_fingerprint_rabin("\"int\""));
-        assert_eq!(store.lookup(&record_fp), Some(int_schema()));
-        let canonical = generate_canonical_form(&record_schema());
+        assert_eq!(store.lookup(&record_fp).cloned(), Some(int_schema()));
+        let canonical = generate_canonical_form(&record_schema()).unwrap();
         let rec_fp = Fingerprint::Rabin(compute_fingerprint_rabin(&canonical));
-        assert_eq!(store.lookup(&rec_fp), Some(record_schema()));
+        assert_eq!(store.lookup(&rec_fp).cloned(), Some(record_schema()));
     }
 
     #[test]
@@ -893,7 +971,7 @@ mod tests {
         let int_canonical = r#""int""#;
         let int_fp = compute_fingerprint_rabin(int_canonical);
         assert_eq!(
-            store.lookup(&Fingerprint::Rabin(int_fp)),
+            store.lookup(&Fingerprint::Rabin(int_fp)).cloned(),
             Some(int_schema())
         );
     }
@@ -908,7 +986,7 @@ mod tests {
             _ => panic!("expected Rabin fingerprint"),
         };
         assert_eq!(
-            store.lookup(&Fingerprint::Rabin(fp_val)),
+            store.lookup(&Fingerprint::Rabin(fp_val)).cloned(),
             Some(schema.clone())
         );
         assert!(store
@@ -930,15 +1008,15 @@ mod tests {
     #[test]
     fn test_canonical_form_generation_primitive() {
         let schema = int_schema();
-        let canonical_form = generate_canonical_form(&schema);
+        let canonical_form = generate_canonical_form(&schema).unwrap();
         assert_eq!(canonical_form, r#""int""#);
     }
 
     #[test]
     fn test_canonical_form_generation_record() {
         let schema = record_schema();
-        let expected_canonical_form = r#"{"fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}],"name":"test.namespace.record1","type":"record"}"#;
-        let canonical_form = generate_canonical_form(&schema);
+        let expected_canonical_form = r#"{"name":"test.namespace.record1","type":"record","fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}]}"#;
+        let canonical_form = generate_canonical_form(&schema).unwrap();
         assert_eq!(canonical_form, expected_canonical_form);
     }
 
@@ -954,11 +1032,12 @@ mod tests {
     fn test_register_and_lookup_complex_schema() {
         let mut store = SchemaStore::new();
         let schema = record_schema();
-        let canonical_form = r#"{"fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}],"name":"test.namespace.record1","type":"record"}"#;
-        let expected_fingerprint = Fingerprint::Rabin(compute_fingerprint_rabin(canonical_form));
+        let canonical_form = r#"{"name":"test.namespace.record1","type":"record","fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}]}"#;
+        let expected_fingerprint =
+            Fingerprint::Rabin(super::compute_fingerprint_rabin(canonical_form));
         let fingerprint = store.register(schema.clone()).unwrap();
         assert_eq!(fingerprint, expected_fingerprint);
-        let looked_up = store.lookup(&fingerprint);
+        let looked_up = store.lookup(&fingerprint).cloned();
         assert_eq!(looked_up, Some(schema));
     }
 
@@ -986,8 +1065,8 @@ mod tests {
                 additional: HashMap::from([("custom_attr", json!("value"))]),
             },
         }));
-        let expected_canonical_form = r#"{"fields":[{"name":"f1","type":"bytes"}],"name":"record_with_attrs","type":"record"}"#;
-        let canonical_form = generate_canonical_form(&schema_with_attrs);
+        let expected_canonical_form = r#"{"name":"record_with_attrs","type":"record","fields":[{"name":"f1","type":"bytes"}]}"#;
+        let canonical_form = generate_canonical_form(&schema_with_attrs).unwrap();
         assert_eq!(canonical_form, expected_canonical_form);
     }
 }
