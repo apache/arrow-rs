@@ -1672,6 +1672,7 @@ mod tests_from_ffi {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_utf8_view_ffi_from_dangling_pointer() {
         let empty = GenericByteViewBuilder::<StringViewType>::new().finish();
         let buffers = empty.data_buffers().to_vec();
