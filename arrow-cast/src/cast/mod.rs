@@ -611,6 +611,20 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// * `List` to `Primitive`
 /// * `Interval` and `Duration`
 ///
+/// # Durations and Intervals
+///
+/// Casting integer types directly to interval types such as
+/// [`IntervalMonthDayNano`] is not supported because the meaning of the integer
+/// is ambiguous. For example, the integer  could represent either nanoseconds
+/// or months.
+///
+/// To cast an integer type to an interval type, first convert to a Duration
+/// type, and then cast that to the desired interval type.
+///
+/// For example, to convert an `Int64` representing nanoseconds to an
+/// `IntervalMonthDayNano` you would first convert the `Int64` to a
+/// `DurationNanoseconds`, and then cast that to `IntervalMonthDayNano`.
+///
 /// # Timestamps and Timezones
 ///
 /// Timestamps are stored with an optional timezone in Arrow.
