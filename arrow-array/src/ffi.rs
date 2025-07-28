@@ -1306,10 +1306,15 @@ mod tests_to_then_from_ffi {
 
 #[cfg(test)]
 mod tests_from_ffi {
+    #[cfg(not(feature = "force_validate"))]
     use std::ptr::NonNull;
     use std::sync::Arc;
 
+    #[cfg(feature = "force_validate")]
+    use arrow_buffer::{bit_util, buffer::Buffer};
+    #[cfg(not(feature = "force_validate"))]
     use arrow_buffer::{bit_util, buffer::Buffer, ScalarBuffer};
+
     use arrow_data::transform::MutableArrayData;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
