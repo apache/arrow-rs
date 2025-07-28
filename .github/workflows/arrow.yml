@@ -71,7 +71,7 @@ jobs:
         run: |
           cargo test -p arrow-array --all-features
           # Disable feature `force_validate`
-          cargo test -p arrow-array
+          cargo test -p arrow-array --features=ffi
       - name: Test arrow-select
         run: cargo test -p arrow-select --all-features
       - name: Test arrow-cast
