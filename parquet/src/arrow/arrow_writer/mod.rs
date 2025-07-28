@@ -131,7 +131,7 @@ mod levels;
 ///
 /// ## Type Compatibility
 /// The writer can write Arrow [`RecordBatch`]s that are logically equivalent. This means that for
-/// a  given column, the writer can accept multiple Arrow [`DataType`]s that have contain the same
+/// a  given column, the writer can accept multiple Arrow [`DataType`]s that contain the same
 /// value type.
 ///
 /// Currently, only compatibility between Arrow dictionary and native arrays are supported.
