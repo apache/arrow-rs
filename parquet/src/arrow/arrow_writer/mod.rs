@@ -130,7 +130,7 @@ mod levels;
 /// [support nanosecond intervals]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
 ///
 /// ## Type Compatibility
-/// The writer can write Arrow [`RecordBatches`]s that are logically equivalent. This means that for
+/// The writer can write Arrow [`RecordBatch`]s that are logically equivalent. This means that for
 /// a  given column, the writer can accept multiple Arrow [`DataType`]s that have contain the same
 /// value type.
 ///
