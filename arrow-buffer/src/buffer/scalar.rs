@@ -79,10 +79,10 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     ///
     /// This function is unsafe because it does not check if the `buffer` is aligned
     pub unsafe fn new_unchecked(buffer: Buffer) -> Self {
-       Self {
-           buffer,
-           phantom: Default::default(),
-       }
+        Self {
+            buffer,
+            phantom: Default::default(),
+        }
     }
 
     /// Free up unused memory.

@@ -1682,7 +1682,8 @@ mod tests_from_ffi {
         let buffer = unsafe { Buffer::from_custom_allocation(NonNull::<u8>::dangling(), 0, alloc) };
         let views = unsafe { ScalarBuffer::new_unchecked(buffer) };
 
-        let str_view: GenericByteViewArray<StringViewType> = unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) };
+        let str_view: GenericByteViewArray<StringViewType> =
+            unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) };
         let imported = roundtrip_byte_view_array(str_view);
         assert_eq!(imported.len(), 0);
         assert_eq!(&imported, &empty);
