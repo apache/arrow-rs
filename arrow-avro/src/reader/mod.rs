@@ -201,9 +201,7 @@ impl Decoder {
             // Cache the old decoder before replacing it
             if let Some(old_fingerprint) = self.active_fingerprint.replace(new_fingerprint) {
                 let old_decoder = std::mem::replace(&mut self.active_decoder, new_decoder);
-                if self.cache.contains_key(&old_fingerprint) {
-                    self.cache.shift_remove(&old_fingerprint);
-                }
+                self.cache.shift_remove(&old_fingerprint);
                 self.cache.insert(old_fingerprint, old_decoder);
             } else {
                 self.active_decoder = new_decoder;
