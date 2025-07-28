@@ -72,6 +72,19 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         buffer.slice_with_length(byte_offset, byte_len).into()
     }
 
+    /// Unsafe function to create a new [`ScalarBuffer`] from a [`Buffer`].
+    /// Only use for testing purpose.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it does not check if the `buffer` is aligned
+    pub unsafe fn new_unchecked(buffer: Buffer) -> Self {
+       Self {
+           buffer,
+           phantom: Default::default(),
+       }
+    }
+
     /// Free up unused memory.
     pub fn shrink_to_fit(&mut self) {
         self.buffer.shrink_to_fit();
@@ -98,6 +111,11 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     #[inline]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.buffer.ptr_eq(&other.buffer)
+    }
+
+    /// Returns the number of elements in the buffer
+    pub fn len(&self) -> usize {
+        self.buffer.len() / std::mem::size_of::<T>()
     }
 }
 

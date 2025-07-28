@@ -1302,9 +1302,10 @@ mod tests_to_then_from_ffi {
 
 #[cfg(test)]
 mod tests_from_ffi {
+    use std::ptr::NonNull;
     use std::sync::Arc;
 
-    use arrow_buffer::{bit_util, buffer::Buffer};
+    use arrow_buffer::{bit_util, buffer::Buffer, ScalarBuffer};
     use arrow_data::transform::MutableArrayData;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
@@ -1664,6 +1665,23 @@ mod tests_from_ffi {
         fn from_str(value: &str) -> &Self {
             value.as_bytes()
         }
+    }
+
+    #[test]
+    fn test_utf8_view_ffi_from_dangling_pointer() {
+        let empty = GenericByteViewBuilder::<StringViewType>::new().finish();
+        let buffers = empty.data_buffers().to_vec();
+        let nulls = empty.nulls().cloned();
+
+        // Create a dangling pointer to a view buffer with zero length.
+        let alloc = Arc::new(1);
+        let buffer = unsafe { Buffer::from_custom_allocation(NonNull::<u8>::dangling(), 0, alloc) };
+        let views = unsafe { ScalarBuffer::new_unchecked(buffer) };
+
+        let str_view: GenericByteViewArray<StringViewType> = unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) };
+        let imported = roundtrip_byte_view_array(str_view);
+        assert_eq!(imported.len(), 0);
+        assert_eq!(&imported, &empty);
     }
 
     #[test]
