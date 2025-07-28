@@ -203,6 +203,9 @@ impl Decoder {
                 let old_decoder = std::mem::replace(&mut self.active_decoder, new_decoder);
                 self.cache.shift_remove(&old_fingerprint);
                 self.cache.insert(old_fingerprint, old_decoder);
+                if self.cache.len() > self.max_cache_size {
+                    self.cache.shift_remove_index(0);
+                }
             } else {
                 self.active_decoder = new_decoder;
             }
