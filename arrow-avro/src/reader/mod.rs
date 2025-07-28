@@ -88,8 +88,8 @@
 
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
-    compare_schemas, Fingerprint, FingerprintAlgorithm, Schema as AvroSchema, SchemaStore,
-    SINGLE_OBJECT_MAGIC,
+    compare_schemas, generate_fingerprint, Fingerprint, FingerprintAlgorithm, Schema as AvroSchema,
+    SchemaStore, SINGLE_OBJECT_MAGIC,
 };
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
@@ -140,13 +140,12 @@ pub struct Decoder {
     active_decoder: RecordDecoder,
     active_fingerprint: Option<Fingerprint>,
     batch_size: usize,
-    decoded_rows: usize,
+    remaining_capacity: usize,
     cache: IndexMap<Fingerprint, RecordDecoder>,
     max_cache_size: usize,
     reader_schema: Option<AvroSchema<'static>>,
-    schema_store: Option<SchemaStore<'static>>,
+    writer_schema_store: Option<SchemaStore<'static>>,
     utf8_view: bool,
-    static_store_mode: bool,
     strict_mode: bool,
     pending_schema: Option<(Fingerprint, RecordDecoder)>,
 }
@@ -168,22 +167,32 @@ impl Decoder {
     ///
     /// Returns the number of bytes consumed.
     pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
+        if self.active_fingerprint.is_none()
+            && self.writer_schema_store.is_some()
+            && !data.starts_with(&SINGLE_OBJECT_MAGIC)
+        {
+            return Err(ArrowError::ParseError(
+                "Expected single‑object encoding fingerprint prefix for first message \
+                     (writer_schema_store is set but active_fingerprint is None)"
+                    .into(),
+            ));
+        }
         let mut total_consumed = 0usize;
-        let hash_type = self.schema_store.as_ref().map_or(
+        let hash_type = self.writer_schema_store.as_ref().map_or(
             FingerprintAlgorithm::Rabin,
             SchemaStore::fingerprint_algorithm,
         );
-        while total_consumed < data.len() && self.decoded_rows < self.batch_size {
+        while total_consumed < data.len() && self.remaining_capacity > 0 {
             if let Some(prefix_bytes) = self.handle_prefix(&data[total_consumed..], hash_type)? {
-                // Schema change detected (> 0) or there were insufficient bytes to read the next prefix (= 0).
-                // If the former, the batch must end because the next record has a different schema.
-                // If the latter, batch ends because the caller needs to fetch more bytes.
+                // A batch is complete when its `remaining_capacity` is 0. It may be completed early if
+                // a schema change is detected or there are insufficient bytes to read the next prefix.
+                // A schema change requires a new batch.
                 total_consumed += prefix_bytes;
                 break;
             }
             let n = self.active_decoder.decode(&data[total_consumed..], 1)?;
             total_consumed += n;
-            self.decoded_rows += 1;
+            self.remaining_capacity -= 1;
         }
         Ok(total_consumed)
     }
@@ -191,11 +200,11 @@ impl Decoder {
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
     /// `Ok(None)` if no new rows are available.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        if self.decoded_rows == 0 {
+        if self.remaining_capacity == self.batch_size {
             return Ok(None);
         }
         let batch = self.active_decoder.flush()?;
-        self.decoded_rows = 0;
+        self.remaining_capacity = self.batch_size;
         // Apply a pending schema switch if one is staged
         if let Some((new_fingerprint, new_decoder)) = self.pending_schema.take() {
             // Cache the old decoder before replacing it
@@ -210,7 +219,6 @@ impl Decoder {
                 self.active_decoder = new_decoder;
             }
         }
-        self.evict_cache();
         Ok(Some(batch))
     }
 
@@ -220,10 +228,7 @@ impl Decoder {
         buf: &[u8],
         hash_type: FingerprintAlgorithm,
     ) -> Result<Option<usize>, ArrowError> {
-        if self.schema_store.is_none()
-            || self.static_store_mode
-            || !buf.starts_with(&SINGLE_OBJECT_MAGIC)
-        {
+        if self.writer_schema_store.is_none() || !buf.starts_with(&SINGLE_OBJECT_MAGIC) {
             return Ok(None);
         }
         let full_len = prefix_len(hash_type);
@@ -247,8 +252,8 @@ impl Decoder {
             self.prepare_schema_switch(new_fp)?;
             // If there are already decoded rows, we must flush them first.
             // Forcing the batch to be full ensures `flush` is called next.
-            if self.decoded_rows > 0 {
-                self.decoded_rows = self.batch_size;
+            if self.remaining_capacity < self.batch_size {
+                self.remaining_capacity = 0;
             }
         }
         Ok(Some(full_len))
@@ -260,7 +265,7 @@ impl Decoder {
         } else {
             // No cached decoder, create a new one
             let store = self
-                .schema_store
+                .writer_schema_store
                 .as_ref()
                 .ok_or_else(|| ArrowError::ParseError("Schema store unavailable".into()))?;
             let writer_schema = store.lookup(&new_fingerprint).ok_or_else(|| {
@@ -282,23 +287,14 @@ impl Decoder {
         Ok(())
     }
 
-    #[inline]
-    fn evict_cache(&mut self) {
-        while self.cache.len() > self.max_cache_size {
-            if let Some(lru_key) = self.cache.keys().next().cloned() {
-                self.cache.shift_remove(&lru_key);
-            }
-        }
-    }
-
     /// Returns the number of rows that can be added to this decoder before it is full.
     pub fn capacity(&self) -> usize {
-        self.batch_size.saturating_sub(self.decoded_rows)
+        self.remaining_capacity
     }
 
     /// Returns true if the decoder has reached its capacity for the current batch.
     pub fn batch_is_full(&self) -> bool {
-        self.capacity() == 0
+        self.remaining_capacity == 0
     }
 }
 
@@ -312,7 +308,6 @@ pub struct ReaderBuilder {
     reader_schema: Option<AvroSchema<'static>>,
     writer_schema_store: Option<SchemaStore<'static>>,
     active_fingerprint: Option<Fingerprint>,
-    static_store_mode: bool,
     decoder_cache_size: usize,
 }
 
@@ -325,7 +320,6 @@ impl Default for ReaderBuilder {
             reader_schema: None,
             writer_schema_store: None,
             active_fingerprint: None,
-            static_store_mode: false,
             decoder_cache_size: 20,
         }
     }
@@ -367,20 +361,18 @@ impl ReaderBuilder {
         active_decoder: RecordDecoder,
         active_fingerprint: Option<Fingerprint>,
         reader_schema: Option<AvroSchema<'static>>,
-        schema_store: Option<SchemaStore<'static>>,
-        static_store_mode: bool,
+        writer_schema_store: Option<SchemaStore<'static>>,
     ) -> Decoder {
         Decoder {
             batch_size: self.batch_size,
-            decoded_rows: 0,
+            remaining_capacity: self.batch_size,
             active_fingerprint,
             active_decoder,
             cache: IndexMap::new(),
             max_cache_size: self.decoder_cache_size,
             reader_schema,
             utf8_view: self.utf8_view,
-            schema_store,
-            static_store_mode,
+            writer_schema_store,
             strict_mode: self.strict_mode,
             pending_schema: None,
         }
@@ -397,39 +389,36 @@ impl ReaderBuilder {
                     })?;
                 let record_decoder =
                     self.make_record_decoder(&writer_schema, self.reader_schema.as_ref())?;
-                Ok(self.make_decoder_with_parts(record_decoder, None, None, None, true))
+                Ok(self.make_decoder_with_parts(record_decoder, None, None, None))
             }
             None => {
                 let reader_schema = self.reader_schema.clone().ok_or_else(|| {
                     ArrowError::ParseError("Reader schema required for raw Avro".into())
                 })?;
                 let (init_fingerprint, initial_decoder) =
-                    match (&self.writer_schema_store, self.active_fingerprint) {
+                    if let (Some(schema_store), Some(fingerprint)) =
+                        (&self.writer_schema_store, self.active_fingerprint)
+                    {
                         // An initial fingerprint is provided, use it to look up the first schema.
-                        (Some(schema_store), Some(fingerprint)) => {
-                            let writer_schema =
-                                schema_store.lookup(&fingerprint).ok_or_else(|| {
-                                    ArrowError::ParseError(
-                                        "Active fingerprint not found in schema store".into(),
-                                    )
-                                })?;
-                            let decoder =
-                                self.make_record_decoder(writer_schema, Some(&reader_schema))?;
-                            (Some(fingerprint), decoder)
-                        }
+                        let writer_schema = schema_store.lookup(&fingerprint).ok_or_else(|| {
+                            ArrowError::ParseError(
+                                "Active fingerprint not found in schema store".into(),
+                            )
+                        })?;
+                        let decoder =
+                            self.make_record_decoder(writer_schema, Some(&reader_schema))?;
+                        (Some(fingerprint), decoder)
+                    } else {
                         // No initial fingerprint; the first record must contain one.
-                        // A temporary decoder is created from the reader schema.
-                        _ => {
-                            let decoder = self.make_record_decoder(&reader_schema, None)?;
-                            (None, decoder)
-                        }
+                        // A decoder is created from the reader schema only.
+                        let decoder = self.make_record_decoder(&reader_schema, None)?;
+                        (None, decoder)
                     };
                 Ok(self.make_decoder_with_parts(
                     initial_decoder,
                     init_fingerprint,
                     Some(reader_schema),
                     self.writer_schema_store.clone(),
-                    self.static_store_mode,
                 ))
             }
         }
@@ -493,18 +482,6 @@ impl ReaderBuilder {
         self
     }
 
-    /// If `true`, all schemas must be pre-registered in the `SchemaStore`.
-    ///
-    /// When this mode is enabled, decoding will fail if a schema fingerprint is
-    /// encountered that does not already exist in the store. This prevents the
-    /// dynamic resolution of schemas and ensures that only known schemas are used.
-    ///
-    /// Defaults to `false`.
-    pub fn with_static_store_mode(mut self, enabled: bool) -> Self {
-        self.static_store_mode = enabled;
-        self
-    }
-
     /// Set the maximum number of decoders to cache.
     ///
     /// When dealing with Avro files that contain multiple schemas, we may need to switch
@@ -521,19 +498,12 @@ impl ReaderBuilder {
             self.writer_schema_store.as_ref(),
             self.reader_schema.as_ref(),
             self.active_fingerprint.as_ref(),
-            self.static_store_mode,
         ) {
-            (Some(_), None, _, _) => Err(ArrowError::ParseError(
+            (Some(_), None, _) => Err(ArrowError::ParseError(
                 "Reader schema must be set when writer schema store is provided".into(),
             )),
-            (None, _, Some(_), _) => Err(ArrowError::ParseError(
+            (None, _, Some(_)) => Err(ArrowError::ParseError(
                 "Active fingerprint requires a writer schema store".into(),
-            )),
-            (None, _, _, true) => Err(ArrowError::ParseError(
-                "static_store_mode=true requires a writer schema store".into(),
-            )),
-            (Some(_), _, None, true) => Err(ArrowError::ParseError(
-                "static_store_mode=true requires an active fingerprint".into(),
             )),
             _ => Ok(()),
         }
@@ -781,32 +751,6 @@ mod test {
     }
 
     #[test]
-    fn test_static_store_mode_ignores_subsequent_prefix() {
-        let (store, fp_int, fp_long, schema_int, _schema_long) = make_two_schema_store();
-        let mut decoder = ReaderBuilder::new()
-            .with_batch_size(8)
-            .with_reader_schema(schema_int.clone())
-            .with_writer_schema_store(store)
-            .with_active_fingerprint(fp_int)
-            .with_static_store_mode(true)
-            .build_decoder()
-            .expect("build decoder");
-        let prefix = make_prefix(fp_long);
-        match decoder.decode(&prefix) {
-            Err(ArrowError::ParseError(_)) => {
-                assert!(
-                    decoder.pending_schema.is_none(),
-                    "no schema switch should be staged"
-                );
-            }
-            Ok(n) => {
-                panic!("decode unexpectedly succeeded (consumed {n} bytes) in static_store_mode")
-            }
-            Err(e) => panic!("unexpected error kind: {e}"),
-        }
-    }
-
-    #[test]
     fn test_unknown_fingerprint_is_error() {
         let (mut store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         {
@@ -829,6 +773,24 @@ mod test {
         let msg = format!("{err}");
         assert!(
             msg.contains("Unknown fingerprint"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_missing_initial_fingerprint_error() {
+        let (store, _fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(schema_int.clone())
+            .with_writer_schema_store(store)
+            .build_decoder()
+            .expect("build decoder");
+        let buf = [0x02u8, 0x00u8];
+        let err = decoder.decode(&buf).expect_err("decode should error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Expected single‑object encoding fingerprint"),
             "unexpected error message: {msg}"
         );
     }

@@ -467,7 +467,6 @@ impl<'a> SchemaStore<'a> {
     }
 }
 
-/// Internal helper to quote a JSON string using serde for correctness
 #[inline]
 fn quote(s: &str) -> Result<String, ArrowError> {
     serde_json::to_string(s)
@@ -482,7 +481,6 @@ fn make_fullname(name: &str, namespace_attr: Option<&str>, enclosing_ns: Option<
 }
 
 fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String, ArrowError> {
-    /// Map a primitive enum variant to its canonical lowercase string.
     #[inline]
     fn prim_str(pt: &PrimitiveType) -> &'static str {
         match pt {
@@ -496,81 +494,70 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
             PrimitiveType::String => "string",
         }
     }
-
     Ok(match schema {
-        Schema::TypeName(tn) => match tn {
+        Schema::TypeName(tn) | Schema::Type(Type { r#type: tn, .. }) => match tn {
             TypeName::Primitive(pt) => quote(prim_str(pt))?,
-            TypeName::Ref(name) => {
-                let full = make_fullname(name, None, enclosing_ns);
-                quote(&full)?
-            }
+            TypeName::Ref(name) => quote(&make_fullname(name, None, enclosing_ns))?,
         },
-        Schema::Type(t) => match &t.r#type {
-            TypeName::Primitive(pt) => quote(prim_str(pt))?,
-            TypeName::Ref(name) => {
-                let full = make_fullname(name, None, enclosing_ns);
-                quote(&full)?
-            }
-        },
-        Schema::Union(branches) => {
-            let parts: Vec<String> = branches
+        Schema::Union(branches) => format!(
+            "[{}]",
+            branches
                 .iter()
                 .map(|b| build_canonical(b, enclosing_ns))
-                .collect::<Result<_, _>>()?;
-            format!("[{}]", parts.join(","))
-        }
+                .collect::<Result<Vec<_>, _>>()?
+                .join(",")
+        ),
         Schema::Complex(ct) => match ct {
             ComplexType::Record(r) => {
                 let fullname = make_fullname(r.name, r.namespace, enclosing_ns);
-                let ns_for_children = fullname.rsplit_once('.').map(|(ns, _)| ns.to_string());
-                let fields: Vec<String> = r
+                let child_ns = fullname.rsplit_once('.').map(|(ns, _)| ns.to_string());
+                let fields = r
                     .fields
                     .iter()
                     .map(|f| {
-                        let field_type = build_canonical(
-                            &f.r#type,
-                            ns_for_children.as_deref().or(enclosing_ns),
-                        )?;
-                        let field_name = quote(f.name)?;
-                        Ok(format!("{{\"name\":{field_name},\"type\":{field_type}}}"))
+                        let field_type =
+                            build_canonical(&f.r#type, child_ns.as_deref().or(enclosing_ns))?;
+                        Ok(format!(
+                            "{{\"name\":{},\"type\":{}}}",
+                            quote(f.name)?,
+                            field_type
+                        ))
                     })
-                    .collect::<Result<_, ArrowError>>()?;
-
-                let fn_json = quote(&fullname)?;
+                    .collect::<Result<Vec<_>, ArrowError>>()?
+                    .join(",");
                 format!(
-                    "{{\"name\":{fn_json},\"type\":\"record\",\"fields\":[{}]}}",
-                    fields.join(",")
+                    "{{\"name\":{},\"type\":\"record\",\"fields\":[{}]}}",
+                    quote(&fullname)?,
+                    fields
                 )
             }
             ComplexType::Enum(e) => {
                 let fullname = make_fullname(e.name, e.namespace, enclosing_ns);
-                let symbols: Vec<String> = e
+                let symbols = e
                     .symbols
                     .iter()
                     .map(|s| quote(s))
-                    .collect::<Result<_, _>>()?;
-                let fn_json = quote(&fullname)?;
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join(",");
                 format!(
-                    "{{\"name\":{fn_json},\"type\":\"enum\",\"symbols\":[{}]}}",
-                    symbols.join(",")
+                    "{{\"name\":{},\"type\":\"enum\",\"symbols\":[{}]}}",
+                    quote(&fullname)?,
+                    symbols
                 )
             }
-            ComplexType::Array(arr) => {
-                let items = build_canonical(&arr.items, enclosing_ns)?;
-                format!("{{\"type\":\"array\",\"items\":{items}}}")
-            }
-            ComplexType::Map(map) => {
-                let values = build_canonical(&map.values, enclosing_ns)?;
-                format!("{{\"type\":\"map\",\"values\":{values}}}")
-            }
-            ComplexType::Fixed(f) => {
-                let fullname = make_fullname(f.name, f.namespace, enclosing_ns);
-                let fn_json = quote(&fullname)?;
-                format!(
-                    "{{\"name\":{fn_json},\"type\":\"fixed\",\"size\":{}}}",
-                    f.size
-                )
-            }
+            ComplexType::Array(arr) => format!(
+                "{{\"type\":\"array\",\"items\":{}}}",
+                build_canonical(&arr.items, enclosing_ns)?
+            ),
+            ComplexType::Map(map) => format!(
+                "{{\"type\":\"map\",\"values\":{}}}",
+                build_canonical(&map.values, enclosing_ns)?
+            ),
+            ComplexType::Fixed(f) => format!(
+                "{{\"name\":{},\"type\":\"fixed\",\"size\":{}}}",
+                quote(&make_fullname(f.name, f.namespace, enclosing_ns))?,
+                f.size
+            ),
         },
     })
 }
