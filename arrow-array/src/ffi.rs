@@ -408,7 +408,13 @@ impl ImportedArrowArray<'_> {
             .map(|index| {
                 let len = self.buffer_len(index, variadic_buffer_lens, &self.data_type)?;
                 match unsafe { create_buffer(self.owner.clone(), self.array, index, len) } {
-                    Some(buf) => Ok(buf),
+                    Some(buf) => {
+                        if buf.is_empty() {
+                            Ok(MutableBuffer::new(0).into())
+                        } else {
+                            Ok(buf)
+                        }
+                    }
                     None if len == 0 => {
                         // Null data buffer, which Rust doesn't allow. So create
                         // an empty buffer.
