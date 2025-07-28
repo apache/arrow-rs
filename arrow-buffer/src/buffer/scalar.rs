@@ -117,6 +117,11 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     pub fn len(&self) -> usize {
         self.buffer.len() / std::mem::size_of::<T>()
     }
+
+    /// Returns if the buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<T: ArrowNativeType> Deref for ScalarBuffer<T> {
