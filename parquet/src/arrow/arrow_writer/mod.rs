@@ -135,7 +135,7 @@ mod levels;
 /// value type.
 ///
 /// Currently, only compatibility between Arrow dictionary and native arrays are supported.
-/// Additional type compatibility may be added in future (see )
+/// Additional type compatibility may be added in future (see [issue #8012](https://github.com/apache/arrow-rs/issues/8012))
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_array::{DictionaryArray, RecordBatch, StringArray, UInt8Array};
