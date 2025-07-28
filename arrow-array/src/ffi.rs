@@ -409,6 +409,10 @@ impl ImportedArrowArray<'_> {
                 let len = self.buffer_len(index, variadic_buffer_lens, &self.data_type)?;
                 match unsafe { create_buffer(self.owner.clone(), self.array, index, len) } {
                     Some(buf) => {
+                        // External libraries may use a dangling pointer for a buffer with length 0.
+                        // We respect the array length specified in the C Data Interface. Actually,
+                        // if the length is incorrect, we cannot create a correct buffer even if
+                        // the pointer is valid.
                         if buf.is_empty() {
                             Ok(MutableBuffer::new(0).into())
                         } else {
