@@ -354,7 +354,7 @@ impl Decoder {
     }
 
     fn prepare_schema_switch(&mut self, new_fp: Fingerprint) -> Result<(), ArrowError> {
-        let new_dec = if let Some(dec) = self.cache.remove(&new_fp) {
+        let new_decoder = if let Some(dec) = self.cache.remove(&new_fp) {
             // Found a cached decoder, remove it from the LRU list
             if let Some(pos) = self.lru.iter().position(|&k| k == new_fp) {
                 self.lru.remove(pos);
