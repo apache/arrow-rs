@@ -3101,13 +3101,16 @@ mod tests {
                 }
             }
 
+            // Convert rows produced from convert_columns().
+            // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
             let back = converter.convert_rows(&rows).unwrap();
             for (actual, expected) in back.iter().zip(&arrays) {
                 actual.to_data().validate_full().unwrap();
                 dictionary_eq(actual, expected)
             }
 
-            // Check that we can convert
+            // Check that we can convert rows into ByteArray and then parse, convert it back to array
+            // Note: validate_utf8 is set to true since Row is initialized through RowParser
             let rows = rows.try_into_binary().expect("reasonable size");
             let parser = converter.parser();
             let back = converter
@@ -3237,5 +3240,65 @@ mod tests {
             Err(e) => panic!("Expected NotYetImplemented error, got: {e}"),
             Ok(_) => panic!("Expected NotYetImplemented error for map data type"),
         }
+    }
+
+    #[test]
+    fn test_values_buffer_smaller_when_utf8_validation_disabled() {
+        fn get_values_buffer_len(col: ArrayRef) -> (usize, usize) {
+            // 1. Convert cols into rows
+            let converter = RowConverter::new(vec![SortField::new(DataType::Utf8View)]).unwrap();
+
+            // 2a. Convert rows into colsa (validate_utf8 = false)
+            let rows = converter.convert_columns(&[col]).unwrap();
+            let converted = converter.convert_rows(&rows).unwrap();
+            let unchecked_values_len = converted[0].as_string_view().data_buffers()[0].len();
+
+            // 2b. Convert rows into cols (validate_utf8 = true since Row is initialized through RowParser)
+            let rows = rows.try_into_binary().expect("reasonable size");
+            let parser = converter.parser();
+            let converted = converter
+                .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+                .unwrap();
+            let checked_values_len = converted[0].as_string_view().data_buffers()[0].len();
+            (unchecked_values_len, checked_values_len)
+        }
+
+        // Case1. StringViewArray with inline strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("hello"), // short(5)
+            None,          // null
+            Some("short"), // short(5)
+            Some("tiny"),  // short(4)
+        ])) as ArrayRef;
+
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        // Since there are no long (>12) strings, len of values buffer is 0
+        assert_eq!(unchecked_values_len, 0);
+        // When utf8 validation enabled, values buffer includes inline strings (5+5+4)
+        assert_eq!(checked_values_len, 14);
+
+        // Case2. StringViewArray with long(>12) strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("this is a very long string over 12 bytes"),
+            Some("another long string to test the buffer"),
+        ])) as ArrayRef;
+
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        // Since there are no inline strings, expected length of values buffer is the same
+        assert!(unchecked_values_len > 0);
+        assert_eq!(unchecked_values_len, checked_values_len);
+
+        // Case3. StringViewArray with both short and long strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("tiny"),          // 4 (short)
+            Some("thisisexact13"), // 13 (long)
+            None,
+            Some("short"), // 5 (short)
+        ])) as ArrayRef;
+
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        // Since there is single long string, len of values buffer is 13
+        assert_eq!(unchecked_values_len, 13);
+        assert!(checked_values_len > unchecked_values_len);
     }
 }
