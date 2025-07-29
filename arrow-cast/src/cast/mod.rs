@@ -907,7 +907,7 @@ pub fn cast_with_options(
                 scale,
                 from_type,
                 to_type,
-                |x: i256| decimal256_to_f64(x),
+                |x: i256| x.to_f64().expect("All i256 values fit in f64"),
                 cast_options,
             )
         }
@@ -2009,17 +2009,6 @@ where
     }
 }
 
-/// Convert a [`i256`] to `f64` saturating to infinity on overflow.
-fn decimal256_to_f64(v: i256) -> f64 {
-    v.to_f64().unwrap_or_else(|| {
-        if v.is_negative() {
-            f64::NEG_INFINITY
-        } else {
-            f64::INFINITY
-        }
-    })
-}
-
 fn cast_to_decimal<D, M>(
     array: &dyn Array,
     base: M,
@@ -2453,6 +2442,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::i256;
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
     use chrono::NaiveDate;
     use half::f16;
@@ -8688,26 +8678,26 @@ mod tests {
         );
     }
     #[test]
-    fn test_cast_decimal256_to_f64_overflow() {
-        // Test positive overflow (positive infinity)
+    fn test_cast_decimal256_to_f64_no_overflow() {
+        // Test casting i256::MAX: should produce a large finite positive value
         let array = vec![Some(i256::MAX)];
         let array = create_decimal256_array(array, 76, 2).unwrap();
         let array = Arc::new(array) as ArrayRef;
 
         let result = cast(&array, &DataType::Float64).unwrap();
         let result = result.as_primitive::<Float64Type>();
-        assert!(result.value(0).is_infinite());
-        assert!(result.value(0) > 0.0); // Positive infinity
+        assert!(result.value(0).is_finite());
+        assert!(result.value(0) > 0.0); // Positive result
 
-        // Test negative overflow (negative infinity)
+        // Test casting i256::MIN: should produce a large finite negative value
         let array = vec![Some(i256::MIN)];
         let array = create_decimal256_array(array, 76, 2).unwrap();
         let array = Arc::new(array) as ArrayRef;
 
         let result = cast(&array, &DataType::Float64).unwrap();
         let result = result.as_primitive::<Float64Type>();
-        assert!(result.value(0).is_infinite());
-        assert!(result.value(0) < 0.0); // Negative infinity
+        assert!(result.value(0).is_finite());
+        assert!(result.value(0) < 0.0); // Negative result
     }
 
     #[test]
@@ -8736,6 +8726,15 @@ mod tests {
         assert_eq!("1123450", decimal_arr.value_as_string(0));
         assert_eq!("2123460", decimal_arr.value_as_string(1));
         assert_eq!("3123460", decimal_arr.value_as_string(2));
+    }
+
+    #[test]
+    fn decimal128_min_max_to_f64() {
+        // Ensure Decimal128 i128::MIN/MAX round-trip cast
+        let min128 = i128::MIN;
+        let max128 = i128::MAX;
+        assert_eq!(min128 as f64, min128 as f64);
+        assert_eq!(max128 as f64, max128 as f64);
     }
 
     #[test]
