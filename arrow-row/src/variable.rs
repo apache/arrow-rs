@@ -262,6 +262,10 @@ fn decode_binary_view_inner(
         valid
     });
 
+    // If we are validating UTF-8, decode all string values (including short strings)
+    // into the values buffer and validate UTF-8 once. If not validating,
+    // we save memory by only copying long strings to the values buffer, as short strings
+    // will be inlined into the view and do not need to be stored redundantly.
     let values_capacity = if validate_utf8 {
         // Capacity for all long and short strings
         rows.iter().map(|row| decoded_len(row, options)).sum()
