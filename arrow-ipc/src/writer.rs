@@ -840,14 +840,16 @@ impl DictionaryTracker {
             return Ok(DictionaryUpdate::None);
         }
 
+        const REPLACEMENT_ERROR: &str =
+            "Dictionary replacement detected when writing IPC file format. \
+                 Arrow IPC files only support a single dictionary for a given field \
+                 across all batches.";
+
         match comparison {
             DictionaryComparison::NotEqual => {
                 if self.error_on_replacement {
                     return Err(ArrowError::InvalidArgumentError(
-                        "Dictionary replacement detected when writing IPC file format. \
-                 Arrow IPC files only support a single dictionary for a given field \
-                 across all batches."
-                            .to_string(),
+                        REPLACEMENT_ERROR.to_string(),
                     ));
                 }
 
@@ -863,10 +865,7 @@ impl DictionaryTracker {
                 } else {
                     if self.error_on_replacement {
                         return Err(ArrowError::InvalidArgumentError(
-                            "Dictionary replacement detected when writing IPC file format. \
-                 Arrow IPC files only support a single dictionary for a given field \
-                 across all batches."
-                                .to_string(),
+                            REPLACEMENT_ERROR.to_string(),
                         ));
                     }
 
