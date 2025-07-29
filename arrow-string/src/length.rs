@@ -17,6 +17,7 @@
 
 //! Defines kernel for length of string arrays and binary arrays
 
+use arrow_array::builder::Int32Builder;
 use arrow_array::*;
 use arrow_array::{cast::AsArray, types::*};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
@@ -110,9 +111,24 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 _ => return Err(ArrowError::ComputeError("Invalid run end type".to_string())),
             };
             if let Some(ree) = ree {
+                // raw length of the values
                 let value_lengths = length(ree.values().as_ref())?;
-                println!("value_lengths:{:?}", value_lengths);
-                Err(ArrowError::ComputeError("RunArray not supported".to_string()))
+                let run_ends = ree.run_ends();
+                match run_field.data_type() {
+                    DataType::Int64 => run_end_length_impl::<Int64Type>(
+                        run_ends.as_any().downcast_ref::<Int64Array>().unwrap(),
+                        value_lengths.as_any().downcast_ref::<Int32Array>().unwrap(),
+                    ),
+                    DataType::Int32 => run_end_length_impl::<Int32Type>(
+                        run_ends.as_any().downcast_ref::<Int32Array>().unwrap(),
+                        value_lengths.as_any().downcast_ref::<Int32Array>().unwrap(),
+                    ),
+                    DataType::Int16 => run_end_length_impl::<Int16Type>(
+                        run_ends.as_any().downcast_ref::<Int16Array>().unwrap(),
+                        value_lengths.as_any().downcast_ref::<Int32Array>().unwrap(),
+                    ),
+                    _ => return Err(ArrowError::ComputeError("Invalid run end type".to_string())),
+                }
             } else {
                 Err(ArrowError::ComputeError("Invalid run end type".to_string()))
             }
@@ -177,6 +193,30 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             "bit_length not supported for {other:?}"
         ))),
     }
+}
+
+fn run_end_length_impl<T: ArrowPrimitiveType>(
+    run_ends: &PrimitiveArray<T>,
+    value_lengths: &Int32Array,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = Int32Builder::with_capacity(run_ends.len());
+    let mut prev_end = T::Native::default();
+
+    for i in 0..run_ends.len() {
+        let end = run_ends.value(i).to_usize().unwrap();
+        let start = prev_end.to_usize().unwrap();
+        let len = end - start;
+
+        let value_length = value_lengths.value(i);
+
+        for _ in 0..len {
+            builder.append_value(value_length);
+        }
+
+        prev_end = run_ends.value(i);
+    }
+
+    Ok(Arc::new(builder.finish()))
 }
 
 #[cfg(test)]
@@ -754,35 +794,171 @@ mod tests {
         assert_eq!(result.as_ref(), &Int32Array::from(vec![32; 4]));
     }
     mod run_array {
+        use arrow_buffer::ScalarBuffer;
+
         use super::*;
         fn test_ree_length_patterns<R: RunEndIndexType>() {
             let data = vec![
-                Some("hello"), Some("hello"), Some("hello"),  // 3 repeated
-                Some("world"), Some("world"),                 // 2 repeated  
-                None, None, None,                             // 3 nulls
-                Some("test"), Some("test"), Some("test"), Some("test"), // 4 repeated
+                Some("hello"),
+                Some("hello"),
+                Some("hello"), // 3 repeated
+                Some("world-axiu"),
+                Some("world-axiu"), // 2 repeated
+                None,
+                None,
+                None, // 3 nulls
+                Some("test"),
+                Some("test"),
+                Some("test"),
+                Some("test"), // 4 repeated
             ];
-    
+
             let run_array: RunArray<R> = data.clone().into_iter().collect();
-            println!("run_array:{:?}", run_array);
-            let expected: Vec<Option<i32>> = data.iter().map(|opt| opt.map(|s| s.len() as i32)).collect();
-            
+
             let result = length(&run_array).unwrap();
-            let result = result.as_any().downcast_ref::<RunArray<R>>().unwrap();
-            
-            println!("result:{:?}", result);
+            let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+            assert_eq!(result.len(), 12);
+
+            assert_eq!(result.value(0), 5);
+            assert_eq!(result.value(1), 5);
+            assert_eq!(result.value(2), 5);
+
+            assert_eq!(result.value(3), 10);
+            assert_eq!(result.value(4), 10);
+
+            assert_eq!(result.value(5), 0);
+            assert_eq!(result.value(6), 0);
+            assert_eq!(result.value(7), 0);
+
+            assert_eq!(result.value(8), 4);
+            assert_eq!(result.value(9), 4);
+            assert_eq!(result.value(10), 4);
+            assert_eq!(result.value(11), 4);
         }
+
+        fn test_run_end_length_generic<R: RunEndIndexType>() {
+            use arrow_array::{PrimitiveArray, RunArray, StringArray};
+
+            let run_ends: PrimitiveArray<R> = PrimitiveArray::new(
+                ScalarBuffer::from(vec![
+                    R::Native::from_usize(2).unwrap(),
+                    R::Native::from_usize(4).unwrap(),
+                ]),
+                None,
+            );
+            let values = StringArray::from(vec![Some("ab"), Some("xyz")]);
+            let run_array = RunArray::<R>::try_new(&run_ends, &values).unwrap();
+
+            let result = length(&run_array).unwrap();
+
+            let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+            assert_eq!(result.len(), 4);
+            assert_eq!(result.value(0), 2);
+            assert_eq!(result.value(1), 2);
+            assert_eq!(result.value(2), 3);
+            assert_eq!(result.value(3), 3);
+        }
+
         #[test]
-        fn test_ree_length_patterns_int64() {
-            test_ree_length_patterns::<Int64Type>();
+        fn test_run_end_length_generic_int16() {
+            test_run_end_length_generic::<Int16Type>();
         }
+
+        #[test]
+        fn test_run_end_length_generic_int32() {
+            test_run_end_length_generic::<Int32Type>();
+        }
+
+        #[test]
+        fn test_run_end_length_generic_int64() {
+            test_run_end_length_generic::<Int64Type>();
+        }
+
+        #[test]
+        fn test_ree_length_patterns_int16() {
+            test_ree_length_patterns::<Int16Type>();
+        }
+
         #[test]
         fn test_ree_length_patterns_int32() {
             test_ree_length_patterns::<Int32Type>();
         }
+
         #[test]
-        fn test_ree_length_patterns_int16() {
-            test_ree_length_patterns::<Int16Type>();
+        fn test_ree_length_patterns_int64() {
+            test_ree_length_patterns::<Int64Type>();
+        }
+
+        #[test]
+        fn test_run_end_length_from_string_lengths() {
+            // Logical: ["hello", NULL, "world", NULL, "test"]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values =
+                StringArray::from(vec![Some("hello"), None, Some("world"), None, Some("test")]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+            let result = length(&run_array).unwrap();
+
+            let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert_eq!(result.len(), 5);
+            assert_eq!(result.value(0), 5);
+            assert_eq!(result.value(1), 0);
+            assert_eq!(result.value(2), 5);
+            assert_eq!(result.value(3), 0);
+            assert_eq!(result.value(4), 4);
+        }
+
+        #[test]
+        fn test_run_end_length_all_empty_strings() {
+            // Logical array: ["", "", ""] (3 elements, all the same value)
+            // Run: 1 run of length 3 with value ""
+            let run_ends = Int32Array::from(vec![3]);
+            let values = StringArray::from(vec![Some("")]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = length(&run_array).unwrap();
+            let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+            assert_eq!(result.len(), 3);
+            assert_eq!(result.value(0), 0);
+            assert_eq!(result.value(1), 0);
+            assert_eq!(result.value(2), 0);
+        }
+
+        #[test]
+        fn test_run_end_length_long_run() {
+            // Logical array: ["abcdef", "abcdef", "abcdef", "abcdef", "abcdef"] (5 elements, all the same value)
+            let run_ends = Int32Array::from(vec![5]);
+            let values = StringArray::from(vec![Some("abcdef")]); // len = 6
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = length(&run_array).unwrap();
+            let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+            assert_eq!(result.len(), 5);
+            assert_eq!(result.value(0), 6);
+            assert_eq!(result.value(1), 6);
+            assert_eq!(result.value(2), 6);
+            assert_eq!(result.value(3), 6);
+            assert_eq!(result.value(4), 6);
+        }
+
+        #[test]
+        fn test_run_end_length_all_nulls() {
+            // logical array: [NULL, NULL, NULL, NULL] (4 elements, all null)
+            let run_ends = Int32Array::from(vec![4]);
+            let data: Vec<Option<&str>> = vec![None];
+            let values = StringArray::from(data);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = length(&run_array).unwrap();
+            let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert_eq!(result.len(), 4);
+            assert_eq!(result.value(0), 0);
+            assert_eq!(result.value(1), 0);
+            assert_eq!(result.value(2), 0);
+            assert_eq!(result.value(3), 0);
         }
     }
 }

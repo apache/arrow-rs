@@ -23,7 +23,12 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
-    builder::StringRunBuilder, cast::AsArray, make_array, run_iterator::RunArrayIter, types::{Int16Type, Int32Type, Int64Type, RunEndIndexType}, Array, ArrayAccessor, ArrayRef, PrimitiveArray
+    builder::StringRunBuilder,
+    cast::AsArray,
+    make_array,
+    run_iterator::RunArrayIter,
+    types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
+    Array, ArrayAccessor, ArrayRef, Int16Array, Int32Array, Int64Array, PrimitiveArray,
 };
 
 /// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
@@ -682,6 +687,23 @@ impl<'a> AnyRunArray<'a> {
             AnyRunArray::Int64(array) => array.values(),
             AnyRunArray::Int32(array) => array.values(),
             AnyRunArray::Int16(array) => array.values(),
+        }
+    }
+    /// Returns the run ends of this [`AnyRunArray`]
+    pub fn run_ends(&self) -> Arc<dyn Array> {
+        match self {
+            AnyRunArray::Int64(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int64Array::from_iter_values(values.iter().copied()))
+            }
+            AnyRunArray::Int32(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int32Array::from_iter_values(values.iter().copied()))
+            }
+            AnyRunArray::Int16(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int16Array::from_iter_values(values.iter().copied()))
+            }
         }
     }
 }
