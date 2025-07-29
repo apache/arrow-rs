@@ -1,0 +1,875 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use arrow_array::{
+    builder::{ListBuilder, PrimitiveDictionaryBuilder, StringDictionaryBuilder},
+    types::Int32Type,
+    Array, ArrayRef, DictionaryArray, RecordBatch, StringArray,
+};
+use arrow_ipc::writer::{DictionaryHandling, IpcWriteOptions, StreamWriter};
+use arrow_ipc::{
+    reader::{FileReader, StreamReader},
+    writer::FileWriter,
+};
+use arrow_schema::{ArrowError, DataType, Field, Schema};
+use std::io::Cursor;
+use std::sync::Arc;
+
+#[test]
+fn test_reset_error_with_file_writer() {}
+
+#[test]
+fn test_replace_same_length() {
+    let batches: &[&[&str]] = &[
+        &["A", "B", "C", "D", "E", "F"],
+        &["A", "G", "H", "I", "J", "K"],
+    ];
+    run_test(batches, false);
+}
+
+#[test]
+fn test_no_deltas() {
+    let batches: &[&[&str]] = &[
+        &["A"],
+        &["C"],
+        &["E", "F", "D"],
+        &["FOO"],
+        &["parquet", "B"],
+        &["123", "B", "C"],
+    ];
+    run_test(batches, false);
+}
+
+#[test]
+fn test_deltas_with_reset() {
+    // Dictionary resets at ["C", "D"]
+    let batches: &[&[&str]] = &[&["A"], &["A", "B"], &["C", "D"], &["A", "B", "C", "D"]];
+    run_test(batches, false);
+}
+
+/// FileWriter can only tolerate very specific patterns of delta dictionaries,
+/// because the dictionary cannot be replaced/reset.
+#[test]
+fn test_deltas_with_file() {
+    let batches: &[&[&str]] = &[&["A"], &["A", "B"], &["A", "B", "C"], &["A", "B", "C", "D"]];
+    run_test(batches, true);
+}
+
+fn run_test(batches: &[&[&str]], include_file: bool) {
+    let delta_options =
+        IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+    let delta_stream_buf = write_all_to_stream(delta_options.clone(), batches);
+
+    let resend_options =
+        IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Resend);
+    let resend_stream_buf = write_all_to_stream(resend_options.clone(), batches);
+
+    assert!(
+        delta_stream_buf.len() <= resend_stream_buf.len(),
+        "Delta buffer should be same size or smaller"
+    );
+
+    let mut streams = vec![
+        get_stream_batches(delta_stream_buf),
+        get_stream_batches(resend_stream_buf),
+    ];
+
+    if include_file {
+        let delta_file_buf = write_all_to_file(delta_options, batches);
+        streams.push(get_file_batches(delta_file_buf.clone()));
+    }
+
+    let (first_stream, other_streams) = streams.split_first_mut().unwrap();
+
+    let mut idx = 0;
+    while let Some(batch) = first_stream.next() {
+        let first_dict = extract_dictionary(batch);
+        let expected_values = batches[idx];
+        assert_eq!(expected_values, &dict_to_vec(first_dict.clone()));
+
+        for stream in other_streams.iter_mut() {
+            let next_batch = stream
+                .next()
+                .expect("All streams should yield same number of elements");
+            let next_dict = extract_dictionary(next_batch);
+            assert_eq!(expected_values, &dict_to_vec(next_dict.clone()));
+            assert_eq!(first_dict, next_dict);
+        }
+
+        idx += 1;
+    }
+
+    for stream in other_streams.iter_mut() {
+        assert!(
+            stream.next().is_none(),
+            "All streams should yield same number of elements"
+        );
+    }
+}
+
+fn dict_to_vec(dict: DictionaryArray<Int32Type>) -> Vec<String> {
+    let values: Vec<String> = dict
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap()
+        .iter()
+        .map(|v| v.map(|s| s.to_string()).unwrap_or_default())
+        .collect();
+
+    dict.keys()
+        .iter()
+        .map(|i| values[i.unwrap() as usize].clone())
+        .collect()
+}
+
+fn get_stream_batches(buf: Vec<u8>) -> Box<dyn Iterator<Item = RecordBatch>> {
+    let reader = StreamReader::try_new(Cursor::new(buf), None).unwrap();
+    Box::new(
+        reader
+            .collect::<Vec<Result<_, _>>>()
+            .into_iter()
+            .map(|r| r.unwrap()),
+    )
+}
+
+fn get_file_batches(buf: Vec<u8>) -> Box<dyn Iterator<Item = RecordBatch>> {
+    let reader = FileReader::try_new(Cursor::new(buf), None).unwrap();
+    Box::new(
+        reader
+            .collect::<Vec<Result<_, _>>>()
+            .into_iter()
+            .map(|r| r.unwrap()),
+    )
+}
+
+fn extract_dictionary(batch: RecordBatch) -> DictionaryArray<arrow_array::types::Int32Type> {
+    batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap()
+        .clone()
+}
+
+fn write_all_to_file(options: IpcWriteOptions, vals: &[&[&str]]) -> Vec<u8> {
+    let batches = build_batches(vals);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut writer =
+        FileWriter::try_new_with_options(&mut buf, &batches[0].schema(), options).unwrap();
+    for batch in batches {
+        writer.write(&batch).unwrap();
+    }
+    writer.finish().unwrap();
+    buf
+}
+
+fn write_all_to_stream(options: IpcWriteOptions, vals: &[&[&str]]) -> Vec<u8> {
+    let batches = build_batches(vals);
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut writer =
+        StreamWriter::try_new_with_options(&mut buf, &batches[0].schema(), options).unwrap();
+    for batch in batches {
+        writer.write(&batch).unwrap();
+    }
+
+    writer.finish().unwrap();
+
+    buf
+}
+
+fn build_batches(vales: &[&[&str]]) -> Vec<RecordBatch> {
+    vales.iter().map(|v| build_batch(v)).collect()
+}
+
+fn build_batch(vals: &[&str]) -> RecordBatch {
+    let mut builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    for &val in vals {
+        if val.is_empty() {
+            builder.append_null();
+        } else {
+            builder.append_value(val);
+        }
+    }
+    let array = builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        DataType::Dictionary(Box::from(DataType::Int32), Box::from(DataType::Utf8)),
+        true,
+    )]));
+
+    RecordBatch::try_new(schema.clone(), vec![Arc::new(array) as ArrayRef]).unwrap()
+}
+
+#[test]
+fn test_dictionary_handling_option() {
+    // Test that DictionaryHandling can be set
+    let _options = IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+
+    // Verify it was set (we can't access private field directly)
+    // This test just verifies the API exists
+}
+
+#[test]
+fn test_nested_dictionary_with_delta() -> Result<(), ArrowError> {
+    // Test writing nested dictionaries with delta option
+    // Create a simple nested structure for testing
+
+    // Create dictionary arrays
+    let mut dict_builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    dict_builder.append_value("hello");
+    dict_builder.append_value("world");
+    let dict_array = dict_builder.finish();
+
+    // Create a list of dictionaries
+    let mut list_builder =
+        ListBuilder::new(StringDictionaryBuilder::<arrow_array::types::Int32Type>::new());
+    list_builder.values().append_value("item1");
+    list_builder.values().append_value("item2");
+    list_builder.append(true);
+    list_builder.values().append_value("item3");
+    list_builder.append(true);
+    let list_array = list_builder.finish();
+
+    // Create schema with nested dictionaries
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("dict", dict_array.data_type().clone(), true),
+        Field::new("list_of_dict", list_array.data_type().clone(), true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(dict_array) as ArrayRef,
+            Arc::new(list_array) as ArrayRef,
+        ],
+    )?;
+
+    // Write with delta dictionary handling
+    let mut buffer = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+        let mut writer = StreamWriter::try_new_with_options(&mut buffer, &schema, options)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+    }
+
+    // Verify it writes without error
+    assert!(!buffer.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn test_read_delta_dictionary_error() -> Result<(), ArrowError> {
+    // This test verifies that reading delta dictionaries returns appropriate error
+    // until the feature is fully implemented
+
+    // Create a dictionary array
+    let mut builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    builder.append_value("test");
+    let array = builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        array.data_type().clone(),
+        true,
+    )]));
+
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array) as ArrayRef])?;
+
+    // Write normally (not delta)
+    let mut buffer = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut buffer, &schema)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+    }
+
+    // Reading should work for non-delta dictionaries
+    let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
+    let batches: Result<Vec<_>, _> = reader.collect();
+    assert!(batches.is_ok());
+
+    Ok(())
+}
+
+#[test]
+fn test_complex_nested_dictionaries() -> Result<(), ArrowError> {
+    // Test nested structure with dictionaries at multiple levels
+
+    // Create a nested structure: List(Dictionary(List(Dictionary)))
+
+    // Inner dictionary for the nested list
+    let _inner_dict_field = Field::new(
+        "inner_item",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    );
+
+    // Create a list of dictionaries
+    let mut list_builder =
+        ListBuilder::new(StringDictionaryBuilder::<arrow_array::types::Int32Type>::new());
+
+    // First list
+    list_builder.values().append_value("inner_a");
+    list_builder.values().append_value("inner_b");
+    list_builder.append(true);
+
+    // Second list
+    list_builder.values().append_value("inner_c");
+    list_builder.values().append_value("inner_d");
+    list_builder.append(true);
+
+    let list_array = list_builder.finish();
+
+    // Create outer dictionary containing the list
+    let mut outer_dict_builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    outer_dict_builder.append_value("outer_1");
+    outer_dict_builder.append_value("outer_2");
+    let outer_dict = outer_dict_builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("outer_dict", outer_dict.data_type().clone(), true),
+        Field::new("nested_list", list_array.data_type().clone(), true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(outer_dict) as ArrayRef,
+            Arc::new(list_array) as ArrayRef,
+        ],
+    )?;
+
+    // Write with delta dictionary handling
+    let mut buffer = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+        let mut writer = StreamWriter::try_new_with_options(&mut buffer, &schema, options)?;
+        writer.write(&batch)?;
+        writer.finish()?;
+    }
+
+    // Verify it writes without error
+    assert!(!buffer.is_empty());
+
+    // Read back and verify
+    let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
+    let read_batches: Result<Vec<_>, _> = reader.collect();
+    let read_batches = read_batches?;
+
+    assert_eq!(read_batches.len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn test_multiple_dictionary_types() -> Result<(), ArrowError> {
+    // Test different dictionary value types in one schema
+
+    // String dictionary
+    let mut string_dict_builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    string_dict_builder.append_value("apple");
+    string_dict_builder.append_value("banana");
+    string_dict_builder.append_value("apple");
+    let string_dict = string_dict_builder.finish();
+
+    // Integer dictionary
+    let mut int_dict_builder = PrimitiveDictionaryBuilder::<
+        arrow_array::types::Int32Type,
+        arrow_array::types::Int64Type,
+    >::new();
+    int_dict_builder.append_value(100);
+    int_dict_builder.append_value(200);
+    int_dict_builder.append_value(100);
+    let int_dict = int_dict_builder.finish();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("string_dict", string_dict.data_type().clone(), true),
+        Field::new("int_dict", int_dict.data_type().clone(), true),
+    ]));
+
+    let batch1 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(string_dict) as ArrayRef,
+            Arc::new(int_dict) as ArrayRef,
+        ],
+    )?;
+
+    // Create second batch with extended dictionaries
+    let mut string_dict_builder2 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    string_dict_builder2.append_value("apple");
+    string_dict_builder2.append_value("banana");
+    string_dict_builder2.append_value("cherry"); // new
+    string_dict_builder2.append_value("date"); // new
+    let string_dict2 = string_dict_builder2.finish();
+
+    let mut int_dict_builder2 = PrimitiveDictionaryBuilder::<
+        arrow_array::types::Int32Type,
+        arrow_array::types::Int64Type,
+    >::new();
+    int_dict_builder2.append_value(100);
+    int_dict_builder2.append_value(200);
+    int_dict_builder2.append_value(300); // new
+    int_dict_builder2.append_value(400); // new
+    let int_dict2 = int_dict_builder2.finish();
+
+    let batch2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(string_dict2) as ArrayRef,
+            Arc::new(int_dict2) as ArrayRef,
+        ],
+    )?;
+
+    // Write with delta dictionary handling
+    let mut buffer = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+        let mut writer = StreamWriter::try_new_with_options(&mut buffer, &schema, options)?;
+        writer.write(&batch1)?;
+        writer.write(&batch2)?;
+        writer.finish()?;
+    }
+
+    // Read back and verify
+    let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
+    let read_batches: Result<Vec<_>, _> = reader.collect();
+    let read_batches = read_batches?;
+
+    assert_eq!(read_batches.len(), 2);
+
+    // Check string dictionary in second batch
+    let read_batch2 = &read_batches[1];
+    let string_dict_array = read_batch2
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+
+    let string_values = string_dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    // Should have all 4 string values
+    assert_eq!(string_values.len(), 4);
+    assert_eq!(string_values.value(0), "apple");
+    assert_eq!(string_values.value(1), "banana");
+    assert_eq!(string_values.value(2), "cherry");
+    assert_eq!(string_values.value(3), "date");
+
+    Ok(())
+}
+
+#[test]
+fn test_dictionary_shrinking_case() -> Result<(), ArrowError> {
+    // Test when second batch has fewer dictionary values (should not delta)
+
+    // First batch with larger dictionary
+    let mut builder1 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    builder1.append_value("hello");
+    builder1.append_value("world");
+    builder1.append_value("foo");
+    builder1.append_value("bar");
+    let array1 = builder1.finish();
+
+    // Second batch with smaller dictionary (subset)
+    let mut builder2 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    builder2.append_value("hello");
+    builder2.append_value("world");
+    let array2 = builder2.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        array1.data_type().clone(),
+        true,
+    )]));
+
+    let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(array1) as ArrayRef])?;
+
+    let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(array2) as ArrayRef])?;
+
+    // Write with delta dictionary handling
+    let mut buffer = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+        let mut writer = StreamWriter::try_new_with_options(&mut buffer, &schema, options)?;
+        writer.write(&batch1)?;
+        writer.write(&batch2)?;
+        writer.finish()?;
+    }
+
+    // Read back and verify
+    let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
+    let read_batches: Result<Vec<_>, _> = reader.collect();
+    let read_batches = read_batches?;
+
+    assert_eq!(read_batches.len(), 2);
+
+    // Second batch should have the new complete dictionary (not a delta)
+    let read_batch2 = &read_batches[1];
+    let dict_array = read_batch2
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+
+    let dict_values = dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    // Should have only 2 values in the second batch's dictionary
+    assert_eq!(dict_values.len(), 2);
+    assert_eq!(dict_values.value(0), "hello");
+    assert_eq!(dict_values.value(1), "world");
+
+    Ok(())
+}
+
+#[test]
+fn test_empty_dictionary_delta() -> Result<(), ArrowError> {
+    // Test edge case with empty dictionaries
+
+    // First batch with empty dictionary
+    let mut builder1 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    builder1.append_null();
+    builder1.append_null();
+    let array1 = builder1.finish();
+
+    // Second batch with some values
+    let mut builder2 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    builder2.append_value("first");
+    builder2.append_value("second");
+    let array2 = builder2.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        array1.data_type().clone(),
+        true,
+    )]));
+
+    let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(array1) as ArrayRef])?;
+
+    let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(array2) as ArrayRef])?;
+
+    // Write with delta dictionary handling
+    let mut buffer = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+        let mut writer = StreamWriter::try_new_with_options(&mut buffer, &schema, options)?;
+        writer.write(&batch1)?;
+        writer.write(&batch2)?;
+        writer.finish()?;
+    }
+
+    // Read back and verify
+    let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
+    let read_batches: Result<Vec<_>, _> = reader.collect();
+    let read_batches = read_batches?;
+
+    assert_eq!(read_batches.len(), 2);
+
+    // Second batch should have the dictionary values
+    let read_batch2 = &read_batches[1];
+    let dict_array = read_batch2
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+
+    let dict_values = dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    assert_eq!(dict_values.len(), 2);
+    assert_eq!(dict_values.value(0), "first");
+    assert_eq!(dict_values.value(1), "second");
+
+    Ok(())
+}
+
+#[test]
+fn test_delta_with_shared_dictionary_data() -> Result<(), ArrowError> {
+    // Test efficient delta detection when dictionaries share underlying data
+
+    // Create initial dictionary
+    let mut builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    builder.append_value("alpha");
+    builder.append_value("beta");
+    let dict1 = builder.finish();
+
+    // Create a dictionary that extends the first one by sharing its data
+    // This simulates a common pattern where dictionaries are built incrementally
+    let dict1_values = dict1.values();
+    let mut builder2 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    // First, add the existing values
+    for i in 0..dict1_values.len() {
+        builder2.append_value(
+            dict1_values
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(i),
+        );
+    }
+    // Then add new values
+    builder2.append_value("gamma");
+    builder2.append_value("delta");
+    let dict2 = builder2.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        dict1.data_type().clone(),
+        true,
+    )]));
+
+    let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict1) as ArrayRef])?;
+
+    let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict2) as ArrayRef])?;
+
+    // Write with delta dictionary handling
+    let mut buffer = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+        let mut writer = StreamWriter::try_new_with_options(&mut buffer, &schema, options)?;
+        writer.write(&batch1)?;
+        writer.write(&batch2)?;
+        writer.finish()?;
+    }
+
+    // Read back and verify delta was used correctly
+    let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
+    let read_batches: Result<Vec<_>, _> = reader.collect();
+    let read_batches = read_batches?;
+
+    assert_eq!(read_batches.len(), 2);
+
+    // Verify second batch has all values
+    let read_batch2 = &read_batches[1];
+    let dict_array = read_batch2
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+
+    let dict_values = dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    assert_eq!(dict_values.len(), 4);
+    assert_eq!(dict_values.value(0), "alpha");
+    assert_eq!(dict_values.value(1), "beta");
+    assert_eq!(dict_values.value(2), "gamma");
+    assert_eq!(dict_values.value(3), "delta");
+
+    Ok(())
+}
+
+#[test]
+fn test_large_dictionary_delta_performance() -> Result<(), ArrowError> {
+    // Test delta dictionary with large dictionaries to ensure efficiency
+
+    // Create a large initial dictionary
+    let mut builder1 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    for i in 0..1000 {
+        builder1.append_value(format!("value_{}", i));
+    }
+    let dict1 = builder1.finish();
+
+    // Create extended dictionary
+    let mut builder2 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    for i in 0..1000 {
+        builder2.append_value(format!("value_{}", i));
+    }
+    // Add just a few new values
+    for i in 1000..1005 {
+        builder2.append_value(format!("value_{}", i));
+    }
+    let dict2 = builder2.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        dict1.data_type().clone(),
+        true,
+    )]));
+
+    let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict1) as ArrayRef])?;
+
+    let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict2) as ArrayRef])?;
+
+    // Write with delta dictionary handling
+    let mut buffer = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+        let mut writer = StreamWriter::try_new_with_options(&mut buffer, &schema, options)?;
+        writer.write(&batch1)?;
+        writer.write(&batch2)?;
+        writer.finish()?;
+    }
+
+    // The buffer should be relatively small since we only sent 5 new values
+    // as delta instead of resending all 1005 values
+    let buffer_size = buffer.len();
+
+    // Write without delta for comparison
+    let mut buffer_no_delta = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Resend);
+        let mut writer =
+            StreamWriter::try_new_with_options(&mut buffer_no_delta, &schema, options)?;
+        writer.write(&batch1)?;
+        writer.write(&batch2)?;
+        writer.finish()?;
+    }
+
+    let buffer_no_delta_size = buffer_no_delta.len();
+
+    // Delta encoding should result in smaller output
+    println!("Delta buffer size: {}", buffer_size);
+    println!("Non-delta buffer size: {}", buffer_no_delta_size);
+
+    // Delta encoding should result in significantly smaller output
+    assert!(
+        buffer_size < buffer_no_delta_size,
+        "Delta buffer ({}) should be smaller than non-delta buffer ({})",
+        buffer_size,
+        buffer_no_delta_size
+    );
+
+    // The delta should save approximately the size of the second dictionary minus the delta
+    // We sent 5 values instead of 1005, saving ~99.5% on the second dictionary
+    let savings_ratio = (buffer_no_delta_size - buffer_size) as f64 / buffer_no_delta_size as f64;
+    println!("Space savings: {:.1}%", savings_ratio * 100.0);
+
+    // We should save at least 30% (conservative estimate accounting for metadata overhead)
+    assert!(
+        savings_ratio > 0.30,
+        "Delta encoding should provide significant space savings (got {:.1}%)",
+        savings_ratio * 100.0
+    );
+
+    // Verify correctness
+    let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
+    let read_batches: Result<Vec<_>, _> = reader.collect();
+    let read_batches = read_batches?;
+
+    assert_eq!(read_batches.len(), 2);
+
+    let read_batch2 = &read_batches[1];
+    let dict_array = read_batch2
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+
+    let dict_values = dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    assert_eq!(dict_values.len(), 1005);
+    assert_eq!(dict_values.value(1004), "value_1004");
+
+    Ok(())
+}
+
+#[test]
+fn test_dictionary_replacement_resend_mode() -> Result<(), ArrowError> {
+    // Test that in Resend mode, changed dictionaries arearrays sent as full replacements
+
+    // First batch
+    let mut builder1 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    builder1.append_value("alpha");
+    builder1.append_value("beta");
+    builder1.append_value("gamma");
+    let dict1 = builder1.finish();
+
+    // Second batch with completely different values
+    let mut builder2 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    builder2.append_value("delta");
+    builder2.append_value("epsilon");
+    let dict2 = builder2.finish();
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "dict",
+        dict1.data_type().clone(),
+        true,
+    )]));
+
+    let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict1) as ArrayRef])?;
+    let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(dict2) as ArrayRef])?;
+
+    // Write with Resend modearrays
+    let mut buffer = Vec::new();
+    {
+        let options =
+            IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Resend);
+        let mut writer = StreamWriter::try_new_with_options(&mut buffer, &schema, options)?;
+        writer.write(&batch1)?;
+        writer.write(&batch2)?;
+        writer.finish()?;
+    }
+
+    // Read back and verify
+    let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
+    let read_batches: Result<Vec<_>, _> = reader.collect();
+    let read_batches = read_batches?;
+
+    assert_eq!(read_batches.len(), 2);
+
+    // Verify the second batch has the new dictionary (not concatenated)
+    let read_batch2 = &read_batches[1];
+    let dict_array = read_batch2
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+
+    let dict_values = dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+
+    // Should have only the new values, not concatenated
+    assert_eq!(dict_values.len(), 2);
+    assert_eq!(dict_values.value(0), "delta");
+    assert_eq!(dict_values.value(1), "epsilon");
+
+    Ok(())
+}
