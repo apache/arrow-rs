@@ -21,6 +21,7 @@ use crate::arrow::arrow_reader::ArrowReaderOptions;
 use crate::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use crate::util::async_util::MaybeLocalBoxFuture;
 use bytes::Bytes;
 use futures::{future::BoxFuture, FutureExt, TryFutureExt};
 use object_store::{path::Path, ObjectStore};
@@ -161,7 +162,7 @@ impl ParquetObjectReader {
 }
 
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch_suffix(&mut self, suffix: usize) -> MaybeLocalBoxFuture<'_, Result<Bytes>> {
         let options = GetOptions {
             range: Some(GetRange::Suffix(suffix as u64)),
             ..Default::default()
@@ -177,14 +178,14 @@ impl MetadataSuffixFetch for &mut ParquetObjectReader {
 }
 
 impl AsyncFileReader for ParquetObjectReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> MaybeLocalBoxFuture<'_, Result<Bytes>> {
         self.spawn(|store, path| store.get_range(path, range))
     }
 
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
-    where
-        Self: Send,
-    {
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> MaybeLocalBoxFuture<'_, Result<Vec<Bytes>>> {
         self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
     }
 
@@ -197,7 +198,7 @@ impl AsyncFileReader for ParquetObjectReader {
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+    ) -> MaybeLocalBoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let mut metadata = ParquetMetaDataReader::new()
                 .with_column_indexes(self.preload_column_index)
