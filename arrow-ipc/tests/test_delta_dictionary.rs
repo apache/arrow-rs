@@ -30,7 +30,10 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 #[test]
-fn test_reset_error_with_file_writer() {}
+fn test_shorter_delta() {
+    let batches: &[&[&str]] = &[&["A", "B", "C"], &["A", "B"]];
+    run_test(batches, false);
+}
 
 #[test]
 fn test_replace_same_length() {
@@ -193,12 +196,15 @@ fn write_all_to_stream(options: IpcWriteOptions, vals: &[&[&str]]) -> Vec<u8> {
     buf
 }
 
-fn build_batches(vales: &[&[&str]]) -> Vec<RecordBatch> {
-    vales.iter().map(|v| build_batch(v)).collect()
+fn build_batches(vals: &[&[&str]]) -> Vec<RecordBatch> {
+    let mut builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+    vals.iter().map(|v| build_batch(v, &mut builder)).collect()
 }
 
-fn build_batch(vals: &[&str]) -> RecordBatch {
-    let mut builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+fn build_batch(
+    vals: &[&str],
+    builder: &mut StringDictionaryBuilder<arrow_array::types::Int32Type>,
+) -> RecordBatch {
     for &val in vals {
         if val.is_empty() {
             builder.append_null();
