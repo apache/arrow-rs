@@ -27,8 +27,10 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_dict_array, create_string_view_array_with_len,
     create_string_view_array_with_max_len,
 };
+use arrow::util::data_gen::create_random_array;
 use arrow_array::types::Int32Type;
 use arrow_array::Array;
+use arrow_schema::{DataType, Field};
 use criterion::Criterion;
 use std::{hint, sync::Arc};
 
@@ -178,6 +180,88 @@ fn row_bench(c: &mut Criterion) {
         Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef,
     ];
     do_bench(c, "4096 4096 string_dictionary(20, 0.5), string_dictionary(30, 0), string_dictionary(100, 0), i64(0)", cols);
+
+    // List
+
+    let cols = vec![create_random_array(
+        &Field::new(
+            "list",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false))),
+            false,
+        ),
+        4096,
+        0.,
+        1.0,
+    )
+    .unwrap()];
+    do_bench(c, "4096 list(0) of u64(0)", cols);
+
+    let cols = vec![create_random_array(
+        &Field::new(
+            "list",
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::UInt64, false))),
+            false,
+        ),
+        4096,
+        0.,
+        1.0,
+    )
+    .unwrap()];
+    do_bench(c, "4096 large_list(0) of u64(0)", cols);
+
+    let cols = vec![create_random_array(
+        &Field::new(
+            "list",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false))),
+            false,
+        ),
+        10,
+        0.,
+        1.0,
+    )
+    .unwrap()];
+    do_bench(c, "10 list(0) of u64(0)", cols);
+
+    let cols = vec![create_random_array(
+        &Field::new(
+            "list",
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::UInt64, false))),
+            false,
+        ),
+        10,
+        0.,
+        1.0,
+    )
+    .unwrap()];
+    do_bench(c, "10 large_list(0) of u64(0)", cols);
+
+    let cols = vec![create_random_array(
+        &Field::new(
+            "list",
+            DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, false))),
+            false,
+        ),
+        4096,
+        0.,
+        1.0,
+    )
+    .unwrap()
+    .slice(10, 20)];
+    do_bench(c, "4096 list(0) sliced to 10 of u64(0)", cols);
+
+    let cols = vec![create_random_array(
+        &Field::new(
+            "list",
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::UInt64, false))),
+            false,
+        ),
+        4096,
+        0.,
+        1.0,
+    )
+    .unwrap()
+    .slice(10, 20)];
+    do_bench(c, "4096 large_list(0) sliced to 10 of u64(0)", cols);
 
     bench_iter(c);
 }

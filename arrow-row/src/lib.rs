@@ -518,12 +518,37 @@ impl Codec {
             }
             Codec::List(converter) => {
                 let values = match array.data_type() {
-                    DataType::List(_) => as_list_array(array).values(),
-                    DataType::LargeList(_) => as_large_list_array(array).values(),
-                    DataType::FixedSizeList(_, _) => as_fixed_size_list_array(array).values(),
+                    DataType::List(_) => {
+                        let list_array = as_list_array(array);
+                        let first_offset = list_array.offsets()[0] as usize;
+                        let last_offset =
+                            list_array.offsets()[list_array.offsets().len() - 1] as usize;
+
+                        // values can include more data than referenced in the ListArray, only encode
+                        // the referenced values.
+                        list_array
+                            .values()
+                            .slice(first_offset, last_offset - first_offset)
+                    }
+                    DataType::LargeList(_) => {
+                        let list_array = as_large_list_array(array);
+
+                        let first_offset = list_array.offsets()[0] as usize;
+                        let last_offset =
+                            list_array.offsets()[list_array.offsets().len() - 1] as usize;
+
+                        // values can include more data than referenced in the LargeListArray, only encode
+                        // the referenced values.
+                        list_array
+                            .values()
+                            .slice(first_offset, last_offset - first_offset)
+                    }
+                    DataType::FixedSizeList(_, _) => {
+                        as_fixed_size_list_array(array).values().clone()
+                    }
                     _ => unreachable!(),
                 };
-                let rows = converter.convert_columns(&[values.clone()])?;
+                let rows = converter.convert_columns(&[values])?;
                 Ok(Encoder::List(rows))
             }
             Codec::RunEndEncoded(converter) => {
@@ -2357,6 +2382,22 @@ mod tests {
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
+
+        let sliced_list = list.slice(1, 5);
+        let rows_on_sliced_list = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows_on_sliced_list.row(1) > rows_on_sliced_list.row(0)); // [32, 52] > [32, 52, 12]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(1)); // null < [32, 52]
+        assert!(rows_on_sliced_list.row(3) < rows_on_sliced_list.row(1)); // [32, null] < [32, 52]
+        assert!(rows_on_sliced_list.row(4) > rows_on_sliced_list.row(1)); // [] > [32, 52]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(4)); // null < []
+
+        let back = converter.convert_rows(&rows_on_sliced_list).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &sliced_list);
     }
 
     fn test_nested_list<O: OffsetSizeTrait>() {
@@ -2448,6 +2489,19 @@ mod tests {
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
+
+        let sliced_list = list.slice(1, 3);
+        let rows = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows.row(0) < rows.row(1));
+        assert!(rows.row(1) < rows.row(2));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &sliced_list);
     }
 
     #[test]
@@ -2568,6 +2622,21 @@ mod tests {
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
+
+        let sliced_list = list.slice(1, 5);
+        let rows_on_sliced_list = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(1)); // null < [32, 52, null]
+        assert!(rows_on_sliced_list.row(3) < rows_on_sliced_list.row(1)); // [32, null, null] < [32, 52, null]
+        assert!(rows_on_sliced_list.row(4) < rows_on_sliced_list.row(1)); // [null, null, null] > [32, 52, null]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(4)); // null < [null, null, null]
+
+        let back = converter.convert_rows(&rows_on_sliced_list).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &sliced_list);
     }
 
     #[test]
@@ -2907,7 +2976,7 @@ mod tests {
 
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = rng();
-        match rng.random_range(0..17) {
+        match rng.random_range(0..18) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -2944,6 +3013,12 @@ mod tests {
             14 => Arc::new(generate_string_view(len, 0.8)),
             15 => Arc::new(generate_byte_view(len, 0.8)),
             16 => Arc::new(generate_fixed_stringview_column(len)),
+            17 => Arc::new(
+                generate_list(len + 1000, 0.8, |values_len| {
+                    Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+                })
+                .slice(500, len),
+            ),
             _ => unreachable!(),
         }
     }

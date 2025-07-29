@@ -603,11 +603,27 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// * Temporal to/from backing Primitive: zero-copy with data type change
 /// * `Float32/Float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
 ///   (i.e. casting `6.4999` to `Decimal(10, 1)` becomes `6.5`).
+/// * `Decimal` to `Float32/Float64` is lossy and values outside the representable
+///   range become `INFINITY` or `-INFINITY` without error.
 ///
 /// Unsupported Casts (check with `can_cast_types` before calling):
 /// * To or from `StructArray`
 /// * `List` to `Primitive`
 /// * `Interval` and `Duration`
+///
+/// # Durations and Intervals
+///
+/// Casting integer types directly to interval types such as
+/// [`IntervalMonthDayNano`] is not supported because the meaning of the integer
+/// is ambiguous. For example, the integer  could represent either nanoseconds
+/// or months.
+///
+/// To cast an integer type to an interval type, first convert to a Duration
+/// type, and then cast that to the desired interval type.
+///
+/// For example, to convert an `Int64` representing nanoseconds to an
+/// `IntervalMonthDayNano` you would first convert the `Int64` to a
+/// `DurationNanoseconds`, and then cast that to `IntervalMonthDayNano`.
 ///
 /// # Timestamps and Timezones
 ///
@@ -891,7 +907,7 @@ pub fn cast_with_options(
                 scale,
                 from_type,
                 to_type,
-                |x: i256| x.to_f64().unwrap(),
+                |x: i256| decimal256_to_f64(x),
                 cast_options,
             )
         }
@@ -1991,6 +2007,17 @@ where
             "Casting from {from_type:?} to {to_type:?} not supported"
         ))),
     }
+}
+
+/// Convert a [`i256`] to `f64` saturating to infinity on overflow.
+fn decimal256_to_f64(v: i256) -> f64 {
+    v.to_f64().unwrap_or_else(|| {
+        if v.is_negative() {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        }
+    })
 }
 
 fn cast_to_decimal<D, M>(
@@ -8659,6 +8686,28 @@ mod tests {
             err.contains(expected_error),
             "did not find expected error '{expected_error}' in actual error '{err}'"
         );
+    }
+    #[test]
+    fn test_cast_decimal256_to_f64_overflow() {
+        // Test positive overflow (positive infinity)
+        let array = vec![Some(i256::MAX)];
+        let array = create_decimal256_array(array, 76, 2).unwrap();
+        let array = Arc::new(array) as ArrayRef;
+
+        let result = cast(&array, &DataType::Float64).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert!(result.value(0).is_infinite());
+        assert!(result.value(0) > 0.0); // Positive infinity
+
+        // Test negative overflow (negative infinity)
+        let array = vec![Some(i256::MIN)];
+        let array = create_decimal256_array(array, 76, 2).unwrap();
+        let array = Arc::new(array) as ArrayRef;
+
+        let result = cast(&array, &DataType::Float64).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert!(result.value(0).is_infinite());
+        assert!(result.value(0) < 0.0); // Negative infinity
     }
 
     #[test]

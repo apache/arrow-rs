@@ -43,13 +43,13 @@ use std::{borrow::Cow, ops::Deref};
 /// // access the field "foo" and then the first element in a variant list value
 /// let path = VariantPath::from("foo").join(0);
 /// // this is the same as the previous one
-/// let path2 = VariantPath::new(vec!["foo".into(), 0.into()]);
+/// let path2 = VariantPath::from_iter(["foo".into(), 0.into()]);
 /// assert_eq!(path, path2);
 /// // you can also create a path from a vector of `VariantPathElement` directly
-/// let path3 = VariantPath::new(vec![
+/// let path3 = [
 ///   VariantPathElement::field("foo"),
 ///   VariantPathElement::index(0)
-/// ]);
+/// ].into_iter().collect::<VariantPath>();
 /// assert_eq!(path, path3);
 /// ```
 ///
@@ -106,6 +106,13 @@ impl<'a> From<&'a str> for VariantPath<'a> {
 impl<'a> From<usize> for VariantPath<'a> {
     fn from(index: usize) -> Self {
         VariantPath::new(vec![VariantPathElement::index(index)])
+    }
+}
+
+/// Create from iter
+impl<'a> FromIterator<VariantPathElement<'a>> for VariantPath<'a> {
+    fn from_iter<T: IntoIterator<Item = VariantPathElement<'a>>>(iter: T) -> Self {
+        VariantPath::new(Vec::from_iter(iter))
     }
 }
 
