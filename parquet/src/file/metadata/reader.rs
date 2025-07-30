@@ -31,7 +31,6 @@ use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
-use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
 #[cfg(feature = "encryption")]
 use crate::format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData};
 use crate::schema::types;
@@ -947,7 +946,7 @@ impl ParquetMetaDataReader {
             }
         }
 
-        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
+        let t_file_metadata = crate::format::FileMetaData::read_from_in_protocol(&mut prot)
             .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
         let schema = types::from_thrift(&t_file_metadata.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
@@ -1005,7 +1004,7 @@ impl ParquetMetaDataReader {
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
         let mut prot = TCompactSliceInputProtocol::new(buf);
 
-        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
+        let t_file_metadata = crate::format::FileMetaData::read_from_in_protocol(&mut prot)
             .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
         let schema = types::from_thrift(&t_file_metadata.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(schema));
@@ -1032,7 +1031,7 @@ impl ParquetMetaDataReader {
     /// Parses column orders from Thrift definition.
     /// If no column orders are defined, returns `None`.
     fn parse_column_orders(
-        t_column_orders: Option<Vec<TColumnOrder>>,
+        t_column_orders: Option<Vec<crate::format::ColumnOrder>>,
         schema_descr: &SchemaDescriptor,
     ) -> Result<Option<Vec<ColumnOrder>>> {
         match t_column_orders {
@@ -1044,7 +1043,7 @@ impl ParquetMetaDataReader {
                 let mut res = Vec::new();
                 for (i, column) in schema_descr.columns().iter().enumerate() {
                     match orders[i] {
-                        TColumnOrder::TYPEORDER(_) => {
+                        crate::format::ColumnOrder::TYPEORDER(_) => {
                             let sort_order = ColumnOrder::get_sort_order(
                                 column.logical_type(),
                                 column.converted_type(),
@@ -1099,7 +1098,6 @@ mod tests {
     use crate::basic::SortOrder;
     use crate::basic::Type;
     use crate::file::reader::Length;
-    use crate::format::TypeDefinedOrder;
     use crate::schema::types::Type as SchemaType;
     use crate::util::test_common::file_util::get_test_file;
 
@@ -1153,8 +1151,8 @@ mod tests {
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
         let t_column_orders = Some(vec![
-            TColumnOrder::TYPEORDER(TypeDefinedOrder::new()),
-            TColumnOrder::TYPEORDER(TypeDefinedOrder::new()),
+            crate::format::ColumnOrder::TYPEORDER(Default::default()),
+            crate::format::ColumnOrder::TYPEORDER(Default::default()),
         ]);
 
         assert_eq!(
@@ -1177,7 +1175,9 @@ mod tests {
         let schema = SchemaType::group_type_builder("schema").build().unwrap();
         let schema_descr = SchemaDescriptor::new(Arc::new(schema));
 
-        let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
+        let t_column_orders = Some(vec![crate::format::ColumnOrder::TYPEORDER(
+            Default::default(),
+        )]);
 
         let res = ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
         assert!(res.is_err());

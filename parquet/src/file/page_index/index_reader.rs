@@ -24,7 +24,6 @@ use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
-use crate::format::{ColumnIndex, OffsetIndex};
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use std::ops::Range;
 
@@ -48,6 +47,7 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
 /// See [Page Index Documentation] for more details.
 ///
 /// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`ColumnIndex`]: crate::format::ColumnIndex
 #[deprecated(
     since = "55.2.0",
     note = "Use ParquetMetaDataReader instead; will be removed in 58.0.0"
@@ -93,6 +93,7 @@ pub fn read_columns_indexes<R: ChunkReader>(
 /// See [Page Index Documentation] for more details.
 ///
 /// [Page Index Documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`OffsetIndex`]: crate::format::OffsetIndex
 #[deprecated(
     since = "55.2.0",
     note = "Use ParquetMetaDataReader instead; will be removed in 58.0.0"
@@ -129,14 +130,14 @@ pub fn read_offset_indexes<R: ChunkReader>(
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
     let mut prot = TCompactSliceInputProtocol::new(data);
-    let offset = OffsetIndex::read_from_in_protocol(&mut prot)?;
+    let offset = crate::format::OffsetIndex::read_from_in_protocol(&mut prot)?;
     OffsetIndexMetaData::try_new(offset)
 }
 
 pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
     let mut prot = TCompactSliceInputProtocol::new(data);
 
-    let index = ColumnIndex::read_from_in_protocol(&mut prot)?;
+    let index = crate::format::ColumnIndex::read_from_in_protocol(&mut prot)?;
 
     let index = match column_type {
         Type::BOOLEAN => Index::BOOLEAN(NativeIndex::<bool>::try_new(index)?),

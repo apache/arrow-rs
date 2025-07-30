@@ -37,10 +37,9 @@
 use clap::Parser;
 use parquet::errors::{ParquetError, Result};
 use parquet::file::page_index::index::{Index, PageIndex};
-use parquet::file::page_index::offset_index::OffsetIndexMetaData;
+use parquet::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::serialized_reader::ReadOptionsBuilder;
-use parquet::format::PageLocation;
 use std::fs::File;
 
 #[derive(Debug, Parser)]

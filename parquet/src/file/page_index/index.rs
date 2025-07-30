@@ -16,13 +16,14 @@
 // under the License.
 
 //! [`Index`] structures holding decoded [`ColumnIndex`] information
+//!
+//! [`ColumnIndex`]: crate::format::ColumnIndex
 
-use crate::basic::Type;
+use crate::basic::{BoundaryOrder, Type};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::file::metadata::LevelHistogram;
-use crate::format::{BoundaryOrder, ColumnIndex};
 use std::fmt::Debug;
 
 /// Typed statistics for one data page
@@ -78,6 +79,11 @@ impl<T> PageIndex<T> {
     pub fn definition_level_histogram(&self) -> Option<&LevelHistogram> {
         self.definition_level_histogram.as_ref()
     }
+
+    /// Returns whether this is an all null page
+    pub fn is_null_page(&self) -> bool {
+        self.min.is_none()
+    }
 }
 
 impl<T> PageIndex<T>
@@ -132,7 +138,7 @@ impl Index {
     pub fn is_sorted(&self) -> bool {
         // 0:UNORDERED, 1:ASCENDING ,2:DESCENDING,
         if let Some(order) = self.get_boundary_order() {
-            order.0 > (BoundaryOrder::UNORDERED.0)
+            order != BoundaryOrder::UNORDERED
         } else {
             false
         }
@@ -170,6 +176,7 @@ impl Index {
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`Statistics`]: crate::file::statistics::Statistics
+/// [`ColumnIndex`]: crate::format::ColumnIndex
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NativeIndex<T: ParquetValueType> {
     /// The actual column indexes, one item per page
@@ -186,7 +193,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
     pub const PHYSICAL_TYPE: Type = T::PHYSICAL_TYPE;
 
     /// Creates a new [`NativeIndex`]
-    pub(crate) fn try_new(index: ColumnIndex) -> Result<Self, ParquetError> {
+    pub(crate) fn try_new(index: crate::format::ColumnIndex) -> Result<Self, ParquetError> {
         let len = index.min_values.len();
 
         let null_counts = index
@@ -248,13 +255,14 @@ impl<T: ParquetValueType> NativeIndex<T> {
             )
             .collect::<Result<Vec<_>, ParquetError>>()?;
 
+        let boundary_order = index.boundary_order.try_into()?;
         Ok(Self {
             indexes,
-            boundary_order: index.boundary_order,
+            boundary_order,
         })
     }
 
-    pub(crate) fn to_thrift(&self) -> ColumnIndex {
+    pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
         let min_values = self
             .indexes
             .iter()
@@ -288,11 +296,11 @@ impl<T: ParquetValueType> NativeIndex<T> {
             .collect::<Option<Vec<&[i64]>>>()
             .map(|hists| hists.concat());
 
-        ColumnIndex::new(
+        crate::format::ColumnIndex::new(
             self.indexes.iter().map(|x| x.min().is_none()).collect(),
             min_values,
             max_values,
-            self.boundary_order,
+            self.boundary_order.into(),
             null_counts,
             repetition_level_histograms,
             definition_level_histograms,
@@ -350,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_invalid_column_index() {
-        let column_index = ColumnIndex {
+        let column_index = crate::format::ColumnIndex {
             null_pages: vec![true, false],
             min_values: vec![
                 vec![],
@@ -363,7 +371,7 @@ mod tests {
             null_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
-            boundary_order: BoundaryOrder::UNORDERED,
+            boundary_order: crate::format::BoundaryOrder::UNORDERED,
         };
 
         let err = NativeIndex::<i32>::try_new(column_index).unwrap_err();

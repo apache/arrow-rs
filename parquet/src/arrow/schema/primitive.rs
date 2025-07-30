@@ -186,7 +186,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
         (Some(LogicalType::Date), _) => Ok(DataType::Date32),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
-            ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
+            ParquetTimeUnit::MILLIS => Ok(DataType::Time32(TimeUnit::Millisecond)),
             _ => Err(arrow_err!(
                 "Cannot create INT32 physical type from {:?}",
                 unit
@@ -225,11 +225,11 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             false => Ok(DataType::UInt64),
         },
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
-            ParquetTimeUnit::MILLIS(_) => {
+            ParquetTimeUnit::MILLIS => {
                 Err(arrow_err!("Cannot create INT64 from MILLIS time unit",))
             }
-            ParquetTimeUnit::MICROS(_) => Ok(DataType::Time64(TimeUnit::Microsecond)),
-            ParquetTimeUnit::NANOS(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
+            ParquetTimeUnit::MICROS => Ok(DataType::Time64(TimeUnit::Microsecond)),
+            ParquetTimeUnit::NANOS => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         },
         (
             Some(LogicalType::Timestamp {
@@ -239,9 +239,9 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             _,
         ) => Ok(DataType::Timestamp(
             match unit {
-                ParquetTimeUnit::MILLIS(_) => TimeUnit::Millisecond,
-                ParquetTimeUnit::MICROS(_) => TimeUnit::Microsecond,
-                ParquetTimeUnit::NANOS(_) => TimeUnit::Nanosecond,
+                ParquetTimeUnit::MILLIS => TimeUnit::Millisecond,
+                ParquetTimeUnit::MICROS => TimeUnit::Microsecond,
+                ParquetTimeUnit::NANOS => TimeUnit::Nanosecond,
             },
             if is_adjusted_to_u_t_c {
                 Some("UTC".into())

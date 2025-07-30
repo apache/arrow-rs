@@ -20,7 +20,6 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use crate::file::metadata::HeapSize;
-use crate::format::SchemaElement;
 
 use crate::basic::{
     ColumnOrder, ConvertedType, LogicalType, Repetition, SortOrder, TimeUnit, Type as PhysicalType,
@@ -375,13 +374,13 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 (LogicalType::Date, PhysicalType::INT32) => {}
                 (
                     LogicalType::Time {
-                        unit: TimeUnit::MILLIS(_),
+                        unit: TimeUnit::MILLIS,
                         ..
                     },
                     PhysicalType::INT32,
                 ) => {}
                 (LogicalType::Time { unit, .. }, PhysicalType::INT64) => {
-                    if *unit == TimeUnit::MILLIS(Default::default()) {
+                    if *unit == TimeUnit::MILLIS {
                         return Err(general_err!(
                             "Cannot use millisecond unit on INT64 type for field '{}'",
                             self.name
@@ -1160,7 +1159,7 @@ fn build_tree<'a>(
 }
 
 /// Method to convert from Thrift.
-pub fn from_thrift(elements: &[SchemaElement]) -> Result<TypePtr> {
+pub fn from_thrift(elements: &[crate::format::SchemaElement]) -> Result<TypePtr> {
     let mut index = 0;
     let mut schema_nodes = Vec::new();
     while index < elements.len() {
@@ -1198,7 +1197,10 @@ fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
 /// The first result is the starting index for the next Type after this one. If it is
 /// equal to `elements.len()`, then this Type is the last one.
 /// The second result is the result Type.
-fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize, TypePtr)> {
+fn from_thrift_helper(
+    elements: &[crate::format::SchemaElement],
+    index: usize,
+) -> Result<(usize, TypePtr)> {
     // Whether or not the current node is root (message type).
     // There is only one message type node in the schema tree.
     let is_root_node = index == 0;
@@ -1313,18 +1315,18 @@ fn from_thrift_helper(elements: &[SchemaElement], index: usize) -> Result<(usize
 }
 
 /// Method to convert to Thrift.
-pub fn to_thrift(schema: &Type) -> Result<Vec<SchemaElement>> {
+pub fn to_thrift(schema: &Type) -> Result<Vec<crate::format::SchemaElement>> {
     if !schema.is_group() {
         return Err(general_err!("Root schema must be Group type"));
     }
-    let mut elements: Vec<SchemaElement> = Vec::new();
+    let mut elements: Vec<crate::format::SchemaElement> = Vec::new();
     to_thrift_helper(schema, &mut elements);
     Ok(elements)
 }
 
 /// Constructs list of `SchemaElement` from the schema using depth-first traversal.
 /// Here we assume that schema is always valid and starts with group type.
-fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
+fn to_thrift_helper(schema: &Type, elements: &mut Vec<crate::format::SchemaElement>) {
     match *schema {
         Type::PrimitiveType {
             ref basic_info,
@@ -1333,7 +1335,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
             scale,
             precision,
         } => {
-            let element = SchemaElement {
+            let element = crate::format::SchemaElement {
                 type_: Some(physical_type.into()),
                 type_length: if type_length >= 0 {
                     Some(type_length)
@@ -1370,7 +1372,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
                 None
             };
 
-            let element = SchemaElement {
+            let element = crate::format::SchemaElement {
                 type_: None,
                 type_length: None,
                 repetition_type: repetition,

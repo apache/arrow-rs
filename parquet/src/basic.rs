@@ -26,12 +26,6 @@ use crate::format as parquet;
 
 use crate::errors::{ParquetError, Result};
 
-// Re-export crate::format types used in this module
-pub use crate::format::{
-    BsonType, DateType, DecimalType, EnumType, IntType, JsonType, ListType, MapType, NullType,
-    StringType, TimeType, TimeUnit, TimestampType, UUIDType,
-};
-
 // ----------------------------------------------------------------------
 // Types from the Thrift definition
 
@@ -168,6 +162,20 @@ pub enum ConvertedType {
     /// the number of milliseconds associated with the provided duration.
     /// This duration of time is independent of any particular timezone or date.
     INTERVAL,
+}
+
+// ----------------------------------------------------------------------
+// Mirrors `parquet::TimeUnit`
+
+/// Time unit for `Time` and `Timestamp` logical types.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TimeUnit {
+    /// Milliseconds.
+    MILLIS,
+    /// Microseconds.
+    MICROS,
+    /// Nanoseconds.
+    NANOS,
 }
 
 // ----------------------------------------------------------------------
@@ -497,7 +505,7 @@ impl FromStr for Compression {
 }
 
 // ----------------------------------------------------------------------
-/// Mirrors [parquet::PageType]
+/// Mirrors `parquet::PageType`
 ///
 /// Available data pages for Parquet file format.
 /// Note that some of the page types may not be supported.
@@ -512,6 +520,53 @@ pub enum PageType {
     DICTIONARY_PAGE,
     /// Data page Parquet 2.0
     DATA_PAGE_V2,
+}
+
+// ----------------------------------------------------------------------
+// Mirrors `parquet::BoundaryOrder`
+
+/// Enum to annotate whether lists of min/max elements inside ColumnIndex
+/// are ordered and if so, in which direction.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum BoundaryOrder {
+    /// Min/max stats are unordered.
+    UNORDERED,
+    /// Min/max stats are ordered in an ascending fashion.
+    ASCENDING,
+    /// Min/max stats are ordered in an descending fashion.
+    DESCENDING,
+}
+
+// ----------------------------------------------------------------------
+// Mirrors `parquet::BloomFilterAlgorithm`
+
+/// The algorithm used in Bloom filter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BloomFilterAlgorithm {
+    /// Block-based Bloom filter.
+    BLOCK,
+}
+
+// ----------------------------------------------------------------------
+// Mirrors `parquet::BloomFilterHash`
+
+/// The hash function used in Bloom filter. This function takes the hash of a column value
+/// using plain encoding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BloomFilterHash {
+    /// xxHash is an extremely fast non-cryptographic hash algorithm. It uses 64 bits version
+    /// of xxHash.
+    XXHASH,
+}
+
+// ----------------------------------------------------------------------
+// Mirrors `parquet::BloomFilterCompression`
+
+/// The compression used in the Bloom filter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BloomFilterCompression {
+    /// No compression is used.
+    UNCOMPRESSED,
 }
 
 // ----------------------------------------------------------------------
@@ -818,6 +873,90 @@ impl From<ConvertedType> for Option<parquet::ConvertedType> {
 }
 
 // ----------------------------------------------------------------------
+// parquet::BloomFilterHash <=> BloomFilterHash conversion
+
+impl From<parquet::BloomFilterHash> for BloomFilterHash {
+    fn from(value: parquet::BloomFilterHash) -> Self {
+        match value {
+            parquet::BloomFilterHash::XXHASH(_) => BloomFilterHash::XXHASH,
+        }
+    }
+}
+
+impl From<BloomFilterHash> for parquet::BloomFilterHash {
+    fn from(value: BloomFilterHash) -> Self {
+        match value {
+            BloomFilterHash::XXHASH => parquet::BloomFilterHash::XXHASH(Default::default()),
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// parquet::BloomFilterAlgorithm <=> BloomFilterAlgorithm conversion
+
+impl From<parquet::BloomFilterAlgorithm> for BloomFilterAlgorithm {
+    fn from(value: parquet::BloomFilterAlgorithm) -> Self {
+        match value {
+            parquet::BloomFilterAlgorithm::BLOCK(_) => BloomFilterAlgorithm::BLOCK,
+        }
+    }
+}
+
+impl From<BloomFilterAlgorithm> for parquet::BloomFilterAlgorithm {
+    fn from(value: BloomFilterAlgorithm) -> Self {
+        match value {
+            BloomFilterAlgorithm::BLOCK => parquet::BloomFilterAlgorithm::BLOCK(Default::default()),
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// parquet::BloomFilterCompression <=> BloomFilterCompression conversion
+
+impl From<parquet::BloomFilterCompression> for BloomFilterCompression {
+    fn from(value: parquet::BloomFilterCompression) -> Self {
+        match value {
+            parquet::BloomFilterCompression::UNCOMPRESSED(_) => {
+                BloomFilterCompression::UNCOMPRESSED
+            }
+        }
+    }
+}
+
+impl From<BloomFilterCompression> for parquet::BloomFilterCompression {
+    fn from(value: BloomFilterCompression) -> Self {
+        match value {
+            BloomFilterCompression::UNCOMPRESSED => {
+                parquet::BloomFilterCompression::UNCOMPRESSED(Default::default())
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// parquet::TimeUnit <=> TimeUnit conversion
+
+impl From<parquet::TimeUnit> for TimeUnit {
+    fn from(value: parquet::TimeUnit) -> Self {
+        match value {
+            parquet::TimeUnit::MILLIS(_) => TimeUnit::MILLIS,
+            parquet::TimeUnit::MICROS(_) => TimeUnit::MICROS,
+            parquet::TimeUnit::NANOS(_) => TimeUnit::NANOS,
+        }
+    }
+}
+
+impl From<TimeUnit> for parquet::TimeUnit {
+    fn from(value: TimeUnit) -> Self {
+        match value {
+            TimeUnit::MILLIS => parquet::TimeUnit::MILLIS(parquet::MilliSeconds {}),
+            TimeUnit::MICROS => parquet::TimeUnit::MICROS(parquet::MicroSeconds {}),
+            TimeUnit::NANOS => parquet::TimeUnit::NANOS(parquet::NanoSeconds {}),
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
 // parquet::LogicalType <=> LogicalType conversion
 
 impl From<parquet::LogicalType> for LogicalType {
@@ -834,11 +973,11 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::DATE(_) => LogicalType::Date,
             parquet::LogicalType::TIME(t) => LogicalType::Time {
                 is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
-                unit: t.unit,
+                unit: t.unit.into(),
             },
             parquet::LogicalType::TIMESTAMP(t) => LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
-                unit: t.unit,
+                unit: t.unit.into(),
             },
             parquet::LogicalType::INTEGER(t) => LogicalType::Integer {
                 bit_width: t.bit_width,
@@ -864,27 +1003,27 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::List => parquet::LogicalType::LIST(Default::default()),
             LogicalType::Enum => parquet::LogicalType::ENUM(Default::default()),
             LogicalType::Decimal { scale, precision } => {
-                parquet::LogicalType::DECIMAL(DecimalType { scale, precision })
+                parquet::LogicalType::DECIMAL(parquet::DecimalType { scale, precision })
             }
             LogicalType::Date => parquet::LogicalType::DATE(Default::default()),
             LogicalType::Time {
                 is_adjusted_to_u_t_c,
                 unit,
-            } => parquet::LogicalType::TIME(TimeType {
+            } => parquet::LogicalType::TIME(parquet::TimeType {
                 is_adjusted_to_u_t_c,
-                unit,
+                unit: unit.into(),
             }),
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c,
                 unit,
-            } => parquet::LogicalType::TIMESTAMP(TimestampType {
+            } => parquet::LogicalType::TIMESTAMP(parquet::TimestampType {
                 is_adjusted_to_u_t_c,
-                unit,
+                unit: unit.into(),
             }),
             LogicalType::Integer {
                 bit_width,
                 is_signed,
-            } => parquet::LogicalType::INTEGER(IntType {
+            } => parquet::LogicalType::INTEGER(parquet::IntType {
                 bit_width,
                 is_signed,
             }),
@@ -920,14 +1059,14 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Decimal { .. } => ConvertedType::DECIMAL,
                 LogicalType::Date => ConvertedType::DATE,
                 LogicalType::Time { unit, .. } => match unit {
-                    TimeUnit::MILLIS(_) => ConvertedType::TIME_MILLIS,
-                    TimeUnit::MICROS(_) => ConvertedType::TIME_MICROS,
-                    TimeUnit::NANOS(_) => ConvertedType::NONE,
+                    TimeUnit::MILLIS => ConvertedType::TIME_MILLIS,
+                    TimeUnit::MICROS => ConvertedType::TIME_MICROS,
+                    TimeUnit::NANOS => ConvertedType::NONE,
                 },
                 LogicalType::Timestamp { unit, .. } => match unit {
-                    TimeUnit::MILLIS(_) => ConvertedType::TIMESTAMP_MILLIS,
-                    TimeUnit::MICROS(_) => ConvertedType::TIMESTAMP_MICROS,
-                    TimeUnit::NANOS(_) => ConvertedType::NONE,
+                    TimeUnit::MILLIS => ConvertedType::TIMESTAMP_MILLIS,
+                    TimeUnit::MICROS => ConvertedType::TIMESTAMP_MICROS,
+                    TimeUnit::NANOS => ConvertedType::NONE,
                 },
                 LogicalType::Integer {
                     bit_width,
@@ -1098,6 +1237,37 @@ impl From<PageType> for parquet::PageType {
 }
 
 // ----------------------------------------------------------------------
+// parquet::PageType <=> PageType conversion
+
+impl TryFrom<parquet::BoundaryOrder> for BoundaryOrder {
+    type Error = ParquetError;
+
+    fn try_from(value: parquet::BoundaryOrder) -> Result<Self> {
+        Ok(match value {
+            parquet::BoundaryOrder::UNORDERED => BoundaryOrder::UNORDERED,
+            parquet::BoundaryOrder::ASCENDING => BoundaryOrder::ASCENDING,
+            parquet::BoundaryOrder::DESCENDING => BoundaryOrder::DESCENDING,
+            _ => {
+                return Err(general_err!(
+                    "unexpected parquet boundary order type: {}",
+                    value.0
+                ))
+            }
+        })
+    }
+}
+
+impl From<BoundaryOrder> for parquet::BoundaryOrder {
+    fn from(value: BoundaryOrder) -> Self {
+        match value {
+            BoundaryOrder::UNORDERED => parquet::BoundaryOrder::UNORDERED,
+            BoundaryOrder::ASCENDING => parquet::BoundaryOrder::ASCENDING,
+            BoundaryOrder::DESCENDING => parquet::BoundaryOrder::DESCENDING,
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
 // String conversions for schema parsing.
 
 impl str::FromStr for Repetition {
@@ -1184,11 +1354,11 @@ impl str::FromStr for LogicalType {
             "DATE" => Ok(LogicalType::Date),
             "TIME" => Ok(LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
+                unit: TimeUnit::MILLIS,
             }),
             "TIMESTAMP" => Ok(LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
+                unit: TimeUnit::MILLIS,
             }),
             "STRING" => Ok(LogicalType::String),
             "JSON" => Ok(LogicalType::Json),
@@ -1732,42 +1902,42 @@ mod tests {
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIME_MILLIS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIME_MICROS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::NONE
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIMESTAMP_MILLIS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::TIMESTAMP_MICROS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::NONE
@@ -2208,27 +2378,27 @@ mod tests {
             LogicalType::Date,
             LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
             },
             LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
             },
             LogicalType::Time {
                 is_adjusted_to_u_t_c: true,
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: true,
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
             },
             LogicalType::Float16,
         ];
