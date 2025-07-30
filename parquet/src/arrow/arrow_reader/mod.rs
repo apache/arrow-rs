@@ -4793,15 +4793,15 @@ mod tests {
         let file = File::open(path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let schema = builder.schema().clone();
-        let mut reader = builder.build().unwrap();
-        let batches = reader.try_collect::<Vec<_>>().unwrap();
+        let reader = builder.build().unwrap();
 
         let mut parquet_data = Vec::new();
         let props = WriterProperties::builder()
             .set_bloom_filter_enabled(true)
             .build();
         let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
-        for batch in batches {
+        for batch in reader {
+            let batch = batch.unwrap();
             writer.write(&batch).unwrap();
         }
         writer.close().unwrap();
