@@ -531,7 +531,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/Handshake",
             );
@@ -564,7 +564,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/ListFlights",
             );
@@ -598,7 +598,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/GetFlightInfo",
             );
@@ -647,7 +647,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/PollFlightInfo",
             );
@@ -678,7 +678,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/GetSchema",
             );
@@ -709,7 +709,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/DoGet",
             );
@@ -740,7 +740,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/DoPut",
             );
@@ -770,7 +770,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/DoExchange",
             );
@@ -803,7 +803,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/DoAction",
             );
@@ -833,7 +833,7 @@ pub mod flight_service_client {
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/arrow.flight.protocol.FlightService/ListActions",
             );
@@ -1142,7 +1142,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = HandshakeSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1188,7 +1188,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListFlightsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1233,7 +1233,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetFlightInfoSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1279,7 +1279,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = PollFlightInfoSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1324,7 +1324,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetSchemaSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1370,7 +1370,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DoGetSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1416,7 +1416,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DoPutSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1462,7 +1462,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DoExchangeSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1508,7 +1508,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DoActionSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -1554,7 +1554,7 @@ pub mod flight_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListActionsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
