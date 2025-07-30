@@ -1136,7 +1136,7 @@ async fn test_multi_threaded_encrypted_writing() {
     let schema = metadata.schema().clone();
 
     let props = Some(
-        WriterPropertiesBuilder::with_defaults()
+        WriterPropertiesBuilder::default()
             .with_file_encryption_properties(file_encryption_properties)
             .build(),
     );
