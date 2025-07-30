@@ -1012,7 +1012,7 @@ mod tests {
         ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
-    use crate::arrow::{ArrowWriter, ProjectionMask};
+    use crate::arrow::{ArrowWriter, ProjectionMask, ADJUSTED_TO_UTC_KEY};
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
@@ -1298,7 +1298,7 @@ mod tests {
                 true,
             )
             .with_metadata(HashMap::from_iter(vec![(
-                "adjusted_to_utc".to_string(),
+                ADJUSTED_TO_UTC_KEY.to_string(),
                 "".to_string(),
             )])),
             Field::new(
@@ -1307,7 +1307,7 @@ mod tests {
                 true,
             )
             .with_metadata(HashMap::from_iter(vec![(
-                "adjusted_to_utc".to_string(),
+                ADJUSTED_TO_UTC_KEY.to_string(),
                 "".to_string(),
             )])),
         ]));
@@ -1340,7 +1340,10 @@ mod tests {
         writer.write(&original)?;
         writer.close()?;
 
-        let mut reader = ParquetRecordBatchReader::try_new(Bytes::from(buf), 1024)?;
+        let opts = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
+
+        let mut reader =
+            ArrowReaderBuilder::try_new_with_options(Bytes::from(buf), opts)?.build()?;
         let ret = reader.next().unwrap()?;
         assert_eq!(ret, original);
 

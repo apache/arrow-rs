@@ -221,6 +221,15 @@ pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
 /// [`BasicTypeInfo::id`]: crate::schema::types::BasicTypeInfo::id
 pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
 
+/// Metadata key whose presence on [`Field::metadata`] indicates that a
+/// [`DataType::Time32`] or [`DataType::Time64`] is adjusted to UTC as defined
+/// in the parquet spec.
+///
+/// [`Field::metadata`]: arrow_schema::Field::metadata
+/// [`DataType::Time32`]: arrow_schema::DataType::Time32
+/// [`DataType::Time64`]: arrow_schema::DataType::Time64
+pub const ADJUSTED_TO_UTC_KEY: &str = "adjusted_to_utc";
+
 /// A [`ProjectionMask`] identifies a set of columns within a potentially nested schema to project
 ///
 /// In particular, a [`ProjectionMask`] can be constructed from a list of leaf column indices
