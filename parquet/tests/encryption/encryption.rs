@@ -1186,6 +1186,9 @@ async fn test_multi_threaded_encrypted_writing() {
     assert_eq!(metadata.num_rows, 0);
     assert_eq!(metadata.schema, metadata.schema);
 
+    // TODO: Test inserting via high-level API and low-level API in the same
+    // file writer, and check that data and the footer are written correctly.
+
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
         read_encrypted_file(&path, decryption_properties.clone()).unwrap();
