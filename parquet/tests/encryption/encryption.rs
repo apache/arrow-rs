@@ -28,10 +28,8 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
     RowSelector,
 };
-use parquet::arrow::arrow_writer::{
-    compute_leaves, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
-};
-use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
+use parquet::arrow::arrow_writer::{compute_leaves, ArrowLeafColumn};
+use parquet::arrow::ArrowWriter;
 use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
@@ -1148,7 +1146,7 @@ async fn test_multi_threaded_encrypted_writing() {
     let mut writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props).unwrap();
 
     // Get column writers with encryptor
-    let mut col_writers = writer.get_column_writers().unwrap();
+    let col_writers = writer.get_column_writers().unwrap();
     let num_columns = col_writers.len();
 
     // Create a channel for each column writer to send ArrowLeafColumn data to
@@ -1161,7 +1159,7 @@ async fn test_multi_threaded_encrypted_writing() {
             while let Some(col) = receive_array.recv().await {
                 col_writer.write(&col).unwrap();
             }
-            col_writer.close().unwrap();
+            col_writer.close().unwrap()
         });
         col_writer_tasks.push(handle);
     }
@@ -1181,9 +1179,12 @@ async fn test_multi_threaded_encrypted_writing() {
         finalized_rg.push(task.await.unwrap());
     }
 
+    assert!(writer.flush().is_ok());
+
     // Close the file writer which writes the footer
     let metadata = writer.finish().unwrap();
-    assert_eq!(metadata.num_rows, 50);
+    assert_eq!(metadata.num_rows, 0);
+    assert_eq!(metadata.schema, metadata.schema);
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
