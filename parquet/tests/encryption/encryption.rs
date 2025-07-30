@@ -28,7 +28,9 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
     RowSelector,
 };
-use parquet::arrow::arrow_writer::{compute_leaves, ArrowLeafColumn, ArrowRowGroupWriterFactory};
+use parquet::arrow::arrow_writer::{
+    compute_leaves, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
+};
 use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
 use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
@@ -1135,36 +1137,31 @@ async fn test_multi_threaded_encrypted_writing() {
         .collect();
     let schema = metadata.schema().clone();
 
-    let props = Some(WriterPropertiesBuilder::with_defaults()
-        .with_file_encryption_properties(file_encryption_properties)
-        .build());
+    let props = Some(
+        WriterPropertiesBuilder::with_defaults()
+            .with_file_encryption_properties(file_encryption_properties)
+            .build(),
+    );
 
     // Create a temporary file to write the encrypted data
-    let temp_file = tempfile::NamedTempFile::new().unwrap();
-    let mut writer = ArrowWriter::try_new(
-        temp_file.into_file(),
-        metadata.schema().clone(),
-        props,
-    ).unwrap();
+    let temp_file = tempfile::tempfile().unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props).unwrap();
 
     // Get column writers with encryptor
-    let col_writers = writer
-        .get_column_writers()
-        .unwrap()
-        .get_column_writers();
+    let mut col_writers = writer.get_column_writers().unwrap();
     let num_columns = col_writers.len();
 
     // Create a channel for each column writer to send ArrowLeafColumn data to
     let mut col_writer_tasks = Vec::with_capacity(num_columns);
     let mut col_array_channels = Vec::with_capacity(num_columns);
-    for mut writer in col_writers.into_iter() {
+    for mut col_writer in col_writers.into_iter() {
         let (send_array, mut receive_array) = tokio::sync::mpsc::channel::<ArrowLeafColumn>(100);
         col_array_channels.push(send_array);
         let handle = tokio::spawn(async move {
             while let Some(col) = receive_array.recv().await {
-                writer.write(&col);
+                col_writer.write(&col).unwrap();
             }
-            &writer.close().unwrap()
+            col_writer.close().unwrap();
         });
         col_writer_tasks.push(handle);
     }
@@ -1189,15 +1186,12 @@ async fn test_multi_threaded_encrypted_writing() {
     assert_eq!(metadata.num_rows, 50);
 
     // Check that the file was written correctly
-    let (read_record_batches, read_metadata) = read_encrypted_file(
-        &path,
-        decryption_properties.clone(),
-    )
-    .unwrap();
+    let (read_record_batches, read_metadata) =
+        read_encrypted_file(&path, decryption_properties.clone()).unwrap();
     verify_encryption_test_data(read_record_batches, read_metadata.metadata());
 
     // Check that file was encrypted
-    let result = ArrowReaderMetadata::load(&temp_file.into_file(), ArrowReaderOptions::default());
+    let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
     assert_eq!(
         result.unwrap_err().to_string(),
         "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"

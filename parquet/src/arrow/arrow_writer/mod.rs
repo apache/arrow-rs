@@ -403,15 +403,12 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.finish()
     }
 
-    pub fn get_column_writers(&mut self) -> Result<&ArrowRowGroupWriter> {
-        let in_progress = match &mut self.in_progress {
-            Some(in_progress) => in_progress,
-            x => x.insert(
-                self.row_group_writer_factory
-                    .create_row_group_writer(self.writer.flushed_row_groups().len())?,
-            ),
-        };
-        Ok(in_progress)
+    pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
+        let _ = self.flush();
+        let in_progress = self
+            .row_group_writer_factory
+            .create_row_group_writer(self.writer.flushed_row_groups().len())?;
+        Ok(in_progress.writers)
     }
 }
 
