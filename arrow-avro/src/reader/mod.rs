@@ -108,9 +108,9 @@ mod vlq;
 /// Fast helper: how many bytes does a fingerprint prefix occupy.
 #[inline]
 const fn prefix_len(ht: FingerprintAlgorithm) -> usize {
-    // SHA-256 and md5 support coming in a future PR
-    2 + match ht {
-        FingerprintAlgorithm::Rabin => 8,
+    // SHA-256, md5, ID support coming in a future PR
+    match ht {
+        FingerprintAlgorithm::Rabin => 10, // (2 magic bytes + 8 byte fingerprint)
     }
 }
 
@@ -234,7 +234,7 @@ impl Decoder {
         let fp_bytes = &buf[2..]; // safe thanks to the `starts_with` check above
         let new_fp = match hash_type {
             FingerprintAlgorithm::Rabin => {
-                let Some(Ok(bytes)) = fp_bytes.get(..8).map(Into::into) else {
+                let Ok(bytes) = <[u8; 8]>::try_from(fp_bytes) else {
                     return Err(ArrowError::ParseError(format!(
                         "Invalid Rabin fingerprint length, expected 8, got {}",
                         fp_bytes.len()
@@ -252,7 +252,7 @@ impl Decoder {
                 self.remaining_capacity = 0;
             }
         }
-        Ok(Some(full_len))
+        Ok(Some(prefix_len(hash_type)))
     }
 
     fn prepare_schema_switch(&mut self, new_fingerprint: Fingerprint) -> Result<(), ArrowError> {
