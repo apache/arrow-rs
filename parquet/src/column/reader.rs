@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -185,6 +192,8 @@ where
         }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Read up to `max_records` whole records, returning the number of complete
     /// records, non-null values and levels decoded. All levels for a given record
     /// will be read, i.e. the next repetition level, if any, will be 0
@@ -243,13 +252,16 @@ where
                 }
             };
 
+            let mut start_offset = 0;
             let values_to_read = match self.def_level_decoder.as_mut() {
                 Some(reader) => {
                     let out = def_levels
                         .as_mut()
                         .ok_or_else(|| general_err!("must specify definition levels"))?;
 
-                    let (values_read, levels_read) = reader.read_def_levels(out, levels_to_read)?;
+                    let (values_read, levels_read, start_offset_1) =
+                        reader.read_def_levels(out, levels_to_read)?;
+                    start_offset = start_offset_1;
 
                     if levels_read != levels_to_read {
                         return Err(general_err!("insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"));
@@ -260,13 +272,46 @@ where
                 None => levels_to_read,
             };
 
-            let values_read = self.values_decoder.read(values, values_to_read)?;
+            let non_null_mask = self
+                .values_decoder
+                .read_with_null_mask(values, values_to_read)?;
+
+            let values_read = non_null_mask.len();
 
             if values_read != values_to_read {
                 return Err(general_err!(
-                    "insufficient values read from column - expected: {values_to_read}, got: {values_read}",
+                    "insufficient values read from column - expected: {values_to_read}, got: {}",
+                    values_read
                 ));
             }
+
+            debug_assert_eq!(non_null_mask.len(), values_read);
+
+            let non_null_count = non_null_mask.iter().filter(|&&x| x).count();
+
+            let values_read = match self.def_level_decoder.as_mut() {
+                Some(reader) => {
+                    let out = def_levels
+                        .as_mut()
+                        .ok_or_else(|| general_err!("must specify definition levels"))?;
+
+                    let (values_read, levels_read) = reader.update_def_levels(
+                        out,
+                        levels_to_read,
+                        start_offset,
+                        non_null_mask,
+                    )?;
+
+                    if levels_read != levels_to_read {
+                        return Err(general_err!("insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"));
+                    }
+
+                    values_read
+                }
+                None => levels_to_read,
+            };
+
+            debug_assert_eq!(values_read, non_null_count);
 
             self.num_decoded_values += levels_to_read;
             total_records_read += records_read;

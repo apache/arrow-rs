@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -260,6 +267,9 @@ mod tests {
     use arrow_data::ArrayDataBuilder;
     use arrow_schema::Fields;
     use std::sync::Arc;
+
+    // THESE IMPORTS ARE ARAS ONLY
+    use crate::arrow::ColumnValueDecoderOptions;
 
     fn list_type<OffsetSize: OffsetSizeTrait>(
         data_type: ArrowType,
@@ -564,7 +574,7 @@ mod tests {
         .unwrap();
 
         let mut array_reader = ArrayReaderBuilder::new(&file_reader)
-            .build_array_reader(fields.as_ref(), &mask)
+            .build_array_reader(fields.as_ref(), &mask,ColumnValueDecoderOptions::default() )
             .unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();

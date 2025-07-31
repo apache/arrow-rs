@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -35,11 +42,17 @@ use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 use std::any::Any;
 
+// THESE IMPORTS ARE ARAS ONLY
+use crate::arrow::ColumnValueDecoderOptions;
+
+/// THIS METHOD IS COMMON, MODIFIED BY ARAS
+///
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
 pub fn make_byte_view_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    options: ColumnValueDecoderOptions,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -52,7 +65,8 @@ pub fn make_byte_view_array_reader(
 
     match data_type {
         ArrowType::BinaryView | ArrowType::Utf8View => {
-            let reader = GenericRecordReader::new(column_desc);
+            let reader =
+                GenericRecordReader::new_with_options(column_desc, data_type.clone(), options);
             Ok(Box::new(ByteViewArrayReader::new(pages, data_type, reader)))
         }
 
@@ -145,6 +159,21 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
         }
     }
 
+    /// THIS METHOD IS ARAS ONLY
+    fn new_with_options(
+        options: ColumnValueDecoderOptions,
+        col: &ColumnDescPtr,
+        data_type: ArrowType,
+    ) -> Self {
+        let validate_utf8 = !options.skip_validation.get()
+            && (col.converted_type() == ConvertedType::UTF8 || data_type == ArrowType::Utf8);
+        Self {
+            dict: None,
+            decoder: None,
+            validate_utf8,
+        }
+    }
+
     fn set_dict(
         &mut self,
         buf: Bytes,
@@ -198,6 +227,16 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             .ok_or_else(|| general_err!("no decoder set"))?;
 
         decoder.read(out, num_values, self.dict.as_ref())
+    }
+
+    /// THIS METHOD IS ARAS ONLY
+    fn read_with_null_mask(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_values: usize,
+    ) -> Result<Vec<bool>> {
+        let len = self.read(out, num_values)?;
+        Ok(vec![true; len])
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {

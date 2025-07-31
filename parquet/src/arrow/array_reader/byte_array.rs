@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -37,11 +44,18 @@ use bytes::Bytes;
 use std::any::Any;
 use std::sync::Arc;
 
+// THESE IMPORTS ARE ARAS ONLY
+use crate::arrow::decoder::DefaultValueForInvalidUtf8;
+use crate::arrow::ColumnValueDecoderOptions;
+
+/// THIS FUNCTION IS COMMON, MODIFIED BY ARAS
+///
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
 pub fn make_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    options: ColumnValueDecoderOptions,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -56,7 +70,7 @@ pub fn make_byte_array_reader(
         | ArrowType::Utf8
         | ArrowType::Decimal128(_, _)
         | ArrowType::Decimal256(_, _) => {
-            let reader = GenericRecordReader::new(column_desc);
+            let reader = GenericRecordReader::new_with_options(column_desc, data_type.clone(),  options);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
@@ -166,25 +180,53 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
     }
 }
 
+/// THIS STRUCT IS COMMON, MODIFIED BY ARAS
+///
 /// A [`ColumnValueDecoder`] for variable length byte arrays
 struct ByteArrayColumnValueDecoder<I: OffsetSizeTrait> {
     dict: Option<OffsetBuffer<I>>,
     decoder: Option<ByteArrayDecoder>,
     validate_utf8: bool,
+    // THIS MEMBER IS ARAS ONLY
+    non_null_mask: Option<Vec<bool>>,
+    // THIS MEMBER IS ARAS ONLY
+    default_value: DefaultValueForInvalidUtf8,
 }
 
 impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
     type Buffer = OffsetBuffer<I>;
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn new(desc: &ColumnDescPtr) -> Self {
         let validate_utf8 = desc.converted_type() == ConvertedType::UTF8;
         Self {
             dict: None,
             decoder: None,
             validate_utf8,
+            non_null_mask: None,
+            default_value: DefaultValueForInvalidUtf8::default(),
         }
     }
 
+    /// THIS METHOD IS ARAS ONLY
+    fn new_with_options(
+        options: ColumnValueDecoderOptions,
+        desc: &ColumnDescPtr,
+        data_type: ArrowType,
+    ) -> Self {
+        let validate_utf8 = !options.skip_validation.get()
+            && (desc.converted_type() == ConvertedType::UTF8 || data_type == ArrowType::Utf8);
+
+        Self {
+            dict: None,
+            non_null_mask: None,
+            decoder: None,
+            validate_utf8,
+            default_value: options.default_value,
+        }
+    }
+
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn set_dict(
         &mut self,
         buf: Bytes,
@@ -208,12 +250,16 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             num_values as usize,
             Some(num_values as usize),
             self.validate_utf8,
+            self.default_value.clone(),
         );
-        decoder.read(&mut buffer, usize::MAX)?;
+        let non_null_mask = decoder.read(&mut buffer, usize::MAX)?;
+
         self.dict = Some(buffer);
+        self.non_null_mask = Some(non_null_mask);
         Ok(())
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn set_data(
         &mut self,
         encoding: Encoding,
@@ -227,17 +273,44 @@ impl<I: OffsetSizeTrait> ColumnValueDecoder for ByteArrayColumnValueDecoder<I> {
             num_levels,
             num_values,
             self.validate_utf8,
+            self.default_value.clone(),
         )?);
         Ok(())
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         let decoder = self
             .decoder
             .as_mut()
             .ok_or_else(|| general_err!("no decoder set"))?;
 
-        decoder.read(out, num_values, self.dict.as_ref())
+        let non_null_mask = decoder.read(
+            out,
+            num_values,
+            self.dict.as_ref(),
+            self.non_null_mask.as_ref(),
+        )?;
+        Ok(non_null_mask.len())
+    }
+
+    /// THIS METHOD IS ARAS ONLY
+    fn read_with_null_mask(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_values: usize,
+    ) -> Result<Vec<bool>> {
+        let decoder = self
+            .decoder
+            .as_mut()
+            .ok_or_else(|| general_err!("no decoder set"))?;
+
+        decoder.read(
+            out,
+            num_values,
+            self.dict.as_ref(),
+            self.non_null_mask.as_ref(),
+        )
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
@@ -259,12 +332,14 @@ pub enum ByteArrayDecoder {
 }
 
 impl ByteArrayDecoder {
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     pub fn new(
         encoding: Encoding,
         data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
         validate_utf8: bool,
+        default_value: DefaultValueForInvalidUtf8,
     ) -> Result<Self> {
         let decoder = match encoding {
             Encoding::PLAIN => ByteArrayDecoder::Plain(ByteArrayDecoderPlain::new(
@@ -272,6 +347,7 @@ impl ByteArrayDecoder {
                 num_levels,
                 num_values,
                 validate_utf8,
+                default_value,
             )),
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
                 ByteArrayDecoderDictionary::new(data, num_levels, num_values),
@@ -293,23 +369,35 @@ impl ByteArrayDecoder {
         Ok(decoder)
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Read up to `len` values to `out` with the optional dictionary
     pub fn read<I: OffsetSizeTrait>(
         &mut self,
         out: &mut OffsetBuffer<I>,
         len: usize,
         dict: Option<&OffsetBuffer<I>>,
-    ) -> Result<usize> {
+        non_null_mask: Option<&Vec<bool>>,
+    ) -> Result<Vec<bool>> {
         match self {
             ByteArrayDecoder::Plain(d) => d.read(out, len),
             ByteArrayDecoder::Dictionary(d) => {
                 let dict =
                     dict.ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
-                d.read(out, dict, len)
+                let non_null_mask = non_null_mask
+                    .ok_or_else(|| general_err!("missing non-null mask for column"))?;
+
+                d.read(out, dict, len, non_null_mask)
             }
-            ByteArrayDecoder::DeltaLength(d) => d.read(out, len),
-            ByteArrayDecoder::DeltaByteArray(d) => d.read(out, len),
+            ByteArrayDecoder::DeltaLength(d) => {
+                let len = d.read(out, len)?;
+                Ok(vec![true; len])
+            }
+            ByteArrayDecoder::DeltaByteArray(d) => {
+                let len = d.read(out, len)?;
+                Ok(vec![true; len])
+            }
         }
     }
 
@@ -333,11 +421,14 @@ impl ByteArrayDecoder {
     }
 }
 
+/// THIS STRUCT IS COMMON, MODIFIED BY ARAS
+///
 /// Decoder from [`Encoding::PLAIN`] data to [`OffsetBuffer`]
 pub struct ByteArrayDecoderPlain {
     buf: Bytes,
     offset: usize,
     validate_utf8: bool,
+    default_value: DefaultValueForInvalidUtf8,
 
     /// This is a maximum as the null count is not always known, e.g. value data from
     /// a v1 data page
@@ -345,25 +436,29 @@ pub struct ByteArrayDecoderPlain {
 }
 
 impl ByteArrayDecoderPlain {
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     pub fn new(
         buf: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
         validate_utf8: bool,
+        default_value: DefaultValueForInvalidUtf8,
     ) -> Self {
         Self {
             buf,
             validate_utf8,
             offset: 0,
             max_remaining_values: num_values.unwrap_or(num_levels),
+            default_value,
         }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     pub fn read<I: OffsetSizeTrait>(
         &mut self,
         output: &mut OffsetBuffer<I>,
         len: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<bool>> {
         let initial_values_length = output.values.len();
 
         let to_read = len.min(self.max_remaining_values);
@@ -371,7 +466,7 @@ impl ByteArrayDecoderPlain {
 
         let remaining_bytes = self.buf.len() - self.offset;
         if remaining_bytes == 0 {
-            return Ok(0);
+            return Ok(vec![]);
         }
 
         let estimated_bytes = remaining_bytes
@@ -384,6 +479,7 @@ impl ByteArrayDecoderPlain {
         let mut read = 0;
 
         let buf = self.buf.as_ref();
+        let mut non_null_mask = vec![true; to_read];
         while self.offset < self.buf.len() && read != to_read {
             if self.offset + 4 > buf.len() {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
@@ -397,7 +493,14 @@ impl ByteArrayDecoderPlain {
                 return Err(ParquetError::EOF("eof decoding byte array".into()));
             }
 
-            output.try_push(&buf[start_offset..end_offset], self.validate_utf8)?;
+            let is_null = output.try_push_with_default_value(
+                &buf[start_offset..end_offset],
+                self.validate_utf8,
+                &self.default_value,
+            )?;
+            if is_null {
+                non_null_mask[read] = false;
+            }
 
             self.offset = end_offset;
             read += 1;
@@ -407,7 +510,7 @@ impl ByteArrayDecoderPlain {
         if self.validate_utf8 {
             output.check_valid_utf8(initial_values_length)?;
         }
-        Ok(to_read)
+        Ok(non_null_mask)
     }
 
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
@@ -569,19 +672,26 @@ impl ByteArrayDecoderDictionary {
         }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn read<I: OffsetSizeTrait>(
         &mut self,
         output: &mut OffsetBuffer<I>,
         dict: &OffsetBuffer<I>,
         len: usize,
-    ) -> Result<usize> {
+        non_null_mask: &Vec<bool>,
+    ) -> Result<Vec<bool>> {
         // All data must be NULL
         if dict.is_empty() {
-            return Ok(0);
+            return Ok(vec![]);
         }
 
-        self.decoder.read(len, |keys| {
-            output.extend_from_dictionary(keys, dict.offsets.as_slice(), dict.values.as_slice())
+        self.decoder.read_with_non_null_mask(len, |keys| {
+            output.extend_from_dictionary_with_non_null_mask(
+                keys,
+                dict.offsets.as_slice(),
+                dict.values.as_slice(),
+                non_null_mask.as_slice(),
+            )
         })
     }
 

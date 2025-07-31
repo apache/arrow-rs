@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -223,6 +230,10 @@ pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
 /// [`Field::metadata`]: arrow_schema::Field::metadata
 /// [`BasicTypeInfo::id`]: crate::schema::types::BasicTypeInfo::id
 pub const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
+
+// THESE EXPORTS ARE ARAS ONLY
+pub use self::decoder::{ColumnValueDecoderOptions, DefaultValueForInvalidUtf8};
+pub use arrow_schema::DataType as ArrowDataType;
 
 /// A [`ProjectionMask`] identifies a set of columns within a potentially nested schema to project
 ///

@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -140,11 +147,12 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 }
 
 impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn read_def_levels(
         &mut self,
         writer: &mut Self::Buffer,
         num_levels: usize,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<(usize, usize, usize)> {
         match (&mut writer.inner, &mut self.decoder) {
             (
                 BufferInner::Full {
@@ -157,14 +165,16 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 assert_eq!(self.max_level, *max_level);
 
                 let start = levels.len();
-                let (values_read, levels_read) = decoder.read_def_levels(levels, num_levels)?;
+                let (values_read, levels_read, _) = decoder.read_def_levels(levels, num_levels)?;
+
+                debug_assert_eq!(nulls.len(), start);
 
                 nulls.reserve(levels_read);
                 for i in &levels[start..] {
                     nulls.append(i == max_level);
                 }
 
-                Ok((values_read, levels_read))
+                Ok((values_read, levels_read, start))
             }
             (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
@@ -173,7 +183,65 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
                 let levels_read = decoder.read(nulls, num_levels)?;
 
                 let values_read = count_set_bits(nulls.as_slice(), start..start + levels_read);
-                Ok((values_read, levels_read))
+                Ok((values_read, levels_read, start))
+            }
+            _ => unreachable!("inconsistent null mask"),
+        }
+    }
+
+    /// THIS METHOD IS ARAS ONLY
+    fn update_def_levels(
+        &mut self,
+        writer: &mut Self::Buffer,
+        num_levels: usize,
+        start_offset: usize,
+        non_null_mask: Vec<bool>,
+    ) -> Result<(usize, usize)> {
+        match (&mut writer.inner, &mut self.decoder) {
+            (
+                BufferInner::Full {
+                    levels,
+                    nulls,
+                    max_level,
+                },
+                MaybePacked::Fallback(_decoder),
+            ) => {
+                assert_eq!(self.max_level, *max_level);
+                debug_assert_eq!(levels.len(), start_offset + num_levels);
+
+                let mut values_read = 0;
+
+                for (i, l) in levels.iter().enumerate().skip(start_offset) {
+                    if l == max_level {
+                        debug_assert!(nulls.get_bit(i));
+                        values_read += 1;
+                    }
+                }
+
+                Ok((values_read, num_levels))
+            }
+            (BufferInner::Mask { nulls }, MaybePacked::Packed(_decoder)) => {
+                assert_eq!(self.max_level, 1);
+
+                let values_read =
+                    count_set_bits(nulls.as_slice(), start_offset..start_offset + num_levels);
+                debug_assert_eq!(non_null_mask.len(), values_read);
+
+                let mut null_mask_iter = 0;
+                for i in start_offset..start_offset + num_levels {
+                    if nulls.get_bit(i) {
+                        debug_assert!(null_mask_iter < non_null_mask.len());
+                        if !non_null_mask[null_mask_iter] {
+                            nulls.set_bit(i, false);
+                        }
+                        null_mask_iter += 1;
+                    }
+                }
+
+                let values_read =
+                    count_set_bits(nulls.as_slice(), start_offset..start_offset + num_levels);
+
+                Ok((values_read, num_levels))
             }
             _ => unreachable!("inconsistent null mask"),
         }

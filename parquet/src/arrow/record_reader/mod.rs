@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -33,6 +40,11 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 
+// THESE IMPORTS ARE ARAS ONLY
+use super::ColumnValueDecoderOptions;
+
+use arrow_schema::DataType as ArrowType;
+
 pub(crate) mod buffer;
 mod definition_levels;
 
@@ -42,6 +54,8 @@ pub type RecordReader<T> = GenericRecordReader<Vec<<T as DataType>::T>, ColumnVa
 pub(crate) type ColumnReader<CV> =
     GenericColumnReader<RepetitionLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>;
 
+/// THIS STRUCT IS COMMON, MODIFIED BY ARAS
+///
 /// A generic stateful column reader that delimits semantic records
 ///
 /// This type is hidden from the docs, and relies on private traits with no
@@ -58,6 +72,12 @@ pub struct GenericRecordReader<V, CV> {
     num_values: usize,
     /// Number of buffered records
     num_records: usize,
+    /// THIS MEMBER IS ARAS ONLY
+    column_value_decoder_options: Option<ColumnValueDecoderOptions>,
+    /// THIS MEMBER IS ARAS ONLY
+    ///
+    /// Data type of the column, if known.
+    data_type: Option<ArrowType>,
 }
 
 impl<V, CV> GenericRecordReader<V, CV>
@@ -65,8 +85,36 @@ where
     V: ValuesBuffer,
     CV: ColumnValueDecoder<Buffer = V>,
 {
+    /// THIS FUNCTION IS COMMON, MODIFIED BY ARAS
+    ///
     /// Create a new [`GenericRecordReader`]
     pub fn new(desc: ColumnDescPtr) -> Self {
+        let def_levels = (desc.max_def_level() > 0)
+            .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
+
+        let rep_levels = (desc.max_rep_level() > 0).then(Vec::new);
+
+        Self {
+            column_value_decoder_options: None,
+            values: V::default(),
+            def_levels,
+            rep_levels,
+            column_reader: None,
+            column_desc: desc,
+            data_type: None,
+            num_values: 0,
+            num_records: 0,
+        }
+    }
+
+    /// THIS METHOD IS ARAS ONLY
+    ///
+    /// Create a new [`GenericRecordReader`]
+    pub fn new_with_options(
+        desc: ColumnDescPtr,
+        data_type: ArrowType,
+        options: ColumnValueDecoderOptions,
+    ) -> Self {
         let def_levels = (desc.max_def_level() > 0)
             .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
 
@@ -78,15 +126,24 @@ where
             rep_levels,
             column_reader: None,
             column_desc: desc,
+            data_type: Some(data_type),
             num_values: 0,
             num_records: 0,
+            column_value_decoder_options: Some(options),
         }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Set the current page reader.
     pub fn set_page_reader(&mut self, page_reader: Box<dyn PageReader>) -> Result<()> {
         let descr = &self.column_desc;
-        let values_decoder = CV::new(descr);
+
+        let values_decoder = if let Some(options) = self.column_value_decoder_options.take() {
+            CV::new_with_options(options, descr, self.data_type.clone().unwrap())
+        } else {
+            CV::new(descr)
+        };
 
         let def_level_decoder = (descr.max_def_level() != 0).then(|| {
             DefinitionLevelBufferDecoder::new(descr.max_def_level(), packed_null_mask(descr))
@@ -206,6 +263,8 @@ where
         }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Try to read one batch of data returning the number of records read
     fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
         let (records_read, values_read, levels_read) =
@@ -220,6 +279,11 @@ where
             let def_levels = self.def_levels.as_ref().ok_or_else(|| {
                 general_err!("Definition levels should exist when data is less than levels!")
             })?;
+
+            let null_slice = def_levels.nulls().as_slice();
+
+            self.values
+                .pad_nulls(self.num_values, values_read, levels_read, null_slice);
 
             self.values.pad_nulls(
                 self.num_values,

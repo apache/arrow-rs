@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -23,6 +30,11 @@ use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
+
+// THESE IMPORTS ARE ARAS ONLY
+use std::collections::HashMap;
+
+use crate::arrow::decoder::DefaultValueForInvalidUtf8;
 
 /// A buffer of variable-sized byte arrays that can be converted into
 /// a corresponding [`ArrayRef`]
@@ -79,6 +91,147 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 
         self.offsets.push(index_offset);
         Ok(())
+    }
+
+    /// THIS METHOD IS ARAS ONLY
+    ///
+    /// try_push with default value for non-UTF8 data
+    pub fn try_push_with_default_value(
+        &mut self,
+        data: &[u8],
+        validate_utf8: bool,
+        default_value: &DefaultValueForInvalidUtf8,
+    ) -> Result<bool> {
+        if validate_utf8 {
+            if let Some(&b) = data.first() {
+                // A valid code-point iff it does not start with 0b10xxxxxx
+                // Bit-magic taken from `std::str::is_char_boundary`
+                if (b as i8) < -0x40 {
+                    match default_value {
+                        DefaultValueForInvalidUtf8::Default(value) => {
+                            if check_valid_utf8(value.as_bytes()).is_ok() {
+                                self.values.extend_from_slice(value.as_bytes());
+                            } else {
+                                return Err(ParquetError::General(
+                                    "encountered non UTF-8 data".to_string(),
+                                ));
+                            }
+
+                            let index_offset =
+                                I::from_usize(self.values.len()).ok_or_else(|| {
+                                    general_err!("index overflow decoding byte array")
+                                })?;
+
+                            self.offsets.push(index_offset);
+                            return Ok(false);
+                        }
+                        DefaultValueForInvalidUtf8::Null => {
+                            let index_offset =
+                                I::from_usize(self.values.len()).ok_or_else(|| {
+                                    general_err!("index overflow decoding byte array")
+                                })?;
+
+                            self.offsets.push(index_offset);
+                            return Ok(true);
+                        }
+                        DefaultValueForInvalidUtf8::None => {
+                            return Err(ParquetError::General(
+                                "encountered non UTF-8 data".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !validate_utf8 || check_valid_utf8(data).is_ok() {
+            self.values.extend_from_slice(data);
+        } else {
+            match default_value {
+                DefaultValueForInvalidUtf8::Default(value) => {
+                    if check_valid_utf8(value.as_bytes()).is_ok() {
+                        self.values.extend_from_slice(value.as_bytes());
+                    } else {
+                        return Err(ParquetError::General(
+                            "encountered non UTF-8 data".to_string(),
+                        ));
+                    }
+                }
+                DefaultValueForInvalidUtf8::Null => return Ok(true),
+                DefaultValueForInvalidUtf8::None => {
+                    return Err(ParquetError::General(
+                        "encountered non UTF-8 data".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let index_offset = I::from_usize(self.values.len())
+            .ok_or_else(|| general_err!("index overflow decoding byte array"))?;
+
+        self.offsets.push(index_offset);
+        Ok(false)
+    }
+
+    /// THIS METHOD IS ARAS ONLY
+    ///
+    /// Extends this buffer with a list of keys
+    ///
+    /// For each value `key` in `keys` this will insert
+    /// `&dict_values[dict_offsets[key]..dict_offsets[key+1]]`
+    ///
+    /// Note: This will validate offsets are valid
+    pub fn extend_from_dictionary_with_non_null_mask<K: ArrowNativeType, V: ArrowNativeType>(
+        &mut self,
+        keys: &[K],
+        dict_offsets: &[V],
+        dict_values: &[u8],
+        non_null_mask: &[bool],
+    ) -> Result<Vec<bool>> {
+        let mut non_null_mask_partial = Vec::with_capacity(keys.len());
+        let mut skipped = 0;
+        let mut offset_indexes = HashMap::with_capacity(keys.len());
+
+        for key in keys.iter() {
+            let index = key.as_usize();
+
+            let offset_index = if let Some(offset_index) = offset_indexes.get(&index) {
+                if !non_null_mask[index] {
+                    non_null_mask_partial.push(false);
+                    continue;
+                } else {
+                    non_null_mask_partial.push(true);
+                    *offset_index
+                }
+            } else {
+                debug_assert!(index < non_null_mask.len());
+                if !non_null_mask[index] {
+                    non_null_mask_partial.push(false);
+                    skipped += 1;
+                    offset_indexes.insert(index, usize::MAX);
+                    continue;
+                } else {
+                    debug_assert!(index >= skipped);
+                    let offset_index = index - skipped;
+                    offset_indexes.insert(index, offset_index);
+                    non_null_mask_partial.push(true);
+                    offset_index
+                }
+            };
+
+            if offset_index + 1 >= dict_offsets.len() {
+                return Err(general_err!(
+                    "dictionary key beyond bounds of dictionary: 0..{}",
+                    dict_offsets.len().saturating_sub(1)
+                ));
+            }
+            let start_offset = dict_offsets[offset_index].as_usize();
+            let end_offset = dict_offsets[offset_index + 1].as_usize();
+
+            // Dictionary values are verified when decoding dictionary page
+            self.try_push(&dict_values[start_offset..end_offset], false)?;
+        }
+        Ok(non_null_mask_partial)
     }
 
     /// Extends this buffer with a list of keys

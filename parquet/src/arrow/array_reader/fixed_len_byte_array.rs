@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -38,6 +45,9 @@ use half::f16;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
+
+// THESE IMPORTS ARE ARAS ONLY
+use crate::arrow::ColumnValueDecoderOptions;
 
 /// Returns an [`ArrayReader`] that decodes the provided fixed length byte array column
 pub fn make_fixed_len_byte_array_reader(
@@ -313,6 +323,15 @@ impl ColumnValueDecoder for ValueDecoder {
         }
     }
 
+    /// THIS METHOD IS ARAS ONLY
+    fn new_with_options(
+        _options: ColumnValueDecoderOptions,
+        col: &ColumnDescPtr,
+        _data_type: ArrowType,
+    ) -> Self {
+        Self::new(col)
+    }
+
     fn set_dict(
         &mut self,
         buf: Bytes,
@@ -437,6 +456,16 @@ impl ColumnValueDecoder for ValueDecoder {
                 Ok(to_read)
             }
         }
+    }
+
+    /// THIS METHOD IS ARAS ONLY
+    fn read_with_null_mask(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_values: usize,
+    ) -> Result<Vec<bool>> {
+        let len = self.read(out, num_values)?;
+        Ok(vec![true; len])
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {

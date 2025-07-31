@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -37,17 +44,23 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::FromBytes;
 
+// THESE IMPORTS ARE ARAS ONLY
+use crate::arrow::decoder::DefaultValueForInvalidUtf8;
+use crate::arrow::ColumnValueDecoderOptions;
+
+/// THIS MACRO IS COMMON, MODIFIED BY ARAS
+///
 /// A macro to reduce verbosity of [`make_byte_array_dictionary_reader`]
 macro_rules! make_reader {
     (
-        ($pages:expr, $column_desc:expr, $data_type:expr) => match ($k:expr, $v:expr) {
+        ($pages:expr, $column_desc:expr, $data_type:expr, $options:expr) => match ($k:expr, $v:expr) {
             $(($key_arrow:pat, $value_arrow:pat) => ($key_type:ty, $value_type:ty),)+
         }
     ) => {
         match (($k, $v)) {
             $(
                 ($key_arrow, $value_arrow) => {
-                    let reader = GenericRecordReader::new($column_desc);
+              let reader = GenericRecordReader::new_with_options($column_desc, $data_type.clone(), $options);
                     Ok(Box::new(ByteArrayDictionaryReader::<$key_type, $value_type>::new(
                         $pages, $data_type, reader,
                     )))
@@ -61,6 +74,8 @@ macro_rules! make_reader {
     }
 }
 
+/// THIS METHOD IS COMMON, MODIFIED BY ARAS
+///
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
 ///
 /// This will attempt to preserve any dictionary encoding present in the parquet data
@@ -77,6 +92,7 @@ pub fn make_byte_array_dictionary_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
+    options: ColumnValueDecoderOptions,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -89,7 +105,7 @@ pub fn make_byte_array_dictionary_reader(
     match &data_type {
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
-                (pages, column_desc, data_type) => match (key_type.as_ref(), value_type.as_ref()) {
+               (pages, column_desc, data_type, options) => match (key_type.as_ref(), value_type.as_ref()) {
                     (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
                     (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i8, i32),
@@ -209,6 +225,8 @@ enum MaybeDictionaryDecoder {
     Fallback(ByteArrayDecoder),
 }
 
+/// THIS STRUCT IS COMMON, MODIFIED BY ARAS
+///
 /// A [`ColumnValueDecoder`] for dictionary encoded variable length byte arrays
 struct DictionaryDecoder<K, V> {
     /// The current dictionary
@@ -222,6 +240,8 @@ struct DictionaryDecoder<K, V> {
     value_type: ArrowType,
 
     phantom: PhantomData<(K, V)>,
+    // THIS MEMBER IS ARAS ONLY
+    default_value: DefaultValueForInvalidUtf8,
 }
 
 impl<K, V> ColumnValueDecoder for DictionaryDecoder<K, V>
@@ -247,9 +267,38 @@ where
             validate_utf8,
             value_type,
             phantom: Default::default(),
+            default_value: DefaultValueForInvalidUtf8::None,
         }
     }
 
+    /// THIS METHOD IS ARAS ONLY
+    fn new_with_options(
+        options: ColumnValueDecoderOptions,
+        col: &ColumnDescPtr,
+        data_type: ArrowType,
+    ) -> Self {
+        let is_utf8_type =
+            col.converted_type() == ConvertedType::UTF8 || data_type == ArrowType::Utf8;
+        let validate_utf8 = !options.skip_validation.get() && is_utf8_type;
+
+        let value_type = match (V::IS_LARGE, is_utf8_type) {
+            (true, true) => ArrowType::LargeUtf8,
+            (true, false) => ArrowType::LargeBinary,
+            (false, true) => ArrowType::Utf8,
+            (false, false) => ArrowType::Binary,
+        };
+
+        Self {
+            dict: None,
+            decoder: None,
+            validate_utf8,
+            value_type,
+            phantom: Default::default(),
+            default_value: options.default_value,
+        }
+    }
+
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn set_dict(
         &mut self,
         buf: Bytes,
@@ -273,7 +322,13 @@ where
 
         let len = num_values as usize;
         let mut buffer = OffsetBuffer::<V>::default();
-        let mut decoder = ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
+        let mut decoder = ByteArrayDecoderPlain::new(
+            buf,
+            len,
+            Some(len),
+            self.validate_utf8,
+            self.default_value.clone(),
+        );
         decoder.read(&mut buffer, usize::MAX)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
@@ -281,6 +336,7 @@ where
         Ok(())
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn set_data(
         &mut self,
         encoding: Encoding,
@@ -304,6 +360,7 @@ where
                 num_levels,
                 num_values,
                 self.validate_utf8,
+                self.default_value.clone(),
             )?),
         };
 
@@ -311,10 +368,12 @@ where
         Ok(())
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         match self.decoder.as_mut().expect("decoder set") {
             MaybeDictionaryDecoder::Fallback(decoder) => {
-                decoder.read(out.spill_values()?, num_values, None)
+                let is_null_mask = decoder.read(out.spill_values()?, num_values, None, None)?;
+                Ok(is_null_mask.len())
             }
             MaybeDictionaryDecoder::Dict {
                 decoder,
@@ -365,6 +424,71 @@ where
                         values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values)?;
                         *max_remaining_values -= len;
                         Ok(len)
+                    }
+                }
+            }
+        }
+    }
+
+    /// THIS METHOD IS ARAS ONLY
+    fn read_with_null_mask(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_values: usize,
+    ) -> Result<Vec<bool>> {
+        match self.decoder.as_mut().expect("decoder set") {
+            MaybeDictionaryDecoder::Fallback(decoder) => {
+                decoder.read(out.spill_values()?, num_values, None, None)
+            }
+            MaybeDictionaryDecoder::Dict {
+                decoder,
+                max_remaining_values,
+            } => {
+                let len = num_values.min(*max_remaining_values);
+
+                let dict = self
+                    .dict
+                    .as_ref()
+                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+
+                assert_eq!(dict.data_type(), &self.value_type);
+
+                if dict.is_empty() {
+                    return Ok(vec![]); // All data must be NULL
+                }
+
+                match out.as_keys(dict) {
+                    Some(keys) => {
+                        // Happy path - can just copy keys
+                        // Keys will be validated on conversion to arrow
+
+                        // TODO: Push vec into decoder (#5177)
+                        let start = keys.len();
+                        keys.resize(start + len, K::default());
+                        let len = decoder.get_batch(&mut keys[start..])?;
+                        keys.truncate(start + len);
+                        *max_remaining_values -= len;
+                        Ok(vec![true; len])
+                    }
+                    None => {
+                        // Sad path - need to recompute dictionary
+                        //
+                        // This either means we crossed into a new column chunk whilst
+                        // reading this batch, or encountered non-dictionary encoded data
+                        let values = out.spill_values()?;
+                        let mut keys = vec![K::default(); len];
+                        let len = decoder.get_batch(&mut keys)?;
+
+                        assert_eq!(dict.data_type(), &self.value_type);
+
+                        let data = dict.to_data();
+                        let dict_buffers = data.buffers();
+                        let dict_offsets = dict_buffers[0].typed_data::<V>();
+                        let dict_values = dict_buffers[1].as_slice();
+
+                        values.extend_from_dictionary(&keys[..len], dict_offsets, dict_values)?;
+                        *max_remaining_values -= len;
+                        Ok(vec![true; len])
                     }
                 }
             }

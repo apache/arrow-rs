@@ -1,3 +1,10 @@
+// This file contains both Apache Software Foundation (ASF) licensed code as
+// well as Synnada, Inc. extensions. Changes that constitute Synnada, Inc.
+// extensions are available in the SYNNADA-CONTRIBUTIONS.txt file. Synnada, Inc.
+// claims copyright only for Synnada, Inc. extensions. The license notice
+// applicable to non-Synnada sections of the file is given below.
+// --
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -28,11 +35,14 @@ use crate::arrow::array_reader::{
     PrimitiveArrayReader, RowGroups, StructArrayReader,
 };
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
-use crate::arrow::ProjectionMask;
+use crate::arrow::{ProjectionMask};
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
+
+// THESE IMPORTS ARE ARAS ONLY
+use crate::arrow::{ColumnValueDecoderOptions};
 
 /// Builds [`ArrayReader`]s from parquet schema, projection mask, and RowGroups reader
 pub(crate) struct ArrayReaderBuilder<'a> {
@@ -44,14 +54,17 @@ impl<'a> ArrayReaderBuilder<'a> {
         Self { row_groups }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Create [`ArrayReader`] from parquet schema, projection mask, and parquet file reader.
     pub fn build_array_reader(
         &self,
         field: Option<&ParquetField>,
         mask: &ProjectionMask,
+        options: ColumnValueDecoderOptions,
     ) -> Result<Box<dyn ArrayReader>> {
         let reader = field
-            .and_then(|field| self.build_reader(field, mask).transpose())
+            .and_then(|field| self.build_reader(field, mask, options).transpose())
             .transpose()?
             .unwrap_or_else(|| make_empty_array_reader(self.num_rows()));
 
@@ -63,35 +76,40 @@ impl<'a> ArrayReaderBuilder<'a> {
         self.row_groups.num_rows()
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn build_reader(
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        options: ColumnValueDecoderOptions,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         match field.field_type {
-            ParquetFieldType::Primitive { .. } => self.build_primitive_reader(field, mask),
+            ParquetFieldType::Primitive { .. } => self.build_primitive_reader(field, mask, options),
             ParquetFieldType::Group { .. } => match &field.arrow_type {
-                DataType::Map(_, _) => self.build_map_reader(field, mask),
-                DataType::Struct(_) => self.build_struct_reader(field, mask),
-                DataType::List(_) => self.build_list_reader(field, mask, false),
-                DataType::LargeList(_) => self.build_list_reader(field, mask, true),
-                DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask),
+                DataType::Map(_, _) => self.build_map_reader(field, mask, options),
+                DataType::Struct(_) => self.build_struct_reader(field, mask, options),
+                DataType::List(_) => self.build_list_reader(field, mask, false, options),
+                DataType::LargeList(_) => self.build_list_reader(field, mask, true, options),
+                DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask, options),
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Build array reader for map type.
     fn build_map_reader(
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        options: ColumnValueDecoderOptions,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 2);
 
-        let key_reader = self.build_reader(&children[0], mask)?;
-        let value_reader = self.build_reader(&children[1], mask)?;
+        let key_reader = self.build_reader(&children[0], mask, options.clone())?;
+        let value_reader = self.build_reader(&children[1], mask,  options)?;
 
         match (key_reader, value_reader) {
             (Some(key_reader), Some(value_reader)) => {
@@ -132,17 +150,20 @@ impl<'a> ArrayReaderBuilder<'a> {
         }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Build array reader for list type.
     fn build_list_reader(
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
         is_large: bool,
+        options: ColumnValueDecoderOptions,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
 
-        let reader = match self.build_reader(&children[0], mask)? {
+        let reader = match self.build_reader(&children[0], mask, options)? {
             Some(item_reader) => {
                 // Need to retrieve underlying data type to handle projection
                 let item_type = item_reader.get_data_type().clone();
@@ -179,16 +200,19 @@ impl<'a> ArrayReaderBuilder<'a> {
         Ok(reader)
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Build array reader for fixed-size list type.
     fn build_fixed_size_list_reader(
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        options: ColumnValueDecoderOptions,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
 
-        let reader = match self.build_reader(&children[0], mask)? {
+        let reader = match self.build_reader(&children[0], mask, options)? {
             Some(item_reader) => {
                 let item_type = item_reader.get_data_type().clone();
                 let reader = match &field.arrow_type {
@@ -216,11 +240,14 @@ impl<'a> ArrayReaderBuilder<'a> {
         Ok(reader)
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Creates primitive array reader for each primitive type.
     fn build_primitive_reader(
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        options: ColumnValueDecoderOptions,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let (col_idx, primitive_type) = match &field.field_type {
             ParquetFieldType::Primitive {
@@ -297,16 +324,16 @@ impl<'a> ArrayReaderBuilder<'a> {
             )?) as _,
             PhysicalType::BYTE_ARRAY => match arrow_type {
                 Some(DataType::Dictionary(_, _)) => {
-                    make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type)?
+                    make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type, options)?
                 }
                 Some(DataType::Utf8View | DataType::BinaryView) => {
-                    make_byte_view_array_reader(page_iterator, column_desc, arrow_type)?
+                    make_byte_view_array_reader(page_iterator, column_desc, arrow_type, options)?
                 }
-                _ => make_byte_array_reader(page_iterator, column_desc, arrow_type)?,
+                _ => make_byte_array_reader(page_iterator, column_desc, arrow_type, options)?,
             },
             PhysicalType::FIXED_LEN_BYTE_ARRAY => match arrow_type {
                 Some(DataType::Dictionary(_, _)) => {
-                    make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type)?
+                    make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type, options)?
                 }
                 _ => make_fixed_len_byte_array_reader(page_iterator, column_desc, arrow_type)?,
             },
@@ -314,10 +341,12 @@ impl<'a> ArrayReaderBuilder<'a> {
         Ok(Some(reader))
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn build_struct_reader(
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
+        options: ColumnValueDecoderOptions,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
         let arrow_fields = match &field.arrow_type {
             DataType::Struct(children) => children,
@@ -330,7 +359,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         let mut builder = SchemaBuilder::with_capacity(children.len());
 
         for (arrow, parquet) in arrow_fields.iter().zip(children) {
-            if let Some(reader) = self.build_reader(parquet, mask)? {
+            if let Some(reader) = self.build_reader(parquet, mask, options.clone())? {
                 // Need to retrieve underlying data type to handle projection
                 let child_type = reader.get_data_type().clone();
                 builder.push(arrow.as_ref().clone().with_data_type(child_type));
@@ -376,7 +405,7 @@ mod tests {
         .unwrap();
 
         let array_reader = ArrayReaderBuilder::new(&file_reader)
-            .build_array_reader(fields.as_ref(), &mask)
+            .build_array_reader(fields.as_ref(), &mask, ColumnValueDecoderOptions::default())
             .unwrap();
 
         // Create arrow types
