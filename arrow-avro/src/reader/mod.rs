@@ -231,14 +231,10 @@ impl Decoder {
         if self.writer_schema_store.is_none() || !buf.starts_with(&SINGLE_OBJECT_MAGIC) {
             return Ok(None);
         }
-        let full_len = prefix_len(hash_type);
-        if buf.len() < full_len {
-            return Ok(Some(0)); // Not enough data to read the full fingerprint
-        }
-        let fp_bytes = &buf[2..full_len];
+        let fp_bytes = &buf[2..]; // safe thanks to the `starts_with` check above
         let new_fp = match hash_type {
             FingerprintAlgorithm::Rabin => {
-                let Ok(bytes) = <[u8; 8]>::try_from(fp_bytes) else {
+                let Some(Ok(bytes)) = fp_bytes.get(..8).map(Into::into) else {
                     return Err(ArrowError::ParseError(format!(
                         "Invalid Rabin fingerprint length, expected 8, got {}",
                         fp_bytes.len()
