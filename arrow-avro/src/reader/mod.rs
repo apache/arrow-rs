@@ -105,15 +105,6 @@ mod header;
 mod record;
 mod vlq;
 
-/// Fast helper: how many bytes does a fingerprint prefix occupy.
-#[inline]
-const fn prefix_len(ht: FingerprintAlgorithm) -> usize {
-    // SHA-256, md5, ID support coming in a future PR
-    match ht {
-        FingerprintAlgorithm::Rabin => 10, // (2 magic bytes + 8 byte fingerprint)
-    }
-}
-
 /// Read the Avro file header (magic, metadata, sync marker) from `reader`.
 fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
     let mut decoder = HeaderDecoder::default();
@@ -169,11 +160,12 @@ impl Decoder {
     pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
         if self.active_fingerprint.is_none()
             && self.writer_schema_store.is_some()
+            && data.len() >= SINGLE_OBJECT_MAGIC.len()
             && !data.starts_with(&SINGLE_OBJECT_MAGIC)
         {
             return Err(ArrowError::ParseError(
                 "Expected single‑object encoding fingerprint prefix for first message \
-                     (writer_schema_store is set but active_fingerprint is None)"
+                 (writer_schema_store is set but active_fingerprint is None)"
                     .into(),
             ));
         }
@@ -182,19 +174,128 @@ impl Decoder {
             FingerprintAlgorithm::Rabin,
             SchemaStore::fingerprint_algorithm,
         );
+        // The loop stops when the batch is full, a schema change is staged,
+        // or handle_prefix indicates we need more bytes (Some(0)).
         while total_consumed < data.len() && self.remaining_capacity > 0 {
-            if let Some(prefix_bytes) = self.handle_prefix(&data[total_consumed..], hash_type)? {
-                // A batch is complete when its `remaining_capacity` is 0. It may be completed early if
-                // a schema change is detected or there are insufficient bytes to read the next prefix.
-                // A schema change requires a new batch.
-                total_consumed += prefix_bytes;
-                break;
+            match self.handle_prefix(&data[total_consumed..], hash_type)? {
+                None => {
+                    // No prefix: decode one row.
+                    let n = self.active_decoder.decode(&data[total_consumed..], 1)?;
+                    total_consumed += n;
+                    self.remaining_capacity -= 1;
+                }
+                Some(0) => {
+                    // Detected start of a prefix but need more bytes.
+                    break;
+                }
+                Some(n) => {
+                    // Consumed a complete prefix (n > 0). Stage flush and stop.
+                    total_consumed += n;
+                    break;
+                }
             }
-            let n = self.active_decoder.decode(&data[total_consumed..], 1)?;
-            total_consumed += n;
-            self.remaining_capacity -= 1;
         }
         Ok(total_consumed)
+    }
+
+    // Attempt to handle a single‑object‑encoding prefix at the current position.
+    //
+    // * Ok(None) – buffer does not start with the prefix.
+    // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
+    // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
+    fn handle_prefix(
+        &mut self,
+        buf: &[u8],
+        hash_type: FingerprintAlgorithm,
+    ) -> Result<Option<usize>, ArrowError> {
+        // If there is no schema store, prefixes are unrecognized.
+        if self.writer_schema_store.is_none() {
+            return Ok(None); // Continue to decode the next record
+        }
+        // Need at least the magic bytes to decide (2 bytes).
+        let Some(magic_bytes) = buf.get(..SINGLE_OBJECT_MAGIC.len()) else {
+            return Ok(Some(0)); // Get more bytes
+        };
+        // Bail out early if the magic does not match.
+        if magic_bytes != SINGLE_OBJECT_MAGIC {
+            return Ok(None); // Continue to decode the next record
+        }
+        // Try to parse the fingerprint that follows the magic.
+        let fingerprint_size = match hash_type {
+            FingerprintAlgorithm::Rabin => self
+                .handle_fingerprint::<8>(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
+                    Fingerprint::Rabin(u64::from_le_bytes(bytes))
+                })?,
+        };
+        // Convert the inner result into a “bytes consumed” count.
+        let consumed = match fingerprint_size {
+            Some(n) => n + SINGLE_OBJECT_MAGIC.len(), // magic + fingerprint
+            None => 0,                                // incomplete fingerprint
+        };
+        Ok(Some(consumed))
+    }
+
+    // Attempts to read and install a new fingerprint of `N` bytes.
+    //
+    // * Ok(None) – insufficient bytes (`buf.len() < `N`).
+    // * Ok(Some(N)) – fingerprint consumed (always `N`).
+    fn handle_fingerprint<const N: usize>(
+        &mut self,
+        buf: &[u8],
+        fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
+    ) -> Result<Option<usize>, ArrowError> {
+        // Need enough bytes to get fingerprint (next N bytes)
+        let Some(fingerprint_bytes) = buf.get(..N) else {
+            return Ok(None); // Get more bytes
+        };
+        // SAFETY: length checked above.
+        let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
+        // If the fingerprint indicates a schema change, prepare to switch decoders.
+        if self.active_fingerprint != Some(new_fingerprint) {
+            let new_decoder = match self.cache.shift_remove(&new_fingerprint) {
+                Some(decoder) => decoder,
+                None => self.create_decoder_for(new_fingerprint)?,
+            };
+            self.pending_schema = Some((new_fingerprint, new_decoder));
+            // If there are already decoded rows, we must flush them first.
+            // Reducing `remaining_capacity` to 0 ensures `flush` is called next.
+            if self.remaining_capacity < self.batch_size {
+                self.remaining_capacity = 0;
+            }
+        }
+        Ok(Some(N))
+    }
+
+    fn create_decoder_for(
+        &mut self,
+        new_fingerprint: Fingerprint,
+    ) -> Result<RecordDecoder, ArrowError> {
+        let writer_schema_store = self
+            .writer_schema_store
+            .as_ref()
+            .ok_or_else(|| ArrowError::ParseError("Schema store unavailable".into()))?;
+        let writer_schema = writer_schema_store
+            .lookup(&new_fingerprint)
+            .ok_or_else(|| {
+                ArrowError::ParseError(format!("Unknown fingerprint: {new_fingerprint:?}"))
+            })?;
+        match self.reader_schema {
+            Some(ref reader_schema) => {
+                let resolved = AvroField::resolve_from_writer_and_reader(
+                    writer_schema,
+                    reader_schema,
+                    self.utf8_view,
+                    self.strict_mode,
+                )?;
+                Ok(RecordDecoder::try_new_with_options(
+                    resolved.data_type(),
+                    self.utf8_view,
+                )?)
+            }
+            None => Err(ArrowError::ParseError(
+                "Reader schema unavailable for resolution".into(),
+            )),
+        }
     }
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
@@ -205,9 +306,8 @@ impl Decoder {
         }
         let batch = self.active_decoder.flush()?;
         self.remaining_capacity = self.batch_size;
-        // Apply a pending schema switch if one is staged
+        // Apply any staged schema switch.
         if let Some((new_fingerprint, new_decoder)) = self.pending_schema.take() {
-            // Cache the old decoder before replacing it
             if let Some(old_fingerprint) = self.active_fingerprint.replace(new_fingerprint) {
                 let old_decoder = std::mem::replace(&mut self.active_decoder, new_decoder);
                 self.cache.shift_remove(&old_fingerprint);
@@ -220,67 +320,6 @@ impl Decoder {
             }
         }
         Ok(Some(batch))
-    }
-
-    #[inline]
-    fn handle_prefix(
-        &mut self,
-        buf: &[u8],
-        hash_type: FingerprintAlgorithm,
-    ) -> Result<Option<usize>, ArrowError> {
-        if self.writer_schema_store.is_none() || !buf.starts_with(&SINGLE_OBJECT_MAGIC) {
-            return Ok(None);
-        }
-        let fp_bytes = &buf[2..]; // safe thanks to the `starts_with` check above
-        let new_fp = match hash_type {
-            FingerprintAlgorithm::Rabin => {
-                let Ok(bytes) = <[u8; 8]>::try_from(fp_bytes) else {
-                    return Err(ArrowError::ParseError(format!(
-                        "Invalid Rabin fingerprint length, expected 8, got {}",
-                        fp_bytes.len()
-                    )));
-                };
-                Fingerprint::Rabin(u64::from_le_bytes(bytes))
-            }
-        };
-        // If the fingerprint indicates a schema change, prepare to switch decoders.
-        if self.active_fingerprint != Some(new_fp) {
-            self.prepare_schema_switch(new_fp)?;
-            // If there are already decoded rows, we must flush them first.
-            // Forcing the batch to be full ensures `flush` is called next.
-            if self.remaining_capacity < self.batch_size {
-                self.remaining_capacity = 0;
-            }
-        }
-        Ok(Some(prefix_len(hash_type)))
-    }
-
-    fn prepare_schema_switch(&mut self, new_fingerprint: Fingerprint) -> Result<(), ArrowError> {
-        let new_decoder = if let Some(decoder) = self.cache.shift_remove(&new_fingerprint) {
-            decoder
-        } else {
-            // No cached decoder, create a new one
-            let store = self
-                .writer_schema_store
-                .as_ref()
-                .ok_or_else(|| ArrowError::ParseError("Schema store unavailable".into()))?;
-            let writer_schema = store.lookup(&new_fingerprint).ok_or_else(|| {
-                ArrowError::ParseError(format!("Unknown fingerprint: {new_fingerprint:?}"))
-            })?;
-            let reader_schema = self.reader_schema.clone().ok_or_else(|| {
-                ArrowError::ParseError("Reader schema unavailable for resolution".into())
-            })?;
-            let resolved = AvroField::resolve_from_writer_and_reader(
-                writer_schema,
-                &reader_schema,
-                self.utf8_view,
-                self.strict_mode,
-            )?;
-            RecordDecoder::try_new_with_options(resolved.data_type(), self.utf8_view)?
-        };
-        // Stage the new decoder and fingerprint to be activated after the next flush
-        self.pending_schema = Some((new_fingerprint, new_decoder));
-        Ok(())
     }
 
     /// Returns the number of rows that can be added to this decoder before it is full.
@@ -328,8 +367,7 @@ impl ReaderBuilder {
     /// - `utf8_view` = false
     /// - `reader_schema` = None
     /// - `writer_schema_store` = None
-    /// - `active_fp` = None
-    /// - `static_store_mode` = false
+    /// - `active_fingerprint` = None
     pub fn new() -> Self {
         Self::default()
     }
@@ -489,25 +527,47 @@ impl ReaderBuilder {
         self
     }
 
+    // Validate the builder configuration against this truth‑table
+    //
+    // | writer_schema_store | reader_schema | active_fingerprint | Result |
+    // |---------------------|---------------|--------------------|--------|
+    // | None----------------| None----------| None---------------| Err----|
+    // | None----------------| None----------| Some---------------| Err----|
+    // | None----------------| Some----------| None---------------| Ok-----|
+    // | None----------------| Some----------| Some---------------| Err----|
+    // | Some----------------| None----------| None---------------| Err----|
+    // | Some----------------| None----------| Some---------------| Err----|
+    // | Some----------------| Some----------| None---------------| Ok-----|
+    // | Some----------------| Some----------| Some---------------| Ok-----|
     fn validate(&self) -> Result<(), ArrowError> {
         match (
-            self.writer_schema_store.as_ref(),
-            self.reader_schema.as_ref(),
-            self.active_fingerprint.as_ref(),
+            self.writer_schema_store.is_some(),
+            self.reader_schema.is_some(),
+            self.active_fingerprint.is_some(),
         ) {
-            (Some(_), None, _) => Err(ArrowError::ParseError(
-                "Reader schema must be set when writer schema store is provided".into(),
-            )),
-            (None, _, Some(_)) => Err(ArrowError::ParseError(
+            // Row 3: No store, reader schema present, no fingerprint
+            (false, true, false)
+            // Row 7: Store is present, reader schema is resent, no fingerprint
+            | (true, true, false)
+            // Row 8: Store present, reader schema present, fingerprint present
+            | (true, true, true) => Ok(()),
+            // Fingerprint without a store (rows 2 & 4)
+            (false, _, true) => Err(ArrowError::InvalidArgumentError(
                 "Active fingerprint requires a writer schema store".into(),
             )),
-            _ => Ok(()),
+            // Store present but no reader schema (rows 5 & 6)
+            (true, false, _) => Err(ArrowError::InvalidArgumentError(
+                "Reader schema must be set when writer schema store is provided".into(),
+            )),
+            // No schema store or reader schema provided (row 1)
+            (false, false, _) => Err(ArrowError::InvalidArgumentError(
+                "Either a Reader Schema or Writer Schema Store must be provided".into(),
+            )),
         }
     }
 
     /// Create a [`Reader`] from this builder and a `BufRead`
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
-        self.validate()?;
         let header = read_header(&mut reader)?;
         let decoder = self.make_decoder(Some(&header))?;
         Ok(Reader {

@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use strum_macros::AsRefStr;
 
 /// The metadata key used for storing the JSON encoded [`Schema`]
 pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
@@ -53,8 +54,9 @@ pub enum TypeName<'a> {
 /// A primitive type
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#primitive-types>
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr)]
 #[serde(rename_all = "camelCase")]
+#[strum(serialize_all = "lowercase")]
 pub enum PrimitiveType {
     /// null: no value
     Null,
@@ -298,7 +300,6 @@ pub enum Fingerprint {
 
 /// Allow easy extraction of the algorithm used to create a fingerprint.
 impl From<&Fingerprint> for FingerprintAlgorithm {
-    #[inline]
     fn from(fp: &Fingerprint) -> Self {
         match fp {
             Fingerprint::Rabin(_) => FingerprintAlgorithm::Rabin,
@@ -307,7 +308,6 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
 }
 
 /// Generates a fingerprint for the given `Schema` using the specified `FingerprintAlgorithm`.
-#[inline]
 pub(crate) fn generate_fingerprint(
     schema: &Schema,
     hash_type: FingerprintAlgorithm,
@@ -329,7 +329,6 @@ pub(crate) fn generate_fingerprint(
 ///
 /// # Returns
 /// A `Fingerprint::Rabin` variant containing the 64-bit fingerprint.
-#[inline]
 pub fn generate_fingerprint_rabin(schema: &Schema) -> Result<Fingerprint, ArrowError> {
     generate_fingerprint(schema, FingerprintAlgorithm::Rabin)
 }
@@ -344,7 +343,6 @@ pub fn generate_fingerprint_rabin(schema: &Schema) -> Result<Fingerprint, ArrowE
 /// Avro specification.
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas>
-#[inline]
 pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
     build_canonical(schema, None)
 }
@@ -467,37 +465,50 @@ impl<'a> SchemaStore<'a> {
     }
 }
 
-#[inline]
 fn quote(s: &str) -> Result<String, ArrowError> {
     serde_json::to_string(s)
         .map_err(|e| ArrowError::ComputeError(format!("Failed to quote string: {e}")))
 }
 
-fn make_fullname(name: &str, namespace_attr: Option<&str>, enclosing_ns: Option<&str>) -> String {
-    match namespace_attr.or(enclosing_ns) {
-        Some(ns) if !name.contains('.') => format!("{ns}.{name}"),
-        _ => name.to_string(),
+// Avro names are defined by a `name` and an optional `namespace`.
+// The full name is composed of the namespace and the name, separated by a dot.
+//
+// Avro specification defines two ways to specify a full name:
+// 1. The `name` attribute contains the full name (e.g., "a.b.c.d").
+//    In this case, the `namespace` attribute is ignored.
+// 2. The `name` attribute contains the simple name (e.g., "d") and the
+//    `namespace` attribute contains the namespace (e.g., "a.b.c").
+//
+// Each part of the name must match the regex `^[A-Za-z_][A-Za-z0-9_]*$`.
+// Complex paths with quotes or backticks like `a."hi".b` are not supported.
+//
+// This function constructs the full name and extracts the namespace,
+// handling both ways of specifying the name. It prioritizes a namespace
+// defined within the `name` attribute itself, then the explicit `namespace_attr`,
+// and finally the `enclosing_ns`.
+fn make_full_name(
+    name: &str,
+    namespace_attr: Option<&str>,
+    enclosing_ns: Option<&str>,
+) -> Result<(String, Option<String>), ArrowError> {
+    // `name` already contains a dot then treat as full-name, ignore namespace.
+    if let Some((ns, _)) = name.rsplit_once('.') {
+        return Ok((name.to_string(), Some(ns.to_string())));
     }
+    Ok(match namespace_attr.or(enclosing_ns) {
+        Some(ns) => (format!("{ns}.{name}"), Some(ns.to_string())),
+        None => (name.to_string(), None),
+    })
 }
 
 fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String, ArrowError> {
-    #[inline]
-    fn prim_str(pt: &PrimitiveType) -> &'static str {
-        match pt {
-            PrimitiveType::Null => "null",
-            PrimitiveType::Boolean => "boolean",
-            PrimitiveType::Int => "int",
-            PrimitiveType::Long => "long",
-            PrimitiveType::Float => "float",
-            PrimitiveType::Double => "double",
-            PrimitiveType::Bytes => "bytes",
-            PrimitiveType::String => "string",
-        }
-    }
     Ok(match schema {
         Schema::TypeName(tn) | Schema::Type(Type { r#type: tn, .. }) => match tn {
-            TypeName::Primitive(pt) => quote(prim_str(pt))?,
-            TypeName::Ref(name) => quote(&make_fullname(name, None, enclosing_ns))?,
+            TypeName::Primitive(pt) => quote(pt.as_ref())?,
+            TypeName::Ref(name) => {
+                let (full_name, _) = make_full_name(name, None, enclosing_ns)?;
+                quote(&full_name)?
+            }
         },
         Schema::Union(branches) => format!(
             "[{}]",
@@ -509,8 +520,7 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
         ),
         Schema::Complex(ct) => match ct {
             ComplexType::Record(r) => {
-                let fullname = make_fullname(r.name, r.namespace, enclosing_ns);
-                let child_ns = fullname.rsplit_once('.').map(|(ns, _)| ns.to_string());
+                let (full_name, child_ns) = make_full_name(r.name, r.namespace, enclosing_ns)?;
                 let fields = r
                     .fields
                     .iter()
@@ -527,12 +537,12 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                     .join(",");
                 format!(
                     "{{\"name\":{},\"type\":\"record\",\"fields\":[{}]}}",
-                    quote(&fullname)?,
+                    quote(&full_name)?,
                     fields
                 )
             }
             ComplexType::Enum(e) => {
-                let fullname = make_fullname(e.name, e.namespace, enclosing_ns);
+                let (full_name, _) = make_full_name(e.name, e.namespace, enclosing_ns)?;
                 let symbols = e
                     .symbols
                     .iter()
@@ -541,7 +551,7 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                     .join(",");
                 format!(
                     "{{\"name\":{},\"type\":\"enum\",\"symbols\":[{}]}}",
-                    quote(&fullname)?,
+                    quote(&full_name)?,
                     symbols
                 )
             }
@@ -553,11 +563,14 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                 "{{\"type\":\"map\",\"values\":{}}}",
                 build_canonical(&map.values, enclosing_ns)?
             ),
-            ComplexType::Fixed(f) => format!(
-                "{{\"name\":{},\"type\":\"fixed\",\"size\":{}}}",
-                quote(&make_fullname(f.name, f.namespace, enclosing_ns))?,
-                f.size
-            ),
+            ComplexType::Fixed(f) => {
+                let (full_name, _) = make_full_name(f.name, f.namespace, enclosing_ns)?;
+                format!(
+                    "{{\"name\":{},\"type\":\"fixed\",\"size\":{}}}",
+                    quote(&full_name)?,
+                    f.size
+                )
+            }
         },
     })
 }
@@ -565,7 +578,12 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
 /// 64‑bit Rabin fingerprint as described in the Avro spec.
 const EMPTY: u64 = 0xc15d_213a_a4d7_a795;
 
-/// Build one entry of the polynomial division table.
+/// Build one entry of the polynomial‑division table.
+///
+/// We cannot yet write `for _ in 0..8` here: `for` loops rely on
+/// `Iterator::next`, which is not `const` on stable Rust.  Until the
+/// `const_for` feature (tracking issue #87575) is stabilized, a `while`
+/// loop is the only option in a `const fn`
 const fn one_entry(i: usize) -> u64 {
     let mut fp = i as u64;
     let mut j = 0;
@@ -577,6 +595,11 @@ const fn one_entry(i: usize) -> u64 {
 }
 
 /// Build the full 256‑entry table at compile time.
+///
+/// We cannot yet write `for _ in 0..256` here: `for` loops rely on
+/// `Iterator::next`, which is not `const` on stable Rust.  Until the
+/// `const_for` feature (tracking issue #87575) is stabilized, a `while`
+/// loop is the only option in a `const fn`
 const fn build_table() -> [u64; 256] {
     let mut table = [0u64; 256];
     let mut i = 0;
@@ -592,7 +615,6 @@ static FINGERPRINT_TABLE: [u64; 256] = build_table();
 
 /// Computes the 64-bit Rabin fingerprint for a given canonical schema string.
 /// This implementation is based on the Avro specification for schema fingerprinting.
-#[inline]
 pub(crate) fn compute_fingerprint_rabin(canonical_form: &str) -> u64 {
     let mut fp = EMPTY;
     for &byte in canonical_form.as_bytes() {
