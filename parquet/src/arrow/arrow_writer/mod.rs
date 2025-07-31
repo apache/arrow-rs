@@ -955,14 +955,7 @@ struct ArrowColumnWriterFactory {
     file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
-impl Default for ArrowColumnWriterFactory {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ArrowColumnWriterFactory {
-    /// Create a new [`ArrowColumnWriterFactory`]
     pub fn new() -> Self {
         Self {
             #[cfg(feature = "encryption")]
