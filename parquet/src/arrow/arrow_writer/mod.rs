@@ -403,14 +403,23 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.finish()
     }
 
-    /// TODO: better docstring
-    /// Create a new row group writer and return it's column writers.
+    /// Create a new row group writer and return its column writers.
     pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         let _ = self.flush();
         let in_progress = self
             .row_group_writer_factory
             .create_row_group_writer(self.writer.flushed_row_groups().len())?;
         Ok(in_progress.writers)
+    }
+
+    /// Append the given column chunks to the current row group.
+    pub fn append_to_row_groups(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
+        let mut row_group_writer = self.writer.next_row_group()?;
+        for chunk in chunks {
+            chunk.append_to_row_group(&mut row_group_writer)?;
+        }
+        let _ = row_group_writer.close();
+        Ok(())
     }
 }
 

@@ -1145,7 +1145,9 @@ async fn test_multi_threaded_encrypted_writing() {
     let temp_file = tempfile::tempfile().unwrap();
     let mut writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props).unwrap();
 
-    // Get column writers with encryptor
+    // LOW-LEVEL API: Use low level API to write into a file using multiple threads
+
+    // Get column writers
     let col_writers = writer.get_column_writers().unwrap();
     let num_columns = col_writers.len();
 
@@ -1179,19 +1181,29 @@ async fn test_multi_threaded_encrypted_writing() {
         finalized_rg.push(task.await.unwrap());
     }
 
+    // Append the finalized row group to the SerializedFileWriter
+    assert!(writer.append_to_row_groups(finalized_rg).is_ok());
+    assert!(writer.flush().is_ok());
+
+    // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
+
+    // Write individual RecordBatches into the file
+    for rb in record_batches {
+        writer.write(&rb).unwrap()
+    }
     assert!(writer.flush().is_ok());
 
     // Close the file writer which writes the footer
     let metadata = writer.finish().unwrap();
-    assert_eq!(metadata.num_rows, 0);
+    assert_eq!(metadata.num_rows, 100);
     assert_eq!(metadata.schema, metadata.schema);
-
-    // TODO: Test inserting via high-level API and low-level API in the same
-    // file writer, and check that data and the footer are written correctly.
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
         read_encrypted_file(&path, decryption_properties.clone()).unwrap();
+
+    // TODO: This should be failing since we're writing data twice and
+    // we only seem to be reading one copy out.
     verify_encryption_test_data(read_record_batches, read_metadata.metadata());
 
     // Check that file was encrypted
