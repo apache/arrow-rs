@@ -852,6 +852,7 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::VARIANT(_) => LogicalType::Variant,
             parquet::LogicalType::GEOMETRY(_) => LogicalType::Geometry,
             parquet::LogicalType::GEOGRAPHY(_) => LogicalType::Geography,
+            _ => LogicalType::Unknown,
         }
     }
 }
@@ -923,11 +924,13 @@ impl From<Option<LogicalType>> for ConvertedType {
                     TimeUnit::MILLIS(_) => ConvertedType::TIME_MILLIS,
                     TimeUnit::MICROS(_) => ConvertedType::TIME_MICROS,
                     TimeUnit::NANOS(_) => ConvertedType::NONE,
+                    _ => ConvertedType::NONE,
                 },
                 LogicalType::Timestamp { unit, .. } => match unit {
                     TimeUnit::MILLIS(_) => ConvertedType::TIMESTAMP_MILLIS,
                     TimeUnit::MICROS(_) => ConvertedType::TIMESTAMP_MICROS,
                     TimeUnit::NANOS(_) => ConvertedType::NONE,
+                    _ => ConvertedType::NONE,
                 },
                 LogicalType::Integer {
                     bit_width,

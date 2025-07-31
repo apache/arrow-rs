@@ -737,6 +737,9 @@ impl MetadataObjectWriter {
                 column_chunk.encrypted_column_metadata = Some(ciphertext);
                 debug_assert!(column_chunk.meta_data.is_none());
             }
+            Some(&crate::format::ColumnCryptoMetaData::__UNKNOWN__ { .. }) => {
+                return Err(general_err!("Unknown crypto metadata"));
+            }
         }
 
         Ok(column_chunk)
