@@ -405,7 +405,7 @@ impl<W: Write + Send> ArrowWriter<W> {
 
     /// Create a new row group writer and return its column writers.
     pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
-        let _ = self.flush();
+        self.flush()?;
         let in_progress = self
             .row_group_writer_factory
             .create_row_group_writer(self.writer.flushed_row_groups().len())?;
