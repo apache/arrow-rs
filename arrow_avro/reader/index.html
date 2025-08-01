@@ -1,0 +1,53 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Core functionality for reading Avro data into Arrow arrays"><title>arrow_avro::reader - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="arrow_avro" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0-nightly (adcb3d3b4 2025-07-31)" data-channel="nightly" data-search-js="search-fa3e91e5.js" data-settings-js="settings-5514c975.js" ><script src="../../static.files/storage-68b7e25d.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-eebb9057.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-32bb7600.css"></noscript><link rel="icon" href="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button><a class="logo-container" href="../../arrow_avro/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt=""></a></nav><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../arrow_avro/index.html"><img src="https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg" alt="logo"></a><h2><a href="../../arrow_avro/index.html">arrow_<wbr>avro</a><span class="version">56.0.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module reader</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#basic-usage" title="Basic Usage">Basic Usage</a><ul><li><a href="#reading-a-single-batch" title="Reading a Single Batch">Reading a Single Batch</a></li></ul></li><li><a href="#async-usage" title="Async Usage">Async Usage</a></li></ul><h3><a href="#modules">Module Items</a></h3><ul class="block"><li><a href="#modules" title="Modules">Modules</a></li><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#functions" title="Functions">Functions</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate arrow_<wbr>avro</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">arrow_avro</a></div><h1>Module <span>reader</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/arrow_avro/reader/mod.rs.html#18-1856">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Core functionality for reading Avro data into Arrow arrays</p>
+<p>Implements the primary reader interface and record decoding logic.
+Avro reader</p>
+<p>This module provides facilities to read Apache Avro-encoded files or streams
+into Arrow’s <code>RecordBatch</code> format. In particular, it introduces:</p>
+<ul>
+<li><code>ReaderBuilder</code>: Configures Avro reading, e.g., batch size</li>
+<li><code>Reader</code>: Yields <code>RecordBatch</code> values, implementing <code>Iterator</code></li>
+<li><code>Decoder</code>: A low-level push-based decoder for Avro records</li>
+</ul>
+<h2 id="basic-usage"><a class="doc-anchor" href="#basic-usage">§</a>Basic Usage</h2>
+<p><code>Reader</code> can be used directly with synchronous data sources, such as <a href="https://doc.rust-lang.org/nightly/std/fs/struct.File.html" title="struct std::fs::File"><code>std::fs::File</code></a>.</p>
+<h3 id="reading-a-single-batch"><a class="doc-anchor" href="#reading-a-single-batch">§</a>Reading a Single Batch</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>file = File::open(path).unwrap();
+<span class="kw">let </span><span class="kw-2">mut </span>avro = ReaderBuilder::new().build(BufReader::new(file)).unwrap();
+<span class="kw">let </span>batch = avro.next().unwrap();</code></pre></div>
+<h2 id="async-usage"><a class="doc-anchor" href="#async-usage">§</a>Async Usage</h2>
+<p>The lower-level <code>Decoder</code> can be integrated with various forms of async data streams,
+and is designed to be agnostic to different async IO primitives within
+the Rust ecosystem. It works by incrementally decoding Avro data from byte slices.</p>
+<p>For example, see below for how it could be used with an arbitrary <code>Stream</code> of <code>Bytes</code>:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code>
+<span class="kw">fn </span>decode_stream&lt;S: Stream&lt;Item = Bytes&gt; + Unpin&gt;(
+    <span class="kw-2">mut </span>decoder: Decoder,
+    <span class="kw-2">mut </span>input: S,
+) -&gt; <span class="kw">impl </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;RecordBatch, ArrowError&gt;&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>buffered = Bytes::new();
+    futures::stream::poll_fn(<span class="kw">move </span>|cx| {
+        <span class="kw">loop </span>{
+            <span class="kw">if </span>buffered.is_empty() {
+                buffered = <span class="kw">match </span><span class="macro">ready!</span>(input.poll_next_unpin(cx)) {
+                    <span class="prelude-val">Some</span>(b) =&gt; b,
+                    <span class="prelude-val">None </span>=&gt; <span class="kw">break</span>,
+                };
+            }
+            <span class="kw">let </span>decoded = <span class="kw">match </span>decoder.decode(buffered.as_ref()) {
+                <span class="prelude-val">Ok</span>(decoded) =&gt; decoded,
+                <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e))),
+            };
+            <span class="kw">let </span>read = buffered.len();
+            buffered.advance(decoded);
+            <span class="kw">if </span>decoded != read {
+                <span class="kw">break
+            </span>}
+        }
+        <span class="comment">// Convert any fully-decoded rows to a RecordBatch, if available
+        </span>Poll::Ready(decoder.flush().transpose())
+    })
+}</code></pre></div>
+</div></details><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><dl class="item-table"><dt><a class="mod" href="block/index.html" title="mod arrow_avro::reader::block">block</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Decoder for <a href="block/struct.Block.html" title="struct arrow_avro::reader::block::Block"><code>Block</code></a></dd><dt><a class="mod" href="cursor/index.html" title="mod arrow_avro::reader::cursor">cursor</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="mod" href="header/index.html" title="mod arrow_avro::reader::header">header</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Decoder for <a href="header/struct.Header.html" title="struct arrow_avro::reader::header::Header"><code>Header</code></a></dd><dt><a class="mod" href="record/index.html" title="mod arrow_avro::reader::record">record</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dt><a class="mod" href="vlq/index.html" title="mod arrow_avro::reader::vlq">vlq</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt></dl><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.Decoder.html" title="struct arrow_avro::reader::Decoder">Decoder</a></dt><dd>A low-level interface for decoding Avro-encoded bytes into Arrow <code>RecordBatch</code>.</dd><dt><a class="struct" href="struct.Reader.html" title="struct arrow_avro::reader::Reader">Reader</a></dt><dd>A high-level Avro <code>Reader</code> that reads container-file blocks
+and feeds them into a row-level <a href="struct.Decoder.html" title="struct arrow_avro::reader::Decoder"><code>Decoder</code></a>.</dd><dt><a class="struct" href="struct.ReaderBuilder.html" title="struct arrow_avro::reader::ReaderBuilder">Reader<wbr>Builder</a></dt><dd>A builder to create an <a href="struct.Reader.html" title="struct arrow_avro::reader::Reader"><code>Avro Reader</code></a> that reads Avro data
+into Arrow <code>RecordBatch</code>.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.read_header.html" title="fn arrow_avro::reader::read_header">read_<wbr>header</a><span title="Restricted Visibility">&nbsp;🔒</span> </dt><dd>Read the Avro file header (magic, metadata, sync marker) from <code>reader</code>.</dd></dl></section></div></main></body></html>

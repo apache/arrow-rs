@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Token"],"fn":["is_separator","make_error","make_error_expected","parse_data_type"],"struct":["Parser","Tokenizer"],"type":["ArrowResult"]};
