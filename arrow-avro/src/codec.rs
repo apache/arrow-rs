@@ -477,7 +477,7 @@ impl<'a> Resolver<'a> {
     }
 }
 
-/// Parses a [`AvroDataType`] from the provided `Schema` and the given `name` and `namespace`
+/// Parses a [`AvroDataType`] from the provided `schema` and the given `name` and `namespace`
 ///
 /// `name`: is name used to refer to `schema` in its parent
 /// `namespace`: an optional qualifier used as part of a type hierarchy
