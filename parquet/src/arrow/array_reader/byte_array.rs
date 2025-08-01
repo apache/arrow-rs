@@ -70,13 +70,15 @@ pub fn make_byte_array_reader(
         | ArrowType::Utf8
         | ArrowType::Decimal128(_, _)
         | ArrowType::Decimal256(_, _) => {
-            let reader = GenericRecordReader::new_with_options(column_desc, data_type.clone(),  options);
+            let reader =
+                GenericRecordReader::new_with_options(column_desc, data_type.clone(), options);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
         }
         ArrowType::LargeUtf8 | ArrowType::LargeBinary => {
-            let reader = GenericRecordReader::new_with_options(column_desc, data_type.clone(), options);
+            let reader =
+                GenericRecordReader::new_with_options(column_desc, data_type.clone(), options);
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
             )))

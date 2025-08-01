@@ -35,14 +35,14 @@ use crate::arrow::array_reader::{
     PrimitiveArrayReader, RowGroups, StructArrayReader,
 };
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
-use crate::arrow::{ProjectionMask};
+use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
 // THESE IMPORTS ARE ARAS ONLY
-use crate::arrow::{ColumnValueDecoderOptions};
+use crate::arrow::ColumnValueDecoderOptions;
 
 /// Builds [`ArrayReader`]s from parquet schema, projection mask, and RowGroups reader
 pub(crate) struct ArrayReaderBuilder<'a> {
@@ -90,7 +90,9 @@ impl<'a> ArrayReaderBuilder<'a> {
                 DataType::Struct(_) => self.build_struct_reader(field, mask, options),
                 DataType::List(_) => self.build_list_reader(field, mask, false, options),
                 DataType::LargeList(_) => self.build_list_reader(field, mask, true, options),
-                DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask, options),
+                DataType::FixedSizeList(_, _) => {
+                    self.build_fixed_size_list_reader(field, mask, options)
+                }
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
@@ -109,7 +111,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         assert_eq!(children.len(), 2);
 
         let key_reader = self.build_reader(&children[0], mask, options.clone())?;
-        let value_reader = self.build_reader(&children[1], mask,  options)?;
+        let value_reader = self.build_reader(&children[1], mask, options)?;
 
         match (key_reader, value_reader) {
             (Some(key_reader), Some(value_reader)) => {
@@ -323,18 +325,24 @@ impl<'a> ArrayReaderBuilder<'a> {
                 arrow_type,
             )?) as _,
             PhysicalType::BYTE_ARRAY => match arrow_type {
-                Some(DataType::Dictionary(_, _)) => {
-                    make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type, options)?
-                }
+                Some(DataType::Dictionary(_, _)) => make_byte_array_dictionary_reader(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    options,
+                )?,
                 Some(DataType::Utf8View | DataType::BinaryView) => {
                     make_byte_view_array_reader(page_iterator, column_desc, arrow_type, options)?
                 }
                 _ => make_byte_array_reader(page_iterator, column_desc, arrow_type, options)?,
             },
             PhysicalType::FIXED_LEN_BYTE_ARRAY => match arrow_type {
-                Some(DataType::Dictionary(_, _)) => {
-                    make_byte_array_dictionary_reader(page_iterator, column_desc, arrow_type, options)?
-                }
+                Some(DataType::Dictionary(_, _)) => make_byte_array_dictionary_reader(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    options,
+                )?,
                 _ => make_fixed_len_byte_array_reader(page_iterator, column_desc, arrow_type)?,
             },
         };

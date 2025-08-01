@@ -575,7 +575,7 @@ mod tests {
         .unwrap();
 
         let mut array_reader = ArrayReaderBuilder::new(&file_reader)
-            .build_array_reader(fields.as_ref(), &mask,ColumnValueDecoderOptions::default() )
+            .build_array_reader(fields.as_ref(), &mask, ColumnValueDecoderOptions::default())
             .unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();
