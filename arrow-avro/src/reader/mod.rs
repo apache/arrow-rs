@@ -545,10 +545,8 @@ impl ReaderBuilder {
         ) {
             // Row 3: No store, reader schema present, no fingerprint
             (false, true, false)
-            // Row 7: Store is present, reader schema is resent, no fingerprint
-            | (true, true, false)
-            // Row 8: Store present, reader schema present, fingerprint present
-            | (true, true, true) => Ok(()),
+            // Store present, reader schema present, fingerprint optional (rows 7 & 8)
+            | (true, true, _) => Ok(()),
             // Fingerprint without a store (rows 2 & 4)
             (false, _, true) => Err(ArrowError::InvalidArgumentError(
                 "Active fingerprint requires a writer schema store".into(),
