@@ -94,7 +94,7 @@ impl DictIndexDecoder {
         Ok(values_read)
     }
 
-    /// THIS FUNCTION IS ARAS ONLY
+    /// THIS METHOD IS ARAS ONLY
     pub fn read_with_non_null_mask<F: FnMut(&[i32]) -> Result<Vec<bool>>>(
         &mut self,
         len: usize,

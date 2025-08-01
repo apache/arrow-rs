@@ -74,7 +74,7 @@ macro_rules! make_reader {
     }
 }
 
-/// THIS METHOD IS COMMON, MODIFIED BY ARAS
+/// THIS FUNCTION IS COMMON, MODIFIED BY ARAS
 ///
 /// Returns an [`ArrayReader`] that decodes the provided byte array column
 ///
@@ -240,6 +240,7 @@ struct DictionaryDecoder<K, V> {
     value_type: ArrowType,
 
     phantom: PhantomData<(K, V)>,
+
     // THIS MEMBER IS ARAS ONLY
     default_value: DefaultValueForInvalidUtf8,
 }
@@ -251,6 +252,7 @@ where
 {
     type Buffer = DictionaryBuffer<K, V>;
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn new(col: &ColumnDescPtr) -> Self {
         let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
 

@@ -102,11 +102,13 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         validate_utf8: bool,
         default_value: &DefaultValueForInvalidUtf8,
     ) -> Result<bool> {
-        if validate_utf8 {
-            if let Some(&b) = data.first() {
-                // A valid code-point iff it does not start with 0b10xxxxxx
-                // Bit-magic taken from `std::str::is_char_boundary`
-                if (b as i8) < -0x40 {
+
+        if !validate_utf8 {
+            self.values.extend_from_slice(data);
+        } else {
+            match check_valid_utf8(data) {
+                Ok(_) => self.values.extend_from_slice(data),
+                Err(e) => {
                     match default_value {
                         DefaultValueForInvalidUtf8::Default(value) => {
                             if check_valid_utf8(value.as_bytes()).is_ok() {
@@ -116,52 +118,12 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
                                     "encountered non UTF-8 data".to_string(),
                                 ));
                             }
-
-                            let index_offset =
-                                I::from_usize(self.values.len()).ok_or_else(|| {
-                                    general_err!("index overflow decoding byte array")
-                                })?;
-
-                            self.offsets.push(index_offset);
-                            return Ok(false);
                         }
-                        DefaultValueForInvalidUtf8::Null => {
-                            let index_offset =
-                                I::from_usize(self.values.len()).ok_or_else(|| {
-                                    general_err!("index overflow decoding byte array")
-                                })?;
-
-                            self.offsets.push(index_offset);
-                            return Ok(true);
-                        }
+                        DefaultValueForInvalidUtf8::Null => return Ok(true),
                         DefaultValueForInvalidUtf8::None => {
-                            return Err(ParquetError::General(
-                                "encountered non UTF-8 data".to_string(),
-                            ));
+                            return Err(e);
                         }
                     }
-                }
-            }
-        }
-
-        if !validate_utf8 || check_valid_utf8(data).is_ok() {
-            self.values.extend_from_slice(data);
-        } else {
-            match default_value {
-                DefaultValueForInvalidUtf8::Default(value) => {
-                    if check_valid_utf8(value.as_bytes()).is_ok() {
-                        self.values.extend_from_slice(value.as_bytes());
-                    } else {
-                        return Err(ParquetError::General(
-                            "encountered non UTF-8 data".to_string(),
-                        ));
-                    }
-                }
-                DefaultValueForInvalidUtf8::Null => return Ok(true),
-                DefaultValueForInvalidUtf8::None => {
-                    return Err(ParquetError::General(
-                        "encountered non UTF-8 data".to_string(),
-                    ));
                 }
             }
         }

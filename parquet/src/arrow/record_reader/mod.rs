@@ -95,15 +95,15 @@ where
         let rep_levels = (desc.max_rep_level() > 0).then(Vec::new);
 
         Self {
-            column_value_decoder_options: None,
             values: V::default(),
             def_levels,
             rep_levels,
             column_reader: None,
             column_desc: desc,
-            data_type: None,
             num_values: 0,
             num_records: 0,
+            column_value_decoder_options: None,
+            data_type: None,
         }
     }
 
@@ -126,10 +126,10 @@ where
             rep_levels,
             column_reader: None,
             column_desc: desc,
-            data_type: Some(data_type),
             num_values: 0,
             num_records: 0,
             column_value_decoder_options: Some(options),
+            data_type: Some(data_type),
         }
     }
 
@@ -281,16 +281,8 @@ where
             })?;
 
             let null_slice = def_levels.nulls().as_slice();
-
             self.values
                 .pad_nulls(self.num_values, values_read, levels_read, null_slice);
-
-            self.values.pad_nulls(
-                self.num_values,
-                values_read,
-                levels_read,
-                def_levels.nulls().as_slice(),
-            );
         }
 
         self.num_records += records_read;

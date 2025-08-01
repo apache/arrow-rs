@@ -45,7 +45,7 @@ use std::any::Any;
 // THESE IMPORTS ARE ARAS ONLY
 use crate::arrow::ColumnValueDecoderOptions;
 
-/// THIS METHOD IS COMMON, MODIFIED BY ARAS
+/// THIS FUNCTION IS COMMON, MODIFIED BY ARAS
 ///
 /// Returns an [`ArrayReader`] that decodes the provided byte array column to view types.
 pub fn make_byte_view_array_reader(

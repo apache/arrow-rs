@@ -48,6 +48,9 @@ use rand::distr::uniform::SampleUniform;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::{collections::VecDeque, sync::Arc};
 
+// THESE IMPORTS ARE ARAS ONLY
+use parquet::arrow::ColumnValueDecoderOptions;
+
 fn build_test_schema() -> SchemaDescPtr {
     use parquet::schema::{parser::parse_message_type, types::SchemaDescriptor};
     let message_type = "
@@ -648,10 +651,10 @@ fn create_decimal_by_bytes_reader(
     let physical_type = column_desc.physical_type();
     match physical_type {
         Type::BYTE_ARRAY => make_byte_array_reader(
-            ColumnValueDecoderOptions::default(),
             Box::new(page_iterator),
             column_desc,
             None,
+            ColumnValueDecoderOptions::default(),
         )
         .unwrap(),
         Type::FIXED_LEN_BYTE_ARRAY => {
@@ -674,10 +677,10 @@ fn create_byte_array_reader(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     make_byte_array_reader(
-        ColumnValueDecoderOptions::default(),
         Box::new(page_iterator),
         column_desc,
         None,
+        ColumnValueDecoderOptions::default(),
     )
     .unwrap()
 }
@@ -688,10 +691,10 @@ fn create_byte_view_array_reader(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     make_byte_view_array_reader(
-        ColumnValueDecoderOptions::default(),
         Box::new(page_iterator),
         column_desc,
         None,
+        ColumnValueDecoderOptions::default(),
     )
     .unwrap()
 }
@@ -702,10 +705,10 @@ fn create_string_view_byte_array_reader(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     make_byte_view_array_reader(
-        ColumnValueDecoderOptions::default(),
         Box::new(page_iterator),
         column_desc,
         None,
+        ColumnValueDecoderOptions::default(),
     )
     .unwrap()
 }
@@ -719,10 +722,10 @@ fn create_string_byte_array_dictionary_reader(
     let arrow_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
     make_byte_array_dictionary_reader(
-        ColumnValueDecoderOptions::default(),
         Box::new(page_iterator),
         column_desc,
         Some(arrow_type),
+        ColumnValueDecoderOptions::default(),
     )
     .unwrap()
 }

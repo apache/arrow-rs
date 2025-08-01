@@ -1156,6 +1156,14 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;
 
+    // THESE IMPORTS ARE ARAS ONLY
+    use std::io::{Read, Seek, Write};
+
+    use crate::arrow::decoder::DefaultValueForInvalidUtf8;
+
+    use arrow_array::{DictionaryArray, StringViewArray};
+    use arrow_data::UnsafeFlag;
+
     #[derive(Clone)]
     struct TestReader {
         data: Bytes,

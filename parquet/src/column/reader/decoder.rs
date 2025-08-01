@@ -24,6 +24,8 @@
 
 use std::collections::HashMap;
 
+use bytes::Bytes;
+
 use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::{
@@ -33,7 +35,6 @@ use crate::encodings::{
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::{num_required_bits, BitReader};
-use bytes::Bytes;
 
 // THESE IMPORTS ARE ARAS ONLY
 #[cfg(feature = "arrow")]
@@ -78,6 +79,8 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
 }
 
 pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
+    ///
     /// Read up to `num_levels` definition levels into `out`
     ///
     /// Returns the number of values skipped, and the number of levels skipped

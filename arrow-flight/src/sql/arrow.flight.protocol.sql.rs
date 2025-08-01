@@ -17,7 +17,7 @@
 ///               int32_bitmask: int32,
 ///               string_list: list<string_data: utf8>
 ///               int32_to_int32_list_map: map<key: int32, value: list<$data$: int32>>
-/// >
+/// \>
 /// where there is one row per requested piece of metadata information.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetSqlInfo {
@@ -97,7 +97,7 @@ pub struct CommandGetSqlInfo {
 ///    interval_precision: int32 (If the data type is an interval data type, then this column contains the value
 ///                               of the interval leading precision. Otherwise, this column is NULL. This fields
 ///                               is only relevant to be used by ODBC).
-/// >
+/// \>
 /// The returned data should be ordered by data_type and then by type_name.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetXdbcTypeInfo {
@@ -116,7 +116,7 @@ pub struct CommandGetXdbcTypeInfo {
 /// The returned Arrow schema will be:
 /// <
 ///   catalog_name: utf8 not null
-/// >
+/// \>
 /// The returned data should be ordered by catalog_name.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetCatalogs {}
@@ -131,7 +131,7 @@ pub struct CommandGetCatalogs {}
 /// <
 ///   catalog_name: utf8,
 ///   db_schema_name: utf8 not null
-/// >
+/// \>
 /// The returned data should be ordered by catalog_name, then db_schema_name.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetDbSchemas {
@@ -164,7 +164,7 @@ pub struct CommandGetDbSchemas {
 ///   table_type: utf8 not null,
 ///   \[optional\] table_schema: bytes not null (schema of the table as described in Schema.fbs::Schema,
 ///                                            it is serialized as an IPC message.)
-/// >
+/// \>
 /// Fields on table_schema may contain the following metadata:
 ///   - ARROW:FLIGHT:SQL:CATALOG_NAME      - Table's catalog name
 ///   - ARROW:FLIGHT:SQL:DB_SCHEMA_NAME    - Database schema name
@@ -224,7 +224,7 @@ pub struct CommandGetTables {
 /// The returned Arrow schema will be:
 /// <
 ///   table_type: utf8 not null
-/// >
+/// \>
 /// The returned data should be ordered by table_type.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CommandGetTableTypes {}
@@ -242,7 +242,7 @@ pub struct CommandGetTableTypes {}
 ///   column_name: utf8 not null,
 ///   key_name: utf8,
 ///   key_sequence: int32 not null
-/// >
+/// \>
 /// The returned data should be ordered by catalog_name, db_schema_name, table_name, key_name, then key_sequence.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandGetPrimaryKeys {
@@ -284,7 +284,7 @@ pub struct CommandGetPrimaryKeys {
 ///   pk_key_name: utf8,
 ///   update_rule: uint8 not null,
 ///   delete_rule: uint8 not null
-/// >
+/// \>
 /// The returned data should be ordered by fk_catalog_name, fk_db_schema_name, fk_table_name, fk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions declared on UpdateDeleteRules enum.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -326,7 +326,7 @@ pub struct CommandGetExportedKeys {
 ///   pk_key_name: utf8,
 ///   update_rule: uint8 not null,
 ///   delete_rule: uint8 not null
-/// >
+/// \>
 /// The returned data should be ordered by pk_catalog_name, pk_db_schema_name, pk_table_name, pk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions:
 ///     - 0 = CASCADE
@@ -375,7 +375,7 @@ pub struct CommandGetImportedKeys {
 ///   pk_key_name: utf8,
 ///   update_rule: uint8 not null,
 ///   delete_rule: uint8 not null
-/// >
+/// \>
 /// The returned data should be ordered by pk_catalog_name, pk_db_schema_name, pk_table_name, pk_key_name, then key_sequence.
 /// update_rule and delete_rule returns a byte that is equivalent to actions:
 ///     - 0 = CASCADE

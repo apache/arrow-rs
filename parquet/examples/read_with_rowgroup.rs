@@ -35,6 +35,11 @@ use parquet::file::serialized_reader::SerializedPageReader;
 use std::sync::Arc;
 use tokio::fs::File;
 
+// THESE IMPORTS ARE ARAS ONLY:
+use arrow_data::UnsafeFlag;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
+use parquet::arrow::{ColumnValueDecoderOptions, DefaultValueForInvalidUtf8};
+
 /// THIS FUNCTION IS COMMON, MODIFIED BY ARAS
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -53,7 +58,7 @@ async fn main() -> Result<()> {
 
     for rg in metadata.row_groups() {
         let mut rowgroup =
-            InMemoryRowGroup::create(options.clone(), rg.clone(), ProjectionMask::all());
+            InMemoryRowGroup::create(rg.clone(), ProjectionMask::all(), options.clone());
         rowgroup.async_fetch_data(&mut file, None).await?;
         let reader = rowgroup.build_reader(1024, None)?;
 
@@ -166,6 +171,7 @@ impl InMemoryRowGroup {
         }
     }
 
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     pub fn build_reader(
         &self,
         batch_size: usize,
@@ -178,11 +184,11 @@ impl InMemoryRowGroup {
         )?;
 
         ParquetRecordBatchReader::try_new_with_row_groups(
-            self.options.clone(),
             &levels,
             self,
             batch_size,
             selection,
+            self.options.clone(),
         )
     }
 

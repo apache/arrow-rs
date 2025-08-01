@@ -148,7 +148,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
 }
 
 impl<T> ArrowReaderBuilder<T> {
-    /// THIS FUNCTION IS COMMON, MODIFIED BY ARAS
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     pub(crate) fn new_builder(input: T, metadata: ArrowReaderMetadata) -> Self {
         Self {
             input,
@@ -183,7 +183,7 @@ impl<T> ArrowReaderBuilder<T> {
 
     /// THIS METHOD IS ARAS ONLY
     ///
-    /// Returns a refernce to the [`ColumnValueDecoderOptions`] for this parquet file
+    /// Returns a reference to the [`ColumnValueDecoderOptions`] for this parquet file
     pub fn column_value_decoder_options(&self) -> &ColumnValueDecoderOptions {
         &self.column_value_decoder_options
     }
@@ -553,7 +553,7 @@ impl ArrowReaderMetadata {
         Self::try_new(Arc::new(metadata), options)
     }
 
-    /// THIS FUNCTION IS COMMON, MODIFIED BY ARAS
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     ///
     /// Create a new [`ArrowReaderMetadata`]
     ///
@@ -590,7 +590,7 @@ impl ArrowReaderMetadata {
         }
     }
 
-    /// THIS FUNCTION IS COMMON, MODIFIED BY ARAS
+    /// THIS METHOD IS COMMON, MODIFIED BY ARAS
     fn with_supplied_schema(
         metadata: Arc<ParquetMetaData>,
         supplied_schema: SchemaRef,
@@ -3051,7 +3051,6 @@ mod tests {
         assert_eq!(batch.column(0).null_count(), 2);
     }
 
-    /// THIS TEST IS COMMON, MODIFIED BY ARAS
     #[test]
     fn test_invalid_utf8() {
         // a parquet file with 1 column with invalid utf8
@@ -3076,7 +3075,7 @@ mod tests {
         let error = record_batch_reader.next().unwrap().unwrap_err();
 
         assert!(
-            error.to_string().contains("encountered non UTF-8 data"),
+            error.to_string().contains("invalid utf-8 sequence"),
             "{}",
             error
         );
