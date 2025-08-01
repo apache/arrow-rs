@@ -190,7 +190,7 @@ impl WriterProperties {
     /// Returns a new default [`WriterPropertiesBuilder`] for creating writer
     /// properties.
     pub fn builder() -> WriterPropertiesBuilder {
-        WriterPropertiesBuilder::with_defaults()
+        WriterPropertiesBuilder::default()
     }
 
     /// Returns data page size limit.
@@ -455,9 +455,9 @@ pub struct WriterPropertiesBuilder {
     file_encryption_properties: Option<FileEncryptionProperties>,
 }
 
-impl WriterPropertiesBuilder {
+impl Default for WriterPropertiesBuilder {
     /// Returns default state of the builder.
-    fn with_defaults() -> Self {
+    fn default() -> Self {
         Self {
             data_page_size_limit: DEFAULT_PAGE_SIZE,
             data_page_row_count_limit: DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT,
@@ -478,7 +478,9 @@ impl WriterPropertiesBuilder {
             file_encryption_properties: None,
         }
     }
+}
 
+impl WriterPropertiesBuilder {
     /// Finalizes the configuration and returns immutable writer properties struct.
     pub fn build(self) -> WriterProperties {
         WriterProperties {
