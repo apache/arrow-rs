@@ -102,29 +102,26 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
         validate_utf8: bool,
         default_value: &DefaultValueForInvalidUtf8,
     ) -> Result<bool> {
-
         if !validate_utf8 {
             self.values.extend_from_slice(data);
         } else {
             match check_valid_utf8(data) {
                 Ok(_) => self.values.extend_from_slice(data),
-                Err(e) => {
-                    match default_value {
-                        DefaultValueForInvalidUtf8::Default(value) => {
-                            if check_valid_utf8(value.as_bytes()).is_ok() {
-                                self.values.extend_from_slice(value.as_bytes());
-                            } else {
-                                return Err(ParquetError::General(
-                                    "encountered non UTF-8 data".to_string(),
-                                ));
-                            }
-                        }
-                        DefaultValueForInvalidUtf8::Null => return Ok(true),
-                        DefaultValueForInvalidUtf8::None => {
-                            return Err(e);
+                Err(e) => match default_value {
+                    DefaultValueForInvalidUtf8::Default(value) => {
+                        if check_valid_utf8(value.as_bytes()).is_ok() {
+                            self.values.extend_from_slice(value.as_bytes());
+                        } else {
+                            return Err(ParquetError::General(
+                                "encountered non UTF-8 data".to_string(),
+                            ));
                         }
                     }
-                }
+                    DefaultValueForInvalidUtf8::Null => return Ok(true),
+                    DefaultValueForInvalidUtf8::None => {
+                        return Err(e);
+                    }
+                },
             }
         }
 
