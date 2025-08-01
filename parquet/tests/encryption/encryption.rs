@@ -18,7 +18,8 @@
 //! This module contains tests for reading encrypted Parquet files with the Arrow API
 
 use crate::encryption_util::{
-    verify_column_indexes, verify_encryption_test_data, TestKeyRetriever,
+    read_and_roundtrip_to_encrypted_file, verify_column_indexes, verify_encryption_test_file_read,
+    TestKeyRetriever,
 };
 use arrow::array::*;
 use arrow::error::Result as ArrowResult;
@@ -28,14 +29,13 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
     RowSelector,
 };
-use parquet::arrow::arrow_writer::{compute_leaves, ArrowLeafColumn};
 use parquet::arrow::ArrowWriter;
 use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
+use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
 use std::fs::File;
@@ -376,21 +376,6 @@ fn test_uniform_encryption_with_key_retriever() {
             .unwrap();
 
     verify_encryption_test_file_read(file, decryption_properties);
-}
-
-fn verify_encryption_test_file_read(file: File, decryption_properties: FileDecryptionProperties) {
-    let options =
-        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
-    let reader_metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
-    let metadata = reader_metadata.metadata();
-
-    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-    let record_reader = builder.build().unwrap();
-    let record_batches = record_reader
-        .map(|x| x.unwrap())
-        .collect::<Vec<RecordBatch>>();
-
-    verify_encryption_test_data(record_batches, metadata);
 }
 
 fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
@@ -1063,218 +1048,4 @@ fn test_decrypt_page_index(
     verify_column_indexes(arrow_metadata.metadata());
 
     Ok(())
-}
-
-fn read_encrypted_file(
-    file: &File,
-    decryption_properties: FileDecryptionProperties,
-) -> Result<(Vec<RecordBatch>, ArrowReaderMetadata), ParquetError> {
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
-    let metadata = ArrowReaderMetadata::load(file, options.clone())?;
-
-    let builder =
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file.try_clone().unwrap(), options)?;
-    let batch_reader = builder.build()?;
-    let batches = batch_reader.collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()?;
-    Ok((batches, metadata))
-}
-
-fn read_and_roundtrip_to_encrypted_file(
-    file: &File,
-    decryption_properties: FileDecryptionProperties,
-    encryption_properties: FileEncryptionProperties,
-) {
-    // read example data
-    let (batches, metadata) = read_encrypted_file(file, decryption_properties.clone()).unwrap();
-
-    // write example data to a temporary file
-    let temp_file = tempfile::tempfile().unwrap();
-    let props = WriterProperties::builder()
-        .with_file_encryption_properties(encryption_properties)
-        .build();
-
-    let mut writer = ArrowWriter::try_new(
-        temp_file.try_clone().unwrap(),
-        metadata.schema().clone(),
-        Some(props),
-    )
-    .unwrap();
-    for batch in batches {
-        writer.write(&batch).unwrap();
-    }
-
-    writer.close().unwrap();
-
-    // check re-written example data
-    verify_encryption_test_file_read(temp_file, decryption_properties);
-}
-
-#[tokio::test]
-async fn test_multi_threaded_encrypted_writing() {
-    // Read example data and set up encryption/decryption properties
-    let testdata = arrow::util::test_util::parquet_test_data();
-    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
-    let file = File::open(path).unwrap();
-
-    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
-        .build()
-        .unwrap();
-    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
-        .with_column_key("double_field", b"1234567890123450".into())
-        .with_column_key("float_field", b"1234567890123451".into())
-        .build()
-        .unwrap();
-
-    let (record_batches, metadata) =
-        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
-    let to_write: Vec<_> = record_batches
-        .iter()
-        .flat_map(|rb| rb.columns().to_vec())
-        .collect();
-    let schema = metadata.schema().clone();
-
-    let props = Some(
-        WriterPropertiesBuilder::default()
-            .with_file_encryption_properties(file_encryption_properties)
-            .build(),
-    );
-
-    // Create a temporary file to write the encrypted data
-    let temp_file = tempfile::tempfile().unwrap();
-    let mut writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props).unwrap();
-
-    // LOW-LEVEL API: Use low level API to write into a file using multiple threads
-
-    // Get column writers
-    let col_writers = writer.get_column_writers().unwrap();
-    let num_columns = col_writers.len();
-
-    // Create a channel for each column writer to send ArrowLeafColumn data to
-    let mut col_writer_tasks = Vec::with_capacity(num_columns);
-    let mut col_array_channels = Vec::with_capacity(num_columns);
-    for mut col_writer in col_writers.into_iter() {
-        let (send_array, mut receive_array) = tokio::sync::mpsc::channel::<ArrowLeafColumn>(100);
-        col_array_channels.push(send_array);
-        let handle = tokio::spawn(async move {
-            while let Some(col) = receive_array.recv().await {
-                col_writer.write(&col).unwrap();
-            }
-            col_writer.close().unwrap()
-        });
-        col_writer_tasks.push(handle);
-    }
-
-    // Send the ArrowLeafColumn data to the respective column writer channels
-    let mut worker_iter = col_array_channels.iter_mut();
-    for (array, field) in to_write.iter().zip(schema.fields()) {
-        for leaves in compute_leaves(field, array).unwrap() {
-            worker_iter.next().unwrap().send(leaves).await.unwrap();
-        }
-    }
-    drop(col_array_channels);
-
-    // Wait for all column writers to finish writing
-    let mut finalized_rg = Vec::with_capacity(num_columns);
-    for task in col_writer_tasks.into_iter() {
-        finalized_rg.push(task.await.unwrap());
-    }
-
-    // Append the finalized row group to the SerializedFileWriter
-    assert!(writer.append_row_group(finalized_rg).is_ok());
-
-    // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
-
-    // Write individual RecordBatches into the file
-    for rb in record_batches {
-        writer.write(&rb).unwrap()
-    }
-    assert!(writer.flush().is_ok());
-
-    // Close the file writer which writes the footer
-    let metadata = writer.finish().unwrap();
-    assert_eq!(metadata.num_rows, 100);
-    assert_eq!(metadata.schema, metadata.schema);
-
-    // Check that the file was written correctly
-    let (read_record_batches, read_metadata) =
-        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
-
-    let file_metadata = read_metadata.metadata().file_metadata();
-    assert_eq!(file_metadata.num_rows(), 100);
-    assert_eq!(file_metadata.schema_descr().num_columns(), 8);
-
-    read_metadata.metadata().row_groups().iter().for_each(|rg| {
-        assert_eq!(rg.num_columns(), 8);
-        assert_eq!(rg.num_rows(), 50);
-    });
-
-    let mut row_count = 0;
-    let wrap_at = 50;
-    for batch in read_record_batches {
-        let batch = batch;
-        row_count += batch.num_rows();
-
-        let bool_col = batch.column(0).as_boolean();
-        let time_col = batch
-            .column(1)
-            .as_primitive::<types::Time32MillisecondType>();
-        let list_col = batch.column(2).as_list::<i32>();
-        let timestamp_col = batch
-            .column(3)
-            .as_primitive::<types::TimestampNanosecondType>();
-        let f32_col = batch.column(4).as_primitive::<types::Float32Type>();
-        let f64_col = batch.column(5).as_primitive::<types::Float64Type>();
-        let binary_col = batch.column(6).as_binary::<i32>();
-        let fixed_size_binary_col = batch.column(7).as_fixed_size_binary();
-
-        for (i, x) in bool_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), i % 2 == 0);
-        }
-        for (i, x) in time_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as i32);
-        }
-        for (i, list_item) in list_col.iter().enumerate() {
-            let list_item = list_item.unwrap();
-            let list_item = list_item.as_primitive::<types::Int64Type>();
-            assert_eq!(list_item.len(), 2);
-            assert_eq!(
-                list_item.value(0),
-                (((i % wrap_at) * 2) * 1000000000000) as i64
-            );
-            assert_eq!(
-                list_item.value(1),
-                (((i % wrap_at) * 2 + 1) * 1000000000000) as i64
-            );
-        }
-        for x in timestamp_col.iter() {
-            assert!(x.is_some());
-        }
-        for (i, x) in f32_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as f32 * 1.1f32);
-        }
-        for (i, x) in f64_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), (i % wrap_at) as f64 * 1.1111111f64);
-        }
-        for (i, x) in binary_col.iter().enumerate() {
-            assert_eq!(x.is_some(), i % 2 == 0);
-            if let Some(x) = x {
-                assert_eq!(&x[0..7], b"parquet");
-            }
-        }
-        for (i, x) in fixed_size_binary_col.iter().enumerate() {
-            assert_eq!(x.unwrap(), &[(i % wrap_at) as u8; 10]);
-        }
-    }
-
-    assert_eq!(row_count, file_metadata.num_rows() as usize);
-
-    // Check that file was encrypted
-    let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
-    );
 }
