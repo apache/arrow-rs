@@ -290,10 +290,7 @@ impl Decoder {
             self.utf8_view,
             self.strict_mode,
         )?;
-        RecordDecoder::try_new_with_options(
-            resolved.data_type(),
-            self.utf8_view,
-        )
+        RecordDecoder::try_new_with_options(resolved.data_type(), self.utf8_view)
     }
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning

@@ -536,9 +536,8 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                     .collect::<Result<Vec<_>, ArrowError>>()?
                     .join(",");
                 format!(
-                    "{{\"name\":{},\"type\":\"record\",\"fields\":[{}]}}",
+                    r#"{{"name":{},"type":"record","fields":[{fields}]}}"#,
                     quote(&full_name)?,
-                    fields
                 )
             }
             ComplexType::Enum(e) => {
