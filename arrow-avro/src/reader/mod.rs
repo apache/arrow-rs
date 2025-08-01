@@ -223,7 +223,7 @@ impl Decoder {
         // Try to parse the fingerprint that follows the magic.
         let fingerprint_size = match hash_type {
             FingerprintAlgorithm::Rabin => self
-                .handle_fingerprint::<8>(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
+                .handle_fingerprint(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
                     Fingerprint::Rabin(u64::from_le_bytes(bytes))
                 })?,
         };
