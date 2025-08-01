@@ -279,23 +279,21 @@ impl Decoder {
             .ok_or_else(|| {
                 ArrowError::ParseError(format!("Unknown fingerprint: {new_fingerprint:?}"))
             })?;
-        match self.reader_schema {
-            Some(ref reader_schema) => {
-                let resolved = AvroField::resolve_from_writer_and_reader(
-                    writer_schema,
-                    reader_schema,
-                    self.utf8_view,
-                    self.strict_mode,
-                )?;
-                Ok(RecordDecoder::try_new_with_options(
-                    resolved.data_type(),
-                    self.utf8_view,
-                )?)
-            }
-            None => Err(ArrowError::ParseError(
+        let Some(ref reader_schema) = self.reader_schema else {
+            return Err(ArrowError::ParseError(
                 "Reader schema unavailable for resolution".into(),
-            )),
-        }
+            ));
+        };
+        let resolved = AvroField::resolve_from_writer_and_reader(
+            writer_schema,
+            reader_schema,
+            self.utf8_view,
+            self.strict_mode,
+        )?;
+        RecordDecoder::try_new_with_options(
+            resolved.data_type(),
+            self.utf8_view,
+        )
     }
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
