@@ -418,7 +418,7 @@ impl<W: Write + Send> ArrowWriter<W> {
         for chunk in chunks {
             chunk.append_to_row_group(&mut row_group_writer)?;
         }
-        let _ = row_group_writer.close();
+        row_group_writer.close()?;
         Ok(())
     }
 }
