@@ -41,6 +41,7 @@ use tempfile::NamedTempFile;
 mod bad_data;
 #[cfg(feature = "crc")]
 mod checksum;
+mod int96_stats_roundtrip;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values
