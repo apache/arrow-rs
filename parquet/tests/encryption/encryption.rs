@@ -631,6 +631,7 @@ fn uniform_encryption_page_skipping(page_index: bool) -> parquet::errors::Result
 fn test_write_non_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
 
     let footer_key = b"0123456789012345".to_vec(); // 128bit/16
     let column_names = vec!["double_field", "float_field"];
@@ -648,13 +649,14 @@ fn test_write_non_uniform_encryption() {
         .build()
         .unwrap();
 
-    read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
+    read_and_roundtrip_to_encrypted_file(&file, decryption_properties, file_encryption_properties);
 }
 
 #[test]
 fn test_write_uniform_encryption_plaintext_footer() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_plaintext_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
 
     let footer_key = b"0123456789012345".to_vec(); // 128bit/16
     let wrong_footer_key = b"0000000000000000".to_vec(); // 128bit/16
@@ -680,7 +682,7 @@ fn test_write_uniform_encryption_plaintext_footer() {
 
     // Try writing plaintext footer and then reading it with the correct footer key
     read_and_roundtrip_to_encrypted_file(
-        &path,
+        &file,
         decryption_properties.clone(),
         file_encryption_properties.clone(),
     );
@@ -689,7 +691,6 @@ fn test_write_uniform_encryption_plaintext_footer() {
     let temp_file = tempfile::tempfile().unwrap();
 
     // read example data
-    let file = File::open(path).unwrap();
     let options = ArrowReaderOptions::default()
         .with_file_decryption_properties(decryption_properties.clone());
     let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
@@ -731,6 +732,7 @@ fn test_write_uniform_encryption_plaintext_footer() {
 fn test_write_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
+    let file = File::open(path).unwrap();
 
     let footer_key = b"0123456789012345".to_vec(); // 128bit/16
 
@@ -742,7 +744,7 @@ fn test_write_uniform_encryption() {
         .build()
         .unwrap();
 
-    read_and_roundtrip_to_encrypted_file(&path, decryption_properties, file_encryption_properties);
+    read_and_roundtrip_to_encrypted_file(&file, decryption_properties, file_encryption_properties);
 }
 
 #[test]
@@ -1064,32 +1066,30 @@ fn test_decrypt_page_index(
 }
 
 fn read_encrypted_file(
-    path: &str,
+    file: &File,
     decryption_properties: FileDecryptionProperties,
 ) -> Result<(Vec<RecordBatch>, ArrowReaderMetadata), ParquetError> {
-    let file = File::open(path).unwrap();
     let options = ArrowReaderOptions::default()
         .with_file_decryption_properties(decryption_properties.clone());
-    let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
+    let metadata = ArrowReaderMetadata::load(file, options.clone())?;
 
-    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
-    let batch_reader = builder.build().unwrap();
-    let batches = batch_reader
-        .collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()
-        .unwrap();
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(file.try_clone().unwrap(), options)?;
+    let batch_reader = builder.build()?;
+    let batches = batch_reader.collect::<parquet::errors::Result<Vec<RecordBatch>, _>>()?;
     Ok((batches, metadata))
 }
 
 fn read_and_roundtrip_to_encrypted_file(
-    path: &str,
+    file: &File,
     decryption_properties: FileDecryptionProperties,
     encryption_properties: FileEncryptionProperties,
 ) {
     // read example data
-    let (batches, metadata) = read_encrypted_file(path, decryption_properties.clone()).unwrap();
+    let (batches, metadata) = read_encrypted_file(file, decryption_properties.clone()).unwrap();
 
+    // write example data to a temporary file
     let temp_file = tempfile::tempfile().unwrap();
-    // write example data
     let props = WriterProperties::builder()
         .with_file_encryption_properties(encryption_properties)
         .build();
@@ -1115,6 +1115,7 @@ async fn test_multi_threaded_encrypted_writing() {
     // Read example data and set up encryption/decryption properties
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let file = File::open(path).unwrap();
 
     let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
         .with_column_key("double_field", b"1234567890123450".into())
@@ -1128,7 +1129,7 @@ async fn test_multi_threaded_encrypted_writing() {
         .unwrap();
 
     let (record_batches, metadata) =
-        read_encrypted_file(&path, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
     let to_write: Vec<_> = record_batches
         .iter()
         .flat_map(|rb| rb.columns().to_vec())
@@ -1182,8 +1183,7 @@ async fn test_multi_threaded_encrypted_writing() {
     }
 
     // Append the finalized row group to the SerializedFileWriter
-    assert!(writer.append_to_row_groups(finalized_rg).is_ok());
-    assert!(writer.flush().is_ok());
+    assert!(writer.append_row_group(finalized_rg).is_ok());
 
     // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
 
@@ -1200,11 +1200,76 @@ async fn test_multi_threaded_encrypted_writing() {
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
-        read_encrypted_file(&path, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
 
-    // TODO: This should be failing since we're writing data twice and
-    // we only seem to be reading one copy out.
-    verify_encryption_test_data(read_record_batches, read_metadata.metadata());
+    let file_metadata = read_metadata.metadata().file_metadata();
+    assert_eq!(file_metadata.num_rows(), 100);
+    assert_eq!(file_metadata.schema_descr().num_columns(), 8);
+
+    read_metadata.metadata().row_groups().iter().for_each(|rg| {
+        assert_eq!(rg.num_columns(), 8);
+        assert_eq!(rg.num_rows(), 50);
+    });
+
+    let mut row_count = 0;
+    let wrap_at = 50;
+    for batch in read_record_batches {
+        let batch = batch;
+        row_count += batch.num_rows();
+
+        let bool_col = batch.column(0).as_boolean();
+        let time_col = batch
+            .column(1)
+            .as_primitive::<types::Time32MillisecondType>();
+        let list_col = batch.column(2).as_list::<i32>();
+        let timestamp_col = batch
+            .column(3)
+            .as_primitive::<types::TimestampNanosecondType>();
+        let f32_col = batch.column(4).as_primitive::<types::Float32Type>();
+        let f64_col = batch.column(5).as_primitive::<types::Float64Type>();
+        let binary_col = batch.column(6).as_binary::<i32>();
+        let fixed_size_binary_col = batch.column(7).as_fixed_size_binary();
+
+        for (i, x) in bool_col.iter().enumerate() {
+            assert_eq!(x.unwrap(), i % 2 == 0);
+        }
+        for (i, x) in time_col.iter().enumerate() {
+            assert_eq!(x.unwrap(), (i % wrap_at) as i32);
+        }
+        for (i, list_item) in list_col.iter().enumerate() {
+            let list_item = list_item.unwrap();
+            let list_item = list_item.as_primitive::<types::Int64Type>();
+            assert_eq!(list_item.len(), 2);
+            assert_eq!(
+                list_item.value(0),
+                (((i % wrap_at) * 2) * 1000000000000) as i64
+            );
+            assert_eq!(
+                list_item.value(1),
+                (((i % wrap_at) * 2 + 1) * 1000000000000) as i64
+            );
+        }
+        for x in timestamp_col.iter() {
+            assert!(x.is_some());
+        }
+        for (i, x) in f32_col.iter().enumerate() {
+            assert_eq!(x.unwrap(), (i % wrap_at) as f32 * 1.1f32);
+        }
+        for (i, x) in f64_col.iter().enumerate() {
+            assert_eq!(x.unwrap(), (i % wrap_at) as f64 * 1.1111111f64);
+        }
+        for (i, x) in binary_col.iter().enumerate() {
+            assert_eq!(x.is_some(), i % 2 == 0);
+            if let Some(x) = x {
+                assert_eq!(&x[0..7], b"parquet");
+            }
+        }
+        for (i, x) in fixed_size_binary_col.iter().enumerate() {
+            assert_eq!(x.unwrap(), &[(i % wrap_at) as u8; 10]);
+        }
+    }
+
+    assert_eq!(row_count, file_metadata.num_rows() as usize);
 
     // Check that file was encrypted
     let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
