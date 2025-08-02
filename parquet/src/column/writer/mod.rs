@@ -1448,33 +1448,32 @@ fn update_stat<T: ParquetValueType, F>(
 
 /// Evaluate `a > b` according to underlying logical type.
 fn compare_greater<T: ParquetValueType>(descr: &OrderedColumnDescriptor, a: &T, b: &T) -> bool {
-    if descr.sort_order == SortOrder::TOTAL_ORDER {
-        if ColumnOrder::get_sort_order(
+    if descr.sort_order() == SortOrder::TOTAL_ORDER
+        && ColumnOrder::get_sort_order(
             descr.logical_type(),
             descr.converted_type(),
             descr.physical_type(),
             true,
         ) == SortOrder::TOTAL_ORDER
-        {
-            if let Some(LogicalType::Float16) = descr.logical_type() {
-                let a = a.as_bytes();
-                let a = f16::from_le_bytes([a[0], a[1]]);
-                let b = b.as_bytes();
-                let b = f16::from_le_bytes([b[0], b[1]]);
-                return a.total_cmp(&b) == Ordering::Greater;
-            }
+    {
+        if let Some(LogicalType::Float16) = descr.logical_type() {
+            let a = a.as_bytes();
+            let a = f16::from_le_bytes([a[0], a[1]]);
+            let b = b.as_bytes();
+            let b = f16::from_le_bytes([b[0], b[1]]);
+            return a.total_cmp(&b) == Ordering::Greater;
+        }
 
-            if descr.physical_type() == Type::FLOAT {
-                let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
-                let b = f32::from_le_bytes(b.as_bytes().try_into().unwrap());
-                return a.total_cmp(&b) == Ordering::Greater;
-            }
+        if descr.physical_type() == Type::FLOAT {
+            let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
+            let b = f32::from_le_bytes(b.as_bytes().try_into().unwrap());
+            return a.total_cmp(&b) == Ordering::Greater;
+        }
 
-            if descr.physical_type() == Type::DOUBLE {
-                let a = f64::from_le_bytes(a.as_bytes().try_into().unwrap());
-                let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
-                return a.total_cmp(&b) == Ordering::Greater;
-            }
+        if descr.physical_type() == Type::DOUBLE {
+            let a = f64::from_le_bytes(a.as_bytes().try_into().unwrap());
+            let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
+            return a.total_cmp(&b) == Ordering::Greater;
         }
     }
 
