@@ -4928,7 +4928,7 @@ mod tests {
             "abcd", "abcde", "abcdf", "abcdaaa", "abcdbbb",
             // Test cases with length < 4 that require padding
             "z", "za", "zaa", "zaaa", "zaaab", // Empty string
-            "", // Test various length combinations with same prefix
+            "",      // Test various length combinations with same prefix
             "test", "test1", "test12", "test123", "test1234",
         ];
 
