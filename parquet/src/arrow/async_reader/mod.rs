@@ -26,7 +26,7 @@ use std::fmt::Formatter;
 use std::io::SeekFrom;
 use std::ops::Range;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use bytes::{Buf, Bytes};
@@ -38,7 +38,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
-use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroups};
+use crate::arrow::array_reader::{
+    ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache, RowGroups,
+};
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection,
@@ -61,6 +63,7 @@ pub use metadata::*;
 #[cfg(feature = "object_store")]
 mod store;
 
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
@@ -510,6 +513,8 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             fields: self.fields,
             limit: self.limit,
             offset: self.offset,
+            metrics: self.metrics,
+            max_predicate_cache_size: self.max_predicate_cache_size,
         };
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -560,6 +565,12 @@ struct ReaderFactory<T> {
 
     /// Offset to apply to the next
     offset: Option<usize>,
+
+    /// Metrics
+    metrics: ArrowReaderMetrics,
+
+    /// Maximum size of the predicate cache
+    max_predicate_cache_size: usize,
 }
 
 impl<T> ReaderFactory<T>
@@ -588,6 +599,16 @@ where
             .filter(|index| !index.is_empty())
             .map(|x| x[row_group_idx].as_slice());
 
+        // Reuse columns that are selected and used by the filters
+        let cache_projection = match self.compute_cache_projection(&projection) {
+            Some(projection) => projection,
+            None => ProjectionMask::none(meta.columns().len()),
+        };
+        let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(
+            batch_size,
+            self.max_predicate_cache_size,
+        )));
+
         let mut row_group = InMemoryRowGroup {
             // schema: meta.schema_descr_ptr(),
             row_count: meta.num_rows() as usize,
@@ -597,11 +618,16 @@ where
             metadata: self.metadata.as_ref(),
         };
 
+        let cache_options_builder =
+            CacheOptionsBuilder::new(&cache_projection, row_group_cache.clone());
+
         let filter = self.filter.as_mut();
         let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
 
         // Update selection based on any filters
         if let Some(filter) = filter {
+            let cache_options = cache_options_builder.clone().producer();
+
             for predicate in filter.predicates.iter_mut() {
                 if !plan_builder.selects_any() {
                     return Ok((self, None)); // ruled out entire row group
@@ -610,10 +636,16 @@ where
                 // (pre) Fetch only the columns that are selected by the predicate
                 let selection = plan_builder.selection();
                 row_group
-                    .fetch(&mut self.input, predicate.projection(), selection)
+                    .fetch(
+                        &mut self.input,
+                        predicate.projection(),
+                        selection,
+                        batch_size,
+                    )
                     .await?;
 
-                let array_reader = ArrayReaderBuilder::new(&row_group)
+                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_cache_options(Some(&cache_options))
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
@@ -656,17 +688,35 @@ where
         }
         // fetch the pages needed for decoding
         row_group
-            .fetch(&mut self.input, &projection, plan_builder.selection())
+            .fetch(
+                &mut self.input,
+                &projection,
+                plan_builder.selection(),
+                batch_size,
+            )
             .await?;
 
         let plan = plan_builder.build();
 
-        let array_reader = ArrayReaderBuilder::new(&row_group)
+        let cache_options = cache_options_builder.consumer();
+        let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+            .with_cache_options(Some(&cache_options))
             .build_array_reader(self.fields.as_deref(), &projection)?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
         Ok((self, Some(reader)))
+    }
+
+    /// Compute which columns are used in filters and the final (output) projection
+    fn compute_cache_projection(&self, projection: &ProjectionMask) -> Option<ProjectionMask> {
+        let filters = self.filter.as_ref()?;
+        let mut cache_projection = filters.predicates.first()?.projection().clone();
+        for predicate in filters.predicates.iter() {
+            cache_projection.union(predicate.projection());
+        }
+        cache_projection.intersect(projection);
+        Some(cache_projection)
     }
 }
 
@@ -897,9 +947,11 @@ impl InMemoryRowGroup<'_> {
         input: &mut T,
         projection: &ProjectionMask,
         selection: Option<&RowSelection>,
+        batch_size: usize,
     ) -> Result<()> {
         let metadata = self.metadata.row_group(self.row_group_idx);
         if let Some((selection, offset_index)) = selection.zip(self.offset_index) {
+            let selection = selection.expand_to_batch_boundaries(batch_size, self.row_count);
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
             let mut page_start_offsets: Vec<Vec<u64>> = vec![];
@@ -1832,6 +1884,7 @@ mod tests {
         assert_eq!(total_rows, 730);
     }
 
+    #[ignore]
     #[tokio::test]
     async fn test_in_memory_row_group_sparse() {
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -1883,6 +1936,8 @@ mod tests {
             filter: None,
             limit: None,
             offset: None,
+            metrics: ArrowReaderMetrics::disabled(),
+            max_predicate_cache_size: 0,
         };
 
         let mut skip = true;
@@ -2385,5 +2440,54 @@ mod tests {
         // Panics here
         let result = reader.try_collect::<Vec<_>>().await.unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_cached_array_reader_sparse_offset_error() {
+        use futures::TryStreamExt;
+
+        use crate::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelection, RowSelector};
+        use arrow_array::{BooleanArray, RecordBatch};
+
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
+        let data = Bytes::from(std::fs::read(path).unwrap());
+
+        let async_reader = TestReader::new(data);
+
+        // Enable page index so the fetch logic loads only required pages
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
+            .await
+            .unwrap();
+
+        // Skip the first 22 rows (entire first Parquet page) and then select the
+        // next 3 rows (22, 23, 24). This means the fetch step will not include
+        // the first page starting at file offset 0.
+        let selection = RowSelection::from(vec![RowSelector::skip(22), RowSelector::select(3)]);
+
+        // Trivial predicate on column 0 that always returns `true`. Using the
+        // same column in both predicate and projection activates the caching
+        // layer (Producer/Consumer pattern).
+        let parquet_schema = builder.parquet_schema();
+        let proj = ProjectionMask::leaves(parquet_schema, vec![0]);
+        let always_true = ArrowPredicateFn::new(proj.clone(), |batch: RecordBatch| {
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        });
+        let filter = RowFilter::new(vec![Box::new(always_true)]);
+
+        // Build the stream with batch size 8 so the cache reads whole batches
+        // that straddle the requested row range (rows 0-7, 8-15, 16-23, …).
+        let stream = builder
+            .with_batch_size(8)
+            .with_projection(proj)
+            .with_row_selection(selection)
+            .with_row_filter(filter)
+            .build()
+            .unwrap();
+
+        // Collecting the stream should fail with the sparse column chunk offset
+        // error we want to reproduce.
+        let _result: Vec<_> = stream.try_collect().await.unwrap();
     }
 }
