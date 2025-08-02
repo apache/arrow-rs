@@ -178,16 +178,66 @@ where
     }
 }
 
-// partition indices into valid and null indices
-fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
-    match array.null_count() {
-        // faster path
-        0 => ((0..(array.len() as u32)).collect(), vec![]),
-        _ => {
-            let indices = 0..(array.len() as u32);
-            indices.partition(|index| array.is_valid(*index as usize))
-        }
+/// Partition indices of an Arrow array into two categories:
+/// - `valid`: indices of non-null elements
+/// - `nulls`: indices of null elements
+///
+/// Optimized for performance with fast-path for all-valid arrays
+/// and bit-parallel scan for null-containing arrays.
+#[inline(always)]
+pub fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
+    let len = array.len();
+    let null_count = array.null_count();
+
+    // Fast path: if there are no nulls, all elements are valid
+    if null_count == 0 {
+        // Simply return a range of indices [0, len)
+        let valid = (0..len as u32).collect();
+        return (valid, Vec::new());
     }
+
+    // null bitmap exists and some values are null
+    partition_validity_scan(array, len, null_count)
+}
+
+/// Scans the null bitmap and partitions valid/null indices efficiently.
+/// Uses bit-level operations to extract bit positions.
+/// This function is only called when nulls exist.
+#[inline(always)]
+fn partition_validity_scan(
+    array: &dyn Array,
+    len: usize,
+    null_count: usize,
+) -> (Vec<u32>, Vec<u32>) {
+    // SAFETY: Guaranteed by caller that null_count > 0, so bitmap must exist
+    let bitmap = array.nulls().unwrap();
+
+    // Preallocate result vectors with exact capacities (avoids reallocations)
+    let mut valid = Vec::with_capacity(len - null_count);
+    let mut nulls = Vec::with_capacity(null_count);
+
+    unsafe {
+        // 1) Write valid indices (bits == 1)
+        let valid_slice = valid.spare_capacity_mut();
+        for (i, idx) in bitmap.inner().set_indices_u32().enumerate() {
+            valid_slice[i].write(idx);
+        }
+
+        // 2) Write null indices by inverting
+        let inv_buf = !bitmap.inner();
+        let null_slice = nulls.spare_capacity_mut();
+        for (i, idx) in inv_buf.set_indices_u32().enumerate() {
+            null_slice[i].write(idx);
+        }
+
+        // Finalize lengths
+        valid.set_len(len - null_count);
+        nulls.set_len(null_count);
+    }
+
+    assert_eq!(valid.len(), len - null_count);
+    assert_eq!(nulls.len(), null_count);
+    (valid, nulls)
 }
 
 /// Whether `sort_to_indices` can sort an array of given data type.
@@ -1863,7 +1913,7 @@ mod tests {
                     None => {
                         builder
                             .values()
-                            .extend(std::iter::repeat(None).take(fixed_length as usize));
+                            .extend(std::iter::repeat_n(None, fixed_length as usize));
                         builder.append(false);
                     }
                 }
@@ -4752,5 +4802,115 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&sorted[0], &expected_struct_array);
+    }
+
+    /// A simple, correct but slower reference implementation.
+    fn naive_partition(array: &BooleanArray) -> (Vec<u32>, Vec<u32>) {
+        let len = array.len();
+        let mut valid = Vec::with_capacity(len);
+        let mut nulls = Vec::with_capacity(len);
+        for i in 0..len {
+            if array.is_valid(i) {
+                valid.push(i as u32);
+            } else {
+                nulls.push(i as u32);
+            }
+        }
+        (valid, nulls)
+    }
+
+    #[test]
+    fn fuzz_partition_validity() {
+        let mut rng = StdRng::seed_from_u64(0xF00D_CAFE);
+        for _ in 0..1_000 {
+            // build a random BooleanArray with some nulls
+            let len = rng.random_range(0..512);
+            let mut builder = BooleanBuilder::new();
+            for _ in 0..len {
+                if rng.random_bool(0.2) {
+                    builder.append_null();
+                } else {
+                    builder.append_value(rng.random_bool(0.5));
+                }
+            }
+            let array = builder.finish();
+
+            // Test both implementations on the full array
+            let (v1, n1) = partition_validity(&array);
+            let (v2, n2) = naive_partition(&array);
+            assert_eq!(v1, v2, "valid mismatch on full array");
+            assert_eq!(n1, n2, "null  mismatch on full array");
+
+            if len >= 8 {
+                // 1) Random slice within the array
+                let max_offset = len - 4;
+                let offset = rng.random_range(0..=max_offset);
+                let max_slice_len = len - offset;
+                let slice_len = rng.random_range(1..=max_slice_len);
+
+                // Bind the sliced ArrayRef to keep it alive
+                let sliced = array.slice(offset, slice_len);
+                let slice = sliced
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .expect("slice should be a BooleanArray");
+
+                let (sv1, sn1) = partition_validity(slice);
+                let (sv2, sn2) = naive_partition(slice);
+                assert_eq!(
+                    sv1, sv2,
+                    "valid mismatch on random slice at offset {offset} length {slice_len}",
+                );
+                assert_eq!(
+                    sn1, sn2,
+                    "null mismatch on random slice at offset {offset} length {slice_len}",
+                );
+
+                // 2) Ensure we test slices that start beyond one 64-bit chunk boundary
+                if len > 68 {
+                    let offset2 = rng.random_range(65..(len - 3));
+                    let len2 = rng.random_range(1..=(len - offset2));
+
+                    let sliced2 = array.slice(offset2, len2);
+                    let slice2 = sliced2
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .expect("slice2 should be a BooleanArray");
+
+                    let (sv3, sn3) = partition_validity(slice2);
+                    let (sv4, sn4) = naive_partition(slice2);
+                    assert_eq!(
+                        sv3, sv4,
+                        "valid mismatch on chunk-crossing slice at offset {offset2} length {len2}",
+                    );
+                    assert_eq!(
+                        sn3, sn4,
+                        "null mismatch on chunk-crossing slice at offset {offset2} length {len2}",
+                    );
+                }
+            }
+        }
+    }
+
+    // A few small deterministic checks
+    #[test]
+    fn test_partition_edge_cases() {
+        // all valid
+        let array = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
+        let (valid, nulls) = partition_validity(&array);
+        assert_eq!(valid, vec![0, 1, 2]);
+        assert!(nulls.is_empty());
+
+        // all null
+        let array = BooleanArray::from(vec![None, None, None]);
+        let (valid, nulls) = partition_validity(&array);
+        assert!(valid.is_empty());
+        assert_eq!(nulls, vec![0, 1, 2]);
+
+        // alternating
+        let array = BooleanArray::from(vec![Some(true), None, Some(true), None]);
+        let (valid, nulls) = partition_validity(&array);
+        assert_eq!(valid, vec![0, 2]);
+        assert_eq!(nulls, vec![1, 3]);
     }
 }

@@ -88,6 +88,8 @@ fn is_leaf(data_type: &DataType) -> bool {
             | DataType::Binary
             | DataType::LargeBinary
             | DataType::BinaryView
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::FixedSizeBinary(_)
@@ -136,7 +138,7 @@ enum LevelInfoBuilder {
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
     fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
-        if field.data_type() != array.data_type() {
+        if !Self::types_compatible(field.data_type(), array.data_type()) {
             return Err(arrow_err!(format!(
                 "Incompatible type. Field '{}' has type {}, array has type {}",
                 field.name(),
@@ -353,10 +355,10 @@ impl LevelInfoBuilder {
                     let len = range.end - range.start;
 
                     let def_levels = info.def_levels.as_mut().unwrap();
-                    def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+                    def_levels.extend(std::iter::repeat_n(ctx.def_level - 1, len));
 
                     if let Some(rep_levels) = info.rep_levels.as_mut() {
-                        rep_levels.extend(std::iter::repeat(ctx.rep_level).take(len));
+                        rep_levels.extend(std::iter::repeat_n(ctx.rep_level, len));
                     }
                 })
             }
@@ -444,9 +446,9 @@ impl LevelInfoBuilder {
             let len = end_idx - start_idx;
             child.visit_leaves(|leaf| {
                 let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                rep_levels.extend(std::iter::repeat(ctx.rep_level - 1).take(len));
+                rep_levels.extend(std::iter::repeat_n(ctx.rep_level - 1, len));
                 let def_levels = leaf.def_levels.as_mut().unwrap();
-                def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+                def_levels.extend(std::iter::repeat_n(ctx.def_level - 1, len));
             })
         };
 
@@ -513,7 +515,7 @@ impl LevelInfoBuilder {
                         );
                     }
                     None => {
-                        let iter = std::iter::repeat(info.max_def_level).take(len);
+                        let iter = std::iter::repeat_n(info.max_def_level, len);
                         def_levels.extend(iter);
                         info.non_null_indices.extend(range);
                     }
@@ -523,7 +525,7 @@ impl LevelInfoBuilder {
         }
 
         if let Some(rep_levels) = &mut info.rep_levels {
-            rep_levels.extend(std::iter::repeat(info.max_rep_level).take(len))
+            rep_levels.extend(std::iter::repeat_n(info.max_rep_level, len))
         }
     }
 
@@ -541,7 +543,25 @@ impl LevelInfoBuilder {
             }
         }
     }
+
+    /// Determine if the fields are compatible for purposes of constructing `LevelBuilderInfo`.
+    ///
+    /// Fields are compatible if they're the same type. Otherwise if one of them is a dictionary
+    /// and the other is a native array, the dictionary values must have the same type as the
+    /// native array
+    fn types_compatible(a: &DataType, b: &DataType) -> bool {
+        if a == b {
+            return true;
+        }
+
+        match (a, b) {
+            (DataType::Dictionary(_, v), b) => v.as_ref() == b,
+            (a, DataType::Dictionary(_, v)) => a == v.as_ref(),
+            _ => false,
+        }
+    }
 }
+
 /// The data necessary to write a primitive Arrow array to parquet, taking into account
 /// any non-primitive parents it may have in the arrow representation
 #[derive(Debug, Clone)]

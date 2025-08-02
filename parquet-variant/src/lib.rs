@@ -20,6 +20,10 @@
 //! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 //! [Apache Parquet]: https://parquet.apache.org/
 //!
+//! ## Main APIs
+//! - [`Variant`]: Represents a variant value, which can be an object, list, or primitive.
+//! - [`VariantBuilder`]: For building `Variant` values.
+//!
 //! ## 🚧 Work In Progress
 //!
 //! This crate is under active development and is not yet ready for production use.
@@ -27,18 +31,12 @@
 //!
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
-// TODO: dead code removal
-#[allow(dead_code)]
-mod decoder;
-mod variant;
-// TODO: dead code removal
 mod builder;
-mod from_json;
-mod to_json;
-#[allow(dead_code)]
+mod decoder;
+mod path;
 mod utils;
+mod variant;
 
 pub use builder::*;
-pub use from_json::json_to_variant;
-pub use to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
+pub use path::{VariantPath, VariantPathElement};
 pub use variant::*;

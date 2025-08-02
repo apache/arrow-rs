@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
-use arrow_schema::DataType::{Decimal128, Decimal256};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
     TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -36,6 +35,14 @@ pub enum Nullability {
     NullFirst,
     /// The nulls are encoded as the second union variant
     NullSecond,
+}
+
+#[cfg(feature = "canonical_extension_types")]
+fn with_extension_type(codec: &Codec, field: Field) -> Field {
+    match codec {
+        Codec::Uuid => field.with_extension_type(arrow_schema::extension::Uuid),
+        _ => field,
+    }
 }
 
 /// An Avro datatype mapped to the arrow data model
@@ -62,8 +69,13 @@ impl AvroDataType {
 
     /// Returns an arrow [`Field`] with the given name
     pub fn field_with_name(&self, name: &str) -> Field {
-        let d = self.codec.data_type();
-        Field::new(name, d, self.nullability.is_some()).with_metadata(self.metadata.clone())
+        let nullable = self.nullability.is_some();
+        let data_type = self.codec.data_type();
+        let field = Field::new(name, data_type, nullable).with_metadata(self.metadata.clone());
+        #[cfg(feature = "canonical_extension_types")]
+        return with_extension_type(&self.codec, field);
+        #[cfg(not(feature = "canonical_extension_types"))]
+        field
     }
 
     /// Returns a reference to the codec used by this data type
@@ -136,7 +148,7 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
         match schema {
             Schema::Complex(ComplexType::Record(r)) => {
                 let mut resolver = Resolver::default();
-                let data_type = make_data_type(schema, None, &mut resolver, false)?;
+                let data_type = make_data_type(schema, None, &mut resolver, false, false)?;
                 Ok(AvroField {
                     data_type,
                     name: r.name.to_string(),
@@ -149,6 +161,60 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
     }
 }
 
+/// Builder for an [`AvroField`]
+#[derive(Debug)]
+pub struct AvroFieldBuilder<'a> {
+    schema: &'a Schema<'a>,
+    use_utf8view: bool,
+    strict_mode: bool,
+}
+
+impl<'a> AvroFieldBuilder<'a> {
+    /// Creates a new [`AvroFieldBuilder`]
+    pub fn new(schema: &'a Schema<'a>) -> Self {
+        Self {
+            schema,
+            use_utf8view: false,
+            strict_mode: false,
+        }
+    }
+
+    /// Enable or disable Utf8View support
+    pub fn with_utf8view(mut self, use_utf8view: bool) -> Self {
+        self.use_utf8view = use_utf8view;
+        self
+    }
+
+    /// Enable or disable strict mode.
+    pub fn with_strict_mode(mut self, strict_mode: bool) -> Self {
+        self.strict_mode = strict_mode;
+        self
+    }
+
+    /// Build an [`AvroField`] from the builder
+    pub fn build(self) -> Result<AvroField, ArrowError> {
+        match self.schema {
+            Schema::Complex(ComplexType::Record(r)) => {
+                let mut resolver = Resolver::default();
+                let data_type = make_data_type(
+                    self.schema,
+                    None,
+                    &mut resolver,
+                    self.use_utf8view,
+                    self.strict_mode,
+                )?;
+                Ok(AvroField {
+                    name: r.name.to_string(),
+                    data_type,
+                })
+            }
+            _ => Err(ArrowError::ParseError(format!(
+                "Expected a Record schema to build an AvroField, but got {:?}",
+                self.schema
+            ))),
+        }
+    }
+}
 /// An Avro encoding
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#encodings>
@@ -201,7 +267,7 @@ pub enum Codec {
     /// - `scale` (`Option<usize>`): Number of fractional digits.
     /// - `fixed_size` (`Option<usize>`): Size in bytes if backed by a `fixed` type, otherwise `None`.
     Decimal(usize, Option<usize>, Option<usize>),
-    /// Represents Avro Uuid type, a FixedSizeBinary with a length of 16
+    /// Represents Avro Uuid type, a FixedSizeBinary with a length of 16.
     Uuid,
     /// Represents an Avro enum, maps to Arrow's Dictionary(Int32, Utf8) type.
     ///
@@ -251,9 +317,9 @@ impl Codec {
                     }
                 };
                 if too_large_for_128 {
-                    Decimal256(p, s)
+                    DataType::Decimal256(p, s)
                 } else {
-                    Decimal128(p, s)
+                    DataType::Decimal128(p, s)
                 }
             }
             Self::Uuid => DataType::FixedSizeBinary(16),
@@ -397,6 +463,7 @@ fn make_data_type<'a>(
     namespace: Option<&'a str>,
     resolver: &mut Resolver<'a>,
     use_utf8view: bool,
+    strict_mode: bool,
 ) -> Result<AvroDataType, ArrowError> {
     match schema {
         Schema::TypeName(TypeName::Primitive(p)) => {
@@ -416,12 +483,20 @@ fn make_data_type<'a>(
                 .position(|x| x == &Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)));
             match (f.len() == 2, null) {
                 (true, Some(0)) => {
-                    let mut field = make_data_type(&f[1], namespace, resolver, use_utf8view)?;
+                    let mut field =
+                        make_data_type(&f[1], namespace, resolver, use_utf8view, strict_mode)?;
                     field.nullability = Some(Nullability::NullFirst);
                     Ok(field)
                 }
                 (true, Some(1)) => {
-                    let mut field = make_data_type(&f[0], namespace, resolver, use_utf8view)?;
+                    if strict_mode {
+                        return Err(ArrowError::SchemaError(
+                            "Found Avro union of the form ['T','null'], which is disallowed in strict_mode"
+                                .to_string(),
+                        ));
+                    }
+                    let mut field =
+                        make_data_type(&f[0], namespace, resolver, use_utf8view, strict_mode)?;
                     field.nullability = Some(Nullability::NullSecond);
                     Ok(field)
                 }
@@ -444,6 +519,7 @@ fn make_data_type<'a>(
                                 namespace,
                                 resolver,
                                 use_utf8view,
+                                strict_mode,
                             )?,
                         })
                     })
@@ -457,8 +533,13 @@ fn make_data_type<'a>(
                 Ok(field)
             }
             ComplexType::Array(a) => {
-                let mut field =
-                    make_data_type(a.items.as_ref(), namespace, resolver, use_utf8view)?;
+                let mut field = make_data_type(
+                    a.items.as_ref(),
+                    namespace,
+                    resolver,
+                    use_utf8view,
+                    strict_mode,
+                )?;
                 Ok(AvroDataType {
                     nullability: None,
                     metadata: a.attributes.field_metadata(),
@@ -478,6 +559,18 @@ fn make_data_type<'a>(
                             nullability: None,
                             metadata: md,
                             codec: Codec::Decimal(precision, Some(scale), Some(size as usize)),
+                        }
+                    }
+                    Some("duration") => {
+                        if size != 12 {
+                            return Err(ArrowError::ParseError(format!(
+                                "Invalid fixed size for Duration: {size}, must be 12"
+                            )));
+                        };
+                        AvroDataType {
+                            nullability: None,
+                            metadata: md,
+                            codec: Codec::Interval,
                         }
                     }
                     _ => AvroDataType {
@@ -511,7 +604,8 @@ fn make_data_type<'a>(
                 Ok(field)
             }
             ComplexType::Map(m) => {
-                let val = make_data_type(&m.values, namespace, resolver, use_utf8view)?;
+                let val =
+                    make_data_type(&m.values, namespace, resolver, use_utf8view, strict_mode)?;
                 Ok(AvroDataType {
                     nullability: None,
                     metadata: m.attributes.field_metadata(),
@@ -525,6 +619,7 @@ fn make_data_type<'a>(
                 namespace,
                 resolver,
                 use_utf8view,
+                strict_mode,
             )?;
 
             // https://avro.apache.org/docs/1.11.1/specification/#logical-types
@@ -544,7 +639,6 @@ fn make_data_type<'a>(
                 (Some("local-timestamp-micros"), c @ Codec::Int64) => {
                     *c = Codec::TimestampMicros(false)
                 }
-                (Some("duration"), c @ Codec::Fixed(12)) => *c = Codec::Interval,
                 (Some("uuid"), c @ Codec::Utf8) => *c = Codec::Uuid,
                 (Some(logical), _) => {
                     // Insert unrecognized logical type into metadata map
@@ -607,7 +701,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "date");
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert!(matches!(result.codec, Codec::Date32));
     }
@@ -617,7 +711,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "time-millis");
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert!(matches!(result.codec, Codec::TimeMillis));
     }
@@ -627,7 +721,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "time-micros");
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert!(matches!(result.codec, Codec::TimeMicros));
     }
@@ -637,7 +731,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-millis");
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert!(matches!(result.codec, Codec::TimestampMillis(true)));
     }
@@ -647,7 +741,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "timestamp-micros");
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert!(matches!(result.codec, Codec::TimestampMicros(true)));
     }
@@ -657,7 +751,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-millis");
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert!(matches!(result.codec, Codec::TimestampMillis(false)));
     }
@@ -667,7 +761,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Long, "local-timestamp-micros");
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert!(matches!(result.codec, Codec::TimestampMicros(false)));
     }
@@ -722,7 +816,7 @@ mod tests {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "custom-type");
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert_eq!(
             result.metadata.get("logicalType"),
@@ -735,7 +829,7 @@ mod tests {
         let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, true).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, true, false).unwrap();
 
         assert!(matches!(result.codec, Codec::Utf8View));
     }
@@ -745,7 +839,7 @@ mod tests {
         let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, false).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
 
         assert!(matches!(result.codec, Codec::Utf8));
     }
@@ -773,13 +867,34 @@ mod tests {
         let schema = Schema::Complex(ComplexType::Record(record));
 
         let mut resolver = Resolver::default();
-        let result = make_data_type(&schema, None, &mut resolver, true).unwrap();
+        let result = make_data_type(&schema, None, &mut resolver, true, false).unwrap();
 
         if let Codec::Struct(fields) = &result.codec {
             let first_field_codec = &fields[0].data_type().codec;
             assert!(matches!(first_field_codec, Codec::Utf8View));
         } else {
             panic!("Expected Struct codec");
+        }
+    }
+
+    #[test]
+    fn test_union_with_strict_mode() {
+        let schema = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
+        ]);
+
+        let mut resolver = Resolver::default();
+        let result = make_data_type(&schema, None, &mut resolver, false, true);
+
+        assert!(result.is_err());
+        match result {
+            Err(ArrowError::SchemaError(msg)) => {
+                assert!(msg.contains(
+                    "Found Avro union of the form ['T','null'], which is disallowed in strict_mode"
+                ));
+            }
+            _ => panic!("Expected SchemaError"),
         }
     }
 }

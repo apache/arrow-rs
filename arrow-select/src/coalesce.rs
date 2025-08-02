@@ -47,10 +47,18 @@ use primitive::InProgressPrimitiveArray;
 /// smaller batches, and we want to coalesce them into larger batches for
 /// further processing.
 ///
+/// # Motivation
+///
+/// If we use [`concat_batches`] to implement the same functionality, there are 2 potential issues:
+/// 1. At least 2x peak memory (holding the input and output of concat)
+/// 2. 2 copies of the data (to create the output of filter and then create the output of concat)
+///
+/// See: <https://github.com/apache/arrow-rs/issues/6692> for more discussions
+/// about the motivation.
+///
 /// [`filter`]: crate::filter::filter
 /// [`take`]: crate::take::take
-///
-/// See: <https://github.com/apache/arrow-rs/issues/6692>
+/// [`concat_batches`]: crate::concat::concat_batches
 ///
 /// # Example
 /// ```
@@ -124,8 +132,10 @@ use primitive::InProgressPrimitiveArray;
 pub struct BatchCoalescer {
     /// The input schema
     schema: SchemaRef,
-    /// output batch size
-    batch_size: usize,
+    /// The target batch size (and thus size for views allocation). This is a
+    /// hard limit: the output batch will be exactly `target_batch_size`,
+    /// rather than possibly being slightly above.
+    target_batch_size: usize,
     /// In-progress arrays
     in_progress_arrays: Vec<Box<dyn InProgressArray>>,
     /// Buffered row count. Always less than `batch_size`
@@ -139,19 +149,19 @@ impl BatchCoalescer {
     ///
     /// # Arguments
     /// - `schema` - the schema of the output batches
-    /// - `batch_size` - the number of rows in each output batch.
+    /// - `target_batch_size` - the number of rows in each output batch.
     ///   Typical values are `4096` or `8192` rows.
     ///
-    pub fn new(schema: SchemaRef, batch_size: usize) -> Self {
+    pub fn new(schema: SchemaRef, target_batch_size: usize) -> Self {
         let in_progress_arrays = schema
             .fields()
             .iter()
-            .map(|field| create_in_progress_array(field.data_type(), batch_size))
+            .map(|field| create_in_progress_array(field.data_type(), target_batch_size))
             .collect::<Vec<_>>();
 
         Self {
             schema,
-            batch_size,
+            target_batch_size,
             in_progress_arrays,
             // We will for sure store at least one completed batch
             completed: VecDeque::with_capacity(1),
@@ -201,7 +211,13 @@ impl BatchCoalescer {
 
     /// Push all the rows from `batch` into the Coalescer
     ///
-    /// See [`Self::next_completed_batch()`] to retrieve any completed batches.
+    /// When buffered data plus incoming rows reach `target_batch_size` ,
+    /// completed batches are generated eagerly and can be retrieved via
+    /// [`Self::next_completed_batch()`].
+    /// Output batches contain exactly `target_batch_size` rows, so the tail of
+    /// the input batch may remain buffered.
+    /// Remaining partial data either waits for future input batches or can be
+    /// materialized immediately by calling [`Self::finish_buffered_batch()`].
     ///
     /// # Example
     /// ```
@@ -237,8 +253,8 @@ impl BatchCoalescer {
         // If pushing this batch would exceed the target batch size,
         // finish the current batch and start a new one
         let mut offset = 0;
-        while num_rows > (self.batch_size - self.buffered_rows) {
-            let remaining_rows = self.batch_size - self.buffered_rows;
+        while num_rows > (self.target_batch_size - self.buffered_rows) {
+            let remaining_rows = self.target_batch_size - self.buffered_rows;
             debug_assert!(remaining_rows > 0);
 
             // Copy remaining_rows from each array
@@ -262,7 +278,7 @@ impl BatchCoalescer {
         }
 
         // If we have reached the target batch size, finalize the buffered batch
-        if self.buffered_rows >= self.batch_size {
+        if self.buffered_rows >= self.target_batch_size {
             self.finish_buffered_batch()?;
         }
 
@@ -316,7 +332,7 @@ impl BatchCoalescer {
         !self.completed.is_empty()
     }
 
-    /// Returns the next completed batch, if any
+    /// Removes and returns the next completed batch, if any.
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.completed.pop_front()
     }
@@ -326,7 +342,10 @@ impl BatchCoalescer {
 fn create_in_progress_array(data_type: &DataType, batch_size: usize) -> Box<dyn InProgressArray> {
     macro_rules! instantiate_primitive {
         ($t:ty) => {
-            Box::new(InProgressPrimitiveArray::<$t>::new(batch_size))
+            Box::new(InProgressPrimitiveArray::<$t>::new(
+                batch_size,
+                data_type.clone(),
+            ))
         };
     }
 
@@ -375,9 +394,11 @@ mod tests {
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
     use arrow_array::{
-        BinaryViewArray, RecordBatchOptions, StringArray, StringViewArray, UInt32Array,
+        BinaryViewArray, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
+        TimestampNanosecondArray, UInt32Array,
     };
     use arrow_schema::{DataType, Field, Schema};
+    use rand::{Rng, SeedableRng};
     use std::ops::Range;
 
     #[test]
@@ -465,6 +486,98 @@ mod tests {
         Test::new()
             .with_batch(batch)
             .with_expected_output_sizes(vec![])
+            .run();
+    }
+
+    /// Coalesce multiple batches, 80k rows, with a 0.1% selectivity filter
+    #[test]
+    fn test_coalesce_filtered_001() {
+        let mut filter_builder = RandomFilterBuilder {
+            num_rows: 8000,
+            selectivity: 0.001,
+            seed: 0,
+        };
+
+        // add 10 batches of 8000 rows each
+        // 80k rows, selecting 0.1% means 80 rows
+        // not exactly 80 as the rows are random;
+        let mut test = Test::new();
+        for _ in 0..10 {
+            test = test
+                .with_batch(multi_column_batch(0..8000))
+                .with_filter(filter_builder.next_filter())
+        }
+        test.with_batch_size(15)
+            .with_expected_output_sizes(vec![15, 15, 15, 13])
+            .run();
+    }
+
+    /// Coalesce multiple batches, 80k rows, with a 1% selectivity filter
+    #[test]
+    fn test_coalesce_filtered_01() {
+        let mut filter_builder = RandomFilterBuilder {
+            num_rows: 8000,
+            selectivity: 0.01,
+            seed: 0,
+        };
+
+        // add 10 batches of 8000 rows each
+        // 80k rows, selecting 1% means 800 rows
+        // not exactly 800 as the rows are random;
+        let mut test = Test::new();
+        for _ in 0..10 {
+            test = test
+                .with_batch(multi_column_batch(0..8000))
+                .with_filter(filter_builder.next_filter())
+        }
+        test.with_batch_size(128)
+            .with_expected_output_sizes(vec![128, 128, 128, 128, 128, 128, 15])
+            .run();
+    }
+
+    /// Coalesce multiple batches, 80k rows, with a 10% selectivity filter
+    #[test]
+    fn test_coalesce_filtered_1() {
+        let mut filter_builder = RandomFilterBuilder {
+            num_rows: 8000,
+            selectivity: 0.1,
+            seed: 0,
+        };
+
+        // add 10 batches of 8000 rows each
+        // 80k rows, selecting 10% means 8000 rows
+        // not exactly 800 as the rows are random;
+        let mut test = Test::new();
+        for _ in 0..10 {
+            test = test
+                .with_batch(multi_column_batch(0..8000))
+                .with_filter(filter_builder.next_filter())
+        }
+        test.with_batch_size(1024)
+            .with_expected_output_sizes(vec![1024, 1024, 1024, 1024, 1024, 1024, 1024, 840])
+            .run();
+    }
+
+    /// Coalesce multiple batches, 8k rows, with a 90% selectivity filter
+    #[test]
+    fn test_coalesce_filtered_90() {
+        let mut filter_builder = RandomFilterBuilder {
+            num_rows: 800,
+            selectivity: 0.90,
+            seed: 0,
+        };
+
+        // add 10 batches of 800 rows each
+        // 8k rows, selecting 99% means 7200 rows
+        // not exactly 7200 as the rows are random;
+        let mut test = Test::new();
+        for _ in 0..10 {
+            test = test
+                .with_batch(multi_column_batch(0..800))
+                .with_filter(filter_builder.next_filter())
+        }
+        test.with_batch_size(1024)
+            .with_expected_output_sizes(vec![1024, 1024, 1024, 1024, 1024, 1024, 1024, 13])
             .run();
     }
 
@@ -672,21 +785,27 @@ mod tests {
 
     #[test]
     fn test_string_view_many_small_compact() {
-        // The strings are 28 long, so each batch has 400 * 28 = 5600 bytes
+        // 200 rows alternating long (28) and short (≤12) strings.
+        // Only the 100 long strings go into data buffers: 100 × 28 = 2800.
         let batch = stringview_batch_repeated(
-            400,
+            200,
             [Some("This string is 28 bytes long"), Some("small string")],
         );
         let output_batches = Test::new()
             // First allocated buffer is 8kb.
-            // Appending five batches of 5600 bytes will use 5600 * 5 = 28kb (8kb, an 16kb and 32kbkb)
+            // Appending 10 batches of 2800 bytes will use 2800 * 10 = 14kb (8kb, an 16kb and 32kbkb)
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
+            .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch(batch.clone())
             .with_batch_size(8000)
-            .with_expected_output_sizes(vec![2000]) // only 2000 rows total
+            .with_expected_output_sizes(vec![2000]) // only 1000 rows total
             .run();
 
         // expect a nice even distribution of buffers
@@ -714,7 +833,7 @@ mod tests {
         // The strings are designed to exactly fit into buffers that are powers of 2 long
         let batch = stringview_batch_repeated(100, [Some("This string is a power of two=32")]);
         let output_batches = Test::new()
-            .with_batches(std::iter::repeat(batch).take(20))
+            .with_batches(std::iter::repeat_n(batch, 20))
             .with_batch_size(900)
             .with_expected_output_sizes(vec![900, 900, 200])
             .run();
@@ -741,14 +860,14 @@ mod tests {
 
     #[test]
     fn test_string_view_large_small() {
-        // The strings are 37 bytes long, so each batch has 200 * 28 = 5600 bytes
+        // The strings are 37 bytes long, so each batch has 100 * 28 = 2800 bytes
         let mixed_batch = stringview_batch_repeated(
-            400,
+            200,
             [Some("This string is 28 bytes long"), Some("small string")],
         );
         // These strings aren't copied, this array has an 8k buffer
         let all_large = stringview_batch_repeated(
-            100,
+            50,
             [Some(
                 "This buffer has only large strings in it so there are no buffer copies",
             )],
@@ -756,7 +875,12 @@ mod tests {
 
         let output_batches = Test::new()
             // First allocated buffer is 8kb.
-            // Appending five batches of 5600 bytes will use 5600 * 5 = 28kb (8kb, an 16kb and 32kbkb)
+            // Appending five batches of 2800 bytes will use 2800 * 10 = 28kb (8kb, an 16kb and 32kbkb)
+            .with_batch(mixed_batch.clone())
+            .with_batch(mixed_batch.clone())
+            .with_batch(all_large.clone())
+            .with_batch(mixed_batch.clone())
+            .with_batch(all_large.clone())
             .with_batch(mixed_batch.clone())
             .with_batch(mixed_batch.clone())
             .with_batch(all_large.clone())
@@ -770,25 +894,16 @@ mod tests {
             col_as_string_view("c0", output_batches.first().unwrap()),
             vec![
                 ExpectedLayout {
-                    len: 8176,
+                    len: 8190,
                     capacity: 8192,
                 },
-                // this buffer was allocated but not used when the all_large batch was pushed
                 ExpectedLayout {
-                    len: 3024,
+                    len: 16366,
                     capacity: 16384,
                 },
                 ExpectedLayout {
-                    len: 7000,
-                    capacity: 8192,
-                },
-                ExpectedLayout {
-                    len: 5600,
+                    len: 6244,
                     capacity: 32768,
-                },
-                ExpectedLayout {
-                    len: 7000,
-                    capacity: 8192,
                 },
             ],
         );
@@ -846,6 +961,11 @@ mod tests {
     struct Test {
         /// Batches to feed to the coalescer.
         input_batches: Vec<RecordBatch>,
+        /// Filters to apply to the corresponding input batches.
+        ///
+        /// If there are no filters for the input batches, the batch will be
+        /// pushed as is.
+        filters: Vec<BooleanArray>,
         /// The schema. If not provided, the first batch's schema is used.
         schema: Option<SchemaRef>,
         /// Expected output sizes of the resulting batches
@@ -858,6 +978,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 input_batches: vec![],
+                filters: vec![],
                 schema: None,
                 expected_output_sizes: vec![],
                 target_batch_size: 1024,
@@ -879,6 +1000,12 @@ mod tests {
         /// Extend the input batches with `batch`
         fn with_batch(mut self, batch: RecordBatch) -> Self {
             self.input_batches.push(batch);
+            self
+        }
+
+        /// Extend the filters with `filter`
+        fn with_filter(mut self, filter: BooleanArray) -> Self {
+            self.filters.push(filter);
             self
         }
 
@@ -904,23 +1031,29 @@ mod tests {
         ///
         /// Returns the resulting output batches
         fn run(self) -> Vec<RecordBatch> {
+            let expected_output = self.expected_output();
+            let schema = self.schema();
+
             let Self {
                 input_batches,
-                schema,
+                filters,
+                schema: _,
                 target_batch_size,
                 expected_output_sizes,
             } = self;
 
-            let schema = schema.unwrap_or_else(|| input_batches[0].schema());
-
-            // create a single large input batch for output comparison
-            let single_input_batch = concat_batches(&schema, &input_batches).unwrap();
+            let had_input = input_batches.iter().any(|b| b.num_rows() > 0);
 
             let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), target_batch_size);
 
-            let had_input = input_batches.iter().any(|b| b.num_rows() > 0);
+            // feed input batches and filters to the coalescer
+            let mut filters = filters.into_iter();
             for batch in input_batches {
-                coalescer.push_batch(batch).unwrap();
+                if let Some(filter) = filters.next() {
+                    coalescer.push_batch_with_filter(batch, &filter).unwrap();
+                } else {
+                    coalescer.push_batch(batch).unwrap();
+                }
             }
             assert_eq!(schema, coalescer.schema());
 
@@ -960,7 +1093,7 @@ mod tests {
             for (i, (expected_size, batch)) in iter {
                 // compare the contents of the batch after normalization (using
                 // `==` compares the underlying memory layout too)
-                let expected_batch = single_input_batch.slice(starting_idx, *expected_size);
+                let expected_batch = expected_output.slice(starting_idx, *expected_size);
                 let expected_batch = normalize_batch(expected_batch);
                 let batch = normalize_batch(batch.clone());
                 assert_eq!(
@@ -971,6 +1104,36 @@ mod tests {
                 starting_idx += *expected_size;
             }
             output_batches
+        }
+
+        /// Return the expected output schema. If not overridden by `with_schema`, it
+        /// returns the schema of the first input batch.
+        fn schema(&self) -> SchemaRef {
+            self.schema
+                .clone()
+                .unwrap_or_else(|| Arc::clone(&self.input_batches[0].schema()))
+        }
+
+        /// Returns the expected output as a single `RecordBatch`
+        fn expected_output(&self) -> RecordBatch {
+            let schema = self.schema();
+            if self.filters.is_empty() {
+                return concat_batches(&schema, &self.input_batches).unwrap();
+            }
+
+            let mut filters = self.filters.iter();
+            let filtered_batches = self
+                .input_batches
+                .iter()
+                .map(|batch| {
+                    if let Some(filter) = filters.next() {
+                        filter_record_batch(batch, filter).unwrap()
+                    } else {
+                        batch.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            concat_batches(&schema, &filtered_batches).unwrap()
         }
     }
 
@@ -1045,6 +1208,77 @@ mod tests {
 
         let array = builder.finish();
         RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(array)]).unwrap()
+    }
+
+    /// Return a RecordBatch of 100 rows
+    fn multi_column_batch(range: Range<i32>) -> RecordBatch {
+        let int64_array = Int64Array::from_iter(range.clone().map(|v| {
+            if v % 5 == 0 {
+                None
+            } else {
+                Some(v as i64)
+            }
+        }));
+        let string_view_array = StringViewArray::from_iter(range.clone().map(|v| {
+            if v % 5 == 0 {
+                None
+            } else if v % 7 == 0 {
+                Some(format!("This is a string longer than 12 bytes{v}"))
+            } else {
+                Some(format!("Short {v}"))
+            }
+        }));
+        let string_array = StringArray::from_iter(range.clone().map(|v| {
+            if v % 11 == 0 {
+                None
+            } else {
+                Some(format!("Value {v}"))
+            }
+        }));
+        let timestamp_array = TimestampNanosecondArray::from_iter(range.map(|v| {
+            if v % 3 == 0 {
+                None
+            } else {
+                Some(v as i64 * 1000) // simulate a timestamp in milliseconds
+            }
+        }))
+        .with_timezone("America/New_York");
+
+        RecordBatch::try_from_iter(vec![
+            ("int64", Arc::new(int64_array) as ArrayRef),
+            ("stringview", Arc::new(string_view_array) as ArrayRef),
+            ("string", Arc::new(string_array) as ArrayRef),
+            ("timestamp", Arc::new(timestamp_array) as ArrayRef),
+        ])
+        .unwrap()
+    }
+
+    /// Return a boolean array that filters out randomly selected rows
+    /// from the input batch with a `selectivity`.
+    ///
+    /// For example a `selectivity` of 0.1 will filter out
+    /// 90% of the rows.
+    #[derive(Debug)]
+    struct RandomFilterBuilder {
+        num_rows: usize,
+        selectivity: f64,
+        /// seed for random number generator, increases by one each time
+        /// `next_filter` is called
+        seed: u64,
+    }
+    impl RandomFilterBuilder {
+        /// Build the next filter with the current seed and increment the seed
+        /// by one.
+        fn next_filter(&mut self) -> BooleanArray {
+            assert!(self.selectivity >= 0.0 && self.selectivity <= 1.0);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(self.seed);
+            self.seed += 1;
+            BooleanArray::from_iter(
+                (0..self.num_rows)
+                    .map(|_| rng.random_bool(self.selectivity))
+                    .map(Some),
+            )
+        }
     }
 
     /// Returns the named column as a StringViewArray

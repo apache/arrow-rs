@@ -74,13 +74,28 @@ pub(crate) fn first_byte_from_slice(slice: &[u8]) -> Result<u8, ArrowError> {
         .ok_or_else(|| ArrowError::InvalidArgumentError("Received empty bytes".to_string()))
 }
 
-/// Helper to get a &str from a slice at the given offset and range, or an error if invalid.
+/// Helper to get a &str from a slice at the given offset and range, or an error if it contains invalid UTF-8 data.
+#[inline]
 pub(crate) fn string_from_slice(
     slice: &[u8],
     offset: usize,
     range: Range<usize>,
 ) -> Result<&str, ArrowError> {
-    str::from_utf8(slice_from_slice_at_offset(slice, offset, range)?)
+    let offset_buffer = slice_from_slice_at_offset(slice, offset, range)?;
+
+    //Use simdutf8 by default
+    #[cfg(feature = "simdutf8")]
+    {
+        simdutf8::basic::from_utf8(offset_buffer).map_err(|_| {
+            // Use simdutf8::compat to return details about the decoding error
+            let e = simdutf8::compat::from_utf8(offset_buffer).unwrap_err();
+            ArrowError::InvalidArgumentError(format!("encountered non UTF-8 data: {e}"))
+        })
+    }
+
+    //Use std::str if simdutf8 is not enabled
+    #[cfg(not(feature = "simdutf8"))]
+    str::from_utf8(offset_buffer)
         .map_err(|_| ArrowError::InvalidArgumentError("invalid UTF-8 string".to_string()))
 }
 
@@ -123,10 +138,11 @@ where
     Some(Err(start))
 }
 
-/// Attempts to prove a fallible iterator is actually infallible in practice, by consuming every
-/// element and returning the first error (if any).
-pub(crate) fn validate_fallible_iterator<T, E>(
-    mut it: impl Iterator<Item = Result<T, E>>,
-) -> Result<(), E> {
-    it.find(Result::is_err).transpose().map(|_| ())
+/// Verifies the expected size of type T, for a type that should only grow if absolutely necessary.
+#[allow(unused)]
+pub(crate) const fn expect_size_of<T>(expected: usize) {
+    let size = std::mem::size_of::<T>();
+    if size != expected {
+        let _ = [""; 0][size];
+    }
 }

@@ -30,12 +30,16 @@ pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
+use crate::bloom_filter::{
+    chunk_read_bloom_filter_header_and_offset, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
+};
 use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
+use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::schema::types::SchemaDescriptor;
 
 pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
@@ -703,6 +707,66 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         Self::new_builder(SyncReader(input), metadata)
     }
 
+    /// Read bloom filter for a column in a row group
+    ///
+    /// Returns `None` if the column does not have a bloom filter
+    ///
+    /// We should call this function after other forms pruning, such as projection and predicate pushdown.
+    pub fn get_row_group_column_bloom_filter(
+        &mut self,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<Sbbf>> {
+        let metadata = self.metadata.row_group(row_group_idx);
+        let column_metadata = metadata.column(column_idx);
+
+        let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
+            offset
+                .try_into()
+                .map_err(|_| ParquetError::General("Bloom filter offset is invalid".to_string()))?
+        } else {
+            return Ok(None);
+        };
+
+        let buffer = match column_metadata.bloom_filter_length() {
+            Some(length) => self.input.0.get_bytes(offset, length as usize),
+            None => self.input.0.get_bytes(offset, SBBF_HEADER_SIZE_ESTIMATE),
+        }?;
+
+        let (header, bitset_offset) =
+            chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
+
+        match header.algorithm {
+            BloomFilterAlgorithm::BLOCK(_) => {
+                // this match exists to future proof the singleton algorithm enum
+            }
+        }
+        match header.compression {
+            BloomFilterCompression::UNCOMPRESSED(_) => {
+                // this match exists to future proof the singleton compression enum
+            }
+        }
+        match header.hash {
+            BloomFilterHash::XXHASH(_) => {
+                // this match exists to future proof the singleton hash enum
+            }
+        }
+
+        let bitset = match column_metadata.bloom_filter_length() {
+            Some(_) => buffer.slice(
+                (TryInto::<usize>::try_into(bitset_offset).unwrap()
+                    - TryInto::<usize>::try_into(offset).unwrap())..,
+            ),
+            None => {
+                let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
+                    ParquetError::General("Bloom filter length is invalid".to_string())
+                })?;
+                self.input.0.get_bytes(bitset_offset, bitset_length)?
+            }
+        };
+        Ok(Some(Sbbf::new(&bitset)))
+    }
+
     /// Build a [`ParquetRecordBatchReader`]
     ///
     /// Note: this will eagerly evaluate any `RowFilter` before returning
@@ -990,8 +1054,9 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
-        Date32Type, Date64Type, Decimal128Type, Decimal256Type, DecimalType, Float16Type,
-        Float32Type, Float64Type, Time32MillisecondType, Time64MicrosecondType,
+        Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+        DecimalType, Float16Type, Float32Type, Float64Type, Time32MillisecondType,
+        Time64MicrosecondType,
     };
     use arrow_array::*;
     use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
@@ -4338,6 +4403,75 @@ mod tests {
         assert_eq!(out, batch.slice(2, 1));
     }
 
+    fn test_decimal32_roundtrip() {
+        let d = |values: Vec<i32>, p: u8| {
+            let iter = values.into_iter();
+            PrimitiveArray::<Decimal32Type>::from_iter_values(iter)
+                .with_precision_and_scale(p, 2)
+                .unwrap()
+        };
+
+        let d1 = d(vec![1, 2, 3, 4, 5], 9);
+        let batch = RecordBatch::try_from_iter([("d1", Arc::new(d1) as ArrayRef)]).unwrap();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer)).unwrap();
+        let t1 = builder.parquet_schema().columns()[0].physical_type();
+        assert_eq!(t1, PhysicalType::INT32);
+
+        let mut reader = builder.build().unwrap();
+        assert_eq!(batch.schema(), reader.schema());
+
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(batch, out);
+    }
+
+    fn test_decimal64_roundtrip() {
+        // Precision <= 9 -> INT32
+        // Precision <= 18 -> INT64
+
+        let d = |values: Vec<i64>, p: u8| {
+            let iter = values.into_iter();
+            PrimitiveArray::<Decimal64Type>::from_iter_values(iter)
+                .with_precision_and_scale(p, 2)
+                .unwrap()
+        };
+
+        let d1 = d(vec![1, 2, 3, 4, 5], 9);
+        let d2 = d(vec![1, 2, 3, 4, 10.pow(10) - 1], 10);
+        let d3 = d(vec![1, 2, 3, 4, 10.pow(18) - 1], 18);
+
+        let batch = RecordBatch::try_from_iter([
+            ("d1", Arc::new(d1) as ArrayRef),
+            ("d2", Arc::new(d2) as ArrayRef),
+            ("d3", Arc::new(d3) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buffer)).unwrap();
+        let t1 = builder.parquet_schema().columns()[0].physical_type();
+        assert_eq!(t1, PhysicalType::INT32);
+        let t2 = builder.parquet_schema().columns()[1].physical_type();
+        assert_eq!(t2, PhysicalType::INT64);
+        let t3 = builder.parquet_schema().columns()[2].physical_type();
+        assert_eq!(t3, PhysicalType::INT64);
+
+        let mut reader = builder.build().unwrap();
+        assert_eq!(batch.schema(), reader.schema());
+
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(batch, out);
+    }
+
     fn test_decimal_roundtrip<T: DecimalType>() {
         // Precision <= 9 -> INT32
         // Precision <= 18 -> INT64
@@ -4387,6 +4521,8 @@ mod tests {
 
     #[test]
     fn test_decimal() {
+        test_decimal32_roundtrip();
+        test_decimal64_roundtrip();
         test_decimal_roundtrip::<Decimal128Type>();
         test_decimal_roundtrip::<Decimal256Type>();
     }
@@ -4647,5 +4783,55 @@ mod tests {
         let c1 = out.column(2).as_list::<i32>();
         assert_eq!(c0.len(), c1.len());
         c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
+    }
+
+    #[test]
+    fn test_get_row_group_column_bloom_filter_with_length() {
+        // convert to new parquet file with bloom_filter_length
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
+        let file = File::open(path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let schema = builder.schema().clone();
+        let reader = builder.build().unwrap();
+
+        let mut parquet_data = Vec::new();
+        let props = WriterProperties::builder()
+            .set_bloom_filter_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
+        for batch in reader {
+            let batch = batch.unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        // test the new parquet file
+        test_get_row_group_column_bloom_filter(parquet_data.into(), true);
+    }
+
+    #[test]
+    fn test_get_row_group_column_bloom_filter_without_length() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/data_index_bloom_encoding_stats.parquet");
+        let data = Bytes::from(std::fs::read(path).unwrap());
+        test_get_row_group_column_bloom_filter(data, false);
+    }
+
+    fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
+        let mut builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
+
+        let metadata = builder.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        let row_group = metadata.row_group(0);
+        let column = row_group.column(0);
+        assert_eq!(column.bloom_filter_length().is_some(), with_length);
+
+        let sbbf = builder
+            .get_row_group_column_bloom_filter(0, 0)
+            .unwrap()
+            .unwrap();
+        assert!(sbbf.check(&"Hello"));
+        assert!(!sbbf.check(&"Hello_Not_Exists"));
     }
 }

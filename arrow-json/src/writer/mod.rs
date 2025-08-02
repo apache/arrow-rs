@@ -1930,6 +1930,54 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal32_encoder() {
+        let array = Decimal32Array::from_iter_values([1234, 5678, 9012])
+            .with_precision_and_scale(8, 2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":12.34}
+{"decimal":56.78}
+{"decimal":90.12}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_decimal64_encoder() {
+        let array = Decimal64Array::from_iter_values([1234, 5678, 9012])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":12.34}
+{"decimal":56.78}
+{"decimal":90.12}
+"#,
+        );
+    }
+
+    #[test]
     fn test_decimal128_encoder() {
         let array = Decimal128Array::from_iter_values([1234, 5678, 9012])
             .with_precision_and_scale(10, 2)

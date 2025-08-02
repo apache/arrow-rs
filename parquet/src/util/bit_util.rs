@@ -245,7 +245,7 @@ impl BitWriter {
     pub fn skip(&mut self, num_bytes: usize) -> usize {
         self.flush();
         let result = self.buffer.len();
-        self.buffer.extend(std::iter::repeat(0).take(num_bytes));
+        self.buffer.extend(std::iter::repeat_n(0, num_bytes));
         result
     }
 

@@ -518,12 +518,37 @@ impl Codec {
             }
             Codec::List(converter) => {
                 let values = match array.data_type() {
-                    DataType::List(_) => as_list_array(array).values(),
-                    DataType::LargeList(_) => as_large_list_array(array).values(),
-                    DataType::FixedSizeList(_, _) => as_fixed_size_list_array(array).values(),
+                    DataType::List(_) => {
+                        let list_array = as_list_array(array);
+                        let first_offset = list_array.offsets()[0] as usize;
+                        let last_offset =
+                            list_array.offsets()[list_array.offsets().len() - 1] as usize;
+
+                        // values can include more data than referenced in the ListArray, only encode
+                        // the referenced values.
+                        list_array
+                            .values()
+                            .slice(first_offset, last_offset - first_offset)
+                    }
+                    DataType::LargeList(_) => {
+                        let list_array = as_large_list_array(array);
+
+                        let first_offset = list_array.offsets()[0] as usize;
+                        let last_offset =
+                            list_array.offsets()[list_array.offsets().len() - 1] as usize;
+
+                        // values can include more data than referenced in the LargeListArray, only encode
+                        // the referenced values.
+                        list_array
+                            .values()
+                            .slice(first_offset, last_offset - first_offset)
+                    }
+                    DataType::FixedSizeList(_, _) => {
+                        as_fixed_size_list_array(array).values().clone()
+                    }
                     _ => unreachable!(),
                 };
-                let rows = converter.convert_columns(&[values.clone()])?;
+                let rows = converter.convert_columns(&[values])?;
                 Ok(Encoder::List(rows))
             }
             Codec::RunEndEncoded(converter) => {
@@ -623,10 +648,9 @@ impl RowConverter {
     fn supports_datatype(d: &DataType) -> bool {
         match d {
             _ if !d.is_nested() => true,
-            DataType::List(f)
-            | DataType::LargeList(f)
-            | DataType::FixedSizeList(f, _)
-            | DataType::Map(f, _) => Self::supports_datatype(f.data_type()),
+            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+                Self::supports_datatype(f.data_type())
+            }
             DataType::Struct(f) => f.iter().all(|x| Self::supports_datatype(x.data_type())),
             DataType::RunEndEncoded(_, values) => Self::supports_datatype(values.data_type()),
             _ => false,
@@ -2358,6 +2382,22 @@ mod tests {
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
+
+        let sliced_list = list.slice(1, 5);
+        let rows_on_sliced_list = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows_on_sliced_list.row(1) > rows_on_sliced_list.row(0)); // [32, 52] > [32, 52, 12]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(1)); // null < [32, 52]
+        assert!(rows_on_sliced_list.row(3) < rows_on_sliced_list.row(1)); // [32, null] < [32, 52]
+        assert!(rows_on_sliced_list.row(4) > rows_on_sliced_list.row(1)); // [] > [32, 52]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(4)); // null < []
+
+        let back = converter.convert_rows(&rows_on_sliced_list).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &sliced_list);
     }
 
     fn test_nested_list<O: OffsetSizeTrait>() {
@@ -2449,6 +2489,19 @@ mod tests {
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
+
+        let sliced_list = list.slice(1, 3);
+        let rows = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows.row(0) < rows.row(1));
+        assert!(rows.row(1) < rows.row(2));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &sliced_list);
     }
 
     #[test]
@@ -2569,6 +2622,21 @@ mod tests {
         assert_eq!(back.len(), 1);
         back[0].to_data().validate_full().unwrap();
         assert_eq!(&back[0], &list);
+
+        let sliced_list = list.slice(1, 5);
+        let rows_on_sliced_list = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(1)); // null < [32, 52, null]
+        assert!(rows_on_sliced_list.row(3) < rows_on_sliced_list.row(1)); // [32, null, null] < [32, 52, null]
+        assert!(rows_on_sliced_list.row(4) < rows_on_sliced_list.row(1)); // [null, null, null] > [32, 52, null]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(4)); // null < [null, null, null]
+
+        let back = converter.convert_rows(&rows_on_sliced_list).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&back[0], &sliced_list);
     }
 
     #[test]
@@ -2800,6 +2868,34 @@ mod tests {
             .collect()
     }
 
+    fn generate_fixed_stringview_column(len: usize) -> StringViewArray {
+        let edge_cases = vec![
+            Some("bar".to_string()),
+            Some("bar\0".to_string()),
+            Some("LongerThan12Bytes".to_string()),
+            Some("LongerThan12Bytez".to_string()),
+            Some("LongerThan12Bytes\0".to_string()),
+            Some("LongerThan12Byt".to_string()),
+            Some("backend one".to_string()),
+            Some("backend two".to_string()),
+            Some("a".repeat(257)),
+            Some("a".repeat(300)),
+        ];
+
+        // Fill up to `len` by repeating edge cases and trimming
+        let mut values = Vec::with_capacity(len);
+        for i in 0..len {
+            values.push(
+                edge_cases
+                    .get(i % edge_cases.len())
+                    .cloned()
+                    .unwrap_or(None),
+            );
+        }
+
+        StringViewArray::from(values)
+    }
+
     fn generate_dictionary<K>(
         values: ArrayRef,
         len: usize,
@@ -2880,7 +2976,7 @@ mod tests {
 
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = rng();
-        match rng.random_range(0..16) {
+        match rng.random_range(0..18) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -2916,6 +3012,13 @@ mod tests {
             })),
             14 => Arc::new(generate_string_view(len, 0.8)),
             15 => Arc::new(generate_byte_view(len, 0.8)),
+            16 => Arc::new(generate_fixed_stringview_column(len)),
+            17 => Arc::new(
+                generate_list(len + 1000, 0.8, |values_len| {
+                    Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+                })
+                .slice(500, len),
+            ),
             _ => unreachable!(),
         }
     }
@@ -2998,13 +3101,16 @@ mod tests {
                 }
             }
 
+            // Convert rows produced from convert_columns().
+            // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
             let back = converter.convert_rows(&rows).unwrap();
             for (actual, expected) in back.iter().zip(&arrays) {
                 actual.to_data().validate_full().unwrap();
                 dictionary_eq(actual, expected)
             }
 
-            // Check that we can convert
+            // Check that we can convert rows into ByteArray and then parse, convert it back to array
+            // Note: validate_utf8 is set to true since Row is initialized through RowParser
             let rows = rows.try_into_binary().expect("reasonable size");
             let parser = converter.parser();
             let back = converter
@@ -3089,5 +3195,110 @@ mod tests {
         let converter = RowConverter::new(vec![SortField::new(a.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
         assert_eq!(rows.row(0).cmp(&rows.row(1)), Ordering::Less);
+    }
+
+    #[test]
+    fn map_should_be_marked_as_unsupported() {
+        let map_data_type = Field::new_map(
+            "map",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+            false,
+            true,
+        )
+        .data_type()
+        .clone();
+
+        let is_supported = RowConverter::supports_fields(&[SortField::new(map_data_type)]);
+
+        assert!(!is_supported, "Map should not be supported");
+    }
+
+    #[test]
+    fn should_fail_to_create_row_converter_for_unsupported_map_type() {
+        let map_data_type = Field::new_map(
+            "map",
+            "entries",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+            false,
+            true,
+        )
+        .data_type()
+        .clone();
+
+        let converter = RowConverter::new(vec![SortField::new(map_data_type)]);
+
+        match converter {
+            Err(ArrowError::NotYetImplemented(message)) => {
+                assert!(
+                    message.contains("Row format support not yet implemented for"),
+                    "Expected NotYetImplemented error for map data type, got: {message}",
+                );
+            }
+            Err(e) => panic!("Expected NotYetImplemented error, got: {e}"),
+            Ok(_) => panic!("Expected NotYetImplemented error for map data type"),
+        }
+    }
+
+    #[test]
+    fn test_values_buffer_smaller_when_utf8_validation_disabled() {
+        fn get_values_buffer_len(col: ArrayRef) -> (usize, usize) {
+            // 1. Convert cols into rows
+            let converter = RowConverter::new(vec![SortField::new(DataType::Utf8View)]).unwrap();
+
+            // 2a. Convert rows into colsa (validate_utf8 = false)
+            let rows = converter.convert_columns(&[col]).unwrap();
+            let converted = converter.convert_rows(&rows).unwrap();
+            let unchecked_values_len = converted[0].as_string_view().data_buffers()[0].len();
+
+            // 2b. Convert rows into cols (validate_utf8 = true since Row is initialized through RowParser)
+            let rows = rows.try_into_binary().expect("reasonable size");
+            let parser = converter.parser();
+            let converted = converter
+                .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+                .unwrap();
+            let checked_values_len = converted[0].as_string_view().data_buffers()[0].len();
+            (unchecked_values_len, checked_values_len)
+        }
+
+        // Case1. StringViewArray with inline strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("hello"), // short(5)
+            None,          // null
+            Some("short"), // short(5)
+            Some("tiny"),  // short(4)
+        ])) as ArrayRef;
+
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        // Since there are no long (>12) strings, len of values buffer is 0
+        assert_eq!(unchecked_values_len, 0);
+        // When utf8 validation enabled, values buffer includes inline strings (5+5+4)
+        assert_eq!(checked_values_len, 14);
+
+        // Case2. StringViewArray with long(>12) strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("this is a very long string over 12 bytes"),
+            Some("another long string to test the buffer"),
+        ])) as ArrayRef;
+
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        // Since there are no inline strings, expected length of values buffer is the same
+        assert!(unchecked_values_len > 0);
+        assert_eq!(unchecked_values_len, checked_values_len);
+
+        // Case3. StringViewArray with both short and long strings
+        let col = Arc::new(StringViewArray::from_iter([
+            Some("tiny"),          // 4 (short)
+            Some("thisisexact13"), // 13 (long)
+            None,
+            Some("short"), // 5 (short)
+        ])) as ArrayRef;
+
+        let (unchecked_values_len, checked_values_len) = get_values_buffer_len(col);
+        // Since there is single long string, len of values buffer is 13
+        assert_eq!(unchecked_values_len, 13);
+        assert!(checked_values_len > unchecked_values_len);
     }
 }

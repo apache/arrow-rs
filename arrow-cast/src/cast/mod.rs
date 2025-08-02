@@ -603,11 +603,27 @@ fn timestamp_to_date32<T: ArrowTimestampType>(
 /// * Temporal to/from backing Primitive: zero-copy with data type change
 /// * `Float32/Float64` to `Decimal(precision, scale)` rounds to the `scale` decimals
 ///   (i.e. casting `6.4999` to `Decimal(10, 1)` becomes `6.5`).
+/// * `Decimal` to `Float32/Float64` is lossy and values outside the representable
+///   range become `INFINITY` or `-INFINITY` without error.
 ///
 /// Unsupported Casts (check with `can_cast_types` before calling):
 /// * To or from `StructArray`
 /// * `List` to `Primitive`
 /// * `Interval` and `Duration`
+///
+/// # Durations and Intervals
+///
+/// Casting integer types directly to interval types such as
+/// [`IntervalMonthDayNano`] is not supported because the meaning of the integer
+/// is ambiguous. For example, the integer  could represent either nanoseconds
+/// or months.
+///
+/// To cast an integer type to an interval type, first convert to a Duration
+/// type, and then cast that to the desired interval type.
+///
+/// For example, to convert an `Int64` representing nanoseconds to an
+/// `IntervalMonthDayNano` you would first convert the `Int64` to a
+/// `DurationNanoseconds`, and then cast that to `IntervalMonthDayNano`.
 ///
 /// # Timestamps and Timezones
 ///
@@ -891,7 +907,7 @@ pub fn cast_with_options(
                 scale,
                 from_type,
                 to_type,
-                |x: i256| x.to_f64().unwrap(),
+                |x: i256| x.to_f64().expect("All i256 values fit in f64"),
                 cast_options,
             )
         }
@@ -2167,7 +2183,7 @@ fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_primitive::<FROM>();
     let size = std::mem::size_of::<FROM::Native>();
-    let offsets = OffsetBuffer::from_lengths(std::iter::repeat(size).take(array.len()));
+    let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(size, array.len()));
     Ok(Arc::new(GenericBinaryArray::<O>::new(
         offsets,
         array.values().inner().clone(),
@@ -2426,6 +2442,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow_buffer::i256;
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
     use chrono::NaiveDate;
     use half::f16;
@@ -8660,6 +8677,28 @@ mod tests {
             "did not find expected error '{expected_error}' in actual error '{err}'"
         );
     }
+    #[test]
+    fn test_cast_decimal256_to_f64_no_overflow() {
+        // Test casting i256::MAX: should produce a large finite positive value
+        let array = vec![Some(i256::MAX)];
+        let array = create_decimal256_array(array, 76, 2).unwrap();
+        let array = Arc::new(array) as ArrayRef;
+
+        let result = cast(&array, &DataType::Float64).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert!(result.value(0).is_finite());
+        assert!(result.value(0) > 0.0); // Positive result
+
+        // Test casting i256::MIN: should produce a large finite negative value
+        let array = vec![Some(i256::MIN)];
+        let array = create_decimal256_array(array, 76, 2).unwrap();
+        let array = Arc::new(array) as ArrayRef;
+
+        let result = cast(&array, &DataType::Float64).unwrap();
+        let result = result.as_primitive::<Float64Type>();
+        assert!(result.value(0).is_finite());
+        assert!(result.value(0) < 0.0); // Negative result
+    }
 
     #[test]
     fn test_cast_decimal128_to_decimal128_negative_scale() {
@@ -8687,6 +8726,15 @@ mod tests {
         assert_eq!("1123450", decimal_arr.value_as_string(0));
         assert_eq!("2123460", decimal_arr.value_as_string(1));
         assert_eq!("3123460", decimal_arr.value_as_string(2));
+    }
+
+    #[test]
+    fn decimal128_min_max_to_f64() {
+        // Ensure Decimal128 i128::MIN/MAX round-trip cast
+        let min128 = i128::MIN;
+        let max128 = i128::MAX;
+        assert_eq!(min128 as f64, min128 as f64);
+        assert_eq!(max128 as f64, max128 as f64);
     }
 
     #[test]

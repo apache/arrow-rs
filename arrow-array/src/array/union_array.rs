@@ -781,13 +781,18 @@ impl Array for UnionArray {
         };
 
         if fields.len() <= 1 {
-            return self
-                .fields
-                .iter()
-                .flatten()
-                .map(Array::logical_nulls)
-                .next()
-                .flatten();
+            return self.fields.iter().find_map(|field_opt| {
+                field_opt
+                    .as_ref()
+                    .and_then(|field| field.logical_nulls())
+                    .map(|logical_nulls| {
+                        if self.is_dense() {
+                            self.gather_nulls(vec![(0, logical_nulls)]).into()
+                        } else {
+                            logical_nulls
+                        }
+                    })
+            });
         }
 
         let logical_nulls = self.fields_logical_nulls();
@@ -1072,6 +1077,30 @@ mod tests {
             let value = slot.value(0);
             assert_eq!(expected_value, &value);
         }
+    }
+
+    #[test]
+    fn slice_union_array_single_field() {
+        // Dense Union
+        // [1, null, 3, null, 4]
+        let union_array = {
+            let mut builder = UnionBuilder::new_dense();
+            builder.append::<Int32Type>("a", 1).unwrap();
+            builder.append_null::<Int32Type>("a").unwrap();
+            builder.append::<Int32Type>("a", 3).unwrap();
+            builder.append_null::<Int32Type>("a").unwrap();
+            builder.append::<Int32Type>("a", 4).unwrap();
+            builder.build().unwrap()
+        };
+
+        // [null, 3, null]
+        let union_slice = union_array.slice(1, 3);
+        let logical_nulls = union_slice.logical_nulls().unwrap();
+
+        assert_eq!(logical_nulls.len(), 3);
+        assert!(logical_nulls.is_null(0));
+        assert!(logical_nulls.is_valid(1));
+        assert!(logical_nulls.is_null(2));
     }
 
     #[test]

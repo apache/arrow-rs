@@ -19,13 +19,15 @@ use crate::coalesce::InProgressArray;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
 use std::sync::Arc;
 
 /// InProgressArray for [`PrimitiveArray`]
 #[derive(Debug)]
 pub(crate) struct InProgressPrimitiveArray<T: ArrowPrimitiveType> {
+    /// Data type of the array
+    data_type: DataType,
     /// The current source, if any
     source: Option<ArrayRef>,
     /// the target batch size (and thus size for views allocation)
@@ -38,8 +40,9 @@ pub(crate) struct InProgressPrimitiveArray<T: ArrowPrimitiveType> {
 
 impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
     /// Create a new `InProgressPrimitiveArray`
-    pub(crate) fn new(batch_size: usize) -> Self {
+    pub(crate) fn new(batch_size: usize, data_type: DataType) -> Self {
         Self {
+            data_type,
             batch_size,
             source: None,
             nulls: NullBufferBuilder::new(batch_size),
@@ -95,7 +98,9 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         let nulls = self.nulls.finish();
         self.nulls = NullBufferBuilder::new(self.batch_size);
 
-        let array = PrimitiveArray::<T>::try_new(ScalarBuffer::from(values), nulls)?;
+        let array = PrimitiveArray::<T>::try_new(ScalarBuffer::from(values), nulls)?
+            // preserve timezone / precision+scale if applicable
+            .with_data_type(self.data_type.clone());
         Ok(Arc::new(array))
     }
 }

@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    hint,
-    iter::{repeat, repeat_with},
-    sync::Arc,
-};
+use std::{hint, iter::repeat_with, sync::Arc};
 
 use arrow_array::{Array, ArrayRef, Int32Array, UnionArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer};
@@ -67,9 +63,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                         fields,
                         type_ids.cycle().take(4096).collect(),
                         None,
-                        repeat(array_with_nulls())
-                            .take(with_nulls as usize)
-                            .chain(repeat(array_without_nulls()).take(without_nulls as usize))
+                        std::iter::repeat_n(array_with_nulls(), with_nulls as usize)
+                            .chain(std::iter::repeat_n(array_without_nulls(), without_nulls as usize))
                             .collect(),
                     )
                     .unwrap();
