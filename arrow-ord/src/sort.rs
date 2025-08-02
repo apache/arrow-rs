@@ -354,12 +354,12 @@ fn sort_bytes<T: ByteArrayType>(
     // 1. Build a vector of (index, prefix, length) tuples
     let mut valids: Vec<(u32, u32, u64)> = value_indices
         .into_iter()
-        .map(|idx| {
-            let slice: &[u8] = values.value(idx as usize).as_ref();
+        .map(|idx| unsafe {
+            let slice: &[u8] = values.value_unchecked(idx as usize).as_ref();
             let len = slice.len() as u64;
             // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
             let prefix = if slice.len() >= 4 {
-                let raw = unsafe { std::ptr::read_unaligned(slice.as_ptr() as *const u32) };
+                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u32);
                 u32::from_be(raw)
             } else {
                 let mut v = 0u32;
@@ -379,7 +379,7 @@ fn sort_bytes<T: ByteArrayType>(
     };
 
     // 3. Comparator: compare prefix, then (when both slices shorter than 4) length, otherwise full slice
-    let cmp_bytes = |a: &(u32, u32, u64), b: &(u32, u32, u64)| {
+    let cmp_bytes = |a: &(u32, u32, u64), b: &(u32, u32, u64)| unsafe {
         let (ia, pa, la) = *a;
         let (ib, pb, lb) = *b;
         // 3.1 prefix (first 4 bytes)
@@ -395,8 +395,8 @@ fn sort_bytes<T: ByteArrayType>(
             }
         }
         // 3.3 full lexicographical compare
-        let a_bytes: &[u8] = values.value(ia as usize).as_ref();
-        let b_bytes: &[u8] = values.value(ib as usize).as_ref();
+        let a_bytes: &[u8] = values.value_unchecked(ia as usize).as_ref();
+        let b_bytes: &[u8] = values.value_unchecked(ib as usize).as_ref();
         a_bytes.cmp(b_bytes)
     };
 
