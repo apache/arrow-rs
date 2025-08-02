@@ -108,7 +108,7 @@ The deprecated version is the next version which will be released (please
 consult the list above). To mark the API as deprecated, use the
 `#[deprecated(since = "...", note = "...")]` attribute.
 
-Foe example
+For example
 
 ```rust
 #[deprecated(since = "51.0.0", note = "Use `date_part` instead")]
