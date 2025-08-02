@@ -36,7 +36,7 @@ bench = false
 all-features = true
 
 [features]
-default = ["deflate", "snappy", "zstd", "bzip2", "xz"]
+default = ["deflate", "snappy", "zstd", "bzip2", "xz", "lru"]
 deflate = ["flate2"]
 snappy = ["snap", "crc"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
@@ -55,7 +55,10 @@ zstd = { version = "0.13", default-features = false, optional = true }
 bzip2 = { version = "0.6.0", optional = true }
 xz = { version = "0.1", default-features = false, optional = true }
 crc = { version = "3.0", optional = true }
+strum_macros = "0.27"
 uuid = "1.17"
+lru      = { version = "0.12", optional = true }
+indexmap = "2.10.0"
 
 [dev-dependencies]
 arrow-data = { workspace = true }
