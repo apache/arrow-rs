@@ -60,21 +60,21 @@ use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
 use std::sync::Arc;
 
-use arrow_array::{RecordBatchIterator, RecordBatchOptions, RecordBatchReader, StructArray};
+use arrow_array::ffi;
+use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::{
+    make_array, RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader,
+    StructArray,
+};
+use arrow_data::ArrayData;
+use arrow_schema::{ArrowError, DataType, Field, Schema};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyList, PyTuple};
-
-use crate::array::{make_array, ArrayData};
-use crate::datatypes::{DataType, Field, Schema};
-use crate::error::ArrowError;
-use crate::ffi;
-use crate::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
-use crate::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use crate::record_batch::RecordBatch;
 
 import_exception!(pyarrow, ArrowException);
 /// Represents an exception raised by PyArrow.
@@ -122,8 +122,7 @@ fn validate_class(expected: &str, value: &Bound<PyAny>) -> PyResult<()> {
             .extract::<PyBackedStr>()?;
         let found_name = found_class.getattr("__name__")?.extract::<PyBackedStr>()?;
         return Err(PyTypeError::new_err(format!(
-            "Expected instance of {}.{}, got {}.{}",
-            expected_module, expected_name, found_module, found_name
+            "Expected instance of {expected_module}.{expected_name}, got {found_module}.{found_name}",
         )));
     }
     Ok(())
@@ -140,8 +139,7 @@ fn validate_pycapsule(capsule: &Bound<PyCapsule>, name: &str) -> PyResult<()> {
     let capsule_name = capsule_name.unwrap().to_str()?;
     if capsule_name != name {
         return Err(PyValueError::new_err(format!(
-            "Expected name '{}' in PyCapsule, instead got '{}'",
-            name, capsule_name
+            "Expected name '{name}' in PyCapsule, instead got '{capsule_name}'",
         )));
     }
 

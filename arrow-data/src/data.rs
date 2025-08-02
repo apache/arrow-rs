@@ -83,6 +83,8 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         | DataType::Float16
         | DataType::Float32
         | DataType::Float64
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
         | DataType::Decimal128(_, _)
         | DataType::Decimal256(_, _)
         | DataType::Date32
@@ -636,7 +638,7 @@ impl ArrayData {
                 ),
                 DataType::Union(f, mode) => {
                     let (id, _) = f.iter().next().unwrap();
-                    let ids = Buffer::from_iter(std::iter::repeat(id).take(len));
+                    let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
                     let buffers = match mode {
                         UnionMode::Sparse => vec![ids],
                         UnionMode::Dense => {
@@ -1612,6 +1614,8 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
             DataTypeLayout::new_fixed_width::<IntervalMonthDayNano>()
         }
         DataType::Duration(_) => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Decimal32(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::Decimal64(_, _) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Decimal128(_, _) => DataTypeLayout::new_fixed_width::<i128>(),
         DataType::Decimal256(_, _) => DataTypeLayout::new_fixed_width::<i256>(),
         DataType::FixedSizeBinary(size) => {

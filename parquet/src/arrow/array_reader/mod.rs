@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Logic for reading into arrow arrays
+//! Logic for reading into arrow arrays: [`ArrayReader`] and [`RowGroups`]
 
 use crate::errors::Result;
 use arrow_array::ArrayRef;
@@ -45,7 +45,8 @@ mod struct_array;
 #[cfg(test)]
 mod test_util;
 
-pub(crate) use builder::ArrayReaderBuilder;
+// Note that this crate is public under the `experimental` feature flag.
+pub use builder::ArrayReaderBuilder;
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
@@ -59,7 +60,22 @@ pub use null_array::NullArrayReader;
 pub use primitive_array::PrimitiveArrayReader;
 pub use struct_array::StructArrayReader;
 
-/// Array reader reads parquet data into arrow array.
+/// Reads Parquet data into Arrow Arrays.
+///
+/// This is an internal implementation detail of the Parquet reader, and is not
+/// intended for public use.
+///
+/// This is the core trait for reading encoded Parquet data directly into Arrow
+/// Arrays efficiently. There are various specializations of this trait for
+/// different combinations of encodings and arrays, such as
+/// [`PrimitiveArrayReader`], [`ListArrayReader`], etc.
+///
+/// Each `ArrayReader` logically contains the following state
+/// 1. A handle to the encoded Parquet data
+/// 2. An in progress buffered Array
+///
+/// Data can either be read in batches using [`ArrayReader::next_batch`] or
+/// incrementally using [`ArrayReader::read_records`] and [`ArrayReader::skip_records`].
 pub trait ArrayReader: Send {
     // TODO: this function is never used, and the trait is not public. Perhaps this should be
     // removed.
@@ -87,6 +103,12 @@ pub trait ArrayReader: Send {
     fn consume_batch(&mut self) -> Result<ArrayRef>;
 
     /// Skips over `num_records` records, returning the number of rows skipped
+    ///
+    /// Note that calling `skip_records` with large values of `num_records` is
+    /// efficient as it avoids decoding data into the the in-progress array.
+    /// However, there is overhead to calling this function, so for small values of
+    /// `num_records`, it can be more efficient to call read_records and apply
+    /// a filter to the resulting array.
     fn skip_records(&mut self, num_records: usize) -> Result<usize>;
 
     /// If this array has a non-zero definition level, i.e. has a nullable parent
@@ -106,7 +128,7 @@ pub trait ArrayReader: Send {
     fn get_rep_levels(&self) -> Option<&[i16]>;
 }
 
-/// A collection of row groups
+/// Interface for reading data pages from the columns of one or more RowGroups.
 pub trait RowGroups {
     /// Get the number of rows in this collection
     fn num_rows(&self) -> usize;

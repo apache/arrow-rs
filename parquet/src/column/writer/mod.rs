@@ -105,16 +105,6 @@ impl ColumnWriter<'_> {
     }
 }
 
-#[deprecated(
-    since = "54.0.0",
-    note = "Seems like a stray and nobody knows what's it for. Will be removed in the next release."
-)]
-#[allow(missing_docs)]
-pub enum Level {
-    Page,
-    Column,
-}
-
 /// Gets a specific column writer corresponding to column descriptor `descr`.
 pub fn get_column_writer<'a>(
     descr: ColumnDescPtr,
@@ -707,15 +697,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 )
             })?;
 
-            let mut values_to_write = 0;
-            for &level in levels {
-                if level == self.descr.max_def_level() {
-                    values_to_write += 1;
-                } else {
-                    // We must always compute this as it is used to populate v2 pages
-                    self.page_metrics.num_page_nulls += 1
-                }
-            }
+            let values_to_write = levels
+                .iter()
+                .map(|level| (*level == self.descr.max_def_level()) as usize)
+                .sum();
+            self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
 
             // Update histogram
             self.page_metrics.update_definition_level_histogram(levels);
@@ -786,7 +772,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn should_dict_fallback(&self) -> bool {
         match self.encoder.estimated_dict_page_size() {
-            Some(size) => size >= self.props.dictionary_page_size_limit(),
+            Some(size) => {
+                size >= self
+                    .props
+                    .column_dictionary_page_size_limit(self.descr.path())
+            }
             None => false,
         }
     }
@@ -993,6 +983,59 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .unwrap_or_else(|| (data.to_vec(), false))
     }
 
+    /// Truncate the min and max values that will be written to a data page
+    /// header or column chunk Statistics
+    fn truncate_statistics(&self, statistics: Statistics) -> Statistics {
+        let backwards_compatible_min_max = self.descr.sort_order().is_signed();
+        match statistics {
+            Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
+                let (min, did_truncate_min) = self.truncate_min_value(
+                    self.props.statistics_truncate_length(),
+                    stats.min_bytes_opt().unwrap(),
+                );
+                let (max, did_truncate_max) = self.truncate_max_value(
+                    self.props.statistics_truncate_length(),
+                    stats.max_bytes_opt().unwrap(),
+                );
+                Statistics::ByteArray(
+                    ValueStatistics::new(
+                        Some(min.into()),
+                        Some(max.into()),
+                        stats.distinct_count(),
+                        stats.null_count_opt(),
+                        backwards_compatible_min_max,
+                    )
+                    .with_max_is_exact(!did_truncate_max)
+                    .with_min_is_exact(!did_truncate_min),
+                )
+            }
+            Statistics::FixedLenByteArray(stats)
+                if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
+            {
+                let (min, did_truncate_min) = self.truncate_min_value(
+                    self.props.statistics_truncate_length(),
+                    stats.min_bytes_opt().unwrap(),
+                );
+                let (max, did_truncate_max) = self.truncate_max_value(
+                    self.props.statistics_truncate_length(),
+                    stats.max_bytes_opt().unwrap(),
+                );
+                Statistics::FixedLenByteArray(
+                    ValueStatistics::new(
+                        Some(min.into()),
+                        Some(max.into()),
+                        stats.distinct_count(),
+                        stats.null_count_opt(),
+                        backwards_compatible_min_max,
+                    )
+                    .with_max_is_exact(!did_truncate_max)
+                    .with_min_is_exact(!did_truncate_min),
+                )
+            }
+            stats => stats,
+        }
+    }
+
     /// Adds data page.
     /// Data page is either buffered in case of dictionary encoding or written directly.
     fn add_data_page(&mut self) -> Result<()> {
@@ -1035,7 +1078,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.column_metrics
             .update_variable_length_bytes(values_data.variable_length_bytes);
 
-        let page_statistics = page_statistics.map(Statistics::from);
+        // From here on, we only need page statistics if they will be written to the page header.
+        let page_statistics = page_statistics
+            .filter(|_| self.props.write_page_header_statistics(self.descr.path()))
+            .map(|stats| self.truncate_statistics(Statistics::from(stats)));
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {
@@ -1191,53 +1237,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .with_backwards_compatible_min_max(backwards_compatible_min_max)
             .into();
 
-            let statistics = match statistics {
-                Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
-                    let (min, did_truncate_min) = self.truncate_min_value(
-                        self.props.statistics_truncate_length(),
-                        stats.min_bytes_opt().unwrap(),
-                    );
-                    let (max, did_truncate_max) = self.truncate_max_value(
-                        self.props.statistics_truncate_length(),
-                        stats.max_bytes_opt().unwrap(),
-                    );
-                    Statistics::ByteArray(
-                        ValueStatistics::new(
-                            Some(min.into()),
-                            Some(max.into()),
-                            stats.distinct_count(),
-                            stats.null_count_opt(),
-                            backwards_compatible_min_max,
-                        )
-                        .with_max_is_exact(!did_truncate_max)
-                        .with_min_is_exact(!did_truncate_min),
-                    )
-                }
-                Statistics::FixedLenByteArray(stats)
-                    if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
-                {
-                    let (min, did_truncate_min) = self.truncate_min_value(
-                        self.props.statistics_truncate_length(),
-                        stats.min_bytes_opt().unwrap(),
-                    );
-                    let (max, did_truncate_max) = self.truncate_max_value(
-                        self.props.statistics_truncate_length(),
-                        stats.max_bytes_opt().unwrap(),
-                    );
-                    Statistics::FixedLenByteArray(
-                        ValueStatistics::new(
-                            Some(min.into()),
-                            Some(max.into()),
-                            stats.distinct_count(),
-                            stats.null_count_opt(),
-                            backwards_compatible_min_max,
-                        )
-                        .with_max_is_exact(!did_truncate_max)
-                        .with_min_is_exact(!did_truncate_min),
-                    )
-                }
-                stats => stats,
-            };
+            let statistics = self.truncate_statistics(statistics);
 
             builder = builder
                 .set_statistics(statistics)
@@ -1432,31 +1432,50 @@ fn update_stat<T: ParquetValueType, F>(
         return;
     }
 
-    if cur.as_ref().map_or(true, should_update) {
+    if cur.as_ref().is_none_or(should_update) {
         *cur = Some(val.clone());
     }
 }
 
 /// Evaluate `a > b` according to underlying logical type.
 fn compare_greater<T: ParquetValueType>(descr: &OrderedColumnDescriptor, a: &T, b: &T) -> bool {
-    if let Some(LogicalType::Integer { is_signed, .. }) = descr.logical_type() {
-        if !is_signed {
-            // need to compare unsigned
-            return a.as_u64().unwrap() > b.as_u64().unwrap();
-        }
-    }
+    match T::PHYSICAL_TYPE {
+        Type::INT32 | Type::INT64 => {
+            if let Some(LogicalType::Integer {
+                is_signed: false, ..
+            }) = descr.logical_type()
+            {
+                // need to compare unsigned
+                return compare_greater_unsigned_int(a, b);
+            }
 
-    match descr.converted_type() {
-        ConvertedType::UINT_8
-        | ConvertedType::UINT_16
-        | ConvertedType::UINT_32
-        | ConvertedType::UINT_64 => {
-            return a.as_u64().unwrap() > b.as_u64().unwrap();
+            match descr.converted_type() {
+                ConvertedType::UINT_8
+                | ConvertedType::UINT_16
+                | ConvertedType::UINT_32
+                | ConvertedType::UINT_64 => {
+                    return compare_greater_unsigned_int(a, b);
+                }
+                _ => {}
+            };
         }
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+            if let Some(LogicalType::Decimal { .. }) = descr.logical_type() {
+                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+            }
+            if let ConvertedType::DECIMAL = descr.converted_type() {
+                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+            }
+            if let Some(LogicalType::Float16) = descr.logical_type() {
+                return compare_greater_f16(a.as_bytes(), b.as_bytes());
+            }
+        }
+
         _ => {}
     };
 
-    if let Some(LogicalType::Decimal { .. }) = descr.logical_type() {
+    // TODO(ets): need to re work this because compare completely changed
+    /*if let Some(LogicalType::Decimal { .. }) = descr.logical_type() {
         match T::PHYSICAL_TYPE {
             Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
                 return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
@@ -1508,8 +1527,9 @@ fn compare_greater<T: ParquetValueType>(descr: &OrderedColumnDescriptor, a: &T, 
         let b = b.as_bytes();
         let b = f16::from_le_bytes([b[0], b[1]]);
         return a > b;
-    }
+    }*/
 
+    // compare independent of logical / converted type
     a > b
 }
 
@@ -1541,6 +1561,18 @@ fn has_dictionary_support(kind: Type, props: &WriterProperties) -> bool {
         (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_2_0) => true,
         _ => true,
     }
+}
+
+#[inline]
+fn compare_greater_unsigned_int<T: ParquetValueType>(a: &T, b: &T) -> bool {
+    a.as_u64().unwrap() > b.as_u64().unwrap()
+}
+
+#[inline]
+fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
+    let a = f16::from_le_bytes(a.try_into().unwrap());
+    let b = f16::from_le_bytes(b.try_into().unwrap());
+    a > b
 }
 
 /// Signed comparison of bytes arrays
@@ -2293,7 +2325,11 @@ mod tests {
         let mut buf = Vec::with_capacity(100);
         let mut write = TrackedWrite::new(&mut buf);
         let page_writer = Box::new(SerializedPageWriter::new(&mut write));
-        let props = Default::default();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_write_page_header_statistics(true)
+                .build(),
+        );
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
 
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();
@@ -2591,8 +2627,8 @@ mod tests {
         let stats = statistics_roundtrip::<Int96Type>(&input);
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Int96(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &Int96::from(vec![0, 20, 30]));
-            assert_eq!(stats.max_opt().unwrap(), &Int96::from(vec![3, 20, 10]));
+            assert_eq!(stats.min_opt().unwrap(), &Int96::from(vec![3, 20, 10]));
+            assert_eq!(stats.max_opt().unwrap(), &Int96::from(vec![2, 20, 30]));
         } else {
             panic!("expecting Statistics::Int96, got {stats:?}");
         }
@@ -3306,7 +3342,10 @@ mod tests {
         // write data
         // and check the offset index and column index
         let page_writer = get_test_page_writer();
-        let props = Default::default();
+        let props = WriterProperties::builder()
+            .set_statistics_truncate_length(None) // disable column index truncation
+            .build()
+            .into();
         let mut writer = get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
 
         let mut data = vec![FixedLenByteArray::default(); 3];
@@ -3499,6 +3538,49 @@ mod tests {
             assert_eq!(expected_value, stats_max_bytes);
         } else {
             panic!("expecting Statistics::FixedLenByteArray");
+        }
+    }
+
+    #[test]
+    fn test_statistics_truncating_byte_array_default() {
+        let page_writer = get_test_page_writer();
+
+        // The default truncate length is 64 bytes
+        let props = WriterProperties::builder().build().into();
+        let mut writer = get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        let mut data = vec![ByteArray::default(); 1];
+        data[0].set_data(Bytes::from(String::from(
+            "This string is longer than 64 bytes, so it will almost certainly be truncated.",
+        )));
+        writer.write_batch(&data, None, None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+
+        assert_eq!(1, r.rows_written);
+
+        let stats = r.metadata.statistics().expect("statistics");
+        if let Statistics::ByteArray(_stats) = stats {
+            let min_value = _stats.min_opt().unwrap();
+            let max_value = _stats.max_opt().unwrap();
+
+            assert!(!_stats.min_is_exact());
+            assert!(!_stats.max_is_exact());
+
+            let expected_len = 64;
+            assert_eq!(min_value.len(), expected_len);
+            assert_eq!(max_value.len(), expected_len);
+
+            let expected_min =
+                "This string is longer than 64 bytes, so it will almost certainly".as_bytes();
+            assert_eq!(expected_min, min_value.as_bytes());
+            // note the max value is different from the min value: the last byte is incremented
+            let expected_max =
+                "This string is longer than 64 bytes, so it will almost certainlz".as_bytes();
+            assert_eq!(expected_max, max_value.as_bytes());
+        } else {
+            panic!("expecting Statistics::ByteArray");
         }
     }
 

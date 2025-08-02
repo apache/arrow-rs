@@ -113,6 +113,8 @@ pub mod client;
 pub mod metadata;
 pub mod server;
 
+pub use crate::streams::FallibleRequestStream;
+
 /// ProstMessageExt are useful utility methods for prost::Message types
 pub trait ProstMessageExt: prost::Message + Default {
     /// type_url for this Message

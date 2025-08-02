@@ -24,7 +24,7 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -178,16 +178,66 @@ where
     }
 }
 
-// partition indices into valid and null indices
-fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
-    match array.null_count() {
-        // faster path
-        0 => ((0..(array.len() as u32)).collect(), vec![]),
-        _ => {
-            let indices = 0..(array.len() as u32);
-            indices.partition(|index| array.is_valid(*index as usize))
-        }
+/// Partition indices of an Arrow array into two categories:
+/// - `valid`: indices of non-null elements
+/// - `nulls`: indices of null elements
+///
+/// Optimized for performance with fast-path for all-valid arrays
+/// and bit-parallel scan for null-containing arrays.
+#[inline(always)]
+pub fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
+    let len = array.len();
+    let null_count = array.null_count();
+
+    // Fast path: if there are no nulls, all elements are valid
+    if null_count == 0 {
+        // Simply return a range of indices [0, len)
+        let valid = (0..len as u32).collect();
+        return (valid, Vec::new());
     }
+
+    // null bitmap exists and some values are null
+    partition_validity_scan(array, len, null_count)
+}
+
+/// Scans the null bitmap and partitions valid/null indices efficiently.
+/// Uses bit-level operations to extract bit positions.
+/// This function is only called when nulls exist.
+#[inline(always)]
+fn partition_validity_scan(
+    array: &dyn Array,
+    len: usize,
+    null_count: usize,
+) -> (Vec<u32>, Vec<u32>) {
+    // SAFETY: Guaranteed by caller that null_count > 0, so bitmap must exist
+    let bitmap = array.nulls().unwrap();
+
+    // Preallocate result vectors with exact capacities (avoids reallocations)
+    let mut valid = Vec::with_capacity(len - null_count);
+    let mut nulls = Vec::with_capacity(null_count);
+
+    unsafe {
+        // 1) Write valid indices (bits == 1)
+        let valid_slice = valid.spare_capacity_mut();
+        for (i, idx) in bitmap.inner().set_indices_u32().enumerate() {
+            valid_slice[i].write(idx);
+        }
+
+        // 2) Write null indices by inverting
+        let inv_buf = !bitmap.inner();
+        let null_slice = nulls.spare_capacity_mut();
+        for (i, idx) in inv_buf.set_indices_u32().enumerate() {
+            null_slice[i].write(idx);
+        }
+
+        // Finalize lengths
+        valid.set_len(len - null_count);
+        nulls.set_len(null_count);
+    }
+
+    assert_eq!(valid.len(), len - null_count);
+    assert_eq!(nulls.len(), null_count);
+    (valid, nulls)
 }
 
 /// Whether `sort_to_indices` can sort an array of given data type.
@@ -310,11 +360,92 @@ fn sort_byte_view<T: ByteViewType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let mut valids = value_indices
-        .into_iter()
-        .map(|index| (index, values.value(index as usize).as_ref()))
-        .collect::<Vec<(u32, &[u8])>>();
-    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+    // 1. Build a list of (index, raw_view, length)
+    let mut valids: Vec<_>;
+    // 2. Compute the number of non-null entries to partially sort
+    let vlimit: usize = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(value_indices.len()),
+        _ => value_indices.len(),
+    };
+    // 3.a Check if all views are inline (no data buffers)
+    if values.data_buffers().is_empty() {
+        valids = value_indices
+            .into_iter()
+            .map(|idx| {
+                // SAFETY: we know idx < values.len()
+                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+                let inline_key = GenericByteViewArray::<T>::inline_key_fast(raw);
+                (idx, inline_key)
+            })
+            .collect();
+        let cmp_inline = |a: &(u32, u128), b: &(u32, u128)| a.1.cmp(&b.1);
+
+        // Partially sort according to ascending/descending
+        if !options.descending {
+            sort_unstable_by(&mut valids, vlimit, cmp_inline);
+        } else {
+            sort_unstable_by(&mut valids, vlimit, |x, y| cmp_inline(x, y).reverse());
+        }
+    } else {
+        valids = value_indices
+            .into_iter()
+            .map(|idx| {
+                // SAFETY: we know idx < values.len()
+                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+                (idx, raw)
+            })
+            .collect();
+        // 3.b Mixed comparator: first prefix, then inline vs full comparison
+        let cmp_mixed = |a: &(u32, u128), b: &(u32, u128)| {
+            let (_, raw_a) = *a;
+            let (_, raw_b) = *b;
+            let len_a = raw_a as u32;
+            let len_b = raw_b as u32;
+            // 3.b.1 Both inline (≤12 bytes): compare full 128-bit key including length
+            if len_a <= MAX_INLINE_VIEW_LEN && len_b <= MAX_INLINE_VIEW_LEN {
+                return GenericByteViewArray::<T>::inline_key_fast(raw_a)
+                    .cmp(&GenericByteViewArray::<T>::inline_key_fast(raw_b));
+            }
+
+            // 3.b.2 Compare 4-byte prefix in big-endian order
+            let pref_a = ByteView::from(raw_a).prefix.swap_bytes();
+            let pref_b = ByteView::from(raw_b).prefix.swap_bytes();
+            if pref_a != pref_b {
+                return pref_a.cmp(&pref_b);
+            }
+
+            // 3.b.3 Fallback to full byte-slice comparison
+            let full_a: &[u8] = unsafe { values.value_unchecked(a.0 as usize).as_ref() };
+            let full_b: &[u8] = unsafe { values.value_unchecked(b.0 as usize).as_ref() };
+            full_a.cmp(full_b)
+        };
+
+        // 3.b.4 Partially sort according to ascending/descending
+        if !options.descending {
+            sort_unstable_by(&mut valids, vlimit, cmp_mixed);
+        } else {
+            sort_unstable_by(&mut valids, vlimit, |x, y| cmp_mixed(x, y).reverse());
+        }
+    }
+
+    // 5. Assemble nulls and sorted indices into final output
+    let total = valids.len() + nulls.len();
+    let out_limit = limit.unwrap_or(total).min(total);
+    let mut out = Vec::with_capacity(total);
+
+    if options.nulls_first {
+        // Place null indices first
+        out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+        let rem = out_limit - out.len();
+        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
+    } else {
+        // Place non-null indices first
+        out.extend(valids.iter().map(|&(i, _)| i).take(out_limit));
+        let rem = out_limit - out.len();
+        out.extend_from_slice(&nulls[..rem]);
+    }
+
+    out.into()
 }
 
 fn sort_fixed_size_binary(
@@ -1710,7 +1841,7 @@ mod tests {
                     None => {
                         builder
                             .values()
-                            .extend(std::iter::repeat(None).take(fixed_length as usize));
+                            .extend(std::iter::repeat_n(None, fixed_length as usize));
                         builder.append(false);
                     }
                 }
@@ -4599,5 +4730,115 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&sorted[0], &expected_struct_array);
+    }
+
+    /// A simple, correct but slower reference implementation.
+    fn naive_partition(array: &BooleanArray) -> (Vec<u32>, Vec<u32>) {
+        let len = array.len();
+        let mut valid = Vec::with_capacity(len);
+        let mut nulls = Vec::with_capacity(len);
+        for i in 0..len {
+            if array.is_valid(i) {
+                valid.push(i as u32);
+            } else {
+                nulls.push(i as u32);
+            }
+        }
+        (valid, nulls)
+    }
+
+    #[test]
+    fn fuzz_partition_validity() {
+        let mut rng = StdRng::seed_from_u64(0xF00D_CAFE);
+        for _ in 0..1_000 {
+            // build a random BooleanArray with some nulls
+            let len = rng.random_range(0..512);
+            let mut builder = BooleanBuilder::new();
+            for _ in 0..len {
+                if rng.random_bool(0.2) {
+                    builder.append_null();
+                } else {
+                    builder.append_value(rng.random_bool(0.5));
+                }
+            }
+            let array = builder.finish();
+
+            // Test both implementations on the full array
+            let (v1, n1) = partition_validity(&array);
+            let (v2, n2) = naive_partition(&array);
+            assert_eq!(v1, v2, "valid mismatch on full array");
+            assert_eq!(n1, n2, "null  mismatch on full array");
+
+            if len >= 8 {
+                // 1) Random slice within the array
+                let max_offset = len - 4;
+                let offset = rng.random_range(0..=max_offset);
+                let max_slice_len = len - offset;
+                let slice_len = rng.random_range(1..=max_slice_len);
+
+                // Bind the sliced ArrayRef to keep it alive
+                let sliced = array.slice(offset, slice_len);
+                let slice = sliced
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .expect("slice should be a BooleanArray");
+
+                let (sv1, sn1) = partition_validity(slice);
+                let (sv2, sn2) = naive_partition(slice);
+                assert_eq!(
+                    sv1, sv2,
+                    "valid mismatch on random slice at offset {offset} length {slice_len}",
+                );
+                assert_eq!(
+                    sn1, sn2,
+                    "null mismatch on random slice at offset {offset} length {slice_len}",
+                );
+
+                // 2) Ensure we test slices that start beyond one 64-bit chunk boundary
+                if len > 68 {
+                    let offset2 = rng.random_range(65..(len - 3));
+                    let len2 = rng.random_range(1..=(len - offset2));
+
+                    let sliced2 = array.slice(offset2, len2);
+                    let slice2 = sliced2
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .expect("slice2 should be a BooleanArray");
+
+                    let (sv3, sn3) = partition_validity(slice2);
+                    let (sv4, sn4) = naive_partition(slice2);
+                    assert_eq!(
+                        sv3, sv4,
+                        "valid mismatch on chunk-crossing slice at offset {offset2} length {len2}",
+                    );
+                    assert_eq!(
+                        sn3, sn4,
+                        "null mismatch on chunk-crossing slice at offset {offset2} length {len2}",
+                    );
+                }
+            }
+        }
+    }
+
+    // A few small deterministic checks
+    #[test]
+    fn test_partition_edge_cases() {
+        // all valid
+        let array = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
+        let (valid, nulls) = partition_validity(&array);
+        assert_eq!(valid, vec![0, 1, 2]);
+        assert!(nulls.is_empty());
+
+        // all null
+        let array = BooleanArray::from(vec![None, None, None]);
+        let (valid, nulls) = partition_validity(&array);
+        assert!(valid.is_empty());
+        assert_eq!(nulls, vec![0, 1, 2]);
+
+        // alternating
+        let array = BooleanArray::from(vec![Some(true), None, Some(true), None]);
+        let (valid, nulls) = partition_validity(&array);
+        assert_eq!(valid, vec![0, 2]);
+        assert_eq!(nulls, vec![1, 3]);
     }
 }

@@ -22,6 +22,7 @@ use crate::{
 };
 use arrow_buffer::{ArrowNativeType, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
+use num::NumCast;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -168,6 +169,68 @@ where
             values_builder: PrimitiveBuilder::with_capacity(values_capacity),
             map: HashMap::with_capacity(values_capacity),
         }
+    }
+
+    /// Creates a new `PrimitiveDictionaryBuilder` from the existing builder with the same
+    /// keys and values, but with a new data type for the keys.
+    ///
+    /// # Example
+    /// ```
+    /// #
+    /// # use arrow_array::builder::PrimitiveDictionaryBuilder;
+    /// # use arrow_array::types::{UInt8Type, UInt16Type, UInt64Type};
+    /// # use arrow_array::UInt16Array;
+    /// # use arrow_schema::ArrowError;
+    ///
+    /// let mut u8_keyed_builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt64Type>::new();
+    ///
+    /// // appending too many values causes the dictionary to overflow
+    /// for i in 0..256 {
+    ///     u8_keyed_builder.append_value(i);
+    /// }
+    /// let result = u8_keyed_builder.append(256);
+    /// assert!(matches!(result, Err(ArrowError::DictionaryKeyOverflowError{})));
+    ///
+    /// // we need to upgrade to a larger key type
+    /// let mut u16_keyed_builder = PrimitiveDictionaryBuilder::<UInt16Type, UInt64Type>::try_new_from_builder(u8_keyed_builder).unwrap();
+    /// let dictionary_array = u16_keyed_builder.finish();
+    /// let keys = dictionary_array.keys();
+    ///
+    /// assert_eq!(keys, &UInt16Array::from_iter(0..256));
+    pub fn try_new_from_builder<K2>(
+        mut source: PrimitiveDictionaryBuilder<K2, V>,
+    ) -> Result<Self, ArrowError>
+    where
+        K::Native: NumCast,
+        K2: ArrowDictionaryKeyType,
+        K2::Native: NumCast,
+    {
+        let map = source.map;
+        let values_builder = source.values_builder;
+
+        let source_keys = source.keys_builder.finish();
+        let new_keys: PrimitiveArray<K> = source_keys.try_unary(|value| {
+            num::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
+                ArrowError::CastError(format!(
+                    "Can't cast dictionary keys from source type {:?} to type {:?}",
+                    K2::DATA_TYPE,
+                    K::DATA_TYPE
+                ))
+            })
+        })?;
+
+        // drop source key here because currently source_keys and new_keys are holding reference to
+        // the same underlying null_buffer. Below we want to call new_keys.into_builder() it must
+        // be the only reference holder.
+        drop(source_keys);
+
+        Ok(Self {
+            map,
+            keys_builder: new_keys
+                .into_builder()
+                .expect("underlying buffer has no references"),
+            values_builder,
+        })
     }
 }
 
@@ -431,7 +494,11 @@ mod tests {
     use crate::array::{Int32Array, UInt32Array, UInt8Array};
     use crate::builder::Decimal128Builder;
     use crate::cast::AsArray;
-    use crate::types::{Decimal128Type, Int32Type, UInt32Type, UInt8Type};
+    use crate::types::{
+        Date32Type, Decimal128Type, DurationNanosecondType, Float32Type, Float64Type, Int16Type,
+        Int32Type, Int64Type, Int8Type, TimestampNanosecondType, UInt16Type, UInt32Type,
+        UInt64Type, UInt8Type,
+    };
 
     #[test]
     fn test_primitive_dictionary_builder() {
@@ -648,5 +715,106 @@ mod tests {
             builder.map.capacity(),
             builder.values_builder.capacity()
         )
+    }
+
+    fn _test_try_new_from_builder_generic_for_key_types<K1, K2, V>(values: Vec<V::Native>)
+    where
+        K1: ArrowDictionaryKeyType,
+        K1::Native: NumCast,
+        K2: ArrowDictionaryKeyType,
+        K2::Native: NumCast + From<u8>,
+        V: ArrowPrimitiveType,
+    {
+        let mut source = PrimitiveDictionaryBuilder::<K1, V>::new();
+        source.append(values[0]).unwrap();
+        source.append_null();
+        source.append(values[1]).unwrap();
+        source.append(values[2]).unwrap();
+
+        let mut result = PrimitiveDictionaryBuilder::<K2, V>::try_new_from_builder(source).unwrap();
+        let array = result.finish();
+
+        let mut expected_keys_builder = PrimitiveBuilder::<K2>::new();
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(0u8));
+        expected_keys_builder.append_null();
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(1u8));
+        expected_keys_builder
+            .append_value(<<K2 as ArrowPrimitiveType>::Native as From<u8>>::from(2u8));
+        let expected_keys = expected_keys_builder.finish();
+        assert_eq!(array.keys(), &expected_keys);
+
+        let av = array.values();
+        let ava = av.as_any().downcast_ref::<PrimitiveArray<V>>().unwrap();
+        assert_eq!(ava.value(0), values[0]);
+        assert_eq!(ava.value(1), values[1]);
+        assert_eq!(ava.value(2), values[2]);
+    }
+
+    fn _test_try_new_from_builder_generic_for_value<T>(values: Vec<T::Native>)
+    where
+        T: ArrowPrimitiveType,
+    {
+        // test cast to bigger size unsigned
+        _test_try_new_from_builder_generic_for_key_types::<UInt8Type, UInt16Type, T>(
+            values.clone(),
+        );
+        // test cast going to smaller size unsigned
+        _test_try_new_from_builder_generic_for_key_types::<UInt16Type, UInt8Type, T>(
+            values.clone(),
+        );
+        // test cast going to bigger size signed
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, Int16Type, T>(values.clone());
+        // test cast going to smaller size signed
+        _test_try_new_from_builder_generic_for_key_types::<Int32Type, Int16Type, T>(values.clone());
+        // test going from signed to signed for different size changes
+        _test_try_new_from_builder_generic_for_key_types::<UInt8Type, Int16Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, UInt8Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int8Type, UInt16Type, T>(values.clone());
+        _test_try_new_from_builder_generic_for_key_types::<Int32Type, Int16Type, T>(values.clone());
+    }
+
+    #[test]
+    fn test_try_new_from_builder() {
+        // test unsigned types
+        _test_try_new_from_builder_generic_for_value::<UInt8Type>(vec![1, 2, 3]);
+        _test_try_new_from_builder_generic_for_value::<UInt16Type>(vec![1, 2, 3]);
+        _test_try_new_from_builder_generic_for_value::<UInt32Type>(vec![1, 2, 3]);
+        _test_try_new_from_builder_generic_for_value::<UInt64Type>(vec![1, 2, 3]);
+        // test signed types
+        _test_try_new_from_builder_generic_for_value::<Int8Type>(vec![-1, 0, 1]);
+        _test_try_new_from_builder_generic_for_value::<Int16Type>(vec![-1, 0, 1]);
+        _test_try_new_from_builder_generic_for_value::<Int32Type>(vec![-1, 0, 1]);
+        _test_try_new_from_builder_generic_for_value::<Int64Type>(vec![-1, 0, 1]);
+        // test some date types
+        _test_try_new_from_builder_generic_for_value::<Date32Type>(vec![5, 6, 7]);
+        _test_try_new_from_builder_generic_for_value::<DurationNanosecondType>(vec![1, 2, 3]);
+        _test_try_new_from_builder_generic_for_value::<TimestampNanosecondType>(vec![1, 2, 3]);
+        // test some floating point types
+        _test_try_new_from_builder_generic_for_value::<Float32Type>(vec![0.1, 0.2, 0.3]);
+        _test_try_new_from_builder_generic_for_value::<Float64Type>(vec![-0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn test_try_new_from_builder_cast_fails() {
+        let mut source_builder = PrimitiveDictionaryBuilder::<UInt16Type, UInt64Type>::new();
+        for i in 0..257 {
+            source_builder.append_value(i);
+        }
+
+        // there should be too many values that we can't downcast to the underlying type
+        // we have keys that wouldn't fit into UInt8Type
+        let result = PrimitiveDictionaryBuilder::<UInt8Type, UInt64Type>::try_new_from_builder(
+            source_builder,
+        );
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(matches!(e, ArrowError::CastError(_)));
+            assert_eq!(
+                e.to_string(),
+                "Cast error: Can't cast dictionary keys from source type UInt16 to type UInt8"
+            );
+        }
     }
 }

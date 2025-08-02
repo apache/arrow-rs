@@ -43,6 +43,7 @@
 use crate::errors::{ParquetError, Result};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_schema::{DataType, Field};
 use std::ops::Range;
@@ -87,6 +88,8 @@ fn is_leaf(data_type: &DataType) -> bool {
             | DataType::Binary
             | DataType::LargeBinary
             | DataType::BinaryView
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::FixedSizeBinary(_)
@@ -135,7 +138,7 @@ enum LevelInfoBuilder {
 impl LevelInfoBuilder {
     /// Create a new [`LevelInfoBuilder`] for the given [`Field`] and parent [`LevelContext`]
     fn try_new(field: &Field, parent_ctx: LevelContext, array: &ArrayRef) -> Result<Self> {
-        if field.data_type() != array.data_type() {
+        if !Self::types_compatible(field.data_type(), array.data_type()) {
             return Err(arrow_err!(format!(
                 "Incompatible type. Field '{}' has type {}, array has type {}",
                 field.name(),
@@ -352,10 +355,10 @@ impl LevelInfoBuilder {
                     let len = range.end - range.start;
 
                     let def_levels = info.def_levels.as_mut().unwrap();
-                    def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+                    def_levels.extend(std::iter::repeat_n(ctx.def_level - 1, len));
 
                     if let Some(rep_levels) = info.rep_levels.as_mut() {
-                        rep_levels.extend(std::iter::repeat(ctx.rep_level).take(len));
+                        rep_levels.extend(std::iter::repeat_n(ctx.rep_level, len));
                     }
                 })
             }
@@ -443,9 +446,9 @@ impl LevelInfoBuilder {
             let len = end_idx - start_idx;
             child.visit_leaves(|leaf| {
                 let rep_levels = leaf.rep_levels.as_mut().unwrap();
-                rep_levels.extend(std::iter::repeat(ctx.rep_level - 1).take(len));
+                rep_levels.extend(std::iter::repeat_n(ctx.rep_level - 1, len));
                 let def_levels = leaf.def_levels.as_mut().unwrap();
-                def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
+                def_levels.extend(std::iter::repeat_n(ctx.def_level - 1, len));
             })
         };
 
@@ -497,21 +500,22 @@ impl LevelInfoBuilder {
                 def_levels.reserve(len);
                 info.non_null_indices.reserve(len);
 
-                match info.array.logical_nulls() {
+                match &info.logical_nulls {
                     Some(nulls) => {
-                        // TODO: Faster bitmask iteration (#1757)
-                        for i in range {
-                            match nulls.is_valid(i) {
-                                true => {
-                                    def_levels.push(info.max_def_level);
-                                    info.non_null_indices.push(i)
-                                }
-                                false => def_levels.push(info.max_def_level - 1),
-                            }
-                        }
+                        assert!(range.end <= nulls.len());
+                        let nulls = nulls.inner();
+                        def_levels.extend(range.clone().map(|i| {
+                            // Safety: range.end was asserted to be in bounds earlier
+                            let valid = unsafe { nulls.value_unchecked(i) };
+                            info.max_def_level - (!valid as i16)
+                        }));
+                        info.non_null_indices.extend(
+                            BitIndexIterator::new(nulls.inner(), nulls.offset() + range.start, len)
+                                .map(|i| i + range.start),
+                        );
                     }
                     None => {
-                        let iter = std::iter::repeat(info.max_def_level).take(len);
+                        let iter = std::iter::repeat_n(info.max_def_level, len);
                         def_levels.extend(iter);
                         info.non_null_indices.extend(range);
                     }
@@ -521,7 +525,7 @@ impl LevelInfoBuilder {
         }
 
         if let Some(rep_levels) = &mut info.rep_levels {
-            rep_levels.extend(std::iter::repeat(info.max_rep_level).take(len))
+            rep_levels.extend(std::iter::repeat_n(info.max_rep_level, len))
         }
     }
 
@@ -539,7 +543,25 @@ impl LevelInfoBuilder {
             }
         }
     }
+
+    /// Determine if the fields are compatible for purposes of constructing `LevelBuilderInfo`.
+    ///
+    /// Fields are compatible if they're the same type. Otherwise if one of them is a dictionary
+    /// and the other is a native array, the dictionary values must have the same type as the
+    /// native array
+    fn types_compatible(a: &DataType, b: &DataType) -> bool {
+        if a == b {
+            return true;
+        }
+
+        match (a, b) {
+            (DataType::Dictionary(_, v), b) => v.as_ref() == b,
+            (a, DataType::Dictionary(_, v)) => a == v.as_ref(),
+            _ => false,
+        }
+    }
 }
+
 /// The data necessary to write a primitive Arrow array to parquet, taking into account
 /// any non-primitive parents it may have in the arrow representation
 #[derive(Debug, Clone)]
@@ -566,6 +588,9 @@ pub(crate) struct ArrayLevels {
 
     /// The arrow array
     array: ArrayRef,
+
+    /// cached logical nulls of the array.
+    logical_nulls: Option<NullBuffer>,
 }
 
 impl PartialEq for ArrayLevels {
@@ -576,6 +601,7 @@ impl PartialEq for ArrayLevels {
             && self.max_def_level == other.max_def_level
             && self.max_rep_level == other.max_rep_level
             && self.array.as_ref() == other.array.as_ref()
+            && self.logical_nulls.as_ref() == other.logical_nulls.as_ref()
     }
 }
 impl Eq for ArrayLevels {}
@@ -588,6 +614,8 @@ impl ArrayLevels {
             false => ctx.def_level,
         };
 
+        let logical_nulls = array.logical_nulls();
+
         Self {
             def_levels: (max_def_level != 0).then(Vec::new),
             rep_levels: (max_rep_level != 0).then(Vec::new),
@@ -595,6 +623,7 @@ impl ArrayLevels {
             max_def_level,
             max_rep_level,
             array,
+            logical_nulls,
         }
     }
 
@@ -668,6 +697,7 @@ mod tests {
             max_def_level: 2,
             max_rep_level: 2,
             array: Arc::new(primitives),
+            logical_nulls: None,
         };
         assert_eq!(&levels[0], &expected);
     }
@@ -688,6 +718,7 @@ mod tests {
             max_def_level: 0,
             max_rep_level: 0,
             array,
+            logical_nulls: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -707,6 +738,7 @@ mod tests {
         let levels = calculate_array_levels(&array, &field).unwrap();
         assert_eq!(levels.len(), 1);
 
+        let logical_nulls = array.logical_nulls();
         let expected_levels = ArrayLevels {
             def_levels: Some(vec![1, 0, 1, 1, 0]),
             rep_levels: None,
@@ -714,6 +746,7 @@ mod tests {
             max_def_level: 1,
             max_rep_level: 0,
             array,
+            logical_nulls,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -748,6 +781,7 @@ mod tests {
             max_def_level: 1,
             max_rep_level: 1,
             array: Arc::new(leaf_array),
+            logical_nulls: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -781,6 +815,7 @@ mod tests {
             max_def_level: 2,
             max_rep_level: 1,
             array: Arc::new(leaf_array),
+            logical_nulls: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -830,6 +865,7 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 1,
             array: Arc::new(leaf),
+            logical_nulls: None,
         };
 
         assert_eq!(&levels[0], &expected_levels);
@@ -880,6 +916,7 @@ mod tests {
             max_def_level: 5,
             max_rep_level: 2,
             array: Arc::new(leaf),
+            logical_nulls: None,
         };
 
         assert_eq!(&levels[0], &expected_levels);
@@ -917,6 +954,7 @@ mod tests {
             max_def_level: 1,
             max_rep_level: 1,
             array: Arc::new(leaf),
+            logical_nulls: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -949,6 +987,7 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 1,
             array: Arc::new(leaf),
+            logical_nulls: None,
         };
         assert_eq!(&levels[0], &expected_levels);
 
@@ -997,6 +1036,7 @@ mod tests {
             max_def_level: 5,
             max_rep_level: 2,
             array: Arc::new(leaf),
+            logical_nulls: None,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1029,6 +1069,7 @@ mod tests {
         let levels = calculate_array_levels(&a_array, &a_field).unwrap();
         assert_eq!(levels.len(), 1);
 
+        let logical_nulls = leaf.logical_nulls();
         let expected_levels = ArrayLevels {
             def_levels: Some(vec![3, 2, 3, 1, 0, 3]),
             rep_levels: None,
@@ -1036,6 +1077,7 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 0,
             array: leaf,
+            logical_nulls,
         };
         assert_eq!(&levels[0], &expected_levels);
     }
@@ -1075,6 +1117,7 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 1,
             array: Arc::new(a_values),
+            logical_nulls: None,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1167,12 +1210,14 @@ mod tests {
             max_def_level: 0,
             max_rep_level: 0,
             array: Arc::new(a),
+            logical_nulls: None,
         };
         assert_eq!(list_level, &expected_level);
 
         // test "b" levels
         let list_level = levels.get(1).unwrap();
 
+        let b_logical_nulls = b.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![1, 0, 0, 1, 1]),
             rep_levels: None,
@@ -1180,12 +1225,14 @@ mod tests {
             max_def_level: 1,
             max_rep_level: 0,
             array: Arc::new(b),
+            logical_nulls: b_logical_nulls,
         };
         assert_eq!(list_level, &expected_level);
 
         // test "d" levels
         let list_level = levels.get(2).unwrap();
 
+        let d_logical_nulls = d.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![1, 1, 1, 2, 1]),
             rep_levels: None,
@@ -1193,12 +1240,14 @@ mod tests {
             max_def_level: 2,
             max_rep_level: 0,
             array: Arc::new(d),
+            logical_nulls: d_logical_nulls,
         };
         assert_eq!(list_level, &expected_level);
 
         // test "f" levels
         let list_level = levels.get(3).unwrap();
 
+        let f_logical_nulls = f.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![3, 2, 3, 2, 3]),
             rep_levels: None,
@@ -1206,6 +1255,7 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 0,
             array: Arc::new(f),
+            logical_nulls: f_logical_nulls,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1301,6 +1351,7 @@ mod tests {
         assert_eq!(levels.len(), 2);
 
         let map = batch.column(0).as_map();
+        let map_keys_logical_nulls = map.keys().logical_nulls();
 
         // test key levels
         let list_level = &levels[0];
@@ -1312,11 +1363,13 @@ mod tests {
             max_def_level: 1,
             max_rep_level: 1,
             array: map.keys().clone(),
+            logical_nulls: map_keys_logical_nulls,
         };
         assert_eq!(list_level, &expected_level);
 
         // test values levels
         let list_level = levels.get(1).unwrap();
+        let map_values_logical_nulls = map.values().logical_nulls();
 
         let expected_level = ArrayLevels {
             def_levels: Some(vec![2, 2, 2, 1, 2, 1, 2]),
@@ -1325,6 +1378,7 @@ mod tests {
             max_def_level: 2,
             max_rep_level: 1,
             array: map.values().clone(),
+            logical_nulls: map_values_logical_nulls,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1403,6 +1457,7 @@ mod tests {
         let levels = calculate_array_levels(rb.column(0), rb.schema().field(0)).unwrap();
         let list_level = &levels[0];
 
+        let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![4, 1, 0, 2, 2, 3, 4]),
             rep_levels: Some(vec![0, 0, 0, 0, 1, 0, 0]),
@@ -1410,6 +1465,7 @@ mod tests {
             max_def_level: 4,
             max_rep_level: 1,
             array: values,
+            logical_nulls,
         };
 
         assert_eq!(list_level, &expected_level);
@@ -1443,6 +1499,7 @@ mod tests {
 
         assert_eq!(levels.len(), 1);
 
+        let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![4, 4, 3, 2, 0, 4, 4, 0, 1]),
             rep_levels: Some(vec![0, 1, 0, 0, 0, 0, 1, 0, 0]),
@@ -1450,6 +1507,7 @@ mod tests {
             max_def_level: 4,
             max_rep_level: 1,
             array: values,
+            logical_nulls,
         };
 
         assert_eq!(&levels[0], &expected_level);
@@ -1528,6 +1586,7 @@ mod tests {
 
         assert_eq!(levels.len(), 2);
 
+        let a1_logical_nulls = a1_values.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![0, 0, 1, 6, 5, 2, 3, 1]),
             rep_levels: Some(vec![0, 0, 0, 0, 2, 0, 1, 0]),
@@ -1535,10 +1594,12 @@ mod tests {
             max_def_level: 6,
             max_rep_level: 2,
             array: a1_values,
+            logical_nulls: a1_logical_nulls,
         };
 
         assert_eq!(&levels[0], &expected_level);
 
+        let a2_logical_nulls = a2_values.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![0, 0, 1, 3, 2, 4, 1]),
             rep_levels: Some(vec![0, 0, 0, 0, 0, 1, 0]),
@@ -1546,6 +1607,7 @@ mod tests {
             max_def_level: 4,
             max_rep_level: 1,
             array: a2_values,
+            logical_nulls: a2_logical_nulls,
         };
 
         assert_eq!(&levels[1], &expected_level);
@@ -1577,6 +1639,7 @@ mod tests {
 
         let list_level = &levels[0];
 
+        let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![0, 0, 3, 3]),
             rep_levels: Some(vec![0, 0, 0, 1]),
@@ -1584,6 +1647,7 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 1,
             array: values,
+            logical_nulls,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1727,6 +1791,7 @@ mod tests {
         let b_levels = &levels[1];
 
         // [[{a: 1}, null], null, [null, null], [{a: null}, {a: 2}]]
+        let values_a_logical_nulls = values_a.logical_nulls();
         let expected_a = ArrayLevels {
             def_levels: Some(vec![4, 2, 0, 2, 2, 3, 4]),
             rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
@@ -1734,8 +1799,10 @@ mod tests {
             max_def_level: 4,
             max_rep_level: 1,
             array: values_a,
+            logical_nulls: values_a_logical_nulls,
         };
         // [[{b: 2}, null], null, [null, null], [{b: 3}, {b: 4}]]
+        let values_b_logical_nulls = values_b.logical_nulls();
         let expected_b = ArrayLevels {
             def_levels: Some(vec![3, 2, 0, 2, 2, 3, 3]),
             rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1]),
@@ -1743,6 +1810,7 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 1,
             array: values_b,
+            logical_nulls: values_b_logical_nulls,
         };
 
         assert_eq!(a_levels, &expected_a);
@@ -1767,6 +1835,7 @@ mod tests {
 
         let list_level = &levels[0];
 
+        let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![1, 0, 1]),
             rep_levels: Some(vec![0, 0, 0]),
@@ -1774,6 +1843,7 @@ mod tests {
             max_def_level: 3,
             max_rep_level: 1,
             array: values,
+            logical_nulls,
         };
         assert_eq!(list_level, &expected_level);
     }
@@ -1802,6 +1872,7 @@ mod tests {
         builder.write(0..4);
         let levels = builder.finish();
 
+        let logical_nulls = values.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![5, 4, 5, 2, 5, 3, 5, 5, 4, 4, 0]),
             rep_levels: Some(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
@@ -1809,6 +1880,7 @@ mod tests {
             max_def_level: 5,
             max_rep_level: 2,
             array: values,
+            logical_nulls,
         };
 
         assert_eq!(levels[0], expected_level);
@@ -1832,6 +1904,8 @@ mod tests {
         let mut builder = levels(&item_field, dict.clone());
         builder.write(0..4);
         let levels = builder.finish();
+
+        let logical_nulls = dict.logical_nulls();
         let expected_level = ArrayLevels {
             def_levels: Some(vec![0, 0, 1, 1]),
             rep_levels: None,
@@ -1839,6 +1913,7 @@ mod tests {
             max_def_level: 1,
             max_rep_level: 0,
             array: Arc::new(dict),
+            logical_nulls,
         };
         assert_eq!(levels[0], expected_level);
     }

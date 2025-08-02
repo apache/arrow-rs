@@ -30,7 +30,6 @@ on:
   pull_request:
 
 jobs:
-
   # Check workspace wide compile and test with default features for
   # mac
   macos:
@@ -51,8 +50,8 @@ jobs:
         run: |
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
-          cargo test
-
+          # PyArrow tests happen in integration.yml.
+          cargo test --workspace
 
   # Check workspace wide compile and test with default features for
   # windows
@@ -83,8 +82,7 @@ jobs:
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           export PATH=$PATH:/d/protoc/bin
-          cargo test
-
+          cargo test --workspace
 
   # Run cargo fmt for all crates
   lint:
@@ -120,15 +118,6 @@ jobs:
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
         run: cargo install cargo-msrv
-      - name: Downgrade arrow-pyarrow-integration-testing dependencies
-        working-directory: arrow-pyarrow-integration-testing
-        # Necessary because half 2.5 requires rust 1.81 or newer
-        run: |
-          cargo update -p half --precise 2.4.0
-      - name: Downgrade workspace dependencies
-        # Necessary because half 2.5 requires rust 1.81 or newer
-        run: |
-          cargo update -p half --precise 2.4.0
       - name: Check all packages
         run: |
           # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies

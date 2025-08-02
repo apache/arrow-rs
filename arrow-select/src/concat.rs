@@ -31,14 +31,16 @@
 //! ```
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBuilder, GenericByteBuilder, PrimitiveBuilder};
+use arrow_array::builder::{
+    BooleanBuilder, GenericByteBuilder, GenericByteViewBuilder, PrimitiveBuilder,
+};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_data::ArrayDataBuilder;
-use arrow_schema::{ArrowError, DataType, FieldRef, SchemaRef};
+use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
@@ -82,6 +84,15 @@ fn fixed_size_list_capacity(arrays: &[&dyn Array], data_type: &DataType) -> Capa
     } else {
         unreachable!("illegal data type for fixed size list")
     }
+}
+
+fn concat_byte_view<B: ByteViewType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
+    let mut builder =
+        GenericByteViewBuilder::<B>::with_capacity(arrays.iter().map(|a| a.len()).sum());
+    for &array in arrays.iter() {
+        builder.append_array(array.as_byte_view());
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 fn concat_dictionaries<K: ArrowDictionaryKeyType>(
@@ -231,6 +242,47 @@ fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, Arr
     Ok(Arc::new(builder.finish()))
 }
 
+fn concat_structs(arrays: &[&dyn Array], fields: &Fields) -> Result<ArrayRef, ArrowError> {
+    let mut len = 0;
+    let mut has_nulls = false;
+    let structs = arrays
+        .iter()
+        .map(|a| {
+            len += a.len();
+            has_nulls |= a.null_count() > 0;
+            a.as_struct()
+        })
+        .collect::<Vec<_>>();
+
+    let nulls = has_nulls.then(|| {
+        let mut b = BooleanBufferBuilder::new(len);
+        for s in &structs {
+            match s.nulls() {
+                Some(n) => b.append_buffer(n.inner()),
+                None => b.append_n(s.len(), true),
+            }
+        }
+        NullBuffer::new(b.finish())
+    });
+
+    let column_concat_result = (0..fields.len())
+        .map(|i| {
+            let extracted_cols = structs
+                .iter()
+                .map(|s| s.column(i).as_ref())
+                .collect::<Vec<_>>();
+            concat(&extracted_cols)
+        })
+        .collect::<Result<Vec<_>, ArrowError>>()?;
+
+    Ok(Arc::new(StructArray::try_new_with_length(
+        fields.clone(),
+        column_concat_result,
+        nulls,
+        len,
+    )?))
+}
+
 /// Concatenate multiple RunArray instances into a single RunArray.
 ///
 /// This function handles the special case of concatenating RunArrays by:
@@ -370,6 +422,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         }
         DataType::List(field) => concat_lists::<i32>(arrays, field),
         DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        DataType::Struct(fields) => concat_structs(arrays, fields),
         DataType::Utf8 => concat_bytes::<Utf8Type>(arrays),
         DataType::LargeUtf8 => concat_bytes::<LargeUtf8Type>(arrays),
         DataType::Binary => concat_bytes::<BinaryType>(arrays),
@@ -384,6 +437,8 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
                 _ => unreachable!("Unsupported run end index type: {r:?}"),
             }
         }
+        DataType::Utf8View => concat_byte_view::<StringViewType>(arrays),
+        DataType::BinaryView => concat_byte_view::<BinaryViewType>(arrays),
         _ => {
             let capacity = get_capacity(arrays, d);
             concat_fallback(arrays, capacity)
@@ -583,6 +638,30 @@ mod tests {
             Some("hello"),
             Some("world"),
             Some("2"),
+            Some("3"),
+            Some("4"),
+            Some("foo"),
+            Some("bar"),
+            None,
+            Some("baz"),
+        ])) as ArrayRef;
+
+        assert_eq!(&arr, &expected_output);
+    }
+
+    #[test]
+    fn test_concat_string_view_arrays() {
+        let arr = concat(&[
+            &StringViewArray::from(vec!["helloxxxxxxxxxxa", "world____________"]),
+            &StringViewArray::from(vec!["helloxxxxxxxxxxy", "3", "4"]),
+            &StringViewArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]),
+        ])
+        .unwrap();
+
+        let expected_output = Arc::new(StringViewArray::from(vec![
+            Some("helloxxxxxxxxxxa"),
+            Some("world____________"),
+            Some("helloxxxxxxxxxxy"),
             Some("3"),
             Some("4"),
             Some("foo"),
@@ -885,6 +964,53 @@ mod tests {
     }
 
     #[test]
+    fn test_concat_struct_arrays_no_nulls() {
+        let input_1a = vec![1, 2, 3];
+        let input_1b = vec!["one", "two", "three"];
+        let input_2a = vec![4, 5, 6, 7];
+        let input_2b = vec!["four", "five", "six", "seven"];
+
+        let struct_from_primitives = |ints: Vec<i64>, strings: Vec<&str>| {
+            StructArray::try_from(vec![
+                ("ints", Arc::new(Int64Array::from(ints)) as _),
+                ("strings", Arc::new(StringArray::from(strings)) as _),
+            ])
+        };
+
+        let expected_output = struct_from_primitives(
+            [input_1a.clone(), input_2a.clone()].concat(),
+            [input_1b.clone(), input_2b.clone()].concat(),
+        )
+        .unwrap();
+
+        let input_1 = struct_from_primitives(input_1a, input_1b).unwrap();
+        let input_2 = struct_from_primitives(input_2a, input_2b).unwrap();
+
+        let arr = concat(&[&input_1, &input_2]).unwrap();
+        let struct_result = arr.as_struct();
+
+        assert_eq!(struct_result, &expected_output);
+        assert_eq!(arr.null_count(), 0);
+    }
+
+    #[test]
+    fn test_concat_struct_no_fields() {
+        let input_1 = StructArray::new_empty_fields(10, None);
+        let input_2 = StructArray::new_empty_fields(10, None);
+        let arr = concat(&[&input_1, &input_2]).unwrap();
+
+        assert_eq!(arr.len(), 20);
+        assert_eq!(arr.null_count(), 0);
+
+        let input1_valid = StructArray::new_empty_fields(10, Some(NullBuffer::new_valid(10)));
+        let input2_null = StructArray::new_empty_fields(10, Some(NullBuffer::new_null(10)));
+        let arr = concat(&[&input1_valid, &input2_null]).unwrap();
+
+        assert_eq!(arr.len(), 20);
+        assert_eq!(arr.null_count(), 10);
+    }
+
+    #[test]
     fn test_string_array_slices() {
         let input_1 = StringArray::from(vec!["hello", "A", "B", "C"]);
         let input_2 = StringArray::from(vec!["world", "D", "E", "Z"]);
@@ -1008,6 +1134,49 @@ mod tests {
         // Not 30 as this is done on a best-effort basis
         let values_len = dictionary.values().len();
         assert!((30..40).contains(&values_len), "{values_len}")
+    }
+
+    #[test]
+    fn test_primitive_dictionary_merge() {
+        // Same value repeated 5 times.
+        let keys = vec![1; 5];
+        let values = (10..20).collect::<Vec<_>>();
+        let dict = DictionaryArray::new(
+            Int8Array::from(keys.clone()),
+            Arc::new(Int32Array::from(values.clone())),
+        );
+        let other = DictionaryArray::new(
+            Int8Array::from(keys.clone()),
+            Arc::new(Int32Array::from(values.clone())),
+        );
+
+        let result_same_dictionary = concat(&[&dict, &dict]).unwrap();
+        // Verify pointer equality check succeeds, and therefore the
+        // dictionaries are not merged. A single values buffer should be reused
+        // in this case.
+        assert!(dict.values().to_data().ptr_eq(
+            &result_same_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .to_data()
+        ));
+        assert_eq!(
+            result_same_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .len(),
+            values.len(),
+        );
+
+        let result_cloned_dictionary = concat(&[&dict, &other]).unwrap();
+        // Should have only 1 underlying value since all keys reference it.
+        assert_eq!(
+            result_cloned_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1166,7 +1335,7 @@ mod tests {
         assert_eq!(data.buffers()[0].len(), 120);
         assert_eq!(data.buffers()[0].capacity(), 128); // Nearest multiple of 64
 
-        let a = StringArray::from_iter_values(std::iter::repeat("foo").take(100));
+        let a = StringArray::from_iter_values(std::iter::repeat_n("foo", 100));
         let b = StringArray::from(vec!["bingo", "bongo", "lorem", ""]);
 
         let a = concat(&[&a, &b]).unwrap();
@@ -1189,8 +1358,8 @@ mod tests {
         assert_eq!(data.buffers()[1].len(), 135);
         assert_eq!(data.buffers()[1].capacity(), 192); // Nearest multiple of 64
 
-        let a = LargeBinaryArray::from_iter_values(std::iter::repeat(b"foo").take(100));
-        let b = LargeBinaryArray::from_iter_values(std::iter::repeat(b"cupcakes").take(10));
+        let a = LargeBinaryArray::from_iter_values(std::iter::repeat_n(b"foo", 100));
+        let b = LargeBinaryArray::from_iter_values(std::iter::repeat_n(b"cupcakes", 10));
 
         let a = concat(&[&a, &b]).unwrap();
         let data = a.to_data();

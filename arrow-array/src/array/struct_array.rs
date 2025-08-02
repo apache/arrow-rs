@@ -108,7 +108,7 @@ impl StructArray {
         arrays: Vec<ArrayRef>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        let len = arrays.first().map(|x| x.len()).ok_or_else(||ArrowError::InvalidArgumentError("use StructArray::try_new_with_length or StructArray::new_empty to create a struct array with no fields so that the length can be set correctly".to_string()))?;
+        let len = arrays.first().map(|x| x.len()).ok_or_else(||ArrowError::InvalidArgumentError("use StructArray::try_new_with_length or StructArray::new_empty_fields to create a struct array with no fields so that the length can be set correctly".to_string()))?;
 
         Self::try_new_with_length(fields, arrays, nulls, len)
     }

@@ -129,6 +129,14 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         self.offsets_builder.append(self.next_offset());
     }
 
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
+        let next_offset = self.next_offset();
+        self.offsets_builder.append_n(n, next_offset);
+    }
+
     /// Appends array values and null to this builder as is
     /// (this means that underlying null values are copied as is).
     #[inline]
@@ -439,15 +447,18 @@ mod tests {
         builder.append_null();
         builder.append_null();
         builder.append_null();
-        assert_eq!(3, builder.len());
+        builder.append_nulls(2);
+        assert_eq!(5, builder.len());
         assert!(!builder.is_empty());
 
         let array = builder.finish();
-        assert_eq!(3, array.null_count());
-        assert_eq!(3, array.len());
+        assert_eq!(5, array.null_count());
+        assert_eq!(5, array.len());
         assert!(array.is_null(0));
         assert!(array.is_null(1));
         assert!(array.is_null(2));
+        assert!(array.is_null(3));
+        assert!(array.is_null(4));
     }
 
     #[test]
@@ -475,16 +486,23 @@ mod tests {
         builder.append_null();
         builder.append_value(b"arrow");
         builder.append_value(b"");
+        builder.append_nulls(2);
+        builder.append_value(b"hi");
         let array = builder.finish();
 
-        assert_eq!(4, array.len());
-        assert_eq!(1, array.null_count());
+        assert_eq!(7, array.len());
+        assert_eq!(3, array.null_count());
         assert_eq!(b"parquet", array.value(0));
         assert!(array.is_null(1));
+        assert!(array.is_null(4));
+        assert!(array.is_null(5));
         assert_eq!(b"arrow", array.value(2));
         assert_eq!(b"", array.value(1));
+        assert_eq!(b"hi", array.value(6));
+
         assert_eq!(O::zero(), array.value_offsets()[0]);
         assert_eq!(O::from_usize(7).unwrap(), array.value_offsets()[2]);
+        assert_eq!(O::from_usize(14).unwrap(), array.value_offsets()[7]);
         assert_eq!(O::from_usize(5).unwrap(), array.value_length(2));
     }
 
@@ -509,7 +527,9 @@ mod tests {
         builder.append_option(Some("rust"));
         builder.append_option(None::<&str>);
         builder.append_option(None::<String>);
-        assert_eq!(7, builder.len());
+        builder.append_nulls(2);
+        builder.append_value("parquet");
+        assert_eq!(10, builder.len());
 
         assert_eq!(
             GenericStringArray::<O>::from(vec![
@@ -519,7 +539,10 @@ mod tests {
                 None,
                 Some("rust"),
                 None,
-                None
+                None,
+                None,
+                None,
+                Some("parquet")
             ]),
             builder.finish()
         );

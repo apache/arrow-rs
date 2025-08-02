@@ -27,8 +27,8 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
-    IntervalDayTimeArray, IntervalYearMonthArray,
+    ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+    FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
 };
 use arrow_buffer::{i256, Buffer, IntervalDayTime};
 use arrow_data::ArrayDataBuilder;
@@ -64,6 +64,22 @@ pub fn make_fixed_len_byte_array_reader(
     };
     match &data_type {
         ArrowType::FixedSizeBinary(_) => {}
+        ArrowType::Decimal32(_, _) => {
+            if byte_length > 4 {
+                return Err(general_err!(
+                    "decimal 32 type too large, must be less then 4 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
+        ArrowType::Decimal64(_, _) => {
+            if byte_length > 8 {
+                return Err(general_err!(
+                    "decimal 64 type too large, must be less then 8 bytes, got {}",
+                    byte_length
+                ));
+            }
+        }
         ArrowType::Decimal128(_, _) => {
             if byte_length > 16 {
                 return Err(general_err!(
@@ -168,6 +184,16 @@ impl ArrayReader for FixedLenByteArrayReader {
         // conversion lambdas are all infallible. This improves performance by avoiding a branch in
         // the inner loop (see docs for `PrimitiveArray::from_unary`).
         let array: ArrayRef = match &self.data_type {
+            ArrowType::Decimal32(p, s) => {
+                let f = |b: &[u8]| i32::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal32Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
+            }
+            ArrowType::Decimal64(p, s) => {
+                let f = |b: &[u8]| i64::from_be_bytes(sign_extend_be(b));
+                Arc::new(Decimal64Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)
+                    as ArrayRef
+            }
             ArrowType::Decimal128(p, s) => {
                 let f = |b: &[u8]| i128::from_be_bytes(sign_extend_be(b));
                 Arc::new(Decimal128Array::from_unary(&binary, f).with_precision_and_scale(*p, *s)?)

@@ -128,6 +128,44 @@ mod levels;
 /// [`ListArray`]: https://docs.rs/arrow/latest/arrow/array/type.ListArray.html
 /// [`IntervalMonthDayNanoArray`]: https://docs.rs/arrow/latest/arrow/array/type.IntervalMonthDayNanoArray.html
 /// [support nanosecond intervals]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
+///
+/// ## Type Compatibility
+/// The writer can write Arrow [`RecordBatch`]s that are logically equivalent. This means that for
+/// a  given column, the writer can accept multiple Arrow [`DataType`]s that contain the same
+/// value type.
+///
+/// Currently, only compatibility between Arrow dictionary and native arrays are supported.
+/// Additional type compatibility may be added in future (see [issue #8012](https://github.com/apache/arrow-rs/issues/8012))
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{DictionaryArray, RecordBatch, StringArray, UInt8Array};
+/// # use arrow_schema::{DataType, Field, Schema};
+/// # use parquet::arrow::arrow_writer::ArrowWriter;
+/// let record_batch1 = RecordBatch::try_new(
+///    Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)])),
+///    vec![Arc::new(StringArray::from_iter_values(vec!["a", "b"]))]
+///  )
+/// .unwrap();
+///
+/// let mut buffer = Vec::new();
+/// let mut writer = ArrowWriter::try_new(&mut buffer, record_batch1.schema(), None).unwrap();
+/// writer.write(&record_batch1).unwrap();
+///
+/// let record_batch2 = RecordBatch::try_new(
+///     Arc::new(Schema::new(vec![Field::new(
+///         "col",
+///         DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+///          false,
+///     )])),
+///     vec![Arc::new(DictionaryArray::new(
+///          UInt8Array::from_iter_values(vec![0, 1]),
+///          Arc::new(StringArray::from_iter_values(vec!["b", "c"])),
+///      ))],
+///  )
+///  .unwrap();
+///  writer.write(&record_batch2).unwrap();
+///  writer.close();
+/// ```
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
@@ -297,6 +335,14 @@ impl<W: Write + Send> ArrowWriter<W> {
         Ok(())
     }
 
+    /// Writes the given buf bytes to the internal buffer.
+    ///
+    /// It's safe to use this method to write data to the underlying writer,
+    /// because it will ensure that the buffering and byte‐counting layers are used.
+    pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.writer.write_all(buf)
+    }
+
     /// Flushes all buffered rows into a new row group
     pub fn flush(&mut self) -> Result<()> {
         let in_progress = match self.in_progress.take() {
@@ -326,8 +372,12 @@ impl<W: Write + Send> ArrowWriter<W> {
 
     /// Returns a mutable reference to the underlying writer.
     ///
-    /// It is inadvisable to directly write to the underlying writer, doing so
-    /// will likely result in a corrupt parquet file
+    /// **Warning**: if you write directly to this writer, you will skip
+    /// the `TrackedWrite` buffering and byte‐counting layers. That’ll cause
+    /// the file footer’s recorded offsets and sizes to diverge from reality,
+    /// resulting in an unreadable or corrupted Parquet file.
+    ///
+    /// If you want to write safely to the underlying writer, use [`Self::write_all`].
     pub fn inner_mut(&mut self) -> &mut W {
         self.writer.inner_mut()
     }
@@ -1027,6 +1077,19 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     let array = values.inner().typed_data::<i32>();
                     write_primitive(typed, array, levels)
                 }
+                ArrowDataType::Decimal32(_, _) => {
+                    let array = column
+                        .as_primitive::<Decimal32Type>()
+                        .unary::<_, Int32Type>(|v| v);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Decimal64(_, _) => {
+                    // use the int32 to represent the decimal with low precision
+                    let array = column
+                        .as_primitive::<Decimal64Type>()
+                        .unary::<_, Int32Type>(|v| v as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int32 to represent the decimal with low precision
                     let array = column
@@ -1042,6 +1105,20 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
+                    ArrowDataType::Decimal32(_, _) => {
+                        let array = arrow_cast::cast(column, value_type)?;
+                        let array = array
+                            .as_primitive::<Decimal32Type>()
+                            .unary::<_, Int32Type>(|v| v);
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    ArrowDataType::Decimal64(_, _) => {
+                        let array = arrow_cast::cast(column, value_type)?;
+                        let array = array
+                            .as_primitive::<Decimal64Type>()
+                            .unary::<_, Int32Type>(|v| v as i32);
+                        write_primitive(typed, array.values(), levels)
+                    }
                     ArrowDataType::Decimal128(_, _) => {
                         let array = arrow_cast::cast(column, value_type)?;
                         let array = array
@@ -1096,6 +1173,12 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     let array = values.inner().typed_data::<i64>();
                     write_primitive(typed, array, levels)
                 }
+                ArrowDataType::Decimal64(_, _) => {
+                    let array = column
+                        .as_primitive::<Decimal64Type>()
+                        .unary::<_, Int64Type>(|v| v);
+                    write_primitive(typed, array.values(), levels)
+                }
                 ArrowDataType::Decimal128(_, _) => {
                     // use the int64 to represent the decimal with low precision
                     let array = column
@@ -1111,6 +1194,13 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
+                    ArrowDataType::Decimal64(_, _) => {
+                        let array = arrow_cast::cast(column, value_type)?;
+                        let array = array
+                            .as_primitive::<Decimal64Type>()
+                            .unary::<_, Int64Type>(|v| v);
+                        write_primitive(typed, array.values(), levels)
+                    }
                     ArrowDataType::Decimal128(_, _) => {
                         let array = arrow_cast::cast(column, value_type)?;
                         let array = array
@@ -1183,6 +1273,14 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .downcast_ref::<arrow_array::FixedSizeBinaryArray>()
                         .unwrap();
                     get_fsb_array_slice(array, indices)
+                }
+                ArrowDataType::Decimal32(_, _) => {
+                    let array = column.as_primitive::<Decimal32Type>();
+                    get_decimal_32_array_slice(array, indices)
+                }
+                ArrowDataType::Decimal64(_, _) => {
+                    let array = column.as_primitive::<Decimal64Type>();
+                    get_decimal_64_array_slice(array, indices)
                 }
                 ArrowDataType::Decimal128(_, _) => {
                     let array = column.as_primitive::<Decimal128Type>();
@@ -1267,6 +1365,34 @@ fn get_interval_dt_array_slice(
     values
 }
 
+fn get_decimal_32_array_slice(
+    array: &arrow_array::Decimal32Array,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    let size = decimal_length_from_precision(array.precision());
+    for i in indices {
+        let as_be_bytes = array.value(*i).to_be_bytes();
+        let resized_value = as_be_bytes[(4 - size)..].to_vec();
+        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+    }
+    values
+}
+
+fn get_decimal_64_array_slice(
+    array: &arrow_array::Decimal64Array,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    let size = decimal_length_from_precision(array.precision());
+    for i in indices {
+        let as_be_bytes = array.value(*i).to_be_bytes();
+        let resized_value = as_be_bytes[(8 - size)..].to_vec();
+        values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
+    }
+    values
+}
+
 fn get_decimal_128_array_slice(
     array: &arrow_array::Decimal128Array,
     indices: &[usize],
@@ -1324,9 +1450,16 @@ mod tests {
     use super::*;
 
     use std::fs::File;
+    use std::io::Seek;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
+    use crate::column::page::{Page, PageReader};
+    use crate::file::page_encoding_stats::PageEncodingStats;
+    use crate::file::reader::SerializedPageReader;
+    use crate::format::PageHeader;
+    use crate::schema::types::ColumnPath;
+    use crate::thrift::TCompactSliceInputProtocol;
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
@@ -1337,12 +1470,12 @@ mod tests {
     use arrow_schema::Fields;
     use half::f16;
     use num::{FromPrimitive, ToPrimitive};
+    use tempfile::tempfile;
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
-    use crate::file::metadata::ParquetMetaData;
+    use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
     use crate::file::page_index::index::Index;
-    use crate::file::page_index::index_reader::read_offset_indexes;
     use crate::file::properties::{
         BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
     };
@@ -2023,7 +2156,9 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
 
-        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader =
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap();
 
         let column = reader.metadata().row_group(0).columns();
 
@@ -2036,7 +2171,8 @@ mod tests {
             "Expected a dictionary page"
         );
 
-        let offset_indexes = read_offset_indexes(&file, column).unwrap().unwrap();
+        assert!(reader.metadata().offset_index().is_some());
+        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
 
         let page_locations = offset_indexes[0].page_locations.clone();
 
@@ -2045,7 +2181,7 @@ mod tests {
         assert_eq!(
             page_locations.len(),
             10,
-            "Expected 9 pages but got {page_locations:#?}"
+            "Expected 10 pages but got {page_locations:#?}"
         );
     }
 
@@ -2569,7 +2705,7 @@ mod tests {
     #[test]
     fn binary_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
@@ -2579,7 +2715,7 @@ mod tests {
     #[test]
     fn binary_view_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
@@ -2620,7 +2756,7 @@ mod tests {
     #[test]
     fn binary_column_bloom_filter() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         let array = Arc::new(BinaryArray::from_iter_values(many_vecs_iter));
@@ -2659,7 +2795,7 @@ mod tests {
     #[test]
     fn large_binary_single_column() {
         let one_vec: Vec<u8> = (0..SMALL_SIZE as u8).collect();
-        let many_vecs: Vec<_> = std::iter::repeat(one_vec).take(SMALL_SIZE).collect();
+        let many_vecs: Vec<_> = std::iter::repeat_n(one_vec, SMALL_SIZE).collect();
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         // LargeBinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
@@ -2929,6 +3065,109 @@ mod tests {
     }
 
     #[test]
+    fn arrow_writer_dict_and_native_compatibility() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let rb1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values(vec![0, 1, 0]),
+                Arc::new(StringArray::from_iter_values(vec!["parquet", "barquet"])),
+            ))],
+        )
+        .unwrap();
+
+        let file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), rb1.schema(), None).unwrap();
+        writer.write(&rb1).unwrap();
+
+        // check can append another record batch where the field has the same type
+        // as the dictionary values from the first batch
+        let schema2 = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let rb2 = RecordBatch::try_new(
+            schema2,
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "barquet", "curious",
+            ]))],
+        )
+        .unwrap();
+        writer.write(&rb2).unwrap();
+
+        writer.close().unwrap();
+
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
+        let actual_batch = record_batch_reader.next().unwrap().unwrap();
+
+        let expected_batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values(vec![0, 1, 0, 1, 2]),
+                Arc::new(StringArray::from_iter_values(vec![
+                    "parquet", "barquet", "curious",
+                ])),
+            ))],
+        )
+        .unwrap();
+
+        assert_eq!(actual_batch, expected_batch)
+    }
+
+    #[test]
+    fn arrow_writer_native_and_dict_compatibility() {
+        let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let rb1 = RecordBatch::try_new(
+            schema1.clone(),
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "parquet", "barquet",
+            ]))],
+        )
+        .unwrap();
+
+        let file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), rb1.schema(), None).unwrap();
+        writer.write(&rb1).unwrap();
+
+        let schema2 = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let rb2 = RecordBatch::try_new(
+            schema2.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values(vec![0, 1, 0]),
+                Arc::new(StringArray::from_iter_values(vec!["barquet", "curious"])),
+            ))],
+        )
+        .unwrap();
+        writer.write(&rb2).unwrap();
+
+        writer.close().unwrap();
+
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
+        let actual_batch = record_batch_reader.next().unwrap().unwrap();
+
+        let expected_batch = RecordBatch::try_new(
+            schema1,
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "parquet", "barquet", "barquet", "curious", "barquet",
+            ]))],
+        )
+        .unwrap();
+
+        assert_eq!(actual_batch, expected_batch)
+    }
+
+    #[test]
     fn arrow_writer_primitive_dictionary() {
         // define schema
         #[allow(deprecated)]
@@ -2949,6 +3188,48 @@ mod tests {
         let d = builder.finish();
 
         one_column_roundtrip_with_schema(Arc::new(d), schema);
+    }
+
+    #[test]
+    fn arrow_writer_decimal32_dictionary() {
+        let integers = vec![12345, 56789, 34567];
+
+        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+
+        let values = Decimal32Array::from(integers.clone())
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+
+        let array = DictionaryArray::new(keys, Arc::new(values));
+        one_column_roundtrip(Arc::new(array.clone()), true);
+
+        let values = Decimal32Array::from(integers)
+            .with_precision_and_scale(9, 2)
+            .unwrap();
+
+        let array = array.with_values(Arc::new(values));
+        one_column_roundtrip(Arc::new(array), true);
+    }
+
+    #[test]
+    fn arrow_writer_decimal64_dictionary() {
+        let integers = vec![12345, 56789, 34567];
+
+        let keys = UInt8Array::from(vec![Some(0), None, Some(1), Some(2), Some(1)]);
+
+        let values = Decimal64Array::from(integers.clone())
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+
+        let array = DictionaryArray::new(keys, Arc::new(values));
+        one_column_roundtrip(Arc::new(array.clone()), true);
+
+        let values = Decimal64Array::from(integers)
+            .with_precision_and_scale(12, 2)
+            .unwrap();
+
+        let array = array.with_values(Arc::new(values));
+        one_column_roundtrip(Arc::new(array), true);
     }
 
     #[test]
@@ -3765,5 +4046,224 @@ mod tests {
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
         assert_eq!(batches.len(), 0);
+    }
+
+    #[test]
+    fn test_page_stats_not_written_by_default() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let schema = Schema::new(vec![string_field]);
+        let raw_string_values = vec!["Blart Versenwald III"];
+        let string_values = StringArray::from(raw_string_values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(string_values)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+
+        assert!(stats.is_none());
+    }
+
+    #[test]
+    fn test_page_stats_when_enabled() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let schema = Schema::new(vec![string_field]);
+        let raw_string_values = vec!["Blart Versenwald III", "Andrew Lamb"];
+        let string_values = StringArray::from(raw_string_values.clone());
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(string_values)]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_write_page_header_statistics(true)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+
+        let stats = stats.unwrap();
+        // check that min/max were actually written to the page
+        assert!(stats.is_max_value_exact.unwrap());
+        assert!(stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Blart Versenwald III".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Andrew Lamb".as_bytes());
+    }
+
+    #[test]
+    fn test_page_stats_truncation() {
+        let string_field = Field::new("a", DataType::Utf8, false);
+        let binary_field = Field::new("b", DataType::Binary, false);
+        let schema = Schema::new(vec![string_field, binary_field]);
+
+        let raw_string_values = vec!["Blart Versenwald III"];
+        let raw_binary_values = [b"Blart Versenwald III".to_vec()];
+        let raw_binary_value_refs = raw_binary_values
+            .iter()
+            .map(|x| x.as_slice())
+            .collect::<Vec<_>>();
+
+        let string_values = StringArray::from(raw_string_values.clone());
+        let binary_values = BinaryArray::from(raw_binary_value_refs);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(string_values), Arc::new(binary_values)],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_statistics_truncate_length(Some(2))
+            .set_dictionary_enabled(false)
+            .set_encoding(Encoding::PLAIN)
+            .set_write_page_header_statistics(true)
+            .set_compression(crate::basic::Compression::UNCOMPRESSED)
+            .build();
+
+        let mut file = roundtrip_opts(&batch, props);
+
+        // read file and decode page headers
+        // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
+        let mut buf = vec![];
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let read = file.read_to_end(&mut buf).unwrap();
+        assert!(read > 0);
+
+        // decode first page header
+        let first_page = &buf[4..];
+        let mut prot = TCompactSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        // check that min/max were properly truncated
+        assert!(!stats.is_max_value_exact.unwrap());
+        assert!(!stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+
+        // check second page now
+        let second_page = &prot.as_slice()[hdr.compressed_page_size as usize..];
+        let mut prot = TCompactSliceInputProtocol::new(second_page);
+        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let stats = hdr.data_page_header.unwrap().statistics;
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        // check that min/max were properly truncated
+        assert!(!stats.is_max_value_exact.unwrap());
+        assert!(!stats.is_min_value_exact.unwrap());
+        assert_eq!(stats.max_value.unwrap(), "Bm".as_bytes());
+        assert_eq!(stats.min_value.unwrap(), "Bl".as_bytes());
+    }
+
+    #[test]
+    fn test_page_encoding_statistics_roundtrip() {
+        let batch_schema = Schema::new(vec![Field::new(
+            "int32",
+            arrow_schema::DataType::Int32,
+            false,
+        )]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(batch_schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+
+        let mut file: File = tempfile::tempfile().unwrap();
+        let mut writer = ArrowWriter::try_new(&mut file, Arc::new(batch_schema), None).unwrap();
+        writer.write(&batch).unwrap();
+        let file_metadata = writer.close().unwrap();
+
+        assert_eq!(file_metadata.row_groups.len(), 1);
+        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
+        let chunk_meta = file_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .expect("column metadata missing");
+        assert!(chunk_meta.encoding_stats.is_some());
+        let chunk_page_stats = chunk_meta.encoding_stats.as_ref().unwrap();
+
+        // check that the read metadata is also correct
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        let rowgroup = reader.get_row_group(0).expect("row group missing");
+        assert_eq!(rowgroup.num_columns(), 1);
+        let column = rowgroup.metadata().column(0);
+        assert!(column.page_encoding_stats().is_some());
+        let file_page_stats = column.page_encoding_stats().unwrap();
+        let chunk_stats: Vec<PageEncodingStats> = chunk_page_stats
+            .iter()
+            .map(|x| crate::file::page_encoding_stats::try_from_thrift(x).unwrap())
+            .collect();
+        assert_eq!(&chunk_stats, file_page_stats);
+    }
+
+    #[test]
+    fn test_different_dict_page_size_limit() {
+        let array = Arc::new(Int64Array::from_iter(0..1024 * 1024));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col0", arrow_schema::DataType::Int64, false),
+            Field::new("col1", arrow_schema::DataType::Int64, false),
+        ]));
+        let batch =
+            arrow_array::RecordBatch::try_new(schema.clone(), vec![array.clone(), array]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_dictionary_page_size_limit(1024 * 1024)
+            .set_column_dictionary_page_size_limit(ColumnPath::from("col1"), 1024 * 1024 * 4)
+            .build();
+        let mut writer = ArrowWriter::try_new(Vec::new(), schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let data = Bytes::from(writer.into_inner().unwrap());
+
+        let mut metadata = ParquetMetaDataReader::new();
+        metadata.try_parse(&data).unwrap();
+        let metadata = metadata.finish().unwrap();
+        let col0_meta = metadata.row_group(0).column(0);
+        let col1_meta = metadata.row_group(0).column(1);
+
+        let get_dict_page_size = move |meta: &ColumnChunkMetaData| {
+            let mut reader =
+                SerializedPageReader::new(Arc::new(data.clone()), meta, 0, None).unwrap();
+            let page = reader.get_next_page().unwrap().unwrap();
+            match page {
+                Page::DictionaryPage { buf, .. } => buf.len(),
+                _ => panic!("expected DictionaryPage"),
+            }
+        };
+
+        assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
+        assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
     }
 }

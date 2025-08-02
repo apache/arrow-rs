@@ -192,6 +192,19 @@ fn add_benchmark(c: &mut Criterion) {
         "take primitive run logical len: 1024, physical len: 512, indices: 1024",
         |b| b.iter(|| bench_take(&values, &indices)),
     );
+
+    let values = create_fsb_array(1024, 0.0, 12);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take primitive fsb value len: 12, indices: 1024", |b| {
+        b.iter(|| bench_take(&values, &indices))
+    });
+
+    let values = create_fsb_array(1024, 0.5, 12);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function(
+        "take primitive fsb value len: 12, null values, indices: 1024",
+        |b| b.iter(|| bench_take(&values, &indices)),
+    );
 }
 
 criterion_group!(benches, add_benchmark);

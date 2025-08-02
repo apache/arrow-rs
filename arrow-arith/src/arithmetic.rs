@@ -43,8 +43,7 @@ fn get_fixed_point_info(
 
     if required_scale > product_scale {
         return Err(ArrowError::ComputeError(format!(
-            "Required scale {} is greater than product scale {}",
-            required_scale, product_scale
+            "Required scale {required_scale} is greater than product scale {product_scale}",
         )));
     }
 
@@ -122,7 +121,7 @@ pub fn multiply_fixed_point_checked(
         let mut mul = a.wrapping_mul(b);
         mul = divide_and_round::<Decimal256Type>(mul, divisor);
         mul.to_i128().ok_or_else(|| {
-            ArrowError::ArithmeticOverflow(format!("Overflow happened on: {:?} * {:?}", a, b))
+            ArrowError::ArithmeticOverflow(format!("Overflow happened on: {a:?} * {b:?}"))
         })
     })
     .and_then(|a| a.with_precision_and_scale(precision, required_scale))
