@@ -41,7 +41,8 @@ use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
-use crate::{Block, FieldNode, Message, MetadataVersion, CONTINUATION_MARKER};
+use crate::gen::Message::Message;
+use crate::{Block, FieldNode, IpcDecoder, IpcMessage, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Read a buffer based on offset and length
@@ -367,7 +368,9 @@ impl RecordBatchDecoder<'_> {
 /// [`RecordBatch`]
 ///
 /// [IPC RecordBatch]: crate::RecordBatch
-struct RecordBatchDecoder<'a> {
+///
+/// TODO(jakedern): Change visibility back to private?
+pub(crate) struct RecordBatchDecoder<'a> {
     /// The flatbuffers encoded record batch
     batch: crate::RecordBatch<'a>,
     /// The output schema
@@ -398,7 +401,7 @@ struct RecordBatchDecoder<'a> {
 
 impl<'a> RecordBatchDecoder<'a> {
     /// Create a reader for decoding arrays from an encoded [`RecordBatch`]
-    fn try_new(
+    pub fn try_new(
         buf: &'a Buffer,
         batch: crate::RecordBatch<'a>,
         schema: SchemaRef,
@@ -468,7 +471,7 @@ impl<'a> RecordBatchDecoder<'a> {
     }
 
     /// Read the record batch, consuming the reader
-    fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
+    pub(crate) fn read_record_batch(mut self) -> Result<RecordBatch, ArrowError> {
         let mut variadic_counts: VecDeque<i64> = self
             .batch
             .variadicBufferCounts()
@@ -1339,7 +1342,7 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
 /// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamReader<R> {
     /// Stream reader
-    reader: R,
+    reader: IpcDecoder<R>,
 
     /// The schema that is read from the stream's first message
     schema: SchemaRef,
@@ -1397,32 +1400,16 @@ impl<R: Read> StreamReader<R> {
     /// An ['Err'](Result::Err) may be returned if the reader does not encounter a schema
     /// as the first message in the stream.
     pub fn try_new(
-        mut reader: R,
+        reader: R,
         projection: Option<Vec<usize>>,
     ) -> Result<StreamReader<R>, ArrowError> {
-        // determine metadata length
-        let mut meta_size: [u8; 4] = [0; 4];
-        reader.read_exact(&mut meta_size)?;
-        let meta_len = {
-            // If a continuation marker is encountered, skip over it and read
-            // the size from the next four bytes.
-            if meta_size == CONTINUATION_MARKER {
-                reader.read_exact(&mut meta_size)?;
-            }
-            i32::from_le_bytes(meta_size)
+        let mut reader = IpcDecoder::new(reader);
+        let IpcMessage::Schema(_, _, schema) = reader.read_message()? else {
+            // TODO(jakedern): Include the type of message we got somehow
+            return Err(ArrowError::IpcError(format!(
+                "Expected a schema as the first message in the stream, got"
+            )));
         };
-
-        let mut meta_buffer = vec![0; meta_len as usize];
-        reader.read_exact(&mut meta_buffer)?;
-
-        let message = crate::root_as_message(meta_buffer.as_slice()).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
-        })?;
-        // message header is a Schema, so read it
-        let ipc_schema: crate::Schema = message.header_as_schema().ok_or_else(|| {
-            ArrowError::ParseError("Unable to read IPC message as schema".to_string())
-        })?;
-        let schema = crate::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
@@ -1434,6 +1421,7 @@ impl<R: Read> StreamReader<R> {
             }
             _ => None,
         };
+
         Ok(Self {
             reader,
             schema: Arc::new(schema),
@@ -1467,65 +1455,35 @@ impl<R: Read> StreamReader<R> {
         if self.finished {
             return Ok(None);
         }
-        // determine metadata length
-        let mut meta_size: [u8; 4] = [0; 4];
 
-        match self.reader.read_exact(&mut meta_size) {
-            Ok(()) => (),
+        let message = self.reader.read_message();
+        let message = match message {
+            Ok(m) => m,
+            Err(ArrowError::IoError(_, e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                // Handle EOF without the "0xFFFFFFFF 0x00000000"
+                // valid according to:
+                // https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+                self.finished = true;
+                return Ok(None);
+            }
             Err(e) => {
-                return if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    // Handle EOF without the "0xFFFFFFFF 0x00000000"
-                    // valid according to:
-                    // https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
-                    self.finished = true;
-                    Ok(None)
-                } else {
-                    Err(ArrowError::from(e))
-                };
+                return Err(e);
             }
-        }
-
-        let meta_len = {
-            // If a continuation marker is encountered, skip over it and read
-            // the size from the next four bytes.
-            if meta_size == CONTINUATION_MARKER {
-                self.reader.read_exact(&mut meta_size)?;
-            }
-            i32::from_le_bytes(meta_size)
         };
 
-        if meta_len == 0 {
-            // the stream has ended, mark the reader as finished
-            self.finished = true;
-            return Ok(None);
-        }
-
-        let mut meta_buffer = vec![0; meta_len as usize];
-        self.reader.read_exact(&mut meta_buffer)?;
-
-        let vecs = &meta_buffer.to_vec();
-        let message = crate::root_as_message(vecs).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
-        })?;
-
-        match message.header_type() {
-            crate::MessageHeader::Schema => Err(ArrowError::IpcError(
+        match message {
+            crate::IpcMessage::Schema(_, _, _) => Err(ArrowError::IpcError(
                 "Not expecting a schema when messages are read".to_string(),
             )),
-            crate::MessageHeader::RecordBatch => {
-                let batch = message.header_as_record_batch().ok_or_else(|| {
-                    ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
-                })?;
-                // read the block that makes up the record batch into a buffer
-                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-                self.reader.read_exact(&mut buf)?;
-
+            crate::IpcMessage::RecordBatch(message, batch, buf) => {
+                let version = message.version();
+                let schema = self.schema.clone();
                 RecordBatchDecoder::try_new(
                     &buf.into(),
                     batch,
-                    self.schema(),
+                    schema,
                     &self.dictionaries_by_id,
-                    &message.version(),
+                    &version,
                 )?
                 .with_projection(self.projection.as_ref().map(|x| x.0.as_ref()))
                 .with_require_alignment(false)
@@ -1533,16 +1491,7 @@ impl<R: Read> StreamReader<R> {
                 .read_record_batch()
                 .map(Some)
             }
-            crate::MessageHeader::DictionaryBatch => {
-                let batch = message.header_as_dictionary_batch().ok_or_else(|| {
-                    ArrowError::IpcError(
-                        "Unable to read IPC message as dictionary batch".to_string(),
-                    )
-                })?;
-                // read the block that makes up the dictionary batch into a buffer
-                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-                self.reader.read_exact(&mut buf)?;
-
+            crate::IpcMessage::DictionaryBatch(message, batch, buf) => {
                 read_dictionary_impl(
                     &buf.into(),
                     batch,
@@ -1556,10 +1505,6 @@ impl<R: Read> StreamReader<R> {
                 // read the next message until we encounter a RecordBatch
                 self.maybe_next()
             }
-            crate::MessageHeader::NONE => Ok(None),
-            t => Err(ArrowError::InvalidArgumentError(format!(
-                "Reading types other than record batches not yet supported, unable to read {t:?} "
-            ))),
         }
     }
 
@@ -1567,14 +1512,14 @@ impl<R: Read> StreamReader<R> {
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_ref(&self) -> &R {
-        &self.reader
+        self.reader.get_ref()
     }
 
     /// Gets a mutable reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_mut(&mut self) -> &mut R {
-        &mut self.reader
+        self.reader.get_mut()
     }
 
     /// Specifies if validation should be skipped when reading data (defaults to `false`)
