@@ -63,7 +63,7 @@ use std::{borrow::Cow, ops::Deref};
 ///   .join("baz");
 /// assert_eq!(path[1], VariantPathElement::field("bar"));
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct VariantPath<'a>(Vec<VariantPathElement<'a>>);
 
 impl<'a> VariantPath<'a> {

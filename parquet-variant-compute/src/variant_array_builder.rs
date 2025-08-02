@@ -375,7 +375,7 @@ mod test {
 
         // the metadata and value fields of non shredded variants should not be null
         assert!(variant_array.metadata_field().nulls().is_none());
-        assert!(variant_array.value_field().nulls().is_none());
+        assert!(variant_array.value_field().unwrap().nulls().is_none());
         let DataType::Struct(fields) = variant_array.data_type() else {
             panic!("Expected VariantArray to have Struct data type");
         };
