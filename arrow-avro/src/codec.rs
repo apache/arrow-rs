@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{
-    Attributes, ComplexType, PrimitiveType, Record, Schema as AvroSchema, TypeName,
-};
+use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE,
@@ -148,8 +146,8 @@ impl AvroField {
     /// `AvroField` that contains all the necessary information to read data written
     /// with the `writer` schema as if it were written with the `reader` schema.
     pub fn resolve_from_writer_and_reader<'a>(
-        writer_schema: &'a AvroSchema<'a>,
-        reader_schema: &'a AvroSchema<'a>,
+        writer_schema: &'a Schema<'a>,
+        reader_schema: &'a Schema<'a>,
         use_utf8view: bool,
         strict_mode: bool,
     ) -> Result<Self, ArrowError> {
@@ -159,12 +157,12 @@ impl AvroField {
     }
 }
 
-impl<'a> TryFrom<&AvroSchema<'a>> for AvroField {
+impl<'a> TryFrom<&Schema<'a>> for AvroField {
     type Error = ArrowError;
 
-    fn try_from(schema: &AvroSchema<'a>) -> Result<Self, Self::Error> {
+    fn try_from(schema: &Schema<'a>) -> Result<Self, Self::Error> {
         match schema {
-            AvroSchema::Complex(ComplexType::Record(r)) => {
+            Schema::Complex(ComplexType::Record(r)) => {
                 let mut resolver = Resolver::default();
                 let data_type = make_data_type(schema, None, &mut resolver, false, false)?;
                 Ok(AvroField {
@@ -182,15 +180,15 @@ impl<'a> TryFrom<&AvroSchema<'a>> for AvroField {
 /// Builder for an [`AvroField`]
 #[derive(Debug)]
 pub struct AvroFieldBuilder<'a> {
-    writer_schema: &'a AvroSchema<'a>,
-    reader_schema: Option<&'a AvroSchema<'a>>,
+    writer_schema: &'a Schema<'a>,
+    reader_schema: Option<&'a Schema<'a>>,
     use_utf8view: bool,
     strict_mode: bool,
 }
 
 impl<'a> AvroFieldBuilder<'a> {
     /// Creates a new [`AvroFieldBuilder`] for a given writer schema.
-    pub fn new(writer_schema: &'a AvroSchema<'a>) -> Self {
+    pub fn new(writer_schema: &'a Schema<'a>) -> Self {
         Self {
             writer_schema,
             reader_schema: None,
@@ -204,7 +202,7 @@ impl<'a> AvroFieldBuilder<'a> {
     /// If a reader schema is provided, the builder will produce a resolved `AvroField`
     /// that can handle differences between the writer's and reader's schemas.
     #[inline]
-    pub fn with_reader_schema(mut self, reader_schema: &'a AvroSchema<'a>) -> Self {
+    pub fn with_reader_schema(mut self, reader_schema: &'a Schema<'a>) -> Self {
         self.reader_schema = Some(reader_schema);
         self
     }
@@ -224,7 +222,7 @@ impl<'a> AvroFieldBuilder<'a> {
     /// Build an [`AvroField`] from the builder
     pub fn build(self) -> Result<AvroField, ArrowError> {
         match self.writer_schema {
-            AvroSchema::Complex(ComplexType::Record(r)) => {
+            Schema::Complex(ComplexType::Record(r)) => {
                 let mut resolver = Resolver::default();
                 let data_type = make_data_type(
                     self.writer_schema,
@@ -490,14 +488,14 @@ impl<'a> Resolver<'a> {
 ///
 /// See [`Resolver`] for more information
 fn make_data_type<'a>(
-    schema: &AvroSchema<'a>,
+    schema: &Schema<'a>,
     namespace: Option<&'a str>,
     resolver: &mut Resolver<'a>,
     use_utf8view: bool,
     strict_mode: bool,
 ) -> Result<AvroDataType, ArrowError> {
     match schema {
-        AvroSchema::TypeName(TypeName::Primitive(p)) => {
+        Schema::TypeName(TypeName::Primitive(p)) => {
             let codec: Codec = (*p).into();
             let codec = codec.with_utf8view(use_utf8view);
             Ok(AvroDataType {
@@ -506,12 +504,12 @@ fn make_data_type<'a>(
                 codec,
             })
         }
-        AvroSchema::TypeName(TypeName::Ref(name)) => resolver.resolve(name, namespace),
-        AvroSchema::Union(f) => {
+        Schema::TypeName(TypeName::Ref(name)) => resolver.resolve(name, namespace),
+        Schema::Union(f) => {
             // Special case the common case of nullable primitives
             let null = f
                 .iter()
-                .position(|x| x == &AvroSchema::TypeName(TypeName::Primitive(PrimitiveType::Null)));
+                .position(|x| x == &Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)));
             match (f.len() == 2, null) {
                 (true, Some(0)) => {
                     let mut field =
@@ -536,7 +534,7 @@ fn make_data_type<'a>(
                 ))),
             }
         }
-        AvroSchema::Complex(c) => match c {
+        Schema::Complex(c) => match c {
             ComplexType::Record(r) => {
                 let namespace = r.namespace.or(namespace);
                 let fields = r
@@ -644,9 +642,9 @@ fn make_data_type<'a>(
                 })
             }
         },
-        AvroSchema::Type(t) => {
+        Schema::Type(t) => {
             let mut field = make_data_type(
-                &AvroSchema::TypeName(t.r#type.clone()),
+                &Schema::TypeName(t.r#type.clone()),
                 namespace,
                 resolver,
                 use_utf8view,
@@ -700,25 +698,25 @@ mod tests {
     fn create_schema_with_logical_type(
         primitive_type: PrimitiveType,
         logical_type: &'static str,
-    ) -> AvroSchema<'static> {
+    ) -> Schema<'static> {
         let attributes = Attributes {
             logical_type: Some(logical_type),
             additional: Default::default(),
         };
 
-        AvroSchema::Type(Type {
+        Schema::Type(Type {
             r#type: TypeName::Primitive(primitive_type),
             attributes,
         })
     }
 
-    fn create_fixed_schema(size: usize, logical_type: &'static str) -> AvroSchema<'static> {
+    fn create_fixed_schema(size: usize, logical_type: &'static str) -> Schema<'static> {
         let attributes = Attributes {
             logical_type: Some(logical_type),
             additional: Default::default(),
         };
 
-        AvroSchema::Complex(ComplexType::Fixed(Fixed {
+        Schema::Complex(ComplexType::Fixed(Fixed {
             name: "fixed_type",
             namespace: None,
             aliases: Vec::new(),
@@ -857,7 +855,7 @@ mod tests {
 
     #[test]
     fn test_string_with_utf8view_enabled() {
-        let schema = AvroSchema::TypeName(TypeName::Primitive(PrimitiveType::String));
+        let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
         let mut resolver = Resolver::default();
         let result = make_data_type(&schema, None, &mut resolver, true, false).unwrap();
@@ -867,7 +865,7 @@ mod tests {
 
     #[test]
     fn test_string_without_utf8view_enabled() {
-        let schema = AvroSchema::TypeName(TypeName::Primitive(PrimitiveType::String));
+        let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
         let mut resolver = Resolver::default();
         let result = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
@@ -877,7 +875,7 @@ mod tests {
 
     #[test]
     fn test_record_with_string_and_utf8view_enabled() {
-        let field_schema = AvroSchema::TypeName(TypeName::Primitive(PrimitiveType::String));
+        let field_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
 
         let avro_field = crate::schema::Field {
             name: "string_field",
@@ -895,7 +893,7 @@ mod tests {
             attributes: Attributes::default(),
         };
 
-        let schema = AvroSchema::Complex(ComplexType::Record(record));
+        let schema = Schema::Complex(ComplexType::Record(record));
 
         let mut resolver = Resolver::default();
         let result = make_data_type(&schema, None, &mut resolver, true, false).unwrap();
@@ -910,9 +908,9 @@ mod tests {
 
     #[test]
     fn test_union_with_strict_mode() {
-        let schema = AvroSchema::Union(vec![
-            AvroSchema::TypeName(TypeName::Primitive(PrimitiveType::String)),
-            AvroSchema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
+        let schema = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
         ]);
 
         let mut resolver = Resolver::default();

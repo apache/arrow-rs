@@ -278,9 +278,10 @@ pub struct Fixed<'a> {
 
 /// Supported fingerprint algorithms for Avro schema identification.
 /// Currently only `Rabin` is supported, `SHA256` and `MD5` support will come in a future update
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum FingerprintAlgorithm {
     /// 64‑bit CRC‑64‑AVRO Rabin fingerprint.
+    #[default]
     Rabin,
 }
 
@@ -377,7 +378,7 @@ pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
 /// let retrieved_schema = store.lookup(&fingerprint).cloned();
 /// assert_eq!(retrieved_schema, Some(schema));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SchemaStore<'a> {
     /// The hashing algorithm used for generating fingerprints.
     fingerprint_algorithm: FingerprintAlgorithm,
@@ -396,15 +397,6 @@ impl<'a> TryFrom<&'a [Schema<'a>]> for SchemaStore<'a> {
             store.register(schema.clone())?;
         }
         Ok(store)
-    }
-}
-
-impl<'a> Default for SchemaStore<'a> {
-    fn default() -> Self {
-        Self {
-            fingerprint_algorithm: FingerprintAlgorithm::Rabin,
-            schemas: HashMap::new(),
-        }
     }
 }
 
@@ -430,12 +422,12 @@ impl<'a> SchemaStore<'a> {
     /// A `Result` containing the `Fingerprint` of the schema if successful,
     /// or an `ArrowError` on failure.
     pub fn register(&mut self, schema: Schema<'a>) -> Result<Fingerprint, ArrowError> {
-        let fp = generate_fingerprint(&schema, self.fingerprint_algorithm)?;
-        match self.schemas.entry(fp) {
+        let fingerprint = generate_fingerprint(&schema, self.fingerprint_algorithm)?;
+        match self.schemas.entry(fingerprint) {
             Entry::Occupied(entry) => {
                 if entry.get() != &schema {
                     return Err(ArrowError::ComputeError(format!(
-                        "Schema fingerprint collision detected for fingerprint {fp:?}"
+                        "Schema fingerprint collision detected for fingerprint {fingerprint:?}"
                     )));
                 }
             }
@@ -443,20 +435,29 @@ impl<'a> SchemaStore<'a> {
                 entry.insert(schema);
             }
         }
-        Ok(fp)
+        Ok(fingerprint)
     }
 
     /// Looks up a schema by its `Fingerprint`.
     ///
     /// # Arguments
     ///
-    /// * `fp` - A reference to the `Fingerprint` of the schema to look up.
+    /// * `fingerprint` - A reference to the `Fingerprint` of the schema to look up.
     ///
     /// # Returns
     ///
     /// An `Option` containing a clone of the `Schema` if found, otherwise `None`.
-    pub fn lookup(&self, fp: &Fingerprint) -> Option<&Schema<'a>> {
-        self.schemas.get(fp)
+    pub fn lookup(&self, fingerprint: &Fingerprint) -> Option<&Schema<'a>> {
+        self.schemas.get(fingerprint)
+    }
+
+    /// Returns a `Vec` containing **all unique [`Fingerprint`]s** currently
+    /// held by this [`SchemaStore`].
+    ///
+    /// The order of the returned fingerprints is unspecified and should not be
+    /// relied upon.
+    pub fn fingerprints(&self) -> Vec<Fingerprint> {
+        self.schemas.keys().copied().collect()
     }
 
     /// Returns the `FingerprintAlgorithm` used by the `SchemaStore` for fingerprinting.
@@ -490,15 +491,15 @@ fn make_full_name(
     name: &str,
     namespace_attr: Option<&str>,
     enclosing_ns: Option<&str>,
-) -> Result<(String, Option<String>), ArrowError> {
+) -> (String, Option<String>) {
     // `name` already contains a dot then treat as full-name, ignore namespace.
     if let Some((ns, _)) = name.rsplit_once('.') {
-        return Ok((name.to_string(), Some(ns.to_string())));
+        return (name.to_string(), Some(ns.to_string()));
     }
-    Ok(match namespace_attr.or(enclosing_ns) {
+    match namespace_attr.or(enclosing_ns) {
         Some(ns) => (format!("{ns}.{name}"), Some(ns.to_string())),
         None => (name.to_string(), None),
-    })
+    }
 }
 
 fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String, ArrowError> {
@@ -506,7 +507,7 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
         Schema::TypeName(tn) | Schema::Type(Type { r#type: tn, .. }) => match tn {
             TypeName::Primitive(pt) => quote(pt.as_ref())?,
             TypeName::Ref(name) => {
-                let (full_name, _) = make_full_name(name, None, enclosing_ns)?;
+                let (full_name, _) = make_full_name(name, None, enclosing_ns);
                 quote(&full_name)?
             }
         },
@@ -520,7 +521,7 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
         ),
         Schema::Complex(ct) => match ct {
             ComplexType::Record(r) => {
-                let (full_name, child_ns) = make_full_name(r.name, r.namespace, enclosing_ns)?;
+                let (full_name, child_ns) = make_full_name(r.name, r.namespace, enclosing_ns);
                 let fields = r
                     .fields
                     .iter()
@@ -528,7 +529,7 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                         let field_type =
                             build_canonical(&f.r#type, child_ns.as_deref().or(enclosing_ns))?;
                         Ok(format!(
-                            "{{\"name\":{},\"type\":{}}}",
+                            r#"{{"name":{},"type":{}}}"#,
                             quote(f.name)?,
                             field_type
                         ))
@@ -541,7 +542,7 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                 )
             }
             ComplexType::Enum(e) => {
-                let (full_name, _) = make_full_name(e.name, e.namespace, enclosing_ns)?;
+                let (full_name, _) = make_full_name(e.name, e.namespace, enclosing_ns);
                 let symbols = e
                     .symbols
                     .iter()
@@ -549,23 +550,22 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                     .collect::<Result<Vec<_>, _>>()?
                     .join(",");
                 format!(
-                    "{{\"name\":{},\"type\":\"enum\",\"symbols\":[{}]}}",
-                    quote(&full_name)?,
-                    symbols
+                    r#"{{"name":{},"type":"enum","symbols":[{symbols}]}}"#,
+                    quote(&full_name)?
                 )
             }
             ComplexType::Array(arr) => format!(
-                "{{\"type\":\"array\",\"items\":{}}}",
+                r#"{{"type":"array","items":{}}}"#,
                 build_canonical(&arr.items, enclosing_ns)?
             ),
             ComplexType::Map(map) => format!(
-                "{{\"type\":\"map\",\"values\":{}}}",
+                r#"{{"type":"map","values":{}}}"#,
                 build_canonical(&map.values, enclosing_ns)?
             ),
             ComplexType::Fixed(f) => {
-                let (full_name, _) = make_full_name(f.name, f.namespace, enclosing_ns)?;
+                let (full_name, _) = make_full_name(f.name, f.namespace, enclosing_ns);
                 format!(
-                    "{{\"name\":{},\"type\":\"fixed\",\"size\":{}}}",
+                    r#"{{"name":{},"type":"fixed","size":{}}}"#,
                     quote(&full_name)?,
                     f.size
                 )
@@ -1047,6 +1047,17 @@ mod tests {
         assert_eq!(fingerprint, expected_fingerprint);
         let looked_up = store.lookup(&fingerprint).cloned();
         assert_eq!(looked_up, Some(schema));
+    }
+
+    #[test]
+    fn test_fingerprints_returns_all_keys() {
+        let mut store = SchemaStore::new();
+        let fp_int = store.register(int_schema()).unwrap();
+        let fp_record = store.register(record_schema()).unwrap();
+        let fps = store.fingerprints();
+        assert_eq!(fps.len(), 2);
+        assert!(fps.contains(&fp_int));
+        assert!(fps.contains(&fp_record));
     }
 
     #[test]
