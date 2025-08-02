@@ -47,7 +47,7 @@ use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
 use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
+use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath};
 
 pub(crate) mod encoder;
 
@@ -328,6 +328,10 @@ impl OrderedColumnDescriptor {
         Self { descr, sort_order }
     }
 
+    fn sort_order(&self) -> SortOrder {
+        self.sort_order
+    }
+
     // add some pass-through methods for convenience
     #[inline]
     fn max_def_level(&self) -> i16 {
@@ -352,6 +356,11 @@ impl OrderedColumnDescriptor {
     #[inline]
     fn physical_type(&self) -> Type {
         self.descr.physical_type()
+    }
+
+    #[inline]
+    fn path(&self) -> &ColumnPath {
+        self.descr.path()
     }
 }
 
@@ -1439,6 +1448,36 @@ fn update_stat<T: ParquetValueType, F>(
 
 /// Evaluate `a > b` according to underlying logical type.
 fn compare_greater<T: ParquetValueType>(descr: &OrderedColumnDescriptor, a: &T, b: &T) -> bool {
+    if descr.sort_order == SortOrder::TOTAL_ORDER {
+        if ColumnOrder::get_sort_order(
+            descr.logical_type(),
+            descr.converted_type(),
+            descr.physical_type(),
+            true,
+        ) == SortOrder::TOTAL_ORDER
+        {
+            if let Some(LogicalType::Float16) = descr.logical_type() {
+                let a = a.as_bytes();
+                let a = f16::from_le_bytes([a[0], a[1]]);
+                let b = b.as_bytes();
+                let b = f16::from_le_bytes([b[0], b[1]]);
+                return a.total_cmp(&b) == Ordering::Greater;
+            }
+
+            if descr.physical_type() == Type::FLOAT {
+                let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
+                let b = f32::from_le_bytes(b.as_bytes().try_into().unwrap());
+                return a.total_cmp(&b) == Ordering::Greater;
+            }
+
+            if descr.physical_type() == Type::DOUBLE {
+                let a = f64::from_le_bytes(a.as_bytes().try_into().unwrap());
+                let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
+                return a.total_cmp(&b) == Ordering::Greater;
+            }
+        }
+    }
+
     match T::PHYSICAL_TYPE {
         Type::INT32 | Type::INT64 => {
             if let Some(LogicalType::Integer {
@@ -1473,61 +1512,6 @@ fn compare_greater<T: ParquetValueType>(descr: &OrderedColumnDescriptor, a: &T, 
 
         _ => {}
     };
-
-    // TODO(ets): need to re work this because compare completely changed
-    /*if let Some(LogicalType::Decimal { .. }) = descr.logical_type() {
-        match T::PHYSICAL_TYPE {
-            Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            _ => {}
-        };
-    }
-
-    if descr.converted_type() == ConvertedType::DECIMAL {
-        match T::PHYSICAL_TYPE {
-            Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            _ => {}
-        };
-    };
-
-    if descr.sort_order == SortOrder::TOTAL_ORDER {
-        if ColumnOrder::get_sort_order(
-            descr.logical_type(),
-            descr.converted_type(),
-            descr.physical_type(),
-            true,
-        ) == SortOrder::TOTAL_ORDER
-        {
-            if let Some(LogicalType::Float16) = descr.logical_type() {
-                let a = a.as_bytes();
-                let a = f16::from_le_bytes([a[0], a[1]]);
-                let b = b.as_bytes();
-                let b = f16::from_le_bytes([b[0], b[1]]);
-                return a.total_cmp(&b) == Ordering::Greater;
-            }
-
-            if descr.physical_type() == Type::FLOAT {
-                let a = f32::from_le_bytes(a.as_bytes().try_into().unwrap());
-                let b = f32::from_le_bytes(b.as_bytes().try_into().unwrap());
-                return a.total_cmp(&b) == Ordering::Greater;
-            }
-
-            if descr.physical_type() == Type::DOUBLE {
-                let a = f64::from_le_bytes(a.as_bytes().try_into().unwrap());
-                let b = f64::from_le_bytes(b.as_bytes().try_into().unwrap());
-                return a.total_cmp(&b) == Ordering::Greater;
-            }
-        }
-    } else if let Some(LogicalType::Float16) = descr.logical_type() {
-        let a = a.as_bytes();
-        let a = f16::from_le_bytes([a[0], a[1]]);
-        let b = b.as_bytes();
-        let b = f16::from_le_bytes([b[0], b[1]]);
-        return a > b;
-    }*/
 
     // compare independent of logical / converted type
     a > b

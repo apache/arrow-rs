@@ -833,6 +833,8 @@ async fn test_float_16_total_order() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "f",
         check: Check::Both,
     }
@@ -888,6 +890,8 @@ async fn test_float_32_total_order() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "f",
         check: Check::Both,
     }
@@ -943,6 +947,8 @@ async fn test_float_64_total_order() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "f",
         check: Check::Both,
     }

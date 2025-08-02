@@ -2336,7 +2336,6 @@ impl crate::thrift::TSerializable for GeographyType {
       fld_var.write_to_out_protocol(o_prot)?;
       o_prot.write_field_end()?
     }
->>>>>>> origin/main
     o_prot.write_field_stop()?;
     o_prot.write_struct_end()
   }

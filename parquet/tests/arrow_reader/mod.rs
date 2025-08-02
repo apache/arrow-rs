@@ -1136,7 +1136,7 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .set_max_row_group_size(row_per_group)
         .set_bloom_filter_enabled(true)
         .set_statistics_enabled(EnabledStatistics::Page)
-        .set_ieee754_total_order(total_order)
+        .set_ieee754_total_order(total_order);
     if scenario.truncate_stats() {
         // The same as default `column_index_truncate_length` to check both stats with one value
         builder = builder.set_statistics_truncate_length(DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH);
