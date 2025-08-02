@@ -338,7 +338,6 @@ fn sort_bytes<T: ByteArrayType>(
             return ord;
         }
         // 3.2 only if both slices had length < 4 (so prefix was padded)
-        // length compare only when prefix was padded (i.e. original length < 4)
         if la < 4 || lb < 4 {
             let ord = la.cmp(&lb);
             if ord != Ordering::Equal {
