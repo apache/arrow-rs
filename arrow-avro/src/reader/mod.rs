@@ -226,10 +226,8 @@ impl Decoder {
                 })?,
         };
         // Convert the inner result into a “bytes consumed” count.
-        let consumed = match fingerprint_size {
-            Some(n) => n + SINGLE_OBJECT_MAGIC.len(), // magic + fingerprint
-            None => 0,                                // incomplete fingerprint
-        };
+        // NOTE: Incomplete fingerprint consumes no bytes.
+        let consumed = fingerprint_size.map_or(0, |n| n + SINGLE_OBJECT_MAGIC.len());
         Ok(Some(consumed))
     }
 
