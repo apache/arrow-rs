@@ -272,7 +272,7 @@ impl Decoder {
         new_fingerprint: Fingerprint,
     ) -> Result<RecordDecoder, ArrowError> {
         let Some(ref writer_schema_store) = self.writer_schema_store else {
-            return Err(ArrowError::ParseError("Schema store unavailable".into())));
+            return Err(ArrowError::ParseError("Schema store unavailable".into()));
         };
         let Some(writer_schema) = writer_schema_store.lookup(&new_fingerprint) else {
             return Err(ArrowError::ParseError(format!(
@@ -308,12 +308,12 @@ impl Decoder {
                 #[cfg(feature = "lru")]
                 self.cache.put(old_fingerprint, old_decoder);
                 #[cfg(not(feature = "lru"))]
-                self.cache.shift_remove(&old_fingerprint);
-                #[cfg(not(feature = "lru"))]
-                self.cache.insert(old_fingerprint, old_decoder);
-                #[cfg(not(feature = "lru"))]
-                if self.cache.len() > self.max_cache_size {
-                    self.cache.shift_remove_index(0);
+                {
+                    self.cache.shift_remove(&old_fingerprint);
+                    self.cache.insert(old_fingerprint, old_decoder);
+                    if self.cache.len() > self.max_cache_size {
+                        self.cache.shift_remove_index(0);
+                    }
                 }
             } else {
                 self.active_decoder = new_decoder;
