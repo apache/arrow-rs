@@ -21,7 +21,7 @@ use num::cast::AsPrimitive;
 use num::{BigInt, FromPrimitive, ToPrimitive};
 use std::cmp::Ordering;
 use std::num::ParseIntError;
-use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
+use std::ops::{BitAnd, BitOr, BitXor, Neg, Not, Shl, Shr};
 use std::str::FromStr;
 
 mod div;
@@ -123,6 +123,15 @@ impl From<i32> for i256 {
 impl From<i64> for i256 {
     fn from(value: i64) -> Self {
         Self::from_i128(value.into())
+    }
+}
+
+impl Not for i256 {
+    type Output = i256;
+
+    #[inline]
+    fn not(self) -> Self::Output {
+        Self::from_parts(!self.low, !self.high)
     }
 }
 
