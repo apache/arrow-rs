@@ -242,7 +242,7 @@ impl Decoder {
     ) -> Result<Option<usize>, ArrowError> {
         // Need enough bytes to get fingerprint (next N bytes)
         let Some(fingerprint_bytes) = buf.get(..N) else {
-            return Ok(None); // Get more bytes
+            return Ok(None); // Insufficient bytes
         };
         // SAFETY: length checked above.
         let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
@@ -279,18 +279,22 @@ impl Decoder {
                 "Unknown fingerprint: {new_fingerprint:?}"
             )));
         };
-        let Some(ref reader_schema) = self.reader_schema else {
-            return Err(ArrowError::ParseError(
-                "Reader schema unavailable for resolution".into(),
-            ));
+        // If a reader schema was supplied, perform writer-to-reader resolution.
+        // Otherwise, fall back to using the writer schema verbatim.
+        let avro_field = if let Some(reader_schema) = &self.reader_schema {
+            AvroField::resolve_from_writer_and_reader(
+                writer_schema,
+                reader_schema,
+                self.utf8_view,
+                self.strict_mode,
+            )?
+        } else {
+            AvroFieldBuilder::new(writer_schema)
+                .with_utf8view(self.utf8_view)
+                .with_strict_mode(self.strict_mode)
+                .build()?
         };
-        let resolved = AvroField::resolve_from_writer_and_reader(
-            writer_schema,
-            reader_schema,
-            self.utf8_view,
-            self.strict_mode,
-        )?;
-        RecordDecoder::try_new_with_options(resolved.data_type(), self.utf8_view)
+        RecordDecoder::try_new_with_options(avro_field.data_type(), self.utf8_view)
     }
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
