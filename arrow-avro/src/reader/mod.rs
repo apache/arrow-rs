@@ -277,11 +277,11 @@ impl Decoder {
             .writer_schema_store
             .as_ref()
             .ok_or_else(|| ArrowError::ParseError("Schema store unavailable".into()))?;
-        let writer_schema = writer_schema_store
-            .lookup(&new_fingerprint)
-            .ok_or_else(|| {
-                ArrowError::ParseError(format!("Unknown fingerprint: {new_fingerprint:?}"))
-            })?;
+        let Some(writer_schema) = writer_schema_store.lookup(&new_fingerprint) else {
+            return Err(ArrowError::ParseError(format!(
+                "Unknown fingerprint: {new_fingerprint:?}"
+            )));
+        };
         let Some(ref reader_schema) = self.reader_schema else {
             return Err(ArrowError::ParseError(
                 "Reader schema unavailable for resolution".into(),
