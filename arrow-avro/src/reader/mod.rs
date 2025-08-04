@@ -273,10 +273,9 @@ impl Decoder {
         &mut self,
         new_fingerprint: Fingerprint,
     ) -> Result<RecordDecoder, ArrowError> {
-        let writer_schema_store = self
-            .writer_schema_store
-            .as_ref()
-            .ok_or_else(|| ArrowError::ParseError("Schema store unavailable".into()))?;
+        let Some(ref writer_schema_store) = self.writer_schema_store else {
+            return Err(ArrowError::ParseError("Schema store unavailable".into())));
+        };
         let Some(writer_schema) = writer_schema_store.lookup(&new_fingerprint) else {
             return Err(ArrowError::ParseError(format!(
                 "Unknown fingerprint: {new_fingerprint:?}"
