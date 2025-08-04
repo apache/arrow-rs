@@ -251,12 +251,11 @@ impl Decoder {
         // If the fingerprint indicates a schema change, prepare to switch decoders.
         if self.active_fingerprint != Some(new_fingerprint) {
             #[cfg(feature = "lru")]
-            let new_decoder = match self.cache.pop(&new_fingerprint) {
-                Some(decoder) => decoder,
-                None => self.create_decoder_for(new_fingerprint)?,
-            };
+            let new_decoder = self.cache.pop(&new_fingerprint);
             #[cfg(not(feature = "lru"))]
-            let new_decoder = match self.cache.shift_remove(&new_fingerprint) {
+            let new_decoder = self.cache.shift_remove(&new_fingerprint);
+
+            let new_decoder = match new_decoder {
                 Some(decoder) => decoder,
                 None => self.create_decoder_for(new_fingerprint)?,
             };
