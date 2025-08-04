@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
+use crate::arrow::arrow_reader::read_plan::{ReadPlan, ReadPlanBuilder};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
 use crate::bloom_filter::{
@@ -41,9 +42,11 @@ use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::schema::types::SchemaDescriptor;
+#[cfg(feature = "experimental")]
+pub use boolean_selection::BooleanRowSelection;
 
-pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
-
+#[cfg(feature = "experimental")]
+mod boolean_selection;
 mod filter;
 mod read_plan;
 mod selection;
