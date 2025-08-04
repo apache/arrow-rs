@@ -400,7 +400,7 @@ impl ReaderBuilder {
         writer_schema_store: Option<SchemaStore<'static>>,
     ) -> Decoder {
         #[cfg(feature = "lru")]
-        let capacity = NonZeroUsize::new(self.decoder_cache_size).unwrap_or(NonZeroUsize::MIN); // NonZeroUsize::MIN is 1
+        let capacity = NonZeroUsize::new(self.decoder_cache_size).unwrap_or(NonZeroUsize::MIN);
         Decoder {
             batch_size: self.batch_size,
             remaining_capacity: self.batch_size,
@@ -543,7 +543,7 @@ impl ReaderBuilder {
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
         if self.writer_schema_store.is_none() {
             return Err(ArrowError::InvalidArgumentError(
-                "Cannot build a decoder without a writer schema store".to_string(),
+                "Building a decoder requires a writer schema store".to_string(),
             ));
         }
         self.make_decoder(None)
