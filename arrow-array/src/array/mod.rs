@@ -336,6 +336,34 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
     fn get_array_memory_size(&self) -> usize;
+
+    /// Claim memory used by this array in the provided memory pool.
+    ///
+    /// This recursively claims memory for:
+    /// - All data buffers in this array
+    /// - All child arrays (for nested types like List, Struct, etc.)
+    /// - The null bitmap buffer if present
+    ///
+    /// This method guarantees that the memory pool will only compute occupied memory
+    /// exactly once. For example, if this array is derived from operations like `slice`,
+    /// calling `claim` on it would not change the memory pool's usage if the underlying buffers
+    /// are already counted before.
+    ///
+    /// # Example
+    /// ```
+    /// #use arrow_array::{Int32Array, Array};
+    /// #use arrow_buffer::pool::TrackingMemoryPool;
+    ///
+    /// let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let pool = TrackingMemoryPool::default();
+    ///
+    /// // Claim the array's memory in the pool
+    /// array.claim(&pool);
+    /// ```
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.to_data().claim(pool)
+    }
 }
 
 /// A reference-counted reference to a generic `Array`
@@ -419,6 +447,11 @@ impl Array for ArrayRef {
     fn get_array_memory_size(&self) -> usize {
         self.as_ref().get_array_memory_size()
     }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.as_ref().claim(pool)
+    }
 }
 
 impl<T: Array> Array for &T {
@@ -488,6 +521,11 @@ impl<T: Array> Array for &T {
 
     fn get_array_memory_size(&self) -> usize {
         T::get_array_memory_size(self)
+    }
+
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        T::claim(self, pool)
     }
 }
 
