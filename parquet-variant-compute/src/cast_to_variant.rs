@@ -49,9 +49,6 @@ macro_rules! primtive_conversion {
 /// If the input array element is null, the corresponding element in the
 /// output `VariantArray` will also be null (not `Variant::Null`).
 ///
-/// If the input array contains a value that cannot be converted to a
-/// `Variant`, it will be null in the output `VariantArray`.
-///
 /// # Example
 /// ```
 /// # use arrow::array::{Array, ArrayRef, Int64Array};
