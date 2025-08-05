@@ -95,6 +95,7 @@ mod memory;
 pub(crate) mod reader;
 mod writer;
 
+use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::FileDecryptor,
@@ -122,10 +123,6 @@ use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use crate::{
     basic::BoundaryOrder,
     errors::{ParquetError, Result},
-};
-use crate::{
-    basic::{ColumnOrder, Compression, Encoding, Type},
-    format,
 };
 use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
@@ -561,8 +558,8 @@ pub struct SortingColumn {
     pub nulls_first: bool,
 }
 
-impl From<&format::SortingColumn> for SortingColumn {
-    fn from(value: &format::SortingColumn) -> Self {
+impl From<&crate::format::SortingColumn> for SortingColumn {
+    fn from(value: &crate::format::SortingColumn) -> Self {
         Self {
             column_idx: value.column_idx,
             descending: value.descending,
@@ -571,7 +568,7 @@ impl From<&format::SortingColumn> for SortingColumn {
     }
 }
 
-impl From<&SortingColumn> for format::SortingColumn {
+impl From<&SortingColumn> for crate::format::SortingColumn {
     fn from(value: &SortingColumn) -> Self {
         Self {
             column_idx: value.column_idx,
@@ -800,7 +797,7 @@ impl RowGroupMetaData {
         let sorting_columns = self.sorting_columns().map(|scs| {
             scs.iter()
                 .map(|sc| sc.into())
-                .collect::<Vec<format::SortingColumn>>()
+                .collect::<Vec<crate::format::SortingColumn>>()
         });
         crate::format::RowGroup {
             columns: self.columns().iter().map(|v| v.to_thrift()).collect(),
@@ -1349,7 +1346,7 @@ impl ColumnChunkMetaData {
                 .as_ref()
                 .map(|hist| hist.clone().into_inner());
 
-            Some(format::SizeStatistics {
+            Some(crate::format::SizeStatistics {
                 unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
                 repetition_level_histogram,
                 definition_level_histogram,
