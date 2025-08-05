@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains Rust mappings for Thrift definition.
-//! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift) file to see raw definitions.
+//! Contains Rust mappings for Thrift definition. This module contains only mappings for thrift
+//! enums and unions. Thrift structs are handled elsewhere.
+//! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift)
+//! file to see raw definitions.
 
 use std::str::FromStr;
 use std::{fmt, str};
@@ -30,7 +32,7 @@ use crate::errors::{ParquetError, Result};
 // Types from the Thrift definition
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::Type`
+// Mirrors thrift enum `parquet::Type`
 
 /// Types supported by Parquet.
 ///
@@ -60,7 +62,7 @@ pub enum Type {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::ConvertedType`
+// Mirrors thrift enum `parquet::ConvertedType`
 
 /// Common types (converted types) used by frameworks when using Parquet.
 ///
@@ -165,7 +167,7 @@ pub enum ConvertedType {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::TimeUnit`
+// Mirrors thrift union `parquet::TimeUnit`
 
 /// Time unit for `Time` and `Timestamp` logical types.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -179,7 +181,7 @@ pub enum TimeUnit {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::LogicalType`
+// Mirrors thrift union `parquet::LogicalType`
 
 /// Logical types used by version 2.4.0+ of the Parquet format.
 ///
@@ -245,7 +247,7 @@ pub enum LogicalType {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::FieldRepetitionType`
+// Mirrors thrift enum `parquet::FieldRepetitionType`
 
 /// Representation of field types in schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,7 +262,7 @@ pub enum Repetition {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::Encoding`
+// Mirrors thrift enum `parquet::Encoding`
 
 /// Encodings supported by Parquet.
 ///
@@ -376,7 +378,7 @@ impl FromStr for Encoding {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::CompressionCodec`
+// Mirrors thrift enum `parquet::CompressionCodec`
 
 /// Supported block compression algorithms.
 ///
@@ -505,7 +507,7 @@ impl FromStr for Compression {
 }
 
 // ----------------------------------------------------------------------
-/// Mirrors `parquet::PageType`
+/// Mirrors thrift enum `parquet::PageType`
 ///
 /// Available data pages for Parquet file format.
 /// Note that some of the page types may not be supported.
@@ -523,7 +525,7 @@ pub enum PageType {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::BoundaryOrder`
+// Mirrors thrift enum `parquet::BoundaryOrder`
 
 /// Enum to annotate whether lists of min/max elements inside ColumnIndex
 /// are ordered and if so, in which direction.
@@ -538,7 +540,7 @@ pub enum BoundaryOrder {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::BloomFilterAlgorithm`
+// Mirrors thrift union `parquet::BloomFilterAlgorithm`
 
 /// The algorithm used in Bloom filter.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -548,7 +550,7 @@ pub enum BloomFilterAlgorithm {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::BloomFilterHash`
+// Mirrors thrift union `parquet::BloomFilterHash`
 
 /// The hash function used in Bloom filter. This function takes the hash of a column value
 /// using plain encoding.
@@ -560,7 +562,7 @@ pub enum BloomFilterHash {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::BloomFilterCompression`
+// Mirrors thrift union `parquet::BloomFilterCompression`
 
 /// The compression used in the Bloom filter.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -570,7 +572,7 @@ pub enum BloomFilterCompression {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors `parquet::ColumnOrder`
+// Mirrors thrift union `parquet::ColumnOrder`
 
 /// Sort order for page and column statistics.
 ///
@@ -714,6 +716,9 @@ impl ColumnOrder {
         }
     }
 }
+
+// ----------------------------------------------------------------------
+// Display handlers
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
