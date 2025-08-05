@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{Attributes, ComplexType, Enum, PrimitiveType, Record, Schema, TypeName};
+use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
     TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -660,73 +660,8 @@ fn make_data_type<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{
-        Array, Attributes, ComplexType, Field, Fixed, Map, PrimitiveType, Record, Schema, Type, TypeName,
-    };
+    use crate::schema::{Attributes, PrimitiveType, Schema, Type, TypeName};
     use serde_json;
-    use std::collections::HashMap;
-
-    fn create_record<'a>(name: &'a str, namespace: Option<&'a str>, fields: Vec<Field<'a>>) -> Record<'a> {
-        Record {
-            name,
-            namespace,
-            aliases: vec![],
-            doc: None,
-            fields,
-            attributes: Attributes::default(),
-        }
-    }
-
-    fn create_field<'a>(name: &'a str, field_type: Schema<'a>) -> Field<'a> {
-        Field {
-            name,
-            r#type: field_type,
-            default: None,
-            doc: None,
-        }
-    }
-
-    fn create_primitive_field<'a>(name: &'a str, primitive_type: PrimitiveType) -> Field<'a> {
-        create_field(name, Schema::TypeName(TypeName::Primitive(primitive_type)))
-    }
-
-    fn create_ref_field<'a>(name: &'a str, ref_name: &'a str) -> Field<'a> {
-        create_field(name, Schema::TypeName(TypeName::Ref(ref_name)))
-    }
-
-    fn create_array_field<'a>(name: &'a str, item_type: Schema<'a>) -> Field<'a> {
-        create_field(name, Schema::Complex(ComplexType::Array(Array {
-            items: Box::new(item_type),
-            attributes: Attributes::default(),
-        })))
-    }
-
-    fn create_map_field<'a>(name: &'a str, value_type: Schema<'a>) -> Field<'a> {
-        create_field(name, Schema::Complex(ComplexType::Map(Map {
-            values: Box::new(value_type),
-            attributes: Attributes::default(),
-        })))
-    }
-
-    fn create_record_field<'a>(name: &'a str, record: Record<'a>) -> Field<'a> {
-        create_field(name, Schema::Complex(ComplexType::Record(record)))
-    }
-
-    fn create_enum<'a>(name: &'a str, namespace: Option<&'a str>, symbols: Vec<&'a str>) -> Enum<'a> {
-        Enum {
-            name,
-            namespace,
-            doc: None,
-            aliases: vec![],
-            symbols,
-            default: None,
-            attributes: Attributes::default(),
-        }
-    }
-
-    fn create_enum_field<'a>(name: &'a str, enum_type: Enum<'a>) -> Field<'a> {
-        create_field(name, Schema::Complex(ComplexType::Enum(enum_type)))
-    }
 
     fn create_schema_with_logical_type(
         primitive_type: PrimitiveType,
@@ -741,72 +676,6 @@ mod tests {
             r#type: TypeName::Primitive(primitive_type),
             attributes,
         })
-    }
-
-    fn create_fixed_schema(size: usize, logical_type: &'static str) -> Schema<'static> {
-        let attributes = Attributes {
-            logical_type: Some(logical_type),
-            additional: Default::default(),
-        };
-
-        Schema::Complex(ComplexType::Fixed(Fixed {
-            name: "fixed_type",
-            namespace: None,
-            aliases: Vec::new(),
-            size,
-            attributes,
-        }))
-    }
-
-    fn validate_struct_field<F>(codec: &Codec, field_index: usize, expected_name: &str, validator: F) 
-    where 
-        F: FnOnce(&Codec)
-    {
-        if let Codec::Struct(fields) = codec {
-            assert!(field_index < fields.len(), "Field index {field_index} out of bounds");
-            assert_eq!(fields[field_index].name(), expected_name);
-            validator(&fields[field_index].data_type().codec);
-        } else {
-            panic!("Expected Struct codec, got {codec:?}");
-        }
-    }
-
-    fn validate_nested_record(codec: &Codec, expected_field_name: &str, expected_type: fn(&Codec) -> bool) {
-        if let Codec::Struct(nested_fields) = codec {
-            assert_eq!(nested_fields.len(), 1);
-            assert_eq!(nested_fields[0].name(), expected_field_name);
-            assert!(expected_type(&nested_fields[0].data_type().codec));
-        } else {
-            panic!("Expected nested field to be a Struct, got {codec:?}");
-        }
-    }
-
-    fn validate_collection_items<F>(codec: &Codec, validator: F) 
-    where 
-        F: FnOnce(&Codec)
-    {
-        match codec {
-            Codec::List(array_item) => validator(&array_item.codec),
-            Codec::Map(map_value) => validator(&map_value.codec),
-            _ => panic!("Expected List or Map codec, got {codec:?}"),
-        }
-    }
-
-    fn validate_enum_type(codec: &Codec) {
-        if let Codec::Enum(symbols) = codec {
-            assert_eq!(symbols.as_ref(), &["ACTIVE", "INACTIVE", "PENDING"]);
-        } else {
-            panic!("Expected Enum codec, got {codec:?}");
-        }
-    }
-
-    fn run_schema_test<F>(schema: Schema, validator: F) 
-    where 
-        F: FnOnce(AvroField)
-    {
-        let result = AvroField::try_from(&schema);
-        assert!(result.is_ok(), "Schema conversion failed: {:?}", result.err());
-        validator(result.unwrap());
     }
 
     #[test]
@@ -1013,65 +882,159 @@ mod tests {
 
     #[test]
     fn test_nested_record_type_reuse_without_namespace() {
-        let nested_record = create_record("Nested", None, vec![
-            create_primitive_field("nested_int", PrimitiveType::Int),
-        ]);
-        let main_record = create_record("Record", None, vec![
-            create_record_field("nested", nested_record),
-            create_ref_field("nestedRecord", "Nested"),
-            create_array_field("nestedArray", Schema::TypeName(TypeName::Ref("Nested"))),
-            create_map_field("nestedMap", Schema::TypeName(TypeName::Ref("Nested"))),
-        ]);
-        let schema = Schema::Complex(ComplexType::Record(main_record));
+        let schema_str = r#"
+        {
+          "type": "record",
+          "name": "Record",
+          "fields": [
+            {
+              "name": "nested",
+              "type": {
+                "type": "record",
+                "name": "Nested",
+                "fields": [
+                  { "name": "nested_int", "type": "int" }
+                ]
+              }
+            },
+            { "name": "nestedRecord", "type": "Nested" },
+            { "name": "nestedArray", "type": { "type": "array", "items": "Nested" } },
+            { "name": "nestedMap", "type": { "type": "map", "values": "Nested" } }
+          ]
+        }
+        "#;
 
-        run_schema_test(schema, |avro_field| {
-            let codec = &avro_field.data_type().codec;
+        let schema: Schema = serde_json::from_str(schema_str).unwrap();
 
-            if let Codec::Struct(fields) = codec {
-                assert_eq!(fields.len(), 4);
-                let field_names: Vec<&str> = fields.iter().map(|f| f.name()).collect();
-                assert_eq!(field_names, vec!["nested", "nestedRecord", "nestedArray", "nestedMap"]);
+        let mut resolver = Resolver::default();
+        let avro_data_type = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
+
+        if let Codec::Struct(fields) = avro_data_type.codec() {
+            assert_eq!(fields.len(), 4);
+
+            // nested
+            assert_eq!(fields[0].name(), "nested");
+            let nested_data_type = fields[0].data_type();
+            if let Codec::Struct(nested_fields) = nested_data_type.codec() {
+                assert_eq!(nested_fields.len(), 1);
+                assert_eq!(nested_fields[0].name(), "nested_int");
+                assert!(matches!(nested_fields[0].data_type().codec(), Codec::Int32));
+            } else {
+                panic!(
+                    "'nested' field is not a struct but {:?}",
+                    nested_data_type.codec()
+                );
             }
 
-            validate_struct_field(codec, 0, "nested", |c| validate_nested_record(c, "nested_int", |codec| matches!(codec, Codec::Int32)));
-            validate_struct_field(codec, 1, "nestedRecord", |c| validate_nested_record(c, "nested_int", |codec| matches!(codec, Codec::Int32)));
-            validate_struct_field(codec, 2, "nestedArray", |c| {
-                validate_collection_items(c, |item_codec| validate_nested_record(item_codec, "nested_int", |codec| matches!(codec, Codec::Int32)));
-            });
-            validate_struct_field(codec, 3, "nestedMap", |c| {
-                validate_collection_items(c, |value_codec| validate_nested_record(value_codec, "nested_int", |codec| matches!(codec, Codec::Int32)));
-            });
-        });
+            // nestedRecord
+            assert_eq!(fields[1].name(), "nestedRecord");
+            let nested_record_data_type = fields[1].data_type();
+            assert_eq!(
+                nested_record_data_type.codec().data_type(),
+                nested_data_type.codec().data_type()
+            );
+
+            // nestedArray
+            assert_eq!(fields[2].name(), "nestedArray");
+            if let Codec::List(item_type) = fields[2].data_type().codec() {
+                assert_eq!(
+                    item_type.codec().data_type(),
+                    nested_data_type.codec().data_type()
+                );
+            } else {
+                panic!("'nestedArray' field is not a list");
+            }
+
+            // nestedMap
+            assert_eq!(fields[3].name(), "nestedMap");
+            if let Codec::Map(value_type) = fields[3].data_type().codec() {
+                assert_eq!(
+                    value_type.codec().data_type(),
+                    nested_data_type.codec().data_type()
+                );
+            } else {
+                panic!("'nestedMap' field is not a map");
+            }
+        } else {
+            panic!("Top-level schema is not a struct");
+        }
     }
 
     #[test]
     fn test_nested_enum_type_reuse_with_namespace() {
-        let status_enum = create_enum("Status", Some("enum_ns"), vec!["ACTIVE", "INACTIVE", "PENDING"]);
-        let main_record = create_record("Record", Some("record_ns"), vec![
-            create_enum_field("status", status_enum),
-            create_ref_field("backupStatus", "enum_ns.Status"),
-            create_array_field("statusHistory", Schema::TypeName(TypeName::Ref("enum_ns.Status"))),
-            create_map_field("statusMap", Schema::TypeName(TypeName::Ref("enum_ns.Status"))),
-        ]);
-        let schema = Schema::Complex(ComplexType::Record(main_record));
+        let schema_str = r#"
+        {
+          "type": "record",
+          "name": "Record",
+          "namespace": "record_ns",
+          "fields": [
+            {
+              "name": "status",
+              "type": {
+                "type": "enum",
+                "name": "Status",
+                "namespace": "enum_ns",
+                "symbols": ["ACTIVE", "INACTIVE", "PENDING"]
+              }
+            },
+            { "name": "backupStatus", "type": "enum_ns.Status" },
+            { "name": "statusHistory", "type": { "type": "array", "items": "enum_ns.Status" } },
+            { "name": "statusMap", "type": { "type": "map", "values": "enum_ns.Status" } }
+          ]
+        }
+        "#;
 
-        run_schema_test(schema, |avro_field| {
-            let codec = &avro_field.data_type().codec;
-            
-            if let Codec::Struct(fields) = codec {
-                assert_eq!(fields.len(), 4);
-                let field_names: Vec<&str> = fields.iter().map(|f| f.name()).collect();
-                assert_eq!(field_names, vec!["status", "backupStatus", "statusHistory", "statusMap"]);
+        let schema: Schema = serde_json::from_str(schema_str).unwrap();
+
+        let mut resolver = Resolver::default();
+        let avro_data_type = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
+
+        if let Codec::Struct(fields) = avro_data_type.codec() {
+            assert_eq!(fields.len(), 4);
+
+            // status
+            assert_eq!(fields[0].name(), "status");
+            let status_data_type = fields[0].data_type();
+            if let Codec::Enum(symbols) = status_data_type.codec() {
+                assert_eq!(symbols.as_ref(), &["ACTIVE", "INACTIVE", "PENDING"]);
+            } else {
+                panic!(
+                    "'status' field is not an enum but {:?}",
+                    status_data_type.codec()
+                );
             }
 
-            validate_struct_field(codec, 0, "status", validate_enum_type);
-            validate_struct_field(codec, 1, "backupStatus", validate_enum_type);
-            validate_struct_field(codec, 2, "statusHistory", |c| {
-                validate_collection_items(c, validate_enum_type);
-            });
-            validate_struct_field(codec, 3, "statusMap", |c| {
-                validate_collection_items(c, validate_enum_type);
-            });
-        });
+            // backupStatus
+            assert_eq!(fields[1].name(), "backupStatus");
+            let backup_status_data_type = fields[1].data_type();
+            assert_eq!(
+                backup_status_data_type.codec().data_type(),
+                status_data_type.codec().data_type()
+            );
+
+            // statusHistory
+            assert_eq!(fields[2].name(), "statusHistory");
+            if let Codec::List(item_type) = fields[2].data_type().codec() {
+                assert_eq!(
+                    item_type.codec().data_type(),
+                    status_data_type.codec().data_type()
+                );
+            } else {
+                panic!("'statusHistory' field is not a list");
+            }
+
+            // statusMap
+            assert_eq!(fields[3].name(), "statusMap");
+            if let Codec::Map(value_type) = fields[3].data_type().codec() {
+                assert_eq!(
+                    value_type.codec().data_type(),
+                    status_data_type.codec().data_type()
+                );
+            } else {
+                panic!("'statusMap' field is not a map");
+            }
+        } else {
+            panic!("Top-level schema is not a struct");
+        }
     }
 }
