@@ -698,6 +698,14 @@ fn read_dictionary_impl(
     Ok(())
 }
 
+/// Updates the `dictionaries_by_id` with the provided dictionary values and id.
+///
+/// # Errors
+/// - If `is_delta` is true and there is no existing dictionary for the given
+/// `dict_id`
+/// - If `is_delta` is true and the concatenation of the existing and new
+/// dictionary fails. This usually signals a type mismatch between the old and
+/// new values.
 fn update_dictionaries(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     is_delta: bool,
@@ -727,6 +735,9 @@ fn update_dictionaries(
     Ok(())
 }
 
+/// Given a dictionary batch IPC message/body along with the full state of a
+/// stream including schema, dictionary cache, metadata, and other flags, this
+/// function will parse the buffer into an array of dictionary values.
 fn get_dictionary_values(
     buf: &Buffer,
     batch: crate::DictionaryBatch,
@@ -1527,6 +1538,13 @@ impl<R: Read> StreamReader<R> {
         }
     }
 
+    /// Reads and fully parses the next IPC message from the stream. Whereas
+    /// [`Self::maybe_next`] is a higher level method focused on reading
+    /// `RecordBatch`es, this method returns the individual fully parsed IPC
+    /// messages from the underlying stream.
+    ///
+    /// This is useful primarily for testing reader/writer behaviors as it
+    /// allows a full view into the messages that have been written to a stream.
     pub(crate) fn next_ipc_message(&mut self) -> Result<Option<IpcMessage>, ArrowError> {
         let message = self.reader.maybe_next()?;
         let Some((message, body)) = message else {
@@ -1643,6 +1661,11 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
     }
 }
 
+/// Representation of a fully parsed IpcMessage from the underlying stream.
+/// Parsing this kind of message is done by higher level constructs such as
+/// [`StreamReader`], because fully interpreting the messages into a record
+/// batch or dictionary batch requires access to stream state such as schema
+/// and the full dictionary cache.
 #[derive(Debug)]
 pub(crate) enum IpcMessage {
     Schema(arrow_schema::Schema),
@@ -1654,6 +1677,8 @@ pub(crate) enum IpcMessage {
     },
 }
 
+/// A low-level construct that reads [`Message::Message`]s from a reader while
+/// re-using a buffer for metadata. This is composed into [`StreamReader`].
 struct MessageReader<R> {
     reader: R,
     buf: Vec<u8>,
@@ -1667,6 +1692,16 @@ impl<R: Read> MessageReader<R> {
         }
     }
 
+    /// Reads the entire next message from the underlying reader which includes
+    /// the metadata length, the metadata, and the body.
+    ///
+    /// # Returns
+    /// - `Ok(None)` if the the reader signals the end of stream with EOF on
+    /// the first read
+    /// - `Err(_)` if the reader returns an error other than on the first
+    /// read, or if the metadata length is invalid
+    /// - `Ok(Some(_))` with the Message and buffer containiner the
+    /// body bytes otherwise.
     fn maybe_next(&mut self) -> Result<Option<(Message::Message, MutableBuffer)>, ArrowError> {
         let meta_len = self.read_meta_len()?;
         let Some(meta_len) = meta_len else {
@@ -1686,10 +1721,12 @@ impl<R: Read> MessageReader<R> {
         Ok(Some((message, buf)))
     }
 
+    /// Get a mutable reference to the underlying reader.
     fn inner_mut(&mut self) -> &mut R {
         &mut self.reader
     }
 
+    /// Get an immutable reference to the underlying reader.
     fn inner(&self) -> &R {
         &self.reader
     }
@@ -1701,7 +1738,7 @@ impl<R: Read> MessageReader<R> {
     /// the first read
     /// - `Err(_)` if the reader returns an error other than on the first
     /// read, or if the metadata length is less than 0.
-    /// - Returns `Ok(Some(_))` with the length otherwise.
+    /// - `Ok(Some(_))` with the length otherwise.
     pub fn read_meta_len(&mut self) -> Result<Option<i32>, ArrowError> {
         let mut meta_len: [u8; 4] = [0; 4];
         match self.reader.read_exact(&mut meta_len) {
