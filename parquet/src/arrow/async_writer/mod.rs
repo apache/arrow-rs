@@ -61,11 +61,13 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::ArrowWriterOptions,
-    arrow::ArrowWriter,
+    arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
     errors::{ParquetError, Result},
-    file::{metadata::RowGroupMetaData, properties::WriterProperties},
-    format::{FileMetaData, KeyValue},
+    file::{
+        metadata::{KeyValue, RowGroupMetaData},
+        properties::WriterProperties,
+    },
+    format::FileMetaData,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;

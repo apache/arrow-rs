@@ -17,12 +17,12 @@
 
 use std::{io::Read, ops::Range, sync::Arc};
 
-use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::{FileDecryptionProperties, FileDecryptor},
     modules::create_footer_aad,
 };
+use crate::{basic::ColumnOrder, file::metadata::KeyValue};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
@@ -979,11 +979,17 @@ impl ParquetMetaDataReader {
         let column_orders =
             Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
 
+        let key_value_metadata = t_file_metadata.key_value_metadata.map(|vkv| {
+            vkv.into_iter()
+                .map(|kv| KeyValue::new(kv.key, kv.value))
+                .collect::<Vec<KeyValue>>()
+        });
+
         let file_metadata = FileMetaData::new(
             t_file_metadata.version,
             t_file_metadata.num_rows,
             t_file_metadata.created_by,
-            t_file_metadata.key_value_metadata,
+            key_value_metadata,
             schema_descr,
             column_orders,
         );
@@ -1016,11 +1022,17 @@ impl ParquetMetaDataReader {
         let column_orders =
             Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
 
+        let key_value_metadata = t_file_metadata.key_value_metadata.map(|vkv| {
+            vkv.into_iter()
+                .map(|kv| KeyValue::new(kv.key, kv.value))
+                .collect::<Vec<KeyValue>>()
+        });
+
         let file_metadata = FileMetaData::new(
             t_file_metadata.version,
             t_file_metadata.num_rows,
             t_file_metadata.created_by,
-            t_file_metadata.key_value_metadata,
+            key_value_metadata,
             schema_descr,
             column_orders,
         );

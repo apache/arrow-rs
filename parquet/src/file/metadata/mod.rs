@@ -427,7 +427,26 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
 }
 
 /// A key-value pair for [`FileMetaData`].
-pub type KeyValue = crate::format::KeyValue;
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct KeyValue {
+    /// The key.
+    pub key: String,
+    /// An optional value.
+    pub value: Option<String>,
+}
+
+impl KeyValue {
+    /// Create a new key value pair
+    pub fn new<F2>(key: String, value: F2) -> KeyValue
+    where
+        F2: Into<Option<String>>,
+    {
+        KeyValue {
+            key,
+            value: value.into(),
+        }
+    }
+}
 
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;

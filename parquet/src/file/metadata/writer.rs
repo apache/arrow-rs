@@ -151,10 +151,18 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         let (encryption_algorithm, footer_signing_key_metadata) =
             self.object_writer.get_plaintext_footer_crypto_metadata();
+        let key_value_metadata = self.key_value_metadata.map(|vkv| {
+            vkv.into_iter()
+                .map(|kv| crate::format::KeyValue {
+                    key: kv.key,
+                    value: kv.value,
+                })
+                .collect::<Vec<crate::format::KeyValue>>()
+        });
         let mut file_metadata = crate::format::FileMetaData {
             num_rows,
             row_groups,
-            key_value_metadata: self.key_value_metadata.clone(),
+            key_value_metadata: key_value_metadata,
             version: self.writer_version,
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: self.created_by.clone(),
