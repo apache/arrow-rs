@@ -4981,12 +4981,51 @@ impl crate::thrift::TSerializable for TypeDefinedOrder {
 }
 
 //
+// IEEE754TotalOrder
+//
+
+/// Empty struct to signal IEEE 754 total order for floating point types
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct IEEE754TotalOrder {
+}
+
+impl IEEE754TotalOrder {
+  pub fn new() -> IEEE754TotalOrder {
+    IEEE754TotalOrder {}
+  }
+}
+
+impl crate::thrift::TSerializable for IEEE754TotalOrder {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<IEEE754TotalOrder> {
+    i_prot.read_struct_begin()?;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      i_prot.skip(field_ident.field_type)?;
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    let ret = IEEE754TotalOrder {};
+    Ok(ret)
+  }
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("IEEE754TotalOrder");
+    o_prot.write_struct_begin(&struct_ident)?;
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // ColumnOrder
 //
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ColumnOrder {
   TYPEORDER(TypeDefinedOrder),
+  IEEE754TOTALORDER(IEEE754TotalOrder),
 }
 
 impl crate::thrift::TSerializable for ColumnOrder {
@@ -5005,6 +5044,13 @@ impl crate::thrift::TSerializable for ColumnOrder {
           let val = TypeDefinedOrder::read_from_in_protocol(i_prot)?;
           if ret.is_none() {
             ret = Some(ColumnOrder::TYPEORDER(val));
+          }
+          received_field_count += 1;
+        },
+        2 => {
+          let val = IEEE754TotalOrder::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(ColumnOrder::IEEE754TOTALORDER(val));
           }
           received_field_count += 1;
         },
@@ -5044,6 +5090,11 @@ impl crate::thrift::TSerializable for ColumnOrder {
     match *self {
       ColumnOrder::TYPEORDER(ref f) => {
         o_prot.write_field_begin(&TFieldIdentifier::new("TYPE_ORDER", TType::Struct, 1))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      ColumnOrder::IEEE754TOTALORDER(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("IEEE_754_TOTAL_ORDER", TType::Struct, 2))?;
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },

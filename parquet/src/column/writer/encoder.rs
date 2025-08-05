@@ -18,7 +18,7 @@
 use bytes::Bytes;
 use half::f16;
 
-use crate::basic::{ConvertedType, Encoding, LogicalType, Type};
+use crate::basic::{ConvertedType, Encoding, LogicalType, SortOrder, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
@@ -28,7 +28,9 @@ use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
+use crate::schema::types::ColumnDescPtr;
+
+use super::OrderedColumnDescriptor;
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
 pub trait ColumnValues {
@@ -126,7 +128,7 @@ pub trait ColumnValueEncoder {
 pub struct ColumnValueEncoderImpl<T: DataType> {
     encoder: Box<dyn Encoder<T>>,
     dict_encoder: Option<DictEncoder<T>>,
-    descr: ColumnDescPtr,
+    descr: OrderedColumnDescriptor,
     num_values: usize,
     statistics_enabled: EnabledStatistics,
     min_value: Option<T::T>,
@@ -201,10 +203,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
             .transpose()?;
 
+        let descr = OrderedColumnDescriptor::new(descr.clone(), props.ieee754_total_order());
+
         Ok(Self {
             encoder,
             dict_encoder,
-            descr: descr.clone(),
+            descr,
             num_values: 0,
             statistics_enabled,
             bloom_filter,
@@ -309,14 +313,15 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 }
 
-fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(T, T)>
+fn get_min_max<'a, T, I>(descr: &OrderedColumnDescriptor, mut iter: I) -> Option<(T, T)>
 where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
+    let ieee754_total_order = descr.sort_order == SortOrder::TOTAL_ORDER;
     let first = loop {
         let next = iter.next()?;
-        if !is_nan(descr, next) {
+        if ieee754_total_order || !is_nan(&descr.descr, next) {
             break next;
         }
     };
@@ -324,7 +329,7 @@ where
     let mut min = first;
     let mut max = first;
     for val in iter {
-        if is_nan(descr, val) {
+        if !ieee754_total_order && is_nan(&descr.descr, val) {
             continue;
         }
         if compare_greater(descr, min, val) {
@@ -350,7 +355,11 @@ where
 }
 
 #[inline]
-fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace: f32) -> T {
+fn replace_zero<T: ParquetValueType>(val: &T, descr: &OrderedColumnDescriptor, replace: f32) -> T {
+    if descr.sort_order == SortOrder::TOTAL_ORDER {
+        return val.clone();
+    }
+
     match T::PHYSICAL_TYPE {
         Type::FLOAT if f32::from_le_bytes(val.as_bytes().try_into().unwrap()) == 0.0 => {
             T::try_from_le_slice(&f32::to_le_bytes(replace)).unwrap()
