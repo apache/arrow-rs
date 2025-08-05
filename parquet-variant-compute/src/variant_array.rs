@@ -52,85 +52,6 @@ pub struct VariantArray {
     shredding_state: ShreddingState,
 }
 
-/// Variant arrays can be shredded in one of three states, encoded here
-#[derive(Debug)]
-pub enum ShreddingState {
-    /// This variant has no typed_value field
-    Unshredded {
-        metadata: BinaryViewArray,
-        value: BinaryViewArray,
-    },
-    /// This variant has a typed_value field and no value field
-    /// meaning it is fully shredded (aka the value is stored in typed_value)
-    FullyShredded {
-        metadata: BinaryViewArray,
-        typed_value: ArrayRef,
-    },
-    /// This variant has both a value field and a typed_value field
-    /// meaning it is partially shredded: first the typed_value is used, and
-    /// if that is null, the value field is used.
-    PartiallyShredded {
-        metadata: BinaryViewArray,
-        value: BinaryViewArray,
-        typed_value: ArrayRef,
-    },
-}
-
-impl ShreddingState {
-    /// Return a reference to the metadata field
-    pub fn metadata_field(&self) -> &BinaryViewArray {
-        match self {
-            ShreddingState::Unshredded { metadata, .. } => metadata,
-            ShreddingState::FullyShredded { metadata, .. } => metadata,
-            ShreddingState::PartiallyShredded { metadata, .. } => metadata,
-        }
-    }
-
-    /// Return a reference to the value field, if present
-    pub fn value_field(&self) -> Option<&BinaryViewArray> {
-        match self {
-            ShreddingState::Unshredded { value, .. } => Some(value),
-            ShreddingState::FullyShredded { .. } => None,
-            ShreddingState::PartiallyShredded { value, .. } => Some(value),
-        }
-    }
-
-    /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        match self {
-            ShreddingState::Unshredded { .. } => None,
-            ShreddingState::FullyShredded { typed_value, .. } => Some(typed_value),
-            ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
-        }
-    }
-
-    /// Slice all the underlying arrays
-    pub fn slice(&self, offset: usize, length: usize) -> Self {
-        match self {
-            ShreddingState::Unshredded { metadata, value } => ShreddingState::Unshredded {
-                metadata: metadata.slice(offset, length),
-                value: value.slice(offset, length),
-            },
-            ShreddingState::FullyShredded {
-                metadata,
-                typed_value,
-            } => ShreddingState::FullyShredded {
-                metadata: metadata.slice(offset, length),
-                typed_value: typed_value.slice(offset, length),
-            },
-            ShreddingState::PartiallyShredded {
-                metadata,
-                value,
-                typed_value,
-            } => ShreddingState::PartiallyShredded {
-                metadata: metadata.slice(offset, length),
-                value: value.slice(offset, length),
-                typed_value: typed_value.slice(offset, length),
-            },
-        }
-    }
-}
-
 impl VariantArray {
     /// Creates a new `VariantArray` from a [`StructArray`].
     ///
@@ -200,27 +121,8 @@ impl VariantArray {
 
         // Note these clones are cheap, they just bump the ref count
         let inner = inner.clone();
-        let metadata = metadata.clone();
-        let value = value.cloned();
-        let typed_value = typed_value.cloned();
-
-        let shredding_state = match (metadata, value, typed_value) {
-            (metadata, Some(value), Some(typed_value)) => ShreddingState::PartiallyShredded {
-                metadata,
-                value,
-                typed_value,
-            },
-            (metadata, Some(value), None) => ShreddingState::Unshredded { metadata, value },
-            (metadata, None, Some(typed_value)) => ShreddingState::FullyShredded {
-                metadata,
-                typed_value,
-            },
-            (_metadata_field, None, None) => {
-                return Err(ArrowError::InvalidArgumentError(String::from(
-                    "VariantArray has neither value nor typed_value field",
-                )));
-            }
-        };
+        let shredding_state =
+            ShreddingState::try_new(metadata.clone(), value.cloned(), typed_value.cloned())?;
 
         Ok(Self {
             inner,
@@ -305,6 +207,108 @@ impl VariantArray {
     /// Return a reference to the typed_value field of the `StructArray`, if present
     pub fn typed_value_field(&self) -> Option<&ArrayRef> {
         self.shredding_state.typed_value_field()
+    }
+}
+
+/// Variant arrays can be shredded in one of three states, encoded here
+#[derive(Debug)]
+pub enum ShreddingState {
+    /// This variant has no typed_value field
+    Unshredded {
+        metadata: BinaryViewArray,
+        value: BinaryViewArray,
+    },
+    /// This variant has a typed_value field and no value field
+    /// meaning it is fully shredded (aka the value is stored in typed_value)
+    FullyShredded {
+        metadata: BinaryViewArray,
+        typed_value: ArrayRef,
+    },
+    /// This variant has both a value field and a typed_value field
+    /// meaning it is partially shredded: first the typed_value is used, and
+    /// if that is null, the value field is used.
+    PartiallyShredded {
+        metadata: BinaryViewArray,
+        value: BinaryViewArray,
+        typed_value: ArrayRef,
+    },
+}
+
+impl ShreddingState {
+    /// try to create a new `ShreddingState` from the given fields
+    pub fn try_new(
+        metadata: BinaryViewArray,
+        value: Option<BinaryViewArray>,
+        typed_value: Option<ArrayRef>,
+    ) -> Result<Self, ArrowError> {
+        match (metadata, value, typed_value) {
+            (metadata, Some(value), Some(typed_value)) => Ok(Self::PartiallyShredded {
+                metadata,
+                value,
+                typed_value,
+            }),
+            (metadata, Some(value), None) => Ok(Self::Unshredded { metadata, value }),
+            (metadata, None, Some(typed_value)) => Ok(Self::FullyShredded {
+                metadata,
+                typed_value,
+            }),
+            (_metadata_field, None, None) => Err(ArrowError::InvalidArgumentError(String::from(
+                "VariantArray has neither value nor typed_value field",
+            ))),
+        }
+    }
+
+    /// Return a reference to the metadata field
+    pub fn metadata_field(&self) -> &BinaryViewArray {
+        match self {
+            ShreddingState::Unshredded { metadata, .. } => metadata,
+            ShreddingState::FullyShredded { metadata, .. } => metadata,
+            ShreddingState::PartiallyShredded { metadata, .. } => metadata,
+        }
+    }
+
+    /// Return a reference to the value field, if present
+    pub fn value_field(&self) -> Option<&BinaryViewArray> {
+        match self {
+            ShreddingState::Unshredded { value, .. } => Some(value),
+            ShreddingState::FullyShredded { .. } => None,
+            ShreddingState::PartiallyShredded { value, .. } => Some(value),
+        }
+    }
+
+    /// Return a reference to the typed_value field, if present
+    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
+        match self {
+            ShreddingState::Unshredded { .. } => None,
+            ShreddingState::FullyShredded { typed_value, .. } => Some(typed_value),
+            ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
+        }
+    }
+
+    /// Slice all the underlying arrays
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        match self {
+            ShreddingState::Unshredded { metadata, value } => ShreddingState::Unshredded {
+                metadata: metadata.slice(offset, length),
+                value: value.slice(offset, length),
+            },
+            ShreddingState::FullyShredded {
+                metadata,
+                typed_value,
+            } => ShreddingState::FullyShredded {
+                metadata: metadata.slice(offset, length),
+                typed_value: typed_value.slice(offset, length),
+            },
+            ShreddingState::PartiallyShredded {
+                metadata,
+                value,
+                typed_value,
+            } => ShreddingState::PartiallyShredded {
+                metadata: metadata.slice(offset, length),
+                value: value.slice(offset, length),
+                typed_value: typed_value.slice(offset, length),
+            },
+        }
     }
 }
 
