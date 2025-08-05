@@ -1667,6 +1667,7 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 /// batch or dictionary batch requires access to stream state such as schema
 /// and the full dictionary cache.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) enum IpcMessage {
     Schema(arrow_schema::Schema),
     RecordBatch(RecordBatch),
