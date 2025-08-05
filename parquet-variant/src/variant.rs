@@ -1149,6 +1149,50 @@ impl From<i64> for Variant<'_, '_> {
     }
 }
 
+impl From<u8> for Variant<'_, '_> {
+    fn from(value: u8) -> Self {
+        // if it fits in i8, use that, otherwise use i16
+        if let Ok(value) = i8::try_from(value) {
+            Variant::Int8(value)
+        } else {
+            Variant::Int16(value as i16)
+        }
+    }
+}
+
+impl From<u16> for Variant<'_, '_> {
+    fn from(value: u16) -> Self {
+        // if it fits in i16, use that, otherwise use i32
+        if let Ok(value) = i16::try_from(value) {
+            Variant::Int16(value)
+        } else {
+            Variant::Int32(value as i32)
+        }
+    }
+}
+impl From<u32> for Variant<'_, '_> {
+    fn from(value: u32) -> Self {
+        // if it fits in i32, use that, otherwise use i64
+        if let Ok(value) = i32::try_from(value) {
+            Variant::Int32(value)
+        } else {
+            Variant::Int64(value as i64)
+        }
+    }
+}
+
+impl From<u64> for Variant<'_, '_> {
+    fn from(value: u64) -> Self {
+        // if it fits in i64, use that, otherwise use Decimal16
+        if let Ok(value) = i64::try_from(value) {
+            Variant::Int64(value)
+        } else {
+            // u64 max is 18446744073709551615, which fits in i128
+            Variant::Decimal16(VariantDecimal16::try_new(value as i128, 0).unwrap())
+        }
+    }
+}
+
 impl From<VariantDecimal4> for Variant<'_, '_> {
     fn from(value: VariantDecimal4) -> Self {
         Variant::Decimal4(value)

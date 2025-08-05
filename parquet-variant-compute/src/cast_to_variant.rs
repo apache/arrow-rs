@@ -34,12 +34,7 @@ macro_rules! primtive_conversion {
                 $builder.append_null();
                 continue;
             }
-            if let Some(value) = array.value(i).to_variant() {
-                $builder.append_variant(value);
-            } else {
-                // Could not convert to Variant, append null
-                $builder.append_null();
-            }
+            $builder.append_variant(Variant::from(array.value(i)));
         }
     }};
 }
@@ -117,88 +112,6 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 
 // TODO add cast_with_options that allow specifying
 
-/// Trait for mapping various types to a `Variant`, returning `None` if the
-/// conversion is not possible.
-pub trait ToVariant {
-    fn to_variant(&self) -> Option<Variant>;
-}
-
-impl ToVariant for i8 {
-    fn to_variant(&self) -> Option<Variant> {
-        Some(Variant::Int8(*self))
-    }
-}
-impl ToVariant for i16 {
-    fn to_variant(&self) -> Option<Variant> {
-        Some(Variant::Int16(*self))
-    }
-}
-impl ToVariant for i32 {
-    fn to_variant(&self) -> Option<Variant> {
-        Some(Variant::Int32(*self))
-    }
-}
-impl ToVariant for i64 {
-    fn to_variant(&self) -> Option<Variant> {
-        Some(Variant::Int64(*self))
-    }
-}
-impl ToVariant for u8 {
-    fn to_variant(&self) -> Option<Variant> {
-        // try to convert to Int8, and if not possible, use Int16
-        if let Ok(value) = i8::try_from(*self) {
-            Some(Variant::Int8(value))
-        } else {
-            Some(Variant::Int16(*self as i16))
-        }
-    }
-}
-
-impl ToVariant for u16 {
-    fn to_variant(&self) -> Option<Variant> {
-        // try to convert to Int16, and if not possible, use Int32
-        if let Ok(value) = i16::try_from(*self) {
-            Some(Variant::Int16(value))
-        } else {
-            Some(Variant::Int32(*self as i32))
-        }
-    }
-}
-
-impl ToVariant for u32 {
-    fn to_variant(&self) -> Option<Variant> {
-        // try to convert to Int32, and if not possible, use Int64
-        if let Ok(value) = i32::try_from(*self) {
-            Some(Variant::Int32(value))
-        } else {
-            Some(Variant::Int64(*self as i64))
-        }
-    }
-}
-
-impl ToVariant for u64 {
-    fn to_variant(&self) -> Option<Variant> {
-        // try to convert to Int64, and if not possible, return None
-        if let Ok(value) = i64::try_from(*self) {
-            Some(Variant::Int64(value))
-        } else {
-            None
-        }
-    }
-}
-
-impl ToVariant for f32 {
-    fn to_variant(&self) -> Option<Variant> {
-        Some(Variant::Float(*self))
-    }
-}
-
-impl ToVariant for f64 {
-    fn to_variant(&self) -> Option<Variant> {
-        Some(Variant::Double(*self))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,7 +119,7 @@ mod tests {
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
         UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
-    use parquet_variant::Variant;
+    use parquet_variant::{Variant, VariantDecimal16};
     use std::sync::Arc;
 
     #[test]
@@ -364,7 +277,10 @@ mod tests {
                 None,
                 Some(Variant::Int64(1)),
                 Some(Variant::Int64(9223372036854775807)),
-                None, // u64::MAX cannot fit in Int64
+                Some(Variant::Decimal16(
+                    // u64::MAX cannot fit in Int64
+                    VariantDecimal16::try_from(18446744073709551615).unwrap(),
+                )),
             ],
         )
     }
