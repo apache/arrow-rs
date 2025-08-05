@@ -47,7 +47,7 @@ fn main() {
     let large_array = Int32Array::from((0..1000).collect::<Vec<i32>>());
     large_array.claim(&pool);
     let original_usage = pool.used();
-    println!("Original array (1000 elements): {} bytes", original_usage);
+    println!("Original array (1000 elements): {original_usage} bytes");
 
     // Create and claim slices - should not increase memory usage
     let slice1 = large_array.slice(0, 100);
@@ -57,7 +57,7 @@ fn main() {
     slice2.claim(&pool);
     let final_usage = pool.used();
 
-    println!("After claiming 2 slices: {} bytes", final_usage);
+    println!("After claiming 2 slices: {final_usage} bytes");
     println!(
         "Increase: {} bytes (slices share the same buffer!)",
         final_usage - original_usage

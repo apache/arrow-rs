@@ -1574,7 +1574,7 @@ impl ArrayData {
     }
 
     /// Claim memory used by this ArrayData in the provided memory pool.
-    /// 
+    ///
     /// This claims memory for:
     /// - All buffers in self.buffers
     /// - All child ArrayData recursively  
@@ -1585,12 +1585,12 @@ impl ArrayData {
         for buffer in &self.buffers {
             buffer.claim(pool);
         }
-        
+
         // Claim null buffer if present
         if let Some(nulls) = &self.nulls {
             nulls.claim(pool);
         }
-        
+
         // Recursively claim child data
         for child in &self.child_data {
             child.claim(pool);

@@ -351,8 +351,8 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     ///
     /// # Example
     /// ```
-    /// #use arrow_array::{Int32Array, Array};
-    /// #use arrow_buffer::pool::TrackingMemoryPool;
+    /// # use arrow_array::{Int32Array, Array};
+    /// # use arrow_buffer::TrackingMemoryPool;
     ///
     /// let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
     /// let pool = TrackingMemoryPool::default();
