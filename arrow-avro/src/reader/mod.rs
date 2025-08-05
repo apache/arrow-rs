@@ -326,15 +326,14 @@ impl ReaderBuilder {
         writer_schema: &Schema,
         reader_schema: Option<&AvroSchema>,
     ) -> Result<RecordDecoder, ArrowError> {
-        let root = match reader_schema {
-            Some(reader_schema) => {
-                AvroFieldBuilder::new(writer_schema).with_reader_schema(reader_schema.clone())
-            }
-            _ => AvroFieldBuilder::new(writer_schema),
+        let mut builder = AvroFieldBuilder::new(writer_schema);
+        if let Some(reader_schema) = reader_schema {
+            builder = builder.with_reader_schema(reader_schema.clone());
         }
-        .with_utf8view(self.utf8_view)
-        .with_strict_mode(self.strict_mode)
-        .build()?;
+        let root = builder
+            .with_utf8view(self.utf8_view)
+            .with_strict_mode(self.strict_mode)
+            .build()?;
         RecordDecoder::try_new_with_options(root.data_type(), self.utf8_view)
     }
 
