@@ -237,14 +237,10 @@ impl Decoder {
         let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
         // If the fingerprint indicates a schema change, prepare to switch decoders.
         if self.active_fingerprint != Some(new_fingerprint) {
-            let new_decoder = self.cache.shift_remove(&new_fingerprint);
-            let new_decoder = match new_decoder {
-                Some(decoder) => decoder,
-                None => {
-                    return Err(ArrowError::ParseError(format!(
-                        "Unknown fingerprint: {new_fingerprint:?}"
-                    )))
-                }
+            let Some(new_decoder) = self.cache.shift_remove(&new_fingerprint) else {
+                return Err(ArrowError::ParseError(format!(
+                    "Unknown fingerprint: {new_fingerprint:?}"
+                )));
             };
             self.pending_schema = Some((new_fingerprint, new_decoder));
             // If there are already decoded rows, we must flush them first.
