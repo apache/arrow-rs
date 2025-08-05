@@ -158,7 +158,7 @@ impl VariantArray {
     /// Dictionary-Encoded, preferably (but not required) with an index type of
     /// int8.
     ///
-    /// Currently, only  [`BinaryViewArray`] are supported.
+    /// Currently, only [`BinaryViewArray`] are supported.
     ///
     /// [`BinaryViewArray`]: arrow::array::BinaryViewArray
     pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
