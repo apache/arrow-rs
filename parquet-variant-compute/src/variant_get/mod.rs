@@ -45,7 +45,6 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
     let output_builder = instantiate_output_builder(options.clone())?;
 
     // Dispatch based on the shredding state of the input variant array
-    // TODO make this an enum on VariantArray (e.g ShreddingState)
     match variant_array.shredding_state() {
         ShreddingState::PartiallyShredded {
             metadata,
