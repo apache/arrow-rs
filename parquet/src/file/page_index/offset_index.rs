@@ -16,6 +16,8 @@
 // under the License.
 
 //! [`OffsetIndexMetaData`] structure holding decoded [`OffsetIndex`] information
+//!
+//! [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
 use crate::errors::ParquetError;
 
@@ -55,6 +57,8 @@ impl From<&PageLocation> for crate::format::PageLocation {
 
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
+///
+/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq)]
 pub struct OffsetIndexMetaData {
     /// Vector of [`PageLocation`] objects, one per page in the chunk.

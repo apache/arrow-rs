@@ -273,6 +273,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 ///
 /// [`FileMetaData`]: crate::format::FileMetaData
 /// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
+/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 ///
 /// ```text
 /// ┌──────────────────────┐
@@ -520,6 +522,8 @@ impl MetadataObjectWriter {
     }
 
     /// Write [`FileMetaData`] in Thrift format, possibly encrypting it if required
+    ///
+    /// [`FileMetaData`]: crate::format::FileMetaData
     fn write_file_metadata(
         &self,
         file_metadata: &crate::format::FileMetaData,
@@ -547,6 +551,8 @@ impl MetadataObjectWriter {
     }
 
     /// Write a column [`OffsetIndex`] in Thrift format, possibly encrypting it if required
+    ///
+    /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_offset_index(
         &self,
         offset_index: &crate::format::OffsetIndex,
@@ -570,6 +576,8 @@ impl MetadataObjectWriter {
     }
 
     /// Write a column [`ColumnIndex`] in Thrift format, possibly encrypting it if required
+    ///
+    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
         &self,
         column_index: &crate::format::ColumnIndex,
