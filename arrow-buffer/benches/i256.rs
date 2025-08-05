@@ -17,6 +17,7 @@
 
 use arrow_buffer::i256;
 use criterion::*;
+use num::cast::ToPrimitive;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::{hint, str::FromStr};
@@ -36,10 +37,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         i256::MAX,
     ];
 
-    for number in numbers {
+    for number in numbers.iter() {
         let t = hint::black_box(number.to_string());
         c.bench_function(&format!("i256_parse({t})"), |b| {
             b.iter(|| i256::from_str(&t).unwrap());
+        });
+    }
+
+    for number in numbers.iter() {
+        c.bench_function(&format!("i256_to_f64({number})"), |b| {
+            b.iter(|| (*number).to_f64().unwrap())
         });
     }
 
