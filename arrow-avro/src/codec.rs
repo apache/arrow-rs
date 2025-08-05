@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
+use crate::schema::{Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, TypeName};
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE,
@@ -145,7 +145,7 @@ impl AvroField {
     /// This is the primary entry point for handling schema evolution. It produces an
     /// `AvroField` that contains all the necessary information to read data written
     /// with the `writer` schema as if it were written with the `reader` schema.
-    pub fn resolve_from_writer_and_reader<'a>(
+    pub(crate) fn resolve_from_writer_and_reader<'a>(
         writer_schema: &'a Schema<'a>,
         reader_schema: &'a Schema<'a>,
         use_utf8view: bool,
@@ -181,7 +181,7 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
 #[derive(Debug)]
 pub struct AvroFieldBuilder<'a> {
     writer_schema: &'a Schema<'a>,
-    reader_schema: Option<&'a Schema<'a>>,
+    reader_schema: Option<AvroSchema>,
     use_utf8view: bool,
     strict_mode: bool,
 }
@@ -202,7 +202,7 @@ impl<'a> AvroFieldBuilder<'a> {
     /// If a reader schema is provided, the builder will produce a resolved `AvroField`
     /// that can handle differences between the writer's and reader's schemas.
     #[inline]
-    pub fn with_reader_schema(mut self, reader_schema: &'a Schema<'a>) -> Self {
+    pub fn with_reader_schema(mut self, reader_schema: AvroSchema) -> Self {
         self.reader_schema = Some(reader_schema);
         self
     }

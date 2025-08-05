@@ -18,6 +18,7 @@
 use arrow_schema::ArrowError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::cmp::PartialEq;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use strum_macros::AsRefStr;
@@ -276,6 +277,33 @@ pub struct Fixed<'a> {
     pub attributes: Attributes<'a>,
 }
 
+/// A wrapper for an Avro schema in its JSON string representation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AvroSchema {
+    /// The Avro schema as a JSON string.
+    pub json_string: String,
+}
+
+impl AvroSchema {
+    /// Creates a new `AvroSchema` from a JSON string.
+    pub fn new(json_string: String) -> Self {
+        Self { json_string }
+    }
+
+    /// Deserializes and returns the `AvroSchema`.
+    ///
+    /// The returned schema borrows from `self`.
+    pub fn schema(&self) -> Result<Schema<'_>, ArrowError> {
+        serde_json::from_str(self.json_string.as_str())
+            .map_err(|e| ArrowError::ParseError(format!("Invalid Avro schema JSON: {e}")))
+    }
+
+    /// Returns the Rabin fingerprint of the schema.
+    pub fn fingerprint(&self) -> Result<Fingerprint, ArrowError> {
+        generate_fingerprint_rabin(&self.schema()?)
+    }
+}
+
 /// Supported fingerprint algorithms for Avro schema identification.
 /// Currently only `Rabin` is supported, `SHA256` and `MD5` support will come in a future update
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -360,18 +388,14 @@ pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
 /// All schemas registered will have their fingerprint computed with this algorithm, and
 /// lookups must use a matching fingerprint.
 ///
-/// The lifetime parameter `'a` corresponds to the lifetime of the string slices
-/// contained within the stored [`Schema`] objects. This means the `SchemaStore`
-/// cannot outlive the data referenced by the schemas it contains.
-///
 /// # Examples
 ///
 /// ```no_run
 /// // Create a new store with the default Rabin fingerprinting.
-/// use arrow_avro::schema::{PrimitiveType, Schema, SchemaStore, TypeName};
+/// use arrow_avro::schema::{AvroSchema, SchemaStore};
 ///
 /// let mut store = SchemaStore::new();
-/// let schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
+/// let schema = AvroSchema::new("\"string\"".to_string());
 /// // Register the schema to get its fingerprint.
 /// let fingerprint = store.register(schema.clone()).unwrap();
 /// // Use the fingerprint to look up the schema.
@@ -379,19 +403,19 @@ pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
 /// assert_eq!(retrieved_schema, Some(schema));
 /// ```
 #[derive(Debug, Clone, Default)]
-pub struct SchemaStore<'a> {
+pub struct SchemaStore {
     /// The hashing algorithm used for generating fingerprints.
     fingerprint_algorithm: FingerprintAlgorithm,
     /// A map from a schema's fingerprint to the schema itself.
-    schemas: HashMap<Fingerprint, Schema<'a>>,
+    schemas: HashMap<Fingerprint, AvroSchema>,
 }
 
-impl<'a> TryFrom<&'a [Schema<'a>]> for SchemaStore<'a> {
+impl TryFrom<&[AvroSchema]> for SchemaStore {
     type Error = ArrowError;
 
     /// Creates a `SchemaStore` from a slice of schemas.
     /// Each schema in the slice is registered with the new store.
-    fn try_from(schemas: &'a [Schema<'a>]) -> Result<Self, Self::Error> {
+    fn try_from(schemas: &[AvroSchema]) -> Result<Self, Self::Error> {
         let mut store = SchemaStore::new();
         for schema in schemas {
             store.register(schema.clone())?;
@@ -400,7 +424,7 @@ impl<'a> TryFrom<&'a [Schema<'a>]> for SchemaStore<'a> {
     }
 }
 
-impl<'a> SchemaStore<'a> {
+impl SchemaStore {
     /// Creates an empty `SchemaStore` using the default fingerprinting algorithm (64-bit Rabin).
     pub fn new() -> Self {
         Self::default()
@@ -415,14 +439,14 @@ impl<'a> SchemaStore<'a> {
     ///
     /// # Arguments
     ///
-    /// * `schema` - The schema to register.
+    /// * `schema` - The `AvroSchema` to register.
     ///
     /// # Returns
     ///
     /// A `Result` containing the `Fingerprint` of the schema if successful,
     /// or an `ArrowError` on failure.
-    pub fn register(&mut self, schema: Schema<'a>) -> Result<Fingerprint, ArrowError> {
-        let fingerprint = generate_fingerprint(&schema, self.fingerprint_algorithm)?;
+    pub fn register(&mut self, schema: AvroSchema) -> Result<Fingerprint, ArrowError> {
+        let fingerprint = generate_fingerprint(&schema.schema()?, self.fingerprint_algorithm)?;
         match self.schemas.entry(fingerprint) {
             Entry::Occupied(entry) => {
                 if entry.get() != &schema {
@@ -446,8 +470,8 @@ impl<'a> SchemaStore<'a> {
     ///
     /// # Returns
     ///
-    /// An `Option` containing a clone of the `Schema` if found, otherwise `None`.
-    pub fn lookup(&self, fingerprint: &Fingerprint) -> Option<&Schema<'a>> {
+    /// An `Option` containing a clone of the `AvroSchema` if found, otherwise `None`.
+    pub fn lookup(&self, fingerprint: &Fingerprint) -> Option<&AvroSchema> {
         self.schemas.get(fingerprint)
     }
 
@@ -962,37 +986,37 @@ mod tests {
 
     #[test]
     fn test_try_from_schemas_rabin() {
-        let schemas = vec![int_schema(), record_schema()];
+        let int_avro_schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let record_avro_schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
+        let schemas = vec![int_avro_schema.clone(), record_avro_schema.clone()];
         let store = SchemaStore::try_from(schemas.as_slice()).unwrap();
-        let record_fp = Fingerprint::Rabin(compute_fingerprint_rabin("\"int\""));
-        assert_eq!(store.lookup(&record_fp).cloned(), Some(int_schema()));
-        let canonical = generate_canonical_form(&record_schema()).unwrap();
-        let rec_fp = Fingerprint::Rabin(compute_fingerprint_rabin(&canonical));
-        assert_eq!(store.lookup(&rec_fp).cloned(), Some(record_schema()));
+        let int_fp = int_avro_schema.fingerprint().unwrap();
+        assert_eq!(store.lookup(&int_fp).cloned(), Some(int_avro_schema));
+        let rec_fp = record_avro_schema.fingerprint().unwrap();
+        assert_eq!(store.lookup(&rec_fp).cloned(), Some(record_avro_schema));
     }
 
     #[test]
     fn test_try_from_with_duplicates() {
-        let schemas = vec![int_schema(), record_schema(), int_schema()];
+        let int_avro_schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let record_avro_schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
+        let schemas = vec![
+            int_avro_schema.clone(),
+            record_avro_schema,
+            int_avro_schema.clone(),
+        ];
         let store = SchemaStore::try_from(schemas.as_slice()).unwrap();
         assert_eq!(store.schemas.len(), 2);
-        let int_canonical = r#""int""#;
-        let int_fp = compute_fingerprint_rabin(int_canonical);
-        assert_eq!(
-            store.lookup(&Fingerprint::Rabin(int_fp)).cloned(),
-            Some(int_schema())
-        );
+        let int_fp = int_avro_schema.fingerprint().unwrap();
+        assert_eq!(store.lookup(&int_fp).cloned(), Some(int_avro_schema));
     }
 
     #[test]
     fn test_register_and_lookup_rabin() {
         let mut store = SchemaStore::new();
-        let schema = int_schema();
+        let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
         let fp_enum = store.register(schema.clone()).unwrap();
-        let fp_val = match fp_enum {
-            Fingerprint::Rabin(v) => v,
-            _ => panic!("expected Rabin fingerprint"),
-        };
+        let Fingerprint::Rabin(fp_val) = fp_enum;
         assert_eq!(
             store.lookup(&Fingerprint::Rabin(fp_val)).cloned(),
             Some(schema.clone())
@@ -1005,8 +1029,8 @@ mod tests {
     #[test]
     fn test_register_duplicate_schema() {
         let mut store = SchemaStore::new();
-        let schema1 = int_schema();
-        let schema2 = int_schema();
+        let schema1 = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let schema2 = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
         let fingerprint1 = store.register(schema1).unwrap();
         let fingerprint2 = store.register(schema2).unwrap();
         assert_eq!(fingerprint1, fingerprint2);
@@ -1039,7 +1063,7 @@ mod tests {
     #[test]
     fn test_register_and_lookup_complex_schema() {
         let mut store = SchemaStore::new();
-        let schema = record_schema();
+        let schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
         let canonical_form = r#"{"name":"test.namespace.record1","type":"record","fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}]}"#;
         let expected_fingerprint =
             Fingerprint::Rabin(super::compute_fingerprint_rabin(canonical_form));
@@ -1052,8 +1076,16 @@ mod tests {
     #[test]
     fn test_fingerprints_returns_all_keys() {
         let mut store = SchemaStore::new();
-        let fp_int = store.register(int_schema()).unwrap();
-        let fp_record = store.register(record_schema()).unwrap();
+        let fp_int = store
+            .register(AvroSchema::new(
+                serde_json::to_string(&int_schema()).unwrap(),
+            ))
+            .unwrap();
+        let fp_record = store
+            .register(AvroSchema::new(
+                serde_json::to_string(&record_schema()).unwrap(),
+            ))
+            .unwrap();
         let fps = store.fingerprints();
         assert_eq!(fps.len(), 2);
         assert!(fps.contains(&fp_int));

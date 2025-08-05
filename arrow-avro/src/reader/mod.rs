@@ -88,20 +88,17 @@
 
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
-    compare_schemas, generate_fingerprint, Fingerprint, FingerprintAlgorithm, Schema as AvroSchema,
+    compare_schemas, generate_fingerprint, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema,
     SchemaStore, SINGLE_OBJECT_MAGIC,
 };
-use arrow_array::{RecordBatch, RecordBatchReader};
+use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
 use block::BlockDecoder;
 use header::{Header, HeaderDecoder};
 use indexmap::IndexMap;
-#[cfg(feature = "lru")]
-use lru::LruCache;
 use record::RecordDecoder;
+use std::collections::HashMap;
 use std::io::BufRead;
-#[cfg(feature = "lru")]
-use std::num::NonZeroUsize;
 
 mod block;
 mod cursor;
@@ -136,13 +133,9 @@ pub struct Decoder {
     active_fingerprint: Option<Fingerprint>,
     batch_size: usize,
     remaining_capacity: usize,
-    #[cfg(feature = "lru")]
-    cache: LruCache<Fingerprint, RecordDecoder>,
-    #[cfg(not(feature = "lru"))]
     cache: IndexMap<Fingerprint, RecordDecoder>,
-    max_cache_size: usize,
-    reader_schema: Option<AvroSchema<'static>>,
-    writer_schema_store: Option<SchemaStore<'static>>,
+    fingerprint_algorithm: FingerprintAlgorithm,
+    expect_prefix: bool,
     utf8_view: bool,
     strict_mode: bool,
     pending_schema: Option<(Fingerprint, RecordDecoder)>,
@@ -165,7 +158,7 @@ impl Decoder {
     ///
     /// Returns the number of bytes consumed.
     pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
-        if self.writer_schema_store.is_some()
+        if self.expect_prefix
             && data.len() >= SINGLE_OBJECT_MAGIC.len()
             && !data.starts_with(&SINGLE_OBJECT_MAGIC)
         {
@@ -176,14 +169,10 @@ impl Decoder {
             ));
         }
         let mut total_consumed = 0usize;
-        let hash_type = self.writer_schema_store.as_ref().map_or(
-            FingerprintAlgorithm::Rabin,
-            SchemaStore::fingerprint_algorithm,
-        );
         // The loop stops when the batch is full, a schema change is staged,
         // or handle_prefix indicates we need more bytes (Some(0)).
         while total_consumed < data.len() && self.remaining_capacity > 0 {
-            if let Some(n) = self.handle_prefix(&data[total_consumed..], hash_type)? {
+            if let Some(n) = self.handle_prefix(&data[total_consumed..])? {
                 // We either consumed a prefix (n > 0) and need a schema switch, or we need
                 // more bytes to make a decision. Either way, this decoding attempt is finished.
                 total_consumed += n;
@@ -201,14 +190,10 @@ impl Decoder {
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
-    fn handle_prefix(
-        &mut self,
-        buf: &[u8],
-        hash_type: FingerprintAlgorithm,
-    ) -> Result<Option<usize>, ArrowError> {
+    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
         // If there is no schema store, prefixes are unrecognized.
-        if self.writer_schema_store.is_none() {
-            return Ok(None); // Continue to decode the next record
+        if !self.expect_prefix {
+            return Ok(None);
         }
         // Need at least the magic bytes to decide (2 bytes).
         let Some(magic_bytes) = buf.get(..SINGLE_OBJECT_MAGIC.len()) else {
@@ -219,7 +204,7 @@ impl Decoder {
             return Ok(None); // Continue to decode the next record
         }
         // Try to parse the fingerprint that follows the magic.
-        let fingerprint_size = match hash_type {
+        let fingerprint_size = match self.fingerprint_algorithm {
             FingerprintAlgorithm::Rabin => self
                 .handle_fingerprint(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
                     Fingerprint::Rabin(u64::from_le_bytes(bytes))
@@ -248,14 +233,14 @@ impl Decoder {
         let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
         // If the fingerprint indicates a schema change, prepare to switch decoders.
         if self.active_fingerprint != Some(new_fingerprint) {
-            #[cfg(feature = "lru")]
-            let new_decoder = self.cache.pop(&new_fingerprint);
-            #[cfg(not(feature = "lru"))]
             let new_decoder = self.cache.shift_remove(&new_fingerprint);
-
             let new_decoder = match new_decoder {
                 Some(decoder) => decoder,
-                None => self.create_decoder_for(new_fingerprint)?,
+                None => {
+                    return Err(ArrowError::ParseError(format!(
+                        "Unknown fingerprint: {new_fingerprint:?}"
+                    )))
+                }
             };
             self.pending_schema = Some((new_fingerprint, new_decoder));
             // If there are already decoded rows, we must flush them first.
@@ -265,36 +250,6 @@ impl Decoder {
             }
         }
         Ok(Some(N))
-    }
-
-    fn create_decoder_for(
-        &mut self,
-        new_fingerprint: Fingerprint,
-    ) -> Result<RecordDecoder, ArrowError> {
-        let Some(ref writer_schema_store) = self.writer_schema_store else {
-            return Err(ArrowError::ParseError("Schema store unavailable".into()));
-        };
-        let Some(writer_schema) = writer_schema_store.lookup(&new_fingerprint) else {
-            return Err(ArrowError::ParseError(format!(
-                "Unknown fingerprint: {new_fingerprint:?}"
-            )));
-        };
-        // If a reader schema was supplied, perform writer-to-reader resolution.
-        // Otherwise, fall back to using the writer schema verbatim.
-        let avro_field = if let Some(reader_schema) = &self.reader_schema {
-            AvroField::resolve_from_writer_and_reader(
-                writer_schema,
-                reader_schema,
-                self.utf8_view,
-                self.strict_mode,
-            )?
-        } else {
-            AvroFieldBuilder::new(writer_schema)
-                .with_utf8view(self.utf8_view)
-                .with_strict_mode(self.strict_mode)
-                .build()?
-        };
-        RecordDecoder::try_new_with_options(avro_field.data_type(), self.utf8_view)
     }
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
@@ -309,15 +264,9 @@ impl Decoder {
         if let Some((new_fingerprint, new_decoder)) = self.pending_schema.take() {
             if let Some(old_fingerprint) = self.active_fingerprint.replace(new_fingerprint) {
                 let old_decoder = std::mem::replace(&mut self.active_decoder, new_decoder);
-                #[cfg(feature = "lru")]
-                self.cache.put(old_fingerprint, old_decoder);
-                #[cfg(not(feature = "lru"))]
                 {
                     self.cache.shift_remove(&old_fingerprint);
                     self.cache.insert(old_fingerprint, old_decoder);
-                    if self.cache.len() > self.max_cache_size {
-                        self.cache.shift_remove_index(0);
-                    }
                 }
             } else {
                 self.active_decoder = new_decoder;
@@ -344,10 +293,9 @@ pub struct ReaderBuilder {
     batch_size: usize,
     strict_mode: bool,
     utf8_view: bool,
-    reader_schema: Option<AvroSchema<'static>>,
-    writer_schema_store: Option<SchemaStore<'static>>,
+    reader_schema: Option<AvroSchema>,
+    writer_schema_store: Option<SchemaStore>,
     active_fingerprint: Option<Fingerprint>,
-    decoder_cache_size: usize,
 }
 
 impl Default for ReaderBuilder {
@@ -359,7 +307,6 @@ impl Default for ReaderBuilder {
             reader_schema: None,
             writer_schema_store: None,
             active_fingerprint: None,
-            decoder_cache_size: 20,
         }
     }
 }
@@ -376,14 +323,14 @@ impl ReaderBuilder {
         Self::default()
     }
 
-    fn make_record_decoder<'a>(
+    fn make_record_decoder(
         &self,
-        writer_schema: &AvroSchema<'a>,
-        reader_schema: Option<&AvroSchema<'a>>,
+        writer_schema: &Schema,
+        reader_schema: Option<&AvroSchema>,
     ) -> Result<RecordDecoder, ArrowError> {
         let root = match reader_schema {
-            Some(reader_schema) if !compare_schemas(writer_schema, reader_schema)? => {
-                AvroFieldBuilder::new(writer_schema).with_reader_schema(reader_schema)
+            Some(reader_schema) => {
+                AvroFieldBuilder::new(writer_schema).with_reader_schema(reader_schema.clone())
             }
             _ => AvroFieldBuilder::new(writer_schema),
         }
@@ -397,30 +344,29 @@ impl ReaderBuilder {
         &self,
         active_decoder: RecordDecoder,
         active_fingerprint: Option<Fingerprint>,
-        reader_schema: Option<AvroSchema<'static>>,
-        writer_schema_store: Option<SchemaStore<'static>>,
+        cache: IndexMap<Fingerprint, RecordDecoder>,
+        expect_prefix: bool,
+        fingerprint_algorithm: FingerprintAlgorithm,
     ) -> Decoder {
-        #[cfg(feature = "lru")]
-        let capacity = NonZeroUsize::new(self.decoder_cache_size).unwrap_or(NonZeroUsize::MIN);
         Decoder {
             batch_size: self.batch_size,
             remaining_capacity: self.batch_size,
             active_fingerprint,
             active_decoder,
-            #[cfg(feature = "lru")]
-            cache: LruCache::new(capacity),
-            #[cfg(not(feature = "lru"))]
-            cache: IndexMap::new(),
-            max_cache_size: self.decoder_cache_size,
-            reader_schema,
+            cache,
+            expect_prefix,
             utf8_view: self.utf8_view,
-            writer_schema_store,
+            fingerprint_algorithm,
             strict_mode: self.strict_mode,
             pending_schema: None,
         }
     }
 
-    fn make_decoder(&self, header: Option<&Header>) -> Result<Decoder, ArrowError> {
+    fn make_decoder(
+        &self,
+        header: Option<&Header>,
+        reader_schema: Option<&AvroSchema>,
+    ) -> Result<Decoder, ArrowError> {
         if let Some(hdr) = header {
             let writer_schema = hdr
                 .schema()
@@ -428,31 +374,60 @@ impl ReaderBuilder {
                 .ok_or_else(|| {
                     ArrowError::ParseError("No Avro schema present in file header".into())
                 })?;
-            let record_decoder =
-                self.make_record_decoder(&writer_schema, self.reader_schema.as_ref())?;
-            return Ok(self.make_decoder_with_parts(record_decoder, None, None, None));
+            let record_decoder = self.make_record_decoder(&writer_schema, reader_schema)?;
+            return Ok(self.make_decoder_with_parts(
+                record_decoder,
+                None,
+                IndexMap::new(),
+                false,
+                FingerprintAlgorithm::Rabin,
+            ));
         }
-        let writer_schema_store = self.writer_schema_store.as_ref().ok_or_else(|| {
+        let store = self.writer_schema_store.as_ref().ok_or_else(|| {
             ArrowError::ParseError("Writer schema store required for raw Avro".into())
         })?;
-        let fingerprint = self
+        let fingerprints = store.fingerprints();
+        if fingerprints.is_empty() {
+            return Err(ArrowError::ParseError(
+                "Writer schema store must contain at least one schema".into(),
+            ));
+        }
+        let start_fingerprint = self
             .active_fingerprint
-            .or_else(|| writer_schema_store.fingerprints().into_iter().next())
+            .or_else(|| fingerprints.first().copied())
             .ok_or_else(|| {
-                ArrowError::ParseError(
-                    "Writer schema store must contain at least one schema".into(),
-                )
+                ArrowError::ParseError("Could not determine initial schema fingerprint".into())
             })?;
-        let writer_schema = writer_schema_store.lookup(&fingerprint).ok_or_else(|| {
-            ArrowError::ParseError("Active fingerprint not found in schema store".into())
+        let mut cache = IndexMap::with_capacity(fingerprints.len().saturating_sub(1));
+        let mut active_decoder: Option<RecordDecoder> = None;
+        for fingerprint in store.fingerprints() {
+            let avro_schema = match store.lookup(&fingerprint) {
+                Some(schema) => schema,
+                None => {
+                    return Err(ArrowError::ComputeError(format!(
+                        "Fingerprint {fingerprint:?} not found in schema store",
+                    )));
+                }
+            };
+            let writer_schema = avro_schema.schema()?;
+            let decoder = self.make_record_decoder(&writer_schema, reader_schema)?;
+            if fingerprint == start_fingerprint {
+                active_decoder = Some(decoder);
+            } else {
+                cache.insert(fingerprint, decoder);
+            }
+        }
+        let active_decoder = active_decoder.ok_or_else(|| {
+            ArrowError::ComputeError(format!(
+                "Initial fingerprint {start_fingerprint:?} not found in schema store"
+            ))
         })?;
-        let record_decoder =
-            self.make_record_decoder(writer_schema, self.reader_schema.as_ref())?;
         Ok(self.make_decoder_with_parts(
-            record_decoder,
-            Some(fingerprint),
-            self.reader_schema.clone(),
-            self.writer_schema_store.clone(),
+            active_decoder,
+            Some(start_fingerprint),
+            cache,
+            true,
+            store.fingerprint_algorithm(),
         ))
     }
 
@@ -485,8 +460,8 @@ impl ReaderBuilder {
     /// Sets the Avro reader schema.
     ///
     /// If a schema is not provided, the schema will be read from the Avro file header.
-    pub fn with_reader_schema(mut self, reader_schema: AvroSchema<'static>) -> Self {
-        self.reader_schema = Some(reader_schema);
+    pub fn with_reader_schema(mut self, schema: AvroSchema) -> Self {
+        self.reader_schema = Some(schema);
         self
     }
 
@@ -497,7 +472,7 @@ impl ReaderBuilder {
     /// full writer schema from a fingerprint embedded in the data.
     ///
     /// Defaults to `None`.
-    pub fn with_writer_schema_store(mut self, store: SchemaStore<'static>) -> Self {
+    pub fn with_writer_schema_store(mut self, store: SchemaStore) -> Self {
         self.writer_schema_store = Some(store);
         self
     }
@@ -514,21 +489,10 @@ impl ReaderBuilder {
         self
     }
 
-    /// Set the maximum number of decoders to cache.
-    ///
-    /// When dealing with Avro files that contain multiple schemas, we may need to switch
-    /// between different decoders. This cache avoids rebuilding them from scratch every time.
-    ///
-    /// Defaults to `20`.
-    pub fn with_max_decoder_cache_size(mut self, n: usize) -> Self {
-        self.decoder_cache_size = n;
-        self
-    }
-
     /// Create a [`Reader`] from this builder and a `BufRead`
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
         let header = read_header(&mut reader)?;
-        let decoder = self.make_decoder(Some(&header))?;
+        let decoder = self.make_decoder(Some(&header), self.reader_schema.as_ref())?;
         Ok(Reader {
             reader,
             header,
@@ -547,7 +511,7 @@ impl ReaderBuilder {
                 "Building a decoder requires a writer schema store".to_string(),
             ));
         }
-        self.make_decoder(None)
+        self.make_decoder(None, self.reader_schema.as_ref())
     }
 }
 
@@ -633,9 +597,8 @@ mod test {
     use crate::reader::vlq::VLQDecoder;
     use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
     use crate::schema::{
-        generate_fingerprint_rabin, ComplexType, Field as AvroFieldDef, Fingerprint,
-        FingerprintAlgorithm, PrimitiveType, Record, Schema as AvroSchema, SchemaStore, TypeName,
-        SINGLE_OBJECT_MAGIC,
+        AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, Schema as AvroRaw,
+        SchemaStore, SINGLE_OBJECT_MAGIC,
     };
     use crate::test_util::arrow_test_data;
     use arrow::array::ArrayDataBuilder;
@@ -701,33 +664,20 @@ mod test {
         }
     }
 
-    fn schema_from_json(js: &str) -> AvroSchema<'static> {
-        let static_js = Box::leak(js.to_string().into_boxed_str());
-        serde_json::from_str(static_js).expect("valid Avro schema JSON")
-    }
-
-    fn make_record_schema(pt: PrimitiveType) -> AvroSchema<'static> {
-        AvroSchema::Complex(ComplexType::Record(Record {
-            name: "TestRecord",
-            namespace: None,
-            doc: None,
-            aliases: vec![],
-            fields: vec![AvroFieldDef {
-                name: "a",
-                doc: None,
-                r#type: AvroSchema::TypeName(TypeName::Primitive(pt)),
-                default: None,
-            }],
-            attributes: Default::default(),
-        }))
+    fn make_record_schema(pt: PrimitiveType) -> AvroSchema {
+        let js = format!(
+            r#"{{"type":"record","name":"TestRecord","fields":[{{"name":"a","type":"{}"}}]}}"#,
+            pt.as_ref()
+        );
+        AvroSchema::new(js)
     }
 
     fn make_two_schema_store() -> (
-        SchemaStore<'static>,
+        SchemaStore,
         Fingerprint,
         Fingerprint,
-        AvroSchema<'static>,
-        AvroSchema<'static>,
+        AvroSchema,
+        AvroSchema,
     ) {
         let schema_int = make_record_schema(PrimitiveType::Int);
         let schema_long = make_record_schema(PrimitiveType::Long);
@@ -744,23 +694,18 @@ mod test {
     fn make_prefix(fp: Fingerprint) -> Vec<u8> {
         match fp {
             Fingerprint::Rabin(v) => {
-                let mut out = Vec::with_capacity(10);
+                let mut out = Vec::with_capacity(2 + 8);
                 out.extend_from_slice(&SINGLE_OBJECT_MAGIC);
                 out.extend_from_slice(&v.to_le_bytes());
                 out
             }
-            _ => panic!("Only Rabin fingerprints are used in unit‑tests"),
         }
     }
 
-    fn make_decoder(
-        store: &SchemaStore<'static>,
-        fp: Fingerprint,
-        schema: &AvroSchema<'static>,
-    ) -> Decoder {
+    fn make_decoder(store: &SchemaStore, fp: Fingerprint, reader_schema: &AvroSchema) -> Decoder {
         ReaderBuilder::new()
             .with_batch_size(8)
-            .with_reader_schema(schema.clone())
+            .with_reader_schema(reader_schema.clone())
             .with_writer_schema_store(store.clone())
             .with_active_fingerprint(fp)
             .build_decoder()
@@ -772,12 +717,8 @@ mod test {
         let schema_int = make_record_schema(PrimitiveType::Int);
         let schema_long = make_record_schema(PrimitiveType::Long);
         let mut store = SchemaStore::new();
-        let fp_int = store
-            .register(schema_int.clone())
-            .expect("register int schema");
-        let fp_long = store
-            .register(schema_long.clone())
-            .expect("register long schema");
+        let fp_int = store.register(schema_int.clone()).unwrap();
+        let fp_long = store.register(schema_long.clone()).unwrap();
         assert_eq!(store.lookup(&fp_int).cloned(), Some(schema_int));
         assert_eq!(store.lookup(&fp_long).cloned(), Some(schema_long));
         assert_eq!(store.fingerprint_algorithm(), FingerprintAlgorithm::Rabin);
@@ -785,28 +726,15 @@ mod test {
 
     #[test]
     fn test_unknown_fingerprint_is_error() {
-        let (mut store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
-        {
-            let mut new_store = SchemaStore::new();
-            new_store
-                .register(schema_int.clone())
-                .expect("register int schema");
-            store = new_store;
-        }
-        let unknown_fp = Fingerprint::Rabin(0xDEADBEEFDEADBEEF);
+        let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
+        let unknown_fp = Fingerprint::Rabin(0xDEAD_BEEF_DEAD_BEEF);
         let prefix = make_prefix(unknown_fp);
-        let mut decoder = ReaderBuilder::new()
-            .with_batch_size(8)
-            .with_reader_schema(schema_int.clone())
-            .with_writer_schema_store(store.clone())
-            .with_active_fingerprint(fp_int)
-            .build_decoder()
-            .expect("build decoder");
+        let mut decoder = make_decoder(&store, fp_int, &schema_int);
         let err = decoder.decode(&prefix).expect_err("decode should error");
-        let msg = format!("{err}");
+        let msg = err.to_string();
         assert!(
             msg.contains("Unknown fingerprint"),
-            "unexpected error message: {msg}"
+            "unexpected message: {msg}"
         );
     }
 
@@ -818,13 +746,13 @@ mod test {
             .with_reader_schema(schema_int.clone())
             .with_writer_schema_store(store)
             .build_decoder()
-            .expect("build decoder");
+            .unwrap();
         let buf = [0x02u8, 0x00u8];
         let err = decoder.decode(&buf).expect_err("decode should error");
-        let msg = format!("{err}");
+        let msg = err.to_string();
         assert!(
             msg.contains("Expected single‑object encoding fingerprint"),
-            "unexpected error message: {msg}"
+            "unexpected message: {msg}"
         );
     }
 
@@ -832,14 +760,11 @@ mod test {
     fn test_handle_prefix_no_schema_store() {
         let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
-        decoder.writer_schema_store = None;
+        decoder.expect_prefix = false;
         let res = decoder
-            .handle_prefix(&SINGLE_OBJECT_MAGIC[..], FingerprintAlgorithm::Rabin)
+            .handle_prefix(&SINGLE_OBJECT_MAGIC[..])
             .expect("handle_prefix");
-        assert!(
-            res.is_none(),
-            "Expected None when writer_schema_store is None"
-        );
+        assert!(res.is_none(), "Expected None when expect_prefix is false");
     }
 
     #[test]
@@ -847,25 +772,18 @@ mod test {
         let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
         let buf = &SINGLE_OBJECT_MAGIC[..1];
-        let res = decoder
-            .handle_prefix(buf, FingerprintAlgorithm::Rabin)
-            .expect("handle_prefix");
-        assert_eq!(res, Some(0), "Expected Some(0) for incomplete magic");
-        assert!(
-            decoder.pending_schema.is_none(),
-            "No schema switch should be staged"
-        );
+        let res = decoder.handle_prefix(buf).unwrap();
+        assert_eq!(res, Some(0));
+        assert!(decoder.pending_schema.is_none());
     }
 
     #[test]
     fn test_handle_prefix_magic_mismatch() {
         let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
-        let buf = [0xFFu8, 0xFFu8, 0xABu8];
-        let res = decoder
-            .handle_prefix(&buf, FingerprintAlgorithm::Rabin)
-            .expect("handle_prefix");
-        assert!(res.is_none(), "Expected None when magic bytes do not match");
+        let buf = [0xFFu8, 0x00u8, 0x01u8];
+        let res = decoder.handle_prefix(&buf).unwrap();
+        assert!(res.is_none());
     }
 
     #[test]
@@ -874,55 +792,30 @@ mod test {
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
-            _ => unreachable!("only Rabin fingerprints are used in tests"),
         };
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         buf.extend_from_slice(&long_bytes[..4]);
-        let res = decoder
-            .handle_prefix(&buf, FingerprintAlgorithm::Rabin)
-            .expect("handle_prefix");
-        assert_eq!(
-            res,
-            Some(0),
-            "Expected Some(0) when fingerprint bytes are incomplete"
-        );
-        assert!(
-            decoder.pending_schema.is_none(),
-            "No schema switch should be staged yet"
-        );
+        let res = decoder.handle_prefix(&buf).unwrap();
+        assert_eq!(res, Some(0));
+        assert!(decoder.pending_schema.is_none());
     }
 
     #[test]
     fn test_handle_prefix_valid_prefix_switches_schema() {
         let (store, fp_int, fp_long, schema_int, schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
-        let root_long = AvroFieldBuilder::new(&schema_long)
-            .build()
-            .expect("root_long");
+        let writer_schema_long = schema_long.schema().unwrap();
+        let root_long = AvroFieldBuilder::new(&writer_schema_long).build().unwrap();
         let long_decoder =
-            RecordDecoder::try_new_with_options(root_long.data_type(), decoder.utf8_view)
-                .expect("long_decoder");
-        #[cfg(feature = "lru")]
-        let _ = decoder.cache.put(fp_long, long_decoder);
-        #[cfg(not(feature = "lru"))]
+            RecordDecoder::try_new_with_options(root_long.data_type(), decoder.utf8_view).unwrap();
         let _ = decoder.cache.insert(fp_long, long_decoder);
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         let Fingerprint::Rabin(v) = fp_long;
         buf.extend_from_slice(&v.to_le_bytes());
-        let consumed = decoder
-            .handle_prefix(&buf, FingerprintAlgorithm::Rabin)
-            .expect("handle_prefix")
-            .expect("Some");
-        assert_eq!(consumed, buf.len(), "Should consume the full prefix");
-        assert!(
-            decoder.pending_schema.is_some(),
-            "A schema switch should be staged"
-        );
-        let (pending_fp, _) = decoder.pending_schema.as_ref().unwrap();
-        assert_eq!(
-            *pending_fp, fp_long,
-            "The staged fingerprint should match the new schema"
-        );
+        let consumed = decoder.handle_prefix(&buf).unwrap().unwrap();
+        assert_eq!(consumed, buf.len());
+        assert!(decoder.pending_schema.is_some());
+        assert_eq!(decoder.pending_schema.as_ref().unwrap().0, fp_long);
     }
 
     #[test]
@@ -1258,35 +1151,31 @@ mod test {
             },
         ];
         for test in tests {
-            let writer_schema: crate::schema::Schema =
-                serde_json::from_str(test.schema).expect("valid Avro schema JSON");
+            let avro_schema = AvroSchema::new(test.schema.to_string());
             let mut store = SchemaStore::new();
-            let fp = store
-                .register(writer_schema.clone())
-                .expect("register schema and get fingerprint");
-            let prefix = make_prefix(fp); // magic + fp
-            let schema_s2: crate::schema::Schema = serde_json::from_str(test.schema).unwrap();
+            let fp = store.register(avro_schema.clone()).unwrap();
+            let prefix = make_prefix(fp);
             let record_val = "some_string";
             let mut body = prefix;
             body.push((record_val.len() as u8) << 1);
             body.extend_from_slice(record_val.as_bytes());
-            let decoder_result = ReaderBuilder::new()
+            let decoder_res = ReaderBuilder::new()
                 .with_batch_size(1)
                 .with_writer_schema_store(store)
                 .with_active_fingerprint(fp)
                 .build_decoder();
-            let decoder = match decoder_result {
-                Ok(decoder) => decoder,
+            let decoder = match decoder_res {
+                Ok(d) => d,
                 Err(e) => {
                     if let Some(expected) = test.expected_error {
                         assert!(
                             e.to_string().contains(expected),
-                            "Test '{}' failed: unexpected error message at build.\nExpected to contain: '{expected}'\nActual: '{e}'",
-                            test.name,
+                            "Test '{}' failed at build – expected '{expected}', got '{e}'",
+                            test.name
                         );
                         continue;
                     } else {
-                        panic!("Test '{}' failed at decoder build: {e}", test.name);
+                        panic!("Test '{}' failed during build: {e}", test.name);
                     }
                 }
             };
@@ -1303,32 +1192,23 @@ mod test {
                     let expected_array = Arc::new(StringArray::from(vec![record_val]));
                     let expected_batch =
                         RecordBatch::try_new(expected_schema, vec![expected_array]).unwrap();
-                    assert_eq!(batch, expected_batch, "Test '{}' failed", test.name);
-                    assert_eq!(
-                        batch.schema().field(0).name(),
-                        "f2",
-                        "Test '{}' failed",
-                        test.name
-                    );
+                    assert_eq!(batch, expected_batch, "Test '{}'", test.name);
                 }
                 (Err(e), Some(expected)) => {
                     assert!(
                         e.to_string().contains(expected),
-                        "Test '{}' failed: unexpected error message at decode.\nExpected to contain: '{expected}'\nActual: '{e}'",
-                        test.name,
+                        "Test '{}' – expected error containing '{expected}', got '{e}'",
+                        test.name
                     );
                 }
-                (Ok(batches), Some(expected)) => {
+                (Ok(_), Some(expected)) => {
                     panic!(
-                        "Test '{}' was expected to fail with '{expected}', but it succeeded with: {:?}",
-                        test.name, batches
+                        "Test '{}' expected failure ('{expected}') but succeeded",
+                        test.name
                     );
                 }
                 (Err(e), None) => {
-                    panic!(
-                        "Test '{}' was not expected to fail, but it did with '{e}'",
-                        test.name
-                    );
+                    panic!("Test '{}' unexpectedly failed with '{e}'", test.name);
                 }
             }
         }
