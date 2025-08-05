@@ -59,6 +59,7 @@ strum_macros = "0.27"
 uuid = "1.17"
 indexmap = "2.10"
 
+
 [dev-dependencies]
 arrow-data = { workspace = true }
 rand = { version = "0.9.1", default-features = false, features = [
