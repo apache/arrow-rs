@@ -33,10 +33,16 @@ pub trait TSerializable: Sized {
     fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()>;
 }
 
-/// Public function to aid benchmarking.
+/// Public function to aid benchmarking. Reads Parquet `FileMetaData` encoded in `bytes`.
 pub fn bench_file_metadata(bytes: &bytes::Bytes) {
     let mut input = TCompactSliceInputProtocol::new(bytes);
     crate::format::FileMetaData::read_from_in_protocol(&mut input).unwrap();
+}
+
+/// Public function to aid benchmarking. Reads Parquet `PageHeader` encoded in `bytes`.
+pub fn bench_page_header(bytes: &bytes::Bytes) {
+    let mut input = TCompactSliceInputProtocol::new(bytes);
+    crate::format::PageHeader::read_from_in_protocol(&mut input).unwrap();
 }
 
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice

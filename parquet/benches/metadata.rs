@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::RecordBatchReader;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use rand::Rng;
 use thrift::protocol::TCompactOutputProtocol;
 
@@ -151,6 +155,30 @@ fn get_footer_bytes(data: Bytes) -> Bytes {
     data.slice(meta_start..meta_end)
 }
 
+fn rewrite_file(bytes: Bytes) -> (Bytes, FileMetaData) {
+    let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
+        .expect("parquet open")
+        .build()
+        .expect("parquet open");
+    let writer_properties = WriterProperties::builder()
+        .set_statistics_enabled(EnabledStatistics::Page)
+        .build();
+    let mut output = Vec::new();
+    let mut parquet_writer = ArrowWriter::try_new(
+        &mut output,
+        parquet_reader.schema(),
+        Some(writer_properties),
+    )
+    .expect("create arrow writer");
+
+    for maybe_batch in parquet_reader {
+        let batch = maybe_batch.expect("reading batch");
+        parquet_writer.write(&batch).expect("writing data");
+    }
+    let file_meta = parquet_writer.close().expect("finalizing file");
+    (output.into(), file_meta)
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     // Read file into memory to isolate filesystem performance
     let file = "../parquet-testing/data/alltypes_tiny_pages.parquet";
@@ -168,7 +196,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let meta_data = get_footer_bytes(data);
+    let meta_data = get_footer_bytes(data.clone());
     c.bench_function("decode file metadata", |b| {
         b.iter(|| {
             parquet::thrift::bench_file_metadata(&meta_data);
@@ -179,6 +207,27 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("decode file metadata (wide)", |b| {
         b.iter(|| {
             parquet::thrift::bench_file_metadata(&buf);
+        })
+    });
+
+    // rewrite file with page statistics. then read page headers.
+    let (file_bytes, metadata) = rewrite_file(data.clone());
+    c.bench_function("page headers", |b| {
+        b.iter(|| {
+            metadata.row_groups.iter().for_each(|rg| {
+                rg.columns.iter().for_each(|col| {
+                    if let Some(col_meta) = &col.meta_data {
+                        if let Some(dict_offset) = col_meta.dictionary_page_offset {
+                            parquet::thrift::bench_page_header(
+                                &file_bytes.slice(dict_offset as usize..),
+                            );
+                        }
+                        parquet::thrift::bench_page_header(
+                            &file_bytes.slice(col_meta.data_page_offset as usize..),
+                        );
+                    }
+                });
+            });
         })
     });
 }
