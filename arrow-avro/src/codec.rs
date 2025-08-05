@@ -763,11 +763,11 @@ mod tests {
         F: FnOnce(&Codec)
     {
         if let Codec::Struct(fields) = codec {
-            assert!(field_index < fields.len(), "Field index {} out of bounds", field_index);
+            assert!(field_index < fields.len(), "Field index {field_index} out of bounds");
             assert_eq!(fields[field_index].name(), expected_name);
             validator(&fields[field_index].data_type().codec);
         } else {
-            panic!("Expected Struct codec, got {:?}", codec);
+            panic!("Expected Struct codec, got {codec:?}");
         }
     }
 
@@ -777,7 +777,7 @@ mod tests {
             assert_eq!(nested_fields[0].name(), expected_field_name);
             assert!(expected_type(&nested_fields[0].data_type().codec));
         } else {
-            panic!("Expected nested field to be a Struct, got {:?}", codec);
+            panic!("Expected nested field to be a Struct, got {codec:?}");
         }
     }
 
@@ -788,7 +788,7 @@ mod tests {
         match codec {
             Codec::List(array_item) => validator(&array_item.codec),
             Codec::Map(map_value) => validator(&map_value.codec),
-            _ => panic!("Expected List or Map codec, got {:?}", codec),
+            _ => panic!("Expected List or Map codec, got {codec:?}"),
         }
     }
 
@@ -796,7 +796,7 @@ mod tests {
         if let Codec::Enum(symbols) = codec {
             assert_eq!(symbols.as_ref(), &["ACTIVE", "INACTIVE", "PENDING"]);
         } else {
-            panic!("Expected Enum codec, got {:?}", codec);
+            panic!("Expected Enum codec, got {codec:?}");
         }
     }
 
@@ -1064,13 +1064,13 @@ mod tests {
                 assert_eq!(field_names, vec!["status", "backupStatus", "statusHistory", "statusMap"]);
             }
 
-            validate_struct_field(codec, 0, "status", |c| validate_enum_type(c));
-            validate_struct_field(codec, 1, "backupStatus", |c| validate_enum_type(c));
+            validate_struct_field(codec, 0, "status", validate_enum_type);
+            validate_struct_field(codec, 1, "backupStatus", validate_enum_type);
             validate_struct_field(codec, 2, "statusHistory", |c| {
-                validate_collection_items(c, |item_codec| validate_enum_type(item_codec));
+                validate_collection_items(c, validate_enum_type);
             });
             validate_struct_field(codec, 3, "statusMap", |c| {
-                validate_collection_items(c, |value_codec| validate_enum_type(value_codec));
+                validate_collection_items(c, validate_enum_type);
             });
         });
     }
