@@ -264,10 +264,8 @@ impl Decoder {
         if let Some((new_fingerprint, new_decoder)) = self.pending_schema.take() {
             if let Some(old_fingerprint) = self.active_fingerprint.replace(new_fingerprint) {
                 let old_decoder = std::mem::replace(&mut self.active_decoder, new_decoder);
-                {
-                    self.cache.shift_remove(&old_fingerprint);
-                    self.cache.insert(old_fingerprint, old_decoder);
-                }
+                self.cache.shift_remove(&old_fingerprint);
+                self.cache.insert(old_fingerprint, old_decoder);
             } else {
                 self.active_decoder = new_decoder;
             }
