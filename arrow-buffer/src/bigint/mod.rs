@@ -1300,6 +1300,20 @@ mod tests {
 
         let v = i256::from_i128(-123456789012345678i128);
         assert_eq!(v.to_f64().unwrap(), -123456789012345678.0);
+
+        let v = i256::from_string("0").unwrap();
+        assert_eq!(v.to_f64().unwrap(), 0.0);
+
+        let v = i256::from_string("1").unwrap();
+        assert_eq!(v.to_f64().unwrap(), 1.0);
+
+        let mut rng = rng();
+        for _ in 0..10 {
+            let f64_value =
+                (rng.random_range(i128::MIN..i128::MAX) as f64) * rng.random_range(0.0..1.0);
+            let big = i256::from_f64(f64_value).unwrap();
+            assert_eq!(big.to_f64().unwrap(), f64_value);
+        }
     }
 
     #[test]
