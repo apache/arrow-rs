@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::RecordBatchReader;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use rand::Rng;
 use thrift::protocol::TCompactOutputProtocol;
 
@@ -155,7 +151,12 @@ fn get_footer_bytes(data: Bytes) -> Bytes {
     data.slice(meta_start..meta_end)
 }
 
+#[cfg(feature = "arrow")]
 fn rewrite_file(bytes: Bytes) -> (Bytes, FileMetaData) {
+    use arrow::array::RecordBatchReader;
+    use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
+
     let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
         .expect("parquet open")
         .build()
@@ -211,7 +212,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     // rewrite file with page statistics. then read page headers.
+    #[cfg(feature = "arrow")]
     let (file_bytes, metadata) = rewrite_file(data.clone());
+    #[cfg(feature = "arrow")]
     c.bench_function("page headers", |b| {
         b.iter(|| {
             metadata.row_groups.iter().for_each(|rg| {
