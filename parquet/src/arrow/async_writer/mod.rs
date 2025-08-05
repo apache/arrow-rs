@@ -67,7 +67,6 @@ use crate::{
         metadata::{KeyValue, RowGroupMetaData},
         properties::WriterProperties,
     },
-    format::FileMetaData,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -247,7 +246,7 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub async fn finish(&mut self) -> Result<FileMetaData> {
+    pub async fn finish(&mut self) -> Result<crate::format::FileMetaData> {
         let metadata = self.sync_writer.finish()?;
 
         // Force to flush the remaining data.
@@ -260,7 +259,7 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Close and finalize the writer.
     ///
     /// All the data in the inner buffer will be force flushed.
-    pub async fn close(mut self) -> Result<FileMetaData> {
+    pub async fn close(mut self) -> Result<crate::format::FileMetaData> {
         self.finish().await
     }
 
