@@ -427,7 +427,7 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
 }
 
 /// A key-value pair for [`FileMetaData`].
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyValue {
     /// The key.
     pub key: String,
