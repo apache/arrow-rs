@@ -845,7 +845,7 @@ impl DictionaryTracker {
                  Arrow IPC files only support a single dictionary for a given field \
                  across all batches.";
 
-        match dbg!(comparison) {
+        match comparison {
             DictionaryComparison::NotEqual => {
                 if self.error_on_replacement {
                     return Err(ArrowError::InvalidArgumentError(
@@ -857,7 +857,7 @@ impl DictionaryTracker {
                 Ok(DictionaryUpdate::Replaced)
             }
             DictionaryComparison::Delta => {
-                if dbg!(compute_delta) {
+                if compute_delta {
                     let delta =
                         new_values.slice(old_values.len(), new_values.len() - old_values.len());
                     self.written.insert(dict_id, new_data);
