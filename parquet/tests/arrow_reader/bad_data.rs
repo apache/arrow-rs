@@ -82,7 +82,7 @@ fn test_parquet_1481() {
     let err = read_file("PARQUET-1481.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Parquet error: unexpected parquet type: -7"
+        "Parquet error: Unexpected parquet Type: -7"
     );
 }
 

@@ -178,4 +178,6 @@ pub mod file;
 pub mod record;
 pub mod schema;
 
+mod parquet_macros;
+mod parquet_thrift;
 pub mod thrift;
