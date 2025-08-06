@@ -26,7 +26,7 @@ use std::{fmt, str};
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::format as parquet;
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
-use crate::{thrift_enum, thrift_union, thrift_union_all_empty};
+use crate::{thrift_enum, thrift_union_all_empty};
 
 use crate::errors::{ParquetError, Result};
 
