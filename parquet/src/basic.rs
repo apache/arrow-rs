@@ -24,7 +24,6 @@ use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
-use crate::format as parquet;
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
 use crate::{thrift_enum, thrift_private_struct, thrift_union_all_empty};
 
@@ -34,7 +33,7 @@ use crate::errors::{ParquetError, Result};
 // Types from the Thrift definition
 
 // ----------------------------------------------------------------------
-// Mirrors thrift enum `parquet::Type`
+// Mirrors thrift enum `crate::format::Type`
 
 thrift_enum!(
 /// Types supported by Parquet.
@@ -56,7 +55,7 @@ enum Type {
 );
 
 // ----------------------------------------------------------------------
-// Mirrors thrift enum `parquet::ConvertedType`
+// Mirrors thrift enum `crate::format::ConvertedType`
 //
 // Cannot use macros because of added field `None`
 
@@ -195,7 +194,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ConvertedType {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors thrift union `parquet::TimeUnit`
+// Mirrors thrift union `crate::format::TimeUnit`
 
 thrift_union_all_empty!(
 /// Time unit for `Time` and `Timestamp` logical types.
@@ -207,7 +206,7 @@ union TimeUnit {
 );
 
 // ----------------------------------------------------------------------
-// Mirrors thrift union `parquet::LogicalType`
+// Mirrors thrift union `crate::format::LogicalType`
 
 // private structs for decoding logical type
 
@@ -506,7 +505,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors thrift enum `parquet::FieldRepetitionType`
+// Mirrors thrift enum `crate::format::FieldRepetitionType`
 //
 // Cannot use macro since the name is changed
 
@@ -536,7 +535,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Repetition {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors thrift enum `parquet::Encoding`
+// Mirrors thrift enum `crate::format::Encoding`
 
 thrift_enum!(
 /// Encodings supported by Parquet.
@@ -592,7 +591,7 @@ impl FromStr for Encoding {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors thrift enum `parquet::CompressionCodec`
+// Mirrors thrift enum `crate::format::CompressionCodec`
 
 /// Supported block compression algorithms.
 ///
@@ -739,7 +738,7 @@ impl FromStr for Compression {
 }
 
 // ----------------------------------------------------------------------
-// Mirrors thrift enum `parquet::PageType`
+// Mirrors thrift enum `crate::format::PageType`
 
 thrift_enum!(
 /// Available data pages for Parquet file format.
@@ -753,7 +752,7 @@ enum PageType {
 );
 
 // ----------------------------------------------------------------------
-// Mirrors thrift enum `parquet::BoundaryOrder`
+// Mirrors thrift enum `crate::format::BoundaryOrder`
 
 thrift_enum!(
 /// Enum to annotate whether lists of min/max elements inside ColumnIndex
@@ -780,7 +779,7 @@ enum EdgeInterpolationAlgorithm {
 );
 
 // ----------------------------------------------------------------------
-// Mirrors thrift union `parquet::BloomFilterAlgorithm`
+// Mirrors thrift union `crate::format::BloomFilterAlgorithm`
 
 thrift_union_all_empty!(
 /// The algorithm used in Bloom filter.
@@ -791,7 +790,7 @@ union BloomFilterAlgorithm {
 );
 
 // ----------------------------------------------------------------------
-// Mirrors thrift union `parquet::BloomFilterHash`
+// Mirrors thrift union `crate::format::BloomFilterHash`
 
 thrift_union_all_empty!(
 /// The hash function used in Bloom filter. This function takes the hash of a column value
@@ -803,7 +802,7 @@ union BloomFilterHash {
 );
 
 // ----------------------------------------------------------------------
-// Mirrors thrift union `parquet::BloomFilterCompression`
+// Mirrors thrift union `crate::format::BloomFilterCompression`
 
 thrift_union_all_empty!(
 /// The compression used in the Bloom filter.
@@ -813,7 +812,7 @@ union BloomFilterCompression {
 );
 
 // ----------------------------------------------------------------------
-// Mirrors thrift union `parquet::ColumnOrder`
+// Mirrors thrift union `crate::format::ColumnOrder`
 
 /// Sort order for page and column statistics.
 ///
@@ -1029,37 +1028,37 @@ impl fmt::Display for ColumnOrder {
 }
 
 // ----------------------------------------------------------------------
-// parquet::ConvertedType <=> ConvertedType conversion
+// crate::format::ConvertedType <=> ConvertedType conversion
 
-impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
+impl TryFrom<Option<crate::format::ConvertedType>> for ConvertedType {
     type Error = ParquetError;
 
-    fn try_from(option: Option<parquet::ConvertedType>) -> Result<Self> {
+    fn try_from(option: Option<crate::format::ConvertedType>) -> Result<Self> {
         Ok(match option {
             None => ConvertedType::NONE,
             Some(value) => match value {
-                parquet::ConvertedType::UTF8 => ConvertedType::UTF8,
-                parquet::ConvertedType::MAP => ConvertedType::MAP,
-                parquet::ConvertedType::MAP_KEY_VALUE => ConvertedType::MAP_KEY_VALUE,
-                parquet::ConvertedType::LIST => ConvertedType::LIST,
-                parquet::ConvertedType::ENUM => ConvertedType::ENUM,
-                parquet::ConvertedType::DECIMAL => ConvertedType::DECIMAL,
-                parquet::ConvertedType::DATE => ConvertedType::DATE,
-                parquet::ConvertedType::TIME_MILLIS => ConvertedType::TIME_MILLIS,
-                parquet::ConvertedType::TIME_MICROS => ConvertedType::TIME_MICROS,
-                parquet::ConvertedType::TIMESTAMP_MILLIS => ConvertedType::TIMESTAMP_MILLIS,
-                parquet::ConvertedType::TIMESTAMP_MICROS => ConvertedType::TIMESTAMP_MICROS,
-                parquet::ConvertedType::UINT_8 => ConvertedType::UINT_8,
-                parquet::ConvertedType::UINT_16 => ConvertedType::UINT_16,
-                parquet::ConvertedType::UINT_32 => ConvertedType::UINT_32,
-                parquet::ConvertedType::UINT_64 => ConvertedType::UINT_64,
-                parquet::ConvertedType::INT_8 => ConvertedType::INT_8,
-                parquet::ConvertedType::INT_16 => ConvertedType::INT_16,
-                parquet::ConvertedType::INT_32 => ConvertedType::INT_32,
-                parquet::ConvertedType::INT_64 => ConvertedType::INT_64,
-                parquet::ConvertedType::JSON => ConvertedType::JSON,
-                parquet::ConvertedType::BSON => ConvertedType::BSON,
-                parquet::ConvertedType::INTERVAL => ConvertedType::INTERVAL,
+                crate::format::ConvertedType::UTF8 => ConvertedType::UTF8,
+                crate::format::ConvertedType::MAP => ConvertedType::MAP,
+                crate::format::ConvertedType::MAP_KEY_VALUE => ConvertedType::MAP_KEY_VALUE,
+                crate::format::ConvertedType::LIST => ConvertedType::LIST,
+                crate::format::ConvertedType::ENUM => ConvertedType::ENUM,
+                crate::format::ConvertedType::DECIMAL => ConvertedType::DECIMAL,
+                crate::format::ConvertedType::DATE => ConvertedType::DATE,
+                crate::format::ConvertedType::TIME_MILLIS => ConvertedType::TIME_MILLIS,
+                crate::format::ConvertedType::TIME_MICROS => ConvertedType::TIME_MICROS,
+                crate::format::ConvertedType::TIMESTAMP_MILLIS => ConvertedType::TIMESTAMP_MILLIS,
+                crate::format::ConvertedType::TIMESTAMP_MICROS => ConvertedType::TIMESTAMP_MICROS,
+                crate::format::ConvertedType::UINT_8 => ConvertedType::UINT_8,
+                crate::format::ConvertedType::UINT_16 => ConvertedType::UINT_16,
+                crate::format::ConvertedType::UINT_32 => ConvertedType::UINT_32,
+                crate::format::ConvertedType::UINT_64 => ConvertedType::UINT_64,
+                crate::format::ConvertedType::INT_8 => ConvertedType::INT_8,
+                crate::format::ConvertedType::INT_16 => ConvertedType::INT_16,
+                crate::format::ConvertedType::INT_32 => ConvertedType::INT_32,
+                crate::format::ConvertedType::INT_64 => ConvertedType::INT_64,
+                crate::format::ConvertedType::JSON => ConvertedType::JSON,
+                crate::format::ConvertedType::BSON => ConvertedType::BSON,
+                crate::format::ConvertedType::INTERVAL => ConvertedType::INTERVAL,
                 _ => {
                     return Err(general_err!(
                         "unexpected parquet converted type: {}",
@@ -1071,73 +1070,73 @@ impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
     }
 }
 
-impl From<ConvertedType> for Option<parquet::ConvertedType> {
+impl From<ConvertedType> for Option<crate::format::ConvertedType> {
     fn from(value: ConvertedType) -> Self {
         match value {
             ConvertedType::NONE => None,
-            ConvertedType::UTF8 => Some(parquet::ConvertedType::UTF8),
-            ConvertedType::MAP => Some(parquet::ConvertedType::MAP),
-            ConvertedType::MAP_KEY_VALUE => Some(parquet::ConvertedType::MAP_KEY_VALUE),
-            ConvertedType::LIST => Some(parquet::ConvertedType::LIST),
-            ConvertedType::ENUM => Some(parquet::ConvertedType::ENUM),
-            ConvertedType::DECIMAL => Some(parquet::ConvertedType::DECIMAL),
-            ConvertedType::DATE => Some(parquet::ConvertedType::DATE),
-            ConvertedType::TIME_MILLIS => Some(parquet::ConvertedType::TIME_MILLIS),
-            ConvertedType::TIME_MICROS => Some(parquet::ConvertedType::TIME_MICROS),
-            ConvertedType::TIMESTAMP_MILLIS => Some(parquet::ConvertedType::TIMESTAMP_MILLIS),
-            ConvertedType::TIMESTAMP_MICROS => Some(parquet::ConvertedType::TIMESTAMP_MICROS),
-            ConvertedType::UINT_8 => Some(parquet::ConvertedType::UINT_8),
-            ConvertedType::UINT_16 => Some(parquet::ConvertedType::UINT_16),
-            ConvertedType::UINT_32 => Some(parquet::ConvertedType::UINT_32),
-            ConvertedType::UINT_64 => Some(parquet::ConvertedType::UINT_64),
-            ConvertedType::INT_8 => Some(parquet::ConvertedType::INT_8),
-            ConvertedType::INT_16 => Some(parquet::ConvertedType::INT_16),
-            ConvertedType::INT_32 => Some(parquet::ConvertedType::INT_32),
-            ConvertedType::INT_64 => Some(parquet::ConvertedType::INT_64),
-            ConvertedType::JSON => Some(parquet::ConvertedType::JSON),
-            ConvertedType::BSON => Some(parquet::ConvertedType::BSON),
-            ConvertedType::INTERVAL => Some(parquet::ConvertedType::INTERVAL),
+            ConvertedType::UTF8 => Some(crate::format::ConvertedType::UTF8),
+            ConvertedType::MAP => Some(crate::format::ConvertedType::MAP),
+            ConvertedType::MAP_KEY_VALUE => Some(crate::format::ConvertedType::MAP_KEY_VALUE),
+            ConvertedType::LIST => Some(crate::format::ConvertedType::LIST),
+            ConvertedType::ENUM => Some(crate::format::ConvertedType::ENUM),
+            ConvertedType::DECIMAL => Some(crate::format::ConvertedType::DECIMAL),
+            ConvertedType::DATE => Some(crate::format::ConvertedType::DATE),
+            ConvertedType::TIME_MILLIS => Some(crate::format::ConvertedType::TIME_MILLIS),
+            ConvertedType::TIME_MICROS => Some(crate::format::ConvertedType::TIME_MICROS),
+            ConvertedType::TIMESTAMP_MILLIS => Some(crate::format::ConvertedType::TIMESTAMP_MILLIS),
+            ConvertedType::TIMESTAMP_MICROS => Some(crate::format::ConvertedType::TIMESTAMP_MICROS),
+            ConvertedType::UINT_8 => Some(crate::format::ConvertedType::UINT_8),
+            ConvertedType::UINT_16 => Some(crate::format::ConvertedType::UINT_16),
+            ConvertedType::UINT_32 => Some(crate::format::ConvertedType::UINT_32),
+            ConvertedType::UINT_64 => Some(crate::format::ConvertedType::UINT_64),
+            ConvertedType::INT_8 => Some(crate::format::ConvertedType::INT_8),
+            ConvertedType::INT_16 => Some(crate::format::ConvertedType::INT_16),
+            ConvertedType::INT_32 => Some(crate::format::ConvertedType::INT_32),
+            ConvertedType::INT_64 => Some(crate::format::ConvertedType::INT_64),
+            ConvertedType::JSON => Some(crate::format::ConvertedType::JSON),
+            ConvertedType::BSON => Some(crate::format::ConvertedType::BSON),
+            ConvertedType::INTERVAL => Some(crate::format::ConvertedType::INTERVAL),
         }
     }
 }
 
 // ----------------------------------------------------------------------
-// parquet::LogicalType <=> LogicalType conversion
+// crate::format::LogicalType <=> LogicalType conversion
 
-impl From<parquet::LogicalType> for LogicalType {
-    fn from(value: parquet::LogicalType) -> Self {
+impl From<crate::format::LogicalType> for LogicalType {
+    fn from(value: crate::format::LogicalType) -> Self {
         match value {
-            parquet::LogicalType::STRING(_) => LogicalType::String,
-            parquet::LogicalType::MAP(_) => LogicalType::Map,
-            parquet::LogicalType::LIST(_) => LogicalType::List,
-            parquet::LogicalType::ENUM(_) => LogicalType::Enum,
-            parquet::LogicalType::DECIMAL(t) => LogicalType::Decimal {
+            crate::format::LogicalType::STRING(_) => LogicalType::String,
+            crate::format::LogicalType::MAP(_) => LogicalType::Map,
+            crate::format::LogicalType::LIST(_) => LogicalType::List,
+            crate::format::LogicalType::ENUM(_) => LogicalType::Enum,
+            crate::format::LogicalType::DECIMAL(t) => LogicalType::Decimal {
                 scale: t.scale,
                 precision: t.precision,
             },
-            parquet::LogicalType::DATE(_) => LogicalType::Date,
-            parquet::LogicalType::TIME(t) => LogicalType::Time {
+            crate::format::LogicalType::DATE(_) => LogicalType::Date,
+            crate::format::LogicalType::TIME(t) => LogicalType::Time {
                 is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
                 unit: t.unit.into(),
             },
-            parquet::LogicalType::TIMESTAMP(t) => LogicalType::Timestamp {
+            crate::format::LogicalType::TIMESTAMP(t) => LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
                 unit: t.unit.into(),
             },
-            parquet::LogicalType::INTEGER(t) => LogicalType::Integer {
+            crate::format::LogicalType::INTEGER(t) => LogicalType::Integer {
                 bit_width: t.bit_width,
                 is_signed: t.is_signed,
             },
-            parquet::LogicalType::UNKNOWN(_) => LogicalType::Unknown,
-            parquet::LogicalType::JSON(_) => LogicalType::Json,
-            parquet::LogicalType::BSON(_) => LogicalType::Bson,
-            parquet::LogicalType::UUID(_) => LogicalType::Uuid,
-            parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
-            parquet::LogicalType::VARIANT(vt) => LogicalType::Variant {
+            crate::format::LogicalType::UNKNOWN(_) => LogicalType::Unknown,
+            crate::format::LogicalType::JSON(_) => LogicalType::Json,
+            crate::format::LogicalType::BSON(_) => LogicalType::Bson,
+            crate::format::LogicalType::UUID(_) => LogicalType::Uuid,
+            crate::format::LogicalType::FLOAT16(_) => LogicalType::Float16,
+            crate::format::LogicalType::VARIANT(vt) => LogicalType::Variant {
                 specification_version: vt.specification_version,
             },
-            parquet::LogicalType::GEOMETRY(gt) => LogicalType::Geometry { crs: gt.crs },
-            parquet::LogicalType::GEOGRAPHY(gt) => LogicalType::Geography {
+            crate::format::LogicalType::GEOMETRY(gt) => LogicalType::Geometry { crs: gt.crs },
+            crate::format::LogicalType::GEOGRAPHY(gt) => LogicalType::Geography {
                 crs: gt.crs,
                 algorithm: gt.algorithm.map(|a| a.try_into().unwrap()),
             },
@@ -1145,53 +1144,53 @@ impl From<parquet::LogicalType> for LogicalType {
     }
 }
 
-impl From<LogicalType> for parquet::LogicalType {
+impl From<LogicalType> for crate::format::LogicalType {
     fn from(value: LogicalType) -> Self {
         match value {
-            LogicalType::String => parquet::LogicalType::STRING(Default::default()),
-            LogicalType::Map => parquet::LogicalType::MAP(Default::default()),
-            LogicalType::List => parquet::LogicalType::LIST(Default::default()),
-            LogicalType::Enum => parquet::LogicalType::ENUM(Default::default()),
+            LogicalType::String => crate::format::LogicalType::STRING(Default::default()),
+            LogicalType::Map => crate::format::LogicalType::MAP(Default::default()),
+            LogicalType::List => crate::format::LogicalType::LIST(Default::default()),
+            LogicalType::Enum => crate::format::LogicalType::ENUM(Default::default()),
             LogicalType::Decimal { scale, precision } => {
-                parquet::LogicalType::DECIMAL(parquet::DecimalType { scale, precision })
+                crate::format::LogicalType::DECIMAL(crate::format::DecimalType { scale, precision })
             }
-            LogicalType::Date => parquet::LogicalType::DATE(Default::default()),
+            LogicalType::Date => crate::format::LogicalType::DATE(Default::default()),
             LogicalType::Time {
                 is_adjusted_to_u_t_c,
                 unit,
-            } => parquet::LogicalType::TIME(parquet::TimeType {
+            } => crate::format::LogicalType::TIME(crate::format::TimeType {
                 is_adjusted_to_u_t_c,
                 unit: unit.into(),
             }),
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c,
                 unit,
-            } => parquet::LogicalType::TIMESTAMP(parquet::TimestampType {
+            } => crate::format::LogicalType::TIMESTAMP(crate::format::TimestampType {
                 is_adjusted_to_u_t_c,
                 unit: unit.into(),
             }),
             LogicalType::Integer {
                 bit_width,
                 is_signed,
-            } => parquet::LogicalType::INTEGER(parquet::IntType {
+            } => crate::format::LogicalType::INTEGER(crate::format::IntType {
                 bit_width,
                 is_signed,
             }),
-            LogicalType::Unknown => parquet::LogicalType::UNKNOWN(Default::default()),
-            LogicalType::Json => parquet::LogicalType::JSON(Default::default()),
-            LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
-            LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
-            LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
+            LogicalType::Unknown => crate::format::LogicalType::UNKNOWN(Default::default()),
+            LogicalType::Json => crate::format::LogicalType::JSON(Default::default()),
+            LogicalType::Bson => crate::format::LogicalType::BSON(Default::default()),
+            LogicalType::Uuid => crate::format::LogicalType::UUID(Default::default()),
+            LogicalType::Float16 => crate::format::LogicalType::FLOAT16(Default::default()),
             LogicalType::Variant {
                 specification_version,
-            } => parquet::LogicalType::VARIANT(parquet::VariantType {
+            } => crate::format::LogicalType::VARIANT(crate::format::VariantType {
                 specification_version,
             }),
             LogicalType::Geometry { crs } => {
-                parquet::LogicalType::GEOMETRY(parquet::GeometryType { crs })
+                crate::format::LogicalType::GEOMETRY(crate::format::GeometryType { crs })
             }
             LogicalType::Geography { crs, algorithm } => {
-                parquet::LogicalType::GEOGRAPHY(parquet::GeographyType {
+                crate::format::LogicalType::GEOGRAPHY(crate::format::GeographyType {
                     crs,
                     algorithm: algorithm.map(|a| a.into()),
                 })
@@ -1262,16 +1261,16 @@ impl From<Option<LogicalType>> for ConvertedType {
 }
 
 // ----------------------------------------------------------------------
-// parquet::FieldRepetitionType <=> Repetition conversion
+// crate::format::FieldRepetitionType <=> Repetition conversion
 
-impl TryFrom<parquet::FieldRepetitionType> for Repetition {
+impl TryFrom<crate::format::FieldRepetitionType> for Repetition {
     type Error = ParquetError;
 
-    fn try_from(value: parquet::FieldRepetitionType) -> Result<Self> {
+    fn try_from(value: crate::format::FieldRepetitionType) -> Result<Self> {
         Ok(match value {
-            parquet::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
-            parquet::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
-            parquet::FieldRepetitionType::REPEATED => Repetition::REPEATED,
+            crate::format::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
+            crate::format::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
+            crate::format::FieldRepetitionType::REPEATED => Repetition::REPEATED,
             _ => {
                 return Err(general_err!(
                     "unexpected parquet repetition type: {}",
@@ -1282,32 +1281,32 @@ impl TryFrom<parquet::FieldRepetitionType> for Repetition {
     }
 }
 
-impl From<Repetition> for parquet::FieldRepetitionType {
+impl From<Repetition> for crate::format::FieldRepetitionType {
     fn from(value: Repetition) -> Self {
         match value {
-            Repetition::REQUIRED => parquet::FieldRepetitionType::REQUIRED,
-            Repetition::OPTIONAL => parquet::FieldRepetitionType::OPTIONAL,
-            Repetition::REPEATED => parquet::FieldRepetitionType::REPEATED,
+            Repetition::REQUIRED => crate::format::FieldRepetitionType::REQUIRED,
+            Repetition::OPTIONAL => crate::format::FieldRepetitionType::OPTIONAL,
+            Repetition::REPEATED => crate::format::FieldRepetitionType::REPEATED,
         }
     }
 }
 
 // ----------------------------------------------------------------------
-// parquet::CompressionCodec <=> Compression conversion
+// crate::format::CompressionCodec <=> Compression conversion
 
-impl TryFrom<parquet::CompressionCodec> for Compression {
+impl TryFrom<crate::format::CompressionCodec> for Compression {
     type Error = ParquetError;
 
-    fn try_from(value: parquet::CompressionCodec) -> Result<Self> {
+    fn try_from(value: crate::format::CompressionCodec) -> Result<Self> {
         Ok(match value {
-            parquet::CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
-            parquet::CompressionCodec::SNAPPY => Compression::SNAPPY,
-            parquet::CompressionCodec::GZIP => Compression::GZIP(Default::default()),
-            parquet::CompressionCodec::LZO => Compression::LZO,
-            parquet::CompressionCodec::BROTLI => Compression::BROTLI(Default::default()),
-            parquet::CompressionCodec::LZ4 => Compression::LZ4,
-            parquet::CompressionCodec::ZSTD => Compression::ZSTD(Default::default()),
-            parquet::CompressionCodec::LZ4_RAW => Compression::LZ4_RAW,
+            crate::format::CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
+            crate::format::CompressionCodec::SNAPPY => Compression::SNAPPY,
+            crate::format::CompressionCodec::GZIP => Compression::GZIP(Default::default()),
+            crate::format::CompressionCodec::LZO => Compression::LZO,
+            crate::format::CompressionCodec::BROTLI => Compression::BROTLI(Default::default()),
+            crate::format::CompressionCodec::LZ4 => Compression::LZ4,
+            crate::format::CompressionCodec::ZSTD => Compression::ZSTD(Default::default()),
+            crate::format::CompressionCodec::LZ4_RAW => Compression::LZ4_RAW,
             _ => {
                 return Err(general_err!(
                     "unexpected parquet compression codec: {}",
@@ -1318,17 +1317,17 @@ impl TryFrom<parquet::CompressionCodec> for Compression {
     }
 }
 
-impl From<Compression> for parquet::CompressionCodec {
+impl From<Compression> for crate::format::CompressionCodec {
     fn from(value: Compression) -> Self {
         match value {
-            Compression::UNCOMPRESSED => parquet::CompressionCodec::UNCOMPRESSED,
-            Compression::SNAPPY => parquet::CompressionCodec::SNAPPY,
-            Compression::GZIP(_) => parquet::CompressionCodec::GZIP,
-            Compression::LZO => parquet::CompressionCodec::LZO,
-            Compression::BROTLI(_) => parquet::CompressionCodec::BROTLI,
-            Compression::LZ4 => parquet::CompressionCodec::LZ4,
-            Compression::ZSTD(_) => parquet::CompressionCodec::ZSTD,
-            Compression::LZ4_RAW => parquet::CompressionCodec::LZ4_RAW,
+            Compression::UNCOMPRESSED => crate::format::CompressionCodec::UNCOMPRESSED,
+            Compression::SNAPPY => crate::format::CompressionCodec::SNAPPY,
+            Compression::GZIP(_) => crate::format::CompressionCodec::GZIP,
+            Compression::LZO => crate::format::CompressionCodec::LZO,
+            Compression::BROTLI(_) => crate::format::CompressionCodec::BROTLI,
+            Compression::LZ4 => crate::format::CompressionCodec::LZ4,
+            Compression::ZSTD(_) => crate::format::CompressionCodec::ZSTD,
+            Compression::LZ4_RAW => crate::format::CompressionCodec::LZ4_RAW,
         }
     }
 }
@@ -1463,35 +1462,50 @@ mod tests {
     #[test]
     fn test_from_type() {
         assert_eq!(
-            Type::try_from(parquet::Type::BOOLEAN).unwrap(),
+            Type::try_from(crate::format::Type::BOOLEAN).unwrap(),
             Type::BOOLEAN
         );
-        assert_eq!(Type::try_from(parquet::Type::INT32).unwrap(), Type::INT32);
-        assert_eq!(Type::try_from(parquet::Type::INT64).unwrap(), Type::INT64);
-        assert_eq!(Type::try_from(parquet::Type::INT96).unwrap(), Type::INT96);
-        assert_eq!(Type::try_from(parquet::Type::FLOAT).unwrap(), Type::FLOAT);
-        assert_eq!(Type::try_from(parquet::Type::DOUBLE).unwrap(), Type::DOUBLE);
         assert_eq!(
-            Type::try_from(parquet::Type::BYTE_ARRAY).unwrap(),
+            Type::try_from(crate::format::Type::INT32).unwrap(),
+            Type::INT32
+        );
+        assert_eq!(
+            Type::try_from(crate::format::Type::INT64).unwrap(),
+            Type::INT64
+        );
+        assert_eq!(
+            Type::try_from(crate::format::Type::INT96).unwrap(),
+            Type::INT96
+        );
+        assert_eq!(
+            Type::try_from(crate::format::Type::FLOAT).unwrap(),
+            Type::FLOAT
+        );
+        assert_eq!(
+            Type::try_from(crate::format::Type::DOUBLE).unwrap(),
+            Type::DOUBLE
+        );
+        assert_eq!(
+            Type::try_from(crate::format::Type::BYTE_ARRAY).unwrap(),
             Type::BYTE_ARRAY
         );
         assert_eq!(
-            Type::try_from(parquet::Type::FIXED_LEN_BYTE_ARRAY).unwrap(),
+            Type::try_from(crate::format::Type::FIXED_LEN_BYTE_ARRAY).unwrap(),
             Type::FIXED_LEN_BYTE_ARRAY
         );
     }
 
     #[test]
     fn test_into_type() {
-        assert_eq!(parquet::Type::BOOLEAN, Type::BOOLEAN.into());
-        assert_eq!(parquet::Type::INT32, Type::INT32.into());
-        assert_eq!(parquet::Type::INT64, Type::INT64.into());
-        assert_eq!(parquet::Type::INT96, Type::INT96.into());
-        assert_eq!(parquet::Type::FLOAT, Type::FLOAT.into());
-        assert_eq!(parquet::Type::DOUBLE, Type::DOUBLE.into());
-        assert_eq!(parquet::Type::BYTE_ARRAY, Type::BYTE_ARRAY.into());
+        assert_eq!(crate::format::Type::BOOLEAN, Type::BOOLEAN.into());
+        assert_eq!(crate::format::Type::INT32, Type::INT32.into());
+        assert_eq!(crate::format::Type::INT64, Type::INT64.into());
+        assert_eq!(crate::format::Type::INT96, Type::INT96.into());
+        assert_eq!(crate::format::Type::FLOAT, Type::FLOAT.into());
+        assert_eq!(crate::format::Type::DOUBLE, Type::DOUBLE.into());
+        assert_eq!(crate::format::Type::BYTE_ARRAY, Type::BYTE_ARRAY.into());
         assert_eq!(
-            parquet::Type::FIXED_LEN_BYTE_ARRAY,
+            crate::format::Type::FIXED_LEN_BYTE_ARRAY,
             Type::FIXED_LEN_BYTE_ARRAY.into()
         );
     }
@@ -1573,196 +1587,199 @@ mod tests {
 
     #[test]
     fn test_from_converted_type() {
-        let parquet_conv_none: Option<parquet::ConvertedType> = None;
+        let parquet_conv_none: Option<crate::format::ConvertedType> = None;
         assert_eq!(
             ConvertedType::try_from(parquet_conv_none).unwrap(),
             ConvertedType::NONE
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UTF8)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::UTF8)).unwrap(),
             ConvertedType::UTF8
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::MAP)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::MAP)).unwrap(),
             ConvertedType::MAP
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::MAP_KEY_VALUE)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::MAP_KEY_VALUE)).unwrap(),
             ConvertedType::MAP_KEY_VALUE
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::LIST)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::LIST)).unwrap(),
             ConvertedType::LIST
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::ENUM)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::ENUM)).unwrap(),
             ConvertedType::ENUM
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::DECIMAL)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::DECIMAL)).unwrap(),
             ConvertedType::DECIMAL
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::DATE)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::DATE)).unwrap(),
             ConvertedType::DATE
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIME_MILLIS)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::TIME_MILLIS)).unwrap(),
             ConvertedType::TIME_MILLIS
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIME_MICROS)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::TIME_MICROS)).unwrap(),
             ConvertedType::TIME_MICROS
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MILLIS)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::TIMESTAMP_MILLIS)).unwrap(),
             ConvertedType::TIMESTAMP_MILLIS
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::TIMESTAMP_MICROS)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::TIMESTAMP_MICROS)).unwrap(),
             ConvertedType::TIMESTAMP_MICROS
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_8)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::UINT_8)).unwrap(),
             ConvertedType::UINT_8
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_16)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::UINT_16)).unwrap(),
             ConvertedType::UINT_16
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_32)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::UINT_32)).unwrap(),
             ConvertedType::UINT_32
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::UINT_64)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::UINT_64)).unwrap(),
             ConvertedType::UINT_64
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INT_8)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::INT_8)).unwrap(),
             ConvertedType::INT_8
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INT_16)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::INT_16)).unwrap(),
             ConvertedType::INT_16
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INT_32)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::INT_32)).unwrap(),
             ConvertedType::INT_32
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INT_64)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::INT_64)).unwrap(),
             ConvertedType::INT_64
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::JSON)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::JSON)).unwrap(),
             ConvertedType::JSON
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::BSON)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::BSON)).unwrap(),
             ConvertedType::BSON
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::INTERVAL)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::INTERVAL)).unwrap(),
             ConvertedType::INTERVAL
         );
         assert_eq!(
-            ConvertedType::try_from(Some(parquet::ConvertedType::DECIMAL)).unwrap(),
+            ConvertedType::try_from(Some(crate::format::ConvertedType::DECIMAL)).unwrap(),
             ConvertedType::DECIMAL
         )
     }
 
     #[test]
     fn test_into_converted_type() {
-        let converted_type: Option<parquet::ConvertedType> = None;
+        let converted_type: Option<crate::format::ConvertedType> = None;
         assert_eq!(converted_type, ConvertedType::NONE.into());
         assert_eq!(
-            Some(parquet::ConvertedType::UTF8),
+            Some(crate::format::ConvertedType::UTF8),
             ConvertedType::UTF8.into()
         );
-        assert_eq!(Some(parquet::ConvertedType::MAP), ConvertedType::MAP.into());
         assert_eq!(
-            Some(parquet::ConvertedType::MAP_KEY_VALUE),
+            Some(crate::format::ConvertedType::MAP),
+            ConvertedType::MAP.into()
+        );
+        assert_eq!(
+            Some(crate::format::ConvertedType::MAP_KEY_VALUE),
             ConvertedType::MAP_KEY_VALUE.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::LIST),
+            Some(crate::format::ConvertedType::LIST),
             ConvertedType::LIST.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::ENUM),
+            Some(crate::format::ConvertedType::ENUM),
             ConvertedType::ENUM.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::DECIMAL),
+            Some(crate::format::ConvertedType::DECIMAL),
             ConvertedType::DECIMAL.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::DATE),
+            Some(crate::format::ConvertedType::DATE),
             ConvertedType::DATE.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::TIME_MILLIS),
+            Some(crate::format::ConvertedType::TIME_MILLIS),
             ConvertedType::TIME_MILLIS.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::TIME_MICROS),
+            Some(crate::format::ConvertedType::TIME_MICROS),
             ConvertedType::TIME_MICROS.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::TIMESTAMP_MILLIS),
+            Some(crate::format::ConvertedType::TIMESTAMP_MILLIS),
             ConvertedType::TIMESTAMP_MILLIS.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::TIMESTAMP_MICROS),
+            Some(crate::format::ConvertedType::TIMESTAMP_MICROS),
             ConvertedType::TIMESTAMP_MICROS.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::UINT_8),
+            Some(crate::format::ConvertedType::UINT_8),
             ConvertedType::UINT_8.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::UINT_16),
+            Some(crate::format::ConvertedType::UINT_16),
             ConvertedType::UINT_16.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::UINT_32),
+            Some(crate::format::ConvertedType::UINT_32),
             ConvertedType::UINT_32.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::UINT_64),
+            Some(crate::format::ConvertedType::UINT_64),
             ConvertedType::UINT_64.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::INT_8),
+            Some(crate::format::ConvertedType::INT_8),
             ConvertedType::INT_8.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::INT_16),
+            Some(crate::format::ConvertedType::INT_16),
             ConvertedType::INT_16.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::INT_32),
+            Some(crate::format::ConvertedType::INT_32),
             ConvertedType::INT_32.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::INT_64),
+            Some(crate::format::ConvertedType::INT_64),
             ConvertedType::INT_64.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::JSON),
+            Some(crate::format::ConvertedType::JSON),
             ConvertedType::JSON.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::BSON),
+            Some(crate::format::ConvertedType::BSON),
             ConvertedType::BSON.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::INTERVAL),
+            Some(crate::format::ConvertedType::INTERVAL),
             ConvertedType::INTERVAL.into()
         );
         assert_eq!(
-            Some(parquet::ConvertedType::DECIMAL),
+            Some(crate::format::ConvertedType::DECIMAL),
             ConvertedType::DECIMAL.into()
         )
     }
@@ -2100,15 +2117,15 @@ mod tests {
     #[test]
     fn test_from_repetition() {
         assert_eq!(
-            Repetition::try_from(parquet::FieldRepetitionType::REQUIRED).unwrap(),
+            Repetition::try_from(crate::format::FieldRepetitionType::REQUIRED).unwrap(),
             Repetition::REQUIRED
         );
         assert_eq!(
-            Repetition::try_from(parquet::FieldRepetitionType::OPTIONAL).unwrap(),
+            Repetition::try_from(crate::format::FieldRepetitionType::OPTIONAL).unwrap(),
             Repetition::OPTIONAL
         );
         assert_eq!(
-            Repetition::try_from(parquet::FieldRepetitionType::REPEATED).unwrap(),
+            Repetition::try_from(crate::format::FieldRepetitionType::REPEATED).unwrap(),
             Repetition::REPEATED
         );
     }
@@ -2116,15 +2133,15 @@ mod tests {
     #[test]
     fn test_into_repetition() {
         assert_eq!(
-            parquet::FieldRepetitionType::REQUIRED,
+            crate::format::FieldRepetitionType::REQUIRED,
             Repetition::REQUIRED.into()
         );
         assert_eq!(
-            parquet::FieldRepetitionType::OPTIONAL,
+            crate::format::FieldRepetitionType::OPTIONAL,
             Repetition::OPTIONAL.into()
         );
         assert_eq!(
-            parquet::FieldRepetitionType::REPEATED,
+            crate::format::FieldRepetitionType::REPEATED,
             Repetition::REPEATED.into()
         );
     }
@@ -2175,54 +2192,57 @@ mod tests {
     #[test]
     fn test_from_encoding() {
         assert_eq!(
-            Encoding::try_from(parquet::Encoding::PLAIN).unwrap(),
+            Encoding::try_from(crate::format::Encoding::PLAIN).unwrap(),
             Encoding::PLAIN
         );
         assert_eq!(
-            Encoding::try_from(parquet::Encoding::PLAIN_DICTIONARY).unwrap(),
+            Encoding::try_from(crate::format::Encoding::PLAIN_DICTIONARY).unwrap(),
             Encoding::PLAIN_DICTIONARY
         );
         assert_eq!(
-            Encoding::try_from(parquet::Encoding::RLE).unwrap(),
+            Encoding::try_from(crate::format::Encoding::RLE).unwrap(),
             Encoding::RLE
         );
         assert_eq!(
-            Encoding::try_from(parquet::Encoding::BIT_PACKED).unwrap(),
+            Encoding::try_from(crate::format::Encoding::BIT_PACKED).unwrap(),
             Encoding::BIT_PACKED
         );
         assert_eq!(
-            Encoding::try_from(parquet::Encoding::DELTA_BINARY_PACKED).unwrap(),
+            Encoding::try_from(crate::format::Encoding::DELTA_BINARY_PACKED).unwrap(),
             Encoding::DELTA_BINARY_PACKED
         );
         assert_eq!(
-            Encoding::try_from(parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY).unwrap(),
+            Encoding::try_from(crate::format::Encoding::DELTA_LENGTH_BYTE_ARRAY).unwrap(),
             Encoding::DELTA_LENGTH_BYTE_ARRAY
         );
         assert_eq!(
-            Encoding::try_from(parquet::Encoding::DELTA_BYTE_ARRAY).unwrap(),
+            Encoding::try_from(crate::format::Encoding::DELTA_BYTE_ARRAY).unwrap(),
             Encoding::DELTA_BYTE_ARRAY
         );
     }
 
     #[test]
     fn test_into_encoding() {
-        assert_eq!(parquet::Encoding::PLAIN, Encoding::PLAIN.into());
+        assert_eq!(crate::format::Encoding::PLAIN, Encoding::PLAIN.into());
         assert_eq!(
-            parquet::Encoding::PLAIN_DICTIONARY,
+            crate::format::Encoding::PLAIN_DICTIONARY,
             Encoding::PLAIN_DICTIONARY.into()
         );
-        assert_eq!(parquet::Encoding::RLE, Encoding::RLE.into());
-        assert_eq!(parquet::Encoding::BIT_PACKED, Encoding::BIT_PACKED.into());
+        assert_eq!(crate::format::Encoding::RLE, Encoding::RLE.into());
         assert_eq!(
-            parquet::Encoding::DELTA_BINARY_PACKED,
+            crate::format::Encoding::BIT_PACKED,
+            Encoding::BIT_PACKED.into()
+        );
+        assert_eq!(
+            crate::format::Encoding::DELTA_BINARY_PACKED,
             Encoding::DELTA_BINARY_PACKED.into()
         );
         assert_eq!(
-            parquet::Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            crate::format::Encoding::DELTA_LENGTH_BYTE_ARRAY,
             Encoding::DELTA_LENGTH_BYTE_ARRAY.into()
         );
         assert_eq!(
-            parquet::Encoding::DELTA_BYTE_ARRAY,
+            crate::format::Encoding::DELTA_BYTE_ARRAY,
             Encoding::DELTA_BYTE_ARRAY.into()
         );
     }
@@ -2259,31 +2279,31 @@ mod tests {
     #[test]
     fn test_from_compression() {
         assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::UNCOMPRESSED).unwrap(),
+            Compression::try_from(crate::format::CompressionCodec::UNCOMPRESSED).unwrap(),
             Compression::UNCOMPRESSED
         );
         assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::SNAPPY).unwrap(),
+            Compression::try_from(crate::format::CompressionCodec::SNAPPY).unwrap(),
             Compression::SNAPPY
         );
         assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::GZIP).unwrap(),
+            Compression::try_from(crate::format::CompressionCodec::GZIP).unwrap(),
             Compression::GZIP(Default::default())
         );
         assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::LZO).unwrap(),
+            Compression::try_from(crate::format::CompressionCodec::LZO).unwrap(),
             Compression::LZO
         );
         assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::BROTLI).unwrap(),
+            Compression::try_from(crate::format::CompressionCodec::BROTLI).unwrap(),
             Compression::BROTLI(Default::default())
         );
         assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::LZ4).unwrap(),
+            Compression::try_from(crate::format::CompressionCodec::LZ4).unwrap(),
             Compression::LZ4
         );
         assert_eq!(
-            Compression::try_from(parquet::CompressionCodec::ZSTD).unwrap(),
+            Compression::try_from(crate::format::CompressionCodec::ZSTD).unwrap(),
             Compression::ZSTD(Default::default())
         );
     }
@@ -2291,25 +2311,31 @@ mod tests {
     #[test]
     fn test_into_compression() {
         assert_eq!(
-            parquet::CompressionCodec::UNCOMPRESSED,
+            crate::format::CompressionCodec::UNCOMPRESSED,
             Compression::UNCOMPRESSED.into()
         );
         assert_eq!(
-            parquet::CompressionCodec::SNAPPY,
+            crate::format::CompressionCodec::SNAPPY,
             Compression::SNAPPY.into()
         );
         assert_eq!(
-            parquet::CompressionCodec::GZIP,
+            crate::format::CompressionCodec::GZIP,
             Compression::GZIP(Default::default()).into()
         );
-        assert_eq!(parquet::CompressionCodec::LZO, Compression::LZO.into());
         assert_eq!(
-            parquet::CompressionCodec::BROTLI,
+            crate::format::CompressionCodec::LZO,
+            Compression::LZO.into()
+        );
+        assert_eq!(
+            crate::format::CompressionCodec::BROTLI,
             Compression::BROTLI(Default::default()).into()
         );
-        assert_eq!(parquet::CompressionCodec::LZ4, Compression::LZ4.into());
         assert_eq!(
-            parquet::CompressionCodec::ZSTD,
+            crate::format::CompressionCodec::LZ4,
+            Compression::LZ4.into()
+        );
+        assert_eq!(
+            crate::format::CompressionCodec::ZSTD,
             Compression::ZSTD(Default::default()).into()
         );
     }
@@ -2325,33 +2351,39 @@ mod tests {
     #[test]
     fn test_from_page_type() {
         assert_eq!(
-            PageType::try_from(parquet::PageType::DATA_PAGE).unwrap(),
+            PageType::try_from(crate::format::PageType::DATA_PAGE).unwrap(),
             PageType::DATA_PAGE
         );
         assert_eq!(
-            PageType::try_from(parquet::PageType::INDEX_PAGE).unwrap(),
+            PageType::try_from(crate::format::PageType::INDEX_PAGE).unwrap(),
             PageType::INDEX_PAGE
         );
         assert_eq!(
-            PageType::try_from(parquet::PageType::DICTIONARY_PAGE).unwrap(),
+            PageType::try_from(crate::format::PageType::DICTIONARY_PAGE).unwrap(),
             PageType::DICTIONARY_PAGE
         );
         assert_eq!(
-            PageType::try_from(parquet::PageType::DATA_PAGE_V2).unwrap(),
+            PageType::try_from(crate::format::PageType::DATA_PAGE_V2).unwrap(),
             PageType::DATA_PAGE_V2
         );
     }
 
     #[test]
     fn test_into_page_type() {
-        assert_eq!(parquet::PageType::DATA_PAGE, PageType::DATA_PAGE.into());
-        assert_eq!(parquet::PageType::INDEX_PAGE, PageType::INDEX_PAGE.into());
         assert_eq!(
-            parquet::PageType::DICTIONARY_PAGE,
+            crate::format::PageType::DATA_PAGE,
+            PageType::DATA_PAGE.into()
+        );
+        assert_eq!(
+            crate::format::PageType::INDEX_PAGE,
+            PageType::INDEX_PAGE.into()
+        );
+        assert_eq!(
+            crate::format::PageType::DICTIONARY_PAGE,
             PageType::DICTIONARY_PAGE.into()
         );
         assert_eq!(
-            parquet::PageType::DATA_PAGE_V2,
+            crate::format::PageType::DATA_PAGE_V2,
             PageType::DATA_PAGE_V2.into()
         );
     }
