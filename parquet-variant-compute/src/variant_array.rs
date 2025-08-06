@@ -105,15 +105,14 @@ impl VariantArray {
         };
 
         // Find the value field, if present
-        let value_field = inner.column_by_name("value");
-        let value = value_field
-            .map(|v| match v.as_binary_view_opt() {
-                Some(bv) => Ok(bv),
-                None => Err(ArrowError::NotYetImplemented(format!(
+        let value = inner
+            .column_by_name("value")
+            .map(|v| v.as_binary_view_opt.unwrap_or_else(|| {
+                ArrowError::NotYetImplemented(format!(
                     "VariantArray 'value' field must be BinaryView, got {}",
                     v.data_type()
-                ))),
-            })
+                ))
+            }))
             .transpose()?;
 
         // Find the typed_value field, if present
@@ -170,10 +169,7 @@ impl VariantArray {
             ShreddingState::Unshredded { metadata, value } => {
                 Variant::new(metadata.value(index), value.value(index))
             }
-            ShreddingState::FullyShredded {
-                metadata: _,
-                typed_value,
-            } => {
+            ShreddingState::FullyShredded { typed_value, .. } => {
                 if typed_value.is_null(index) {
                     Variant::Null
                 } else {
