@@ -353,7 +353,7 @@ pub enum DataType {
     /// that contain many repeated values using less memory, but with
     /// a higher CPU overhead for some operations.
     ///
-    /// This type mostly used to represent low cardinality string
+    /// This type is mostly used to represent low cardinality string
     /// arrays or a limited set of primitive types as integers.
     Dictionary(Box<DataType>, Box<DataType>),
     /// Exact 32-bit width decimal value with precision and scale
