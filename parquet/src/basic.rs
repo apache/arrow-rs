@@ -1299,6 +1299,53 @@ impl TryFrom<crate::format::CompressionCodec> for Compression {
 
     fn try_from(value: crate::format::CompressionCodec) -> Result<Self> {
         Ok(match value {
+
+impl TryFrom<crate::format::Encoding> for Encoding {
+    type Error = ParquetError;
+
+    fn try_from(value: crate::format::Encoding) -> Result<Self> {
+        Ok(match value {
+            crate::format::Encoding::PLAIN => Encoding::PLAIN,
+            crate::format::Encoding::PLAIN_DICTIONARY => Encoding::PLAIN_DICTIONARY,
+            crate::format::Encoding::RLE => Encoding::RLE,
+            #[allow(deprecated)]
+            crate::format::Encoding::BIT_PACKED => Encoding::BIT_PACKED,
+            crate::format::Encoding::DELTA_BINARY_PACKED => Encoding::DELTA_BINARY_PACKED,
+            crate::format::Encoding::DELTA_LENGTH_BYTE_ARRAY => Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            crate::format::Encoding::DELTA_BYTE_ARRAY => Encoding::DELTA_BYTE_ARRAY,
+            crate::format::Encoding::RLE_DICTIONARY => Encoding::RLE_DICTIONARY,
+            crate::format::Encoding::BYTE_STREAM_SPLIT => Encoding::BYTE_STREAM_SPLIT,
+            _ => return Err(general_err!("unexpected parquet encoding: {}", value.0)),
+        })
+    }
+}
+
+impl From<Encoding> for crate::format::Encoding {
+    fn from(value: Encoding) -> Self {
+        match value {
+            Encoding::PLAIN => crate::format::Encoding::PLAIN,
+            Encoding::PLAIN_DICTIONARY => crate::format::Encoding::PLAIN_DICTIONARY,
+            Encoding::RLE => crate::format::Encoding::RLE,
+            #[allow(deprecated)]
+            Encoding::BIT_PACKED => crate::format::Encoding::BIT_PACKED,
+            Encoding::DELTA_BINARY_PACKED => crate::format::Encoding::DELTA_BINARY_PACKED,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY => crate::format::Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY => crate::format::Encoding::DELTA_BYTE_ARRAY,
+            Encoding::RLE_DICTIONARY => crate::format::Encoding::RLE_DICTIONARY,
+            Encoding::BYTE_STREAM_SPLIT => crate::format::Encoding::BYTE_STREAM_SPLIT,
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
+// crate::format::CompressionCodec <=> Compression conversion
+
+impl TryFrom<crate::format::CompressionCodec> for Compression {
+    type Error = ParquetError;
+
+    fn try_from(value: crate::format::CompressionCodec) -> Result<Self> {
+        Ok(match value {
+>>>>>>> origin/gh5854_thrift_remodel
             crate::format::CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
             crate::format::CompressionCodec::SNAPPY => Compression::SNAPPY,
             crate::format::CompressionCodec::GZIP => Compression::GZIP(Default::default()),
