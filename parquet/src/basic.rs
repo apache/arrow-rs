@@ -26,7 +26,7 @@ use std::{fmt, str};
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::format as parquet;
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
-use crate::{thrift_empty_struct, thrift_enum, thrift_union};
+use crate::{thrift_enum, thrift_union, thrift_union_all_empty};
 
 use crate::errors::{ParquetError, Result};
 
@@ -197,11 +197,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ConvertedType {
 // ----------------------------------------------------------------------
 // Mirrors thrift union `parquet::TimeUnit`
 
-thrift_empty_struct!(MilliSeconds);
-thrift_empty_struct!(MicroSeconds);
-thrift_empty_struct!(NanoSeconds);
-
-thrift_union!(
+thrift_union_all_empty!(
 /// Time unit for `Time` and `Timestamp` logical types.
 union TimeUnit {
   1: MilliSeconds MILLIS
@@ -553,9 +549,7 @@ enum EdgeInterpolationAlgorithm {
 // ----------------------------------------------------------------------
 // Mirrors thrift union `parquet::BloomFilterAlgorithm`
 
-thrift_empty_struct!(SplitBlockAlgorithm);
-
-thrift_union!(
+thrift_union_all_empty!(
 /// The algorithm used in Bloom filter.
 union BloomFilterAlgorithm {
   /** Block-based Bloom filter. **/
@@ -566,9 +560,7 @@ union BloomFilterAlgorithm {
 // ----------------------------------------------------------------------
 // Mirrors thrift union `parquet::BloomFilterHash`
 
-thrift_empty_struct!(XxHash);
-
-thrift_union!(
+thrift_union_all_empty!(
 /// The hash function used in Bloom filter. This function takes the hash of a column value
 /// using plain encoding.
 union BloomFilterHash {
@@ -580,9 +572,7 @@ union BloomFilterHash {
 // ----------------------------------------------------------------------
 // Mirrors thrift union `parquet::BloomFilterCompression`
 
-thrift_empty_struct!(Uncompressed);
-
-thrift_union!(
+thrift_union_all_empty!(
 /// The compression used in the Bloom filter.
 union BloomFilterCompression {
   1: Uncompressed UNCOMPRESSED;
@@ -949,14 +939,14 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Decimal { .. } => ConvertedType::DECIMAL,
                 LogicalType::Date => ConvertedType::DATE,
                 LogicalType::Time { unit, .. } => match unit {
-                    TimeUnit::MILLIS(_) => ConvertedType::TIME_MILLIS,
-                    TimeUnit::MICROS(_) => ConvertedType::TIME_MICROS,
-                    TimeUnit::NANOS(_) => ConvertedType::NONE,
+                    TimeUnit::MILLIS => ConvertedType::TIME_MILLIS,
+                    TimeUnit::MICROS => ConvertedType::TIME_MICROS,
+                    TimeUnit::NANOS => ConvertedType::NONE,
                 },
                 LogicalType::Timestamp { unit, .. } => match unit {
-                    TimeUnit::MILLIS(_) => ConvertedType::TIMESTAMP_MILLIS,
-                    TimeUnit::MICROS(_) => ConvertedType::TIMESTAMP_MICROS,
-                    TimeUnit::NANOS(_) => ConvertedType::NONE,
+                    TimeUnit::MILLIS => ConvertedType::TIMESTAMP_MILLIS,
+                    TimeUnit::MICROS => ConvertedType::TIMESTAMP_MICROS,
+                    TimeUnit::NANOS => ConvertedType::NONE,
                 },
                 LogicalType::Integer {
                     bit_width,
@@ -1145,11 +1135,11 @@ impl str::FromStr for LogicalType {
             "DATE" => Ok(LogicalType::Date),
             "TIME" => Ok(LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
             }),
             "TIMESTAMP" => Ok(LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
             }),
             "STRING" => Ok(LogicalType::String),
             "JSON" => Ok(LogicalType::Json),
@@ -1693,42 +1683,42 @@ mod tests {
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIME_MILLIS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIME_MICROS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Time {
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::NONE
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
                 is_adjusted_to_u_t_c: true,
             })),
             ConvertedType::TIMESTAMP_MILLIS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::TIMESTAMP_MICROS
         );
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Timestamp {
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
                 is_adjusted_to_u_t_c: false,
             })),
             ConvertedType::NONE
@@ -2169,27 +2159,27 @@ mod tests {
             LogicalType::Date,
             LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
             },
             LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
             },
             LogicalType::Time {
                 is_adjusted_to_u_t_c: true,
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MILLIS(Default::default()),
+                unit: TimeUnit::MILLIS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
-                unit: TimeUnit::MICROS(Default::default()),
+                unit: TimeUnit::MICROS,
             },
             LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: true,
-                unit: TimeUnit::NANOS(Default::default()),
+                unit: TimeUnit::NANOS,
             },
             LogicalType::Float16,
         ];

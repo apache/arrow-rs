@@ -25,7 +25,7 @@
 macro_rules! thrift_enum {
     ($(#[$($def_attrs:tt)*])* enum $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_name:ident = $field_value:literal;)* }) => {
         $(#[$($def_attrs)*])*
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
         #[allow(non_camel_case_types)]
         #[allow(missing_docs)]
         pub enum $identifier {
@@ -100,6 +100,69 @@ macro_rules! thrift_empty_struct {
     };
 }
 
+/// macro to generate rust enums for thrift unions where all fields are typed with empty structs
+#[macro_export]
+macro_rules! thrift_union_all_empty {
+    ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $field_type:ident $(< $element_type:ident >)? $field_name:ident $(;)?)* }) => {
+        $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[allow(non_camel_case_types)]
+        #[allow(non_snake_case)]
+        #[allow(missing_docs)]
+        pub enum $identifier {
+            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name),*
+        }
+
+        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
+            type Error = ParquetError;
+
+            fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+                prot.read_struct_begin()?;
+                let field_ident = prot.read_field_begin()?;
+                if field_ident.field_type == FieldType::Stop {
+                    return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
+                }
+                let ret = match field_ident.id {
+                    $($field_id => {
+                        prot.skip_empty_struct()?;
+                        Self::$field_name
+                    }
+                    )*
+                    _ => {
+                        return Err(general_err!("Unexpected {} {}", stringify!($identifier), field_ident.id));
+                    }
+                };
+                let field_ident = prot.read_field_begin()?;
+                if field_ident.field_type != FieldType::Stop {
+                    return Err(general_err!(
+                        "Received multiple fields for union from remote {}", stringify!($identifier)
+                    ));
+                }
+                prot.read_struct_end()?;
+                Ok(ret)
+            }
+        }
+
+        // TODO: remove when we finally get rid of the format module
+        impl From<crate::format::$identifier> for $identifier {
+            fn from(value: crate::format::$identifier) -> Self {
+                match value {
+                    $(crate::format::$identifier::$field_name(_) => Self::$field_name,)*
+                }
+            }
+        }
+
+        impl From<$identifier> for crate::format::$identifier {
+            fn from(value: $identifier) -> Self {
+                match value {
+                    $($identifier::$field_name => Self::$field_name(Default::default()),)*
+                }
+            }
+        }
+    }
+}
+
+/// rust enums from a thrift union definition
 #[macro_export]
 macro_rules! thrift_union {
     ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $field_type:ident $(< $element_type:ident >)? $field_name:ident $(;)?)* }) => {
@@ -119,7 +182,7 @@ macro_rules! thrift_union {
                 prot.read_struct_begin()?;
                 let field_ident = prot.read_field_begin()?;
                 if field_ident.field_type == FieldType::Stop {
-                    return Err(general_err!("Received empty union from remote TimeUnit"));
+                    return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
                 }
                 let ret = match field_ident.id {
                     $($field_id => {
