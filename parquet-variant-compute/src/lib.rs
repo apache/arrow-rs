@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod cast_to_variant;
 mod from_json;
 mod to_json;
 mod variant_array;
