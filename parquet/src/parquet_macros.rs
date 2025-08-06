@@ -43,6 +43,12 @@ macro_rules! thrift_enum {
             }
         }
 
+        impl fmt::Display for $identifier {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "{self:?}")
+            }
+        }
+
         // TODO: remove when we finally get rid of the format module
         impl TryFrom<parquet::$identifier> for $identifier {
             type Error = ParquetError;

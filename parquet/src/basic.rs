@@ -729,12 +729,6 @@ impl ColumnOrder {
 // ----------------------------------------------------------------------
 // Display handlers
 
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
 impl fmt::Display for ConvertedType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
@@ -747,19 +741,7 @@ impl fmt::Display for Repetition {
     }
 }
 
-impl fmt::Display for Encoding {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
 impl fmt::Display for Compression {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl fmt::Display for PageType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
     }
@@ -2471,6 +2453,110 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Parquet error: unknown encoding: gzip(-10)"
+        );
+    }
+
+    #[test]
+    fn test_display_boundary_order() {
+        assert_eq!(BoundaryOrder::ASCENDING.to_string(), "ASCENDING");
+        assert_eq!(BoundaryOrder::DESCENDING.to_string(), "DESCENDING");
+        assert_eq!(BoundaryOrder::UNORDERED.to_string(), "UNORDERED");
+    }
+
+    #[test]
+    fn test_from_boundary_order() {
+        assert_eq!(
+            BoundaryOrder::try_from(parquet::BoundaryOrder::ASCENDING).unwrap(),
+            BoundaryOrder::ASCENDING
+        );
+        assert_eq!(
+            BoundaryOrder::try_from(parquet::BoundaryOrder::DESCENDING).unwrap(),
+            BoundaryOrder::DESCENDING
+        );
+        assert_eq!(
+            BoundaryOrder::try_from(parquet::BoundaryOrder::UNORDERED).unwrap(),
+            BoundaryOrder::UNORDERED
+        );
+    }
+
+    #[test]
+    fn test_into_boundary_order() {
+        assert_eq!(
+            parquet::BoundaryOrder::ASCENDING,
+            BoundaryOrder::ASCENDING.into()
+        );
+        assert_eq!(
+            parquet::BoundaryOrder::DESCENDING,
+            BoundaryOrder::DESCENDING.into()
+        );
+        assert_eq!(
+            parquet::BoundaryOrder::UNORDERED,
+            BoundaryOrder::UNORDERED.into()
+        );
+    }
+
+    #[test]
+    fn test_display_edge_algo() {
+        assert_eq!(
+            EdgeInterpolationAlgorithm::SPHERICAL.to_string(),
+            "SPHERICAL"
+        );
+        assert_eq!(EdgeInterpolationAlgorithm::VINCENTY.to_string(), "VINCENTY");
+        assert_eq!(EdgeInterpolationAlgorithm::THOMAS.to_string(), "THOMAS");
+        assert_eq!(EdgeInterpolationAlgorithm::ANDOYER.to_string(), "ANDOYER");
+        assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
+    }
+
+    #[test]
+    fn test_from_edge_algo() {
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::SPHERICAL)
+                .unwrap(),
+            EdgeInterpolationAlgorithm::SPHERICAL
+        );
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::VINCENTY)
+                .unwrap(),
+            EdgeInterpolationAlgorithm::VINCENTY
+        );
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::THOMAS)
+                .unwrap(),
+            EdgeInterpolationAlgorithm::THOMAS
+        );
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::ANDOYER)
+                .unwrap(),
+            EdgeInterpolationAlgorithm::ANDOYER
+        );
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::KARNEY)
+                .unwrap(),
+            EdgeInterpolationAlgorithm::KARNEY
+        );
+    }
+
+    #[test]
+    fn test_into_edge_algo() {
+        assert_eq!(
+            parquet::EdgeInterpolationAlgorithm::SPHERICAL,
+            EdgeInterpolationAlgorithm::SPHERICAL.into()
+        );
+        assert_eq!(
+            parquet::EdgeInterpolationAlgorithm::VINCENTY,
+            EdgeInterpolationAlgorithm::VINCENTY.into()
+        );
+        assert_eq!(
+            parquet::EdgeInterpolationAlgorithm::THOMAS,
+            EdgeInterpolationAlgorithm::THOMAS.into()
+        );
+        assert_eq!(
+            parquet::EdgeInterpolationAlgorithm::ANDOYER,
+            EdgeInterpolationAlgorithm::ANDOYER.into()
+        );
+        assert_eq!(
+            parquet::EdgeInterpolationAlgorithm::KARNEY,
+            EdgeInterpolationAlgorithm::KARNEY.into()
         );
     }
 }
