@@ -34,8 +34,12 @@
 //! # use std::fs::File;
 //! # use std::io::BufReader;
 //! # use arrow_avro::reader::ReaderBuilder;
-//!
-//! let file = File::open("../testing/data/avro/alltypes_plain.avro").unwrap();
+//! # let path = "avro/alltypes_plain.avro";
+//! # let path = match std::env::var("ARROW_TEST_DATA") {
+//! #   Ok(dir) => format!("{dir}/{path}"),
+//! #   Err(_) => format!("../testing/data/{path}")
+//! # };
+//! let file = File::open(path).unwrap();
 //! let mut avro = ReaderBuilder::new().build(BufReader::new(file)).unwrap();
 //! let batch = avro.next().unwrap();
 //! ```
@@ -1848,5 +1852,248 @@ mod test {
         assert!(err.to_string().contains(
             "Found Avro union of the form ['T','null'], which is disallowed in strict_mode"
         ));
+    }
+
+    #[test]
+    fn test_nested_record_type_reuse() {
+        // The .avro file has the following schema:
+        // {
+        // "type" : "record",
+        // "name" : "Record",
+        // "fields" : [ {
+        //     "name" : "nested",
+        //     "type" : {
+        //     "type" : "record",
+        //     "name" : "Nested",
+        //     "fields" : [ {
+        //         "name" : "nested_int",
+        //         "type" : "int"
+        //     } ]
+        //     }
+        // }, {
+        //     "name" : "nestedRecord",
+        //     "type" : "Nested"
+        // }, {
+        //     "name" : "nestedArray",
+        //     "type" : {
+        //     "type" : "array",
+        //     "items" : "Nested"
+        //     }
+        // } ]
+        // }
+        let batch = read_file("test/data/nested_record_reuse.avro", 8, false);
+        let schema = batch.schema();
+
+        // Verify schema structure
+        assert_eq!(schema.fields().len(), 3);
+        let fields = schema.fields();
+        assert_eq!(fields[0].name(), "nested");
+        assert_eq!(fields[1].name(), "nestedRecord");
+        assert_eq!(fields[2].name(), "nestedArray");
+        assert!(matches!(fields[0].data_type(), DataType::Struct(_)));
+        assert!(matches!(fields[1].data_type(), DataType::Struct(_)));
+        assert!(matches!(fields[2].data_type(), DataType::List(_)));
+
+        // Validate that the nested record type
+        if let DataType::Struct(nested_fields) = fields[0].data_type() {
+            assert_eq!(nested_fields.len(), 1);
+            assert_eq!(nested_fields[0].name(), "nested_int");
+            assert_eq!(nested_fields[0].data_type(), &DataType::Int32);
+        }
+
+        // Validate that the nested record type is reused
+        assert_eq!(fields[0].data_type(), fields[1].data_type());
+        if let DataType::List(array_field) = fields[2].data_type() {
+            assert_eq!(array_field.data_type(), fields[0].data_type());
+        }
+
+        // Validate data
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 3);
+
+        // Validate the first column (nested)
+        let nested_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let nested_int_array = nested_col
+            .column_by_name("nested_int")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(nested_int_array.value(0), 42);
+        assert_eq!(nested_int_array.value(1), 99);
+
+        // Validate the second column (nestedRecord)
+        let nested_record_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let nested_record_int_array = nested_record_col
+            .column_by_name("nested_int")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(nested_record_int_array.value(0), 100);
+        assert_eq!(nested_record_int_array.value(1), 200);
+
+        // Validate the third column (nestedArray)
+        let nested_array_col = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(nested_array_col.len(), 2);
+        let first_array_struct = nested_array_col.value(0);
+        let first_array_struct_array = first_array_struct
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let first_array_int_values = first_array_struct_array
+            .column_by_name("nested_int")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(first_array_int_values.len(), 3);
+        assert_eq!(first_array_int_values.value(0), 1);
+        assert_eq!(first_array_int_values.value(1), 2);
+        assert_eq!(first_array_int_values.value(2), 3);
+    }
+
+    #[test]
+    fn test_enum_type_reuse() {
+        // The .avro file has the following schema:
+        // {
+        //     "type" : "record",
+        //     "name" : "Record",
+        //     "fields" : [ {
+        //       "name" : "status",
+        //       "type" : {
+        //         "type" : "enum",
+        //         "name" : "Status",
+        //         "symbols" : [ "ACTIVE", "INACTIVE", "PENDING" ]
+        //       }
+        //     }, {
+        //       "name" : "backupStatus",
+        //       "type" : "Status"
+        //     }, {
+        //       "name" : "statusHistory",
+        //       "type" : {
+        //         "type" : "array",
+        //         "items" : "Status"
+        //       }
+        //     } ]
+        //   }
+        let batch = read_file("test/data/enum_reuse.avro", 8, false);
+        let schema = batch.schema();
+
+        // Verify schema structure
+        assert_eq!(schema.fields().len(), 3);
+        let fields = schema.fields();
+        assert_eq!(fields[0].name(), "status");
+        assert_eq!(fields[1].name(), "backupStatus");
+        assert_eq!(fields[2].name(), "statusHistory");
+        assert!(matches!(fields[0].data_type(), DataType::Dictionary(_, _)));
+        assert!(matches!(fields[1].data_type(), DataType::Dictionary(_, _)));
+        assert!(matches!(fields[2].data_type(), DataType::List(_)));
+
+        if let DataType::Dictionary(key_type, value_type) = fields[0].data_type() {
+            assert_eq!(key_type.as_ref(), &DataType::Int32);
+            assert_eq!(value_type.as_ref(), &DataType::Utf8);
+        }
+
+        // Validate that the enum types are reused
+        assert_eq!(fields[0].data_type(), fields[1].data_type());
+        if let DataType::List(array_field) = fields[2].data_type() {
+            assert_eq!(array_field.data_type(), fields[0].data_type());
+        }
+
+        // Validate data - should have 2 rows
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 3);
+
+        // Get status enum values
+        let status_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let status_values = status_col
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        // First row should be "ACTIVE", second row should be "PENDING"
+        assert_eq!(
+            status_values.value(status_col.key(0).unwrap() as usize),
+            "ACTIVE"
+        );
+        assert_eq!(
+            status_values.value(status_col.key(1).unwrap() as usize),
+            "PENDING"
+        );
+
+        // Get backupStatus enum values (same as status)
+        let backup_status_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let backup_status_values = backup_status_col
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        // First row should be "INACTIVE", second row should be "ACTIVE"
+        assert_eq!(
+            backup_status_values.value(backup_status_col.key(0).unwrap() as usize),
+            "INACTIVE"
+        );
+        assert_eq!(
+            backup_status_values.value(backup_status_col.key(1).unwrap() as usize),
+            "ACTIVE"
+        );
+
+        // Get statusHistory array
+        let status_history_col = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(status_history_col.len(), 2);
+
+        // Validate first row's array data
+        let first_array_dict = status_history_col.value(0);
+        let first_array_dict_array = first_array_dict
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let first_array_values = first_array_dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        // First row: ["PENDING", "ACTIVE", "INACTIVE"]
+        assert_eq!(first_array_dict_array.len(), 3);
+        assert_eq!(
+            first_array_values.value(first_array_dict_array.key(0).unwrap() as usize),
+            "PENDING"
+        );
+        assert_eq!(
+            first_array_values.value(first_array_dict_array.key(1).unwrap() as usize),
+            "ACTIVE"
+        );
+        assert_eq!(
+            first_array_values.value(first_array_dict_array.key(2).unwrap() as usize),
+            "INACTIVE"
+        );
     }
 }
