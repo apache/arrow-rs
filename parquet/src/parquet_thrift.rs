@@ -360,9 +360,12 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
     /// Empty structs in unions consist of a single byte of 0 for the field stop record.
     /// This skips that byte without pushing to the field id stack.
     pub(crate) fn skip_empty_struct(&mut self) -> Result<()> {
-        let _b = self.read_byte()?;
-        // TODO: check that it's actually 0?
-        Ok(())
+        let b = self.read_byte()?;
+        if b != 0 {
+            Err(general_err!("Empty struct has fields"))
+        } else {
+            Ok(())
+        }
     }
 
     /// Skip a field with type `field_type` recursively up to `depth` levels.
