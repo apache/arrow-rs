@@ -267,7 +267,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for GeometryType<'a> {
                 }
             };
         }
-        Ok(Self { crs: crs })
+        Ok(Self { crs })
     }
 }
 
@@ -302,10 +302,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for GeographyType<'a> {
                 }
             };
         }
-        Ok(Self {
-            crs: crs,
-            algorithm: algorithm,
-        })
+        Ok(Self { crs, algorithm })
     }
 }
 

@@ -21,6 +21,7 @@
 // into a macro to generate rust structures and implementations.
 
 #[macro_export]
+#[allow(clippy::crate_in_macro_def)]
 /// macro to generate rust enums from a thrift enum definition
 macro_rules! thrift_enum {
     ($(#[$($def_attrs:tt)*])* enum $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_name:ident = $field_value:literal;)* }) => {
@@ -72,6 +73,7 @@ macro_rules! thrift_enum {
 }
 
 #[macro_export]
+#[allow(clippy::crate_in_macro_def)]
 /// macro to generate rust enums for empty thrift structs used in unions
 macro_rules! thrift_empty_struct {
     ($identifier: ident) => {
@@ -103,6 +105,7 @@ macro_rules! thrift_empty_struct {
 
 /// macro to generate rust enums for thrift unions where all fields are typed with empty structs
 #[macro_export]
+#[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_all_empty {
     ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $field_type:ident $(< $element_type:ident >)? $field_name:ident $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
