@@ -162,6 +162,90 @@ macro_rules! thrift_union_all_empty {
     }
 }
 
+/// macro to generate rust structs from a thrift struct definition
+#[macro_export]
+macro_rules! thrift_private_struct {
+    ($(#[$($def_attrs:tt)*])* struct $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
+        $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
+        #[derive(Clone, Debug, PartialEq)]
+        #[allow(non_camel_case_types)]
+        #[allow(non_snake_case)]
+        struct $identifier {
+            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* pub $field_name: $crate::__thrift_required_or_optional!($required_or_optional $crate::__thrift_field_type!($field_type $($element_type)?))),*
+        }
+
+        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
+            type Error = ParquetError;
+            fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+                $(let mut $field_name: Option<$field_type> = None;)*
+                prot.read_struct_begin()?;
+                loop {
+                    let field_ident = prot.read_field_begin()?;
+                    if field_ident.field_type == FieldType::Stop {
+                        break;
+                    }
+                    match field_ident.id {
+                        $($field_id => {
+                            let val = $crate::__thrift_read_field!(prot $field_type);
+                            $field_name = Some(val);
+                        })*
+                        _ => {
+                            prot.skip(field_ident.field_type)?;
+                        }
+                    };
+                }
+                Ok(Self {
+                    $($field_name: $crate::__thrift_result_required_or_optional!($required_or_optional $field_name)),*
+                })
+            }
+        }
+    }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_required_or_optional {
+    (required $field_type:ty) => { $field_type };
+    (optional $field_type:ty) => { Option<$field_type> };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_result_required_or_optional {
+    (required $field_name:ident) => {
+        $field_name.expect(&format!(
+            "Required field {} not present",
+            stringify!($field_name)
+        ))
+    };
+    (optional $field_name:ident) => {
+        $field_name
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_read_field {
+    ($prot:tt bool) => {
+        $prot.read_bool()?
+    };
+    ($prot:tt i8) => {
+        $prot.read_i8()?
+    };
+    ($prot:tt i32) => {
+        $prot.read_i32()?
+    };
+    ($prot:tt i64) => {
+        $prot.read_i64()?
+    };
+    ($prot:tt string) => {
+        $prot.read_string()?
+    };
+    ($prot:tt $field_type:ident) => {
+        $field_type::try_from(&mut *$prot)?
+    };
+}
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_field_type {

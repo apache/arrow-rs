@@ -326,10 +326,15 @@ fn print_logical_and_converted(
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
             LogicalType::Float16 => "FLOAT16".to_string(),
-            LogicalType::Variant => "VARIANT".to_string(),
-            LogicalType::Geometry => "GEOMETRY".to_string(),
-            LogicalType::Geography => "GEOGRAPHY".to_string(),
+            LogicalType::Variant {
+                specification_version,
+            } => format!("VARIANT({:?})", specification_version),
+            LogicalType::Geometry { crs } => format!("GEOMETRY({:?})", crs),
+            LogicalType::Geography { crs, algorithm } => {
+                format!("GEOGRAPHY({:?},{:?})", crs, algorithm)
+            }
             LogicalType::Unknown => "UNKNOWN".to_string(),
+            LogicalType::_Unknown { field_id } => format!("_Unknown({})", field_id),
         },
         None => {
             // Also print converted type if it is available

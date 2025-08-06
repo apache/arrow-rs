@@ -26,7 +26,7 @@ use std::{fmt, str};
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::format as parquet;
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
-use crate::{thrift_enum, thrift_union_all_empty};
+use crate::{thrift_enum, thrift_private_struct, thrift_union_all_empty};
 
 use crate::errors::{ParquetError, Result};
 
@@ -209,6 +209,107 @@ union TimeUnit {
 // ----------------------------------------------------------------------
 // Mirrors thrift union `parquet::LogicalType`
 
+// private structs for decoding logical type
+
+thrift_private_struct!(
+struct DecimalType {
+  1: required i32 scale
+  2: required i32 precision
+}
+);
+
+thrift_private_struct!(
+struct TimestampType {
+  1: required bool is_adjusted_to_u_t_c
+  2: required TimeUnit unit
+}
+);
+
+// they are identical
+use TimestampType as TimeType;
+
+thrift_private_struct!(
+struct IntType {
+  1: required i8 bit_width
+  2: required bool is_signed
+}
+);
+
+thrift_private_struct!(
+struct VariantType {
+  // The version of the variant specification that the variant was
+  // written with.
+  1: optional i8 specification_version
+}
+);
+
+// TODO need macro for structs that need lifetime annotation
+struct GeometryType<'a> {
+    crs: Option<&'a str>,
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for GeometryType<'a> {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let mut crs: Option<&str> = None;
+        prot.read_struct_begin()?;
+        loop {
+            let field_ident = prot.read_field_begin()?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = prot.read_string()?;
+                    crs = Some(val);
+                }
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+        }
+        Ok(Self { crs: crs })
+    }
+}
+
+struct GeographyType<'a> {
+    crs: Option<&'a str>,
+    algorithm: Option<EdgeInterpolationAlgorithm>,
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for GeographyType<'a> {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let mut crs: Option<&str> = None;
+        let mut algorithm: Option<EdgeInterpolationAlgorithm> = None;
+        prot.read_struct_begin()?;
+        loop {
+            let field_ident = prot.read_field_begin()?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = prot.read_string()?;
+                    crs = Some(val);
+                }
+                2 => {
+                    let val = EdgeInterpolationAlgorithm::try_from(&mut *prot)?;
+                    algorithm = Some(val);
+                }
+
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+        }
+        Ok(Self {
+            crs: crs,
+            algorithm: algorithm,
+        })
+    }
+}
+
 /// Logical types used by version 2.4.0+ of the Parquet format.
 ///
 /// This is an *entirely new* struct as of version
@@ -265,11 +366,143 @@ pub enum LogicalType {
     /// A 16-bit floating point number.
     Float16,
     /// A Variant value.
-    Variant,
+    Variant {
+        /// The version of the variant specification that the variant was written with.
+        specification_version: Option<i8>,
+    },
     /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
-    Geometry,
+    Geometry {
+        /// A custom CRS. If unset the defaults to `OGC:CRS84`.
+        crs: Option<String>,
+    },
     /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
-    Geography,
+    Geography {
+        /// A custom CRS. If unset the defaults to `OGC:CRS84`.
+        crs: Option<String>,
+        /// An optional algorithm can be set to correctly interpret edges interpolation
+        /// of the geometries. If unset, the algorithm defaults to `SPHERICAL``.
+        algorithm: Option<EdgeInterpolationAlgorithm>,
+    },
+    /// For forward compatibility; used when an unknown union value is encountered.
+    _Unknown {
+        /// The field id encountered when parsing the unknown logical type.
+        field_id: i16,
+    },
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_struct_begin()?;
+
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type == FieldType::Stop {
+            return Err(general_err!("received empty union from remote LogicalType"));
+        }
+        let ret = match field_ident.id {
+            1 => {
+                prot.skip_empty_struct()?;
+                Self::String
+            }
+            2 => {
+                prot.skip_empty_struct()?;
+                Self::Map
+            }
+            3 => {
+                prot.skip_empty_struct()?;
+                Self::List
+            }
+            4 => {
+                prot.skip_empty_struct()?;
+                Self::Enum
+            }
+            5 => {
+                let val = DecimalType::try_from(&mut *prot)?;
+                Self::Decimal {
+                    scale: val.scale,
+                    precision: val.precision,
+                }
+            }
+            6 => {
+                prot.skip_empty_struct()?;
+                Self::Date
+            }
+            7 => {
+                let val = TimeType::try_from(&mut *prot)?;
+                Self::Time {
+                    is_adjusted_to_u_t_c: val.is_adjusted_to_u_t_c,
+                    unit: val.unit,
+                }
+            }
+            8 => {
+                let val = TimestampType::try_from(&mut *prot)?;
+                Self::Timestamp {
+                    is_adjusted_to_u_t_c: val.is_adjusted_to_u_t_c,
+                    unit: val.unit,
+                }
+            }
+            10 => {
+                let val = IntType::try_from(&mut *prot)?;
+                Self::Integer {
+                    is_signed: val.is_signed,
+                    bit_width: val.bit_width,
+                }
+            }
+            11 => {
+                prot.skip_empty_struct()?;
+                Self::Unknown
+            }
+            12 => {
+                prot.skip_empty_struct()?;
+                Self::Json
+            }
+            13 => {
+                prot.skip_empty_struct()?;
+                Self::Bson
+            }
+            14 => {
+                prot.skip_empty_struct()?;
+                Self::Uuid
+            }
+            15 => {
+                prot.skip_empty_struct()?;
+                Self::Float16
+            }
+            16 => {
+                let val = VariantType::try_from(&mut *prot)?;
+                Self::Variant {
+                    specification_version: val.specification_version,
+                }
+            }
+            17 => {
+                let val = GeometryType::try_from(&mut *prot)?;
+                Self::Geometry {
+                    crs: val.crs.map(|s| s.to_owned()),
+                }
+            }
+            18 => {
+                let val = GeographyType::try_from(&mut *prot)?;
+                Self::Geography {
+                    crs: val.crs.map(|s| s.to_owned()),
+                    algorithm: val.algorithm,
+                }
+            }
+            _ => {
+                prot.skip(field_ident.field_type)?;
+                Self::_Unknown {
+                    field_id: field_ident.id,
+                }
+            }
+        };
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type != FieldType::Stop {
+            return Err(general_err!(
+                "Received multiple fields for union from remote LogicalType"
+            ));
+        }
+        prot.read_struct_end()?;
+        Ok(ret)
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -653,9 +886,10 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
-                LogicalType::Variant | LogicalType::Geometry | LogicalType::Geography => {
-                    SortOrder::UNDEFINED
-                }
+                LogicalType::Variant { .. }
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. }
+                | LogicalType::_Unknown { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -899,9 +1133,14 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::BSON(_) => LogicalType::Bson,
             parquet::LogicalType::UUID(_) => LogicalType::Uuid,
             parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
-            parquet::LogicalType::VARIANT(_) => LogicalType::Variant,
-            parquet::LogicalType::GEOMETRY(_) => LogicalType::Geometry,
-            parquet::LogicalType::GEOGRAPHY(_) => LogicalType::Geography,
+            parquet::LogicalType::VARIANT(vt) => LogicalType::Variant {
+                specification_version: vt.specification_version,
+            },
+            parquet::LogicalType::GEOMETRY(gt) => LogicalType::Geometry { crs: gt.crs },
+            parquet::LogicalType::GEOGRAPHY(gt) => LogicalType::Geography {
+                crs: gt.crs,
+                algorithm: gt.algorithm.map(|a| a.try_into().unwrap()),
+            },
         }
     }
 }
@@ -943,9 +1182,23 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
-            LogicalType::Variant => parquet::LogicalType::VARIANT(Default::default()),
-            LogicalType::Geometry => parquet::LogicalType::GEOMETRY(Default::default()),
-            LogicalType::Geography => parquet::LogicalType::GEOGRAPHY(Default::default()),
+            LogicalType::Variant {
+                specification_version,
+            } => parquet::LogicalType::VARIANT(parquet::VariantType {
+                specification_version,
+            }),
+            LogicalType::Geometry { crs } => {
+                parquet::LogicalType::GEOMETRY(parquet::GeometryType { crs })
+            }
+            LogicalType::Geography { crs, algorithm } => {
+                parquet::LogicalType::GEOGRAPHY(parquet::GeographyType {
+                    crs,
+                    algorithm: algorithm.map(|a| a.into()),
+                })
+            }
+            LogicalType::_Unknown { .. } => {
+                panic!("Trying to convert unknown LogicalType to thrift");
+            }
         }
     }
 }
@@ -997,9 +1250,10 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Bson => ConvertedType::BSON,
                 LogicalType::Uuid
                 | LogicalType::Float16
-                | LogicalType::Variant
-                | LogicalType::Geometry
-                | LogicalType::Geography
+                | LogicalType::Variant { .. }
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. }
+                | LogicalType::_Unknown { .. }
                 | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
