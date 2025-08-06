@@ -729,6 +729,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns the primitive value at index `i`.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if index `i` is out of bounds
     #[inline]
@@ -1235,6 +1239,8 @@ where
     ///
     /// If a data type cannot be converted to `NaiveDateTime`, a `None` is returned.
     /// A valid value is expected, thus the user should first check for validity.
+    ///
+    /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
     pub fn value_as_datetime(&self, i: usize) -> Option<NaiveDateTime> {
         as_datetime::<T>(i64::from(self.value(i)))
     }
@@ -1243,6 +1249,8 @@ where
     ///
     /// functionally it is same as `value_as_datetime`, however it adds
     /// the passed tz to the to-be-returned NaiveDateTime
+    ///
+    /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
     pub fn value_as_datetime_with_tz(&self, i: usize, tz: Tz) -> Option<DateTime<Tz>> {
         as_datetime_with_timezone::<T>(i64::from(self.value(i)), tz)
     }
@@ -1250,6 +1258,8 @@ where
     /// Returns value as a chrono `NaiveDate` by using `Self::datetime()`
     ///
     /// If a data type cannot be converted to `NaiveDate`, a `None` is returned
+    ///
+    /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
     pub fn value_as_date(&self, i: usize) -> Option<NaiveDate> {
         self.value_as_datetime(i).map(|datetime| datetime.date())
     }
@@ -1257,6 +1267,8 @@ where
     /// Returns a value as a chrono `NaiveTime`
     ///
     /// `Date32` and `Date64` return UTC midnight as they do not have time resolution
+    ///
+    /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
     pub fn value_as_time(&self, i: usize) -> Option<NaiveTime> {
         as_time::<T>(i64::from(self.value(i)))
     }
@@ -1264,6 +1276,8 @@ where
     /// Returns a value as a chrono `Duration`
     ///
     /// If a data type cannot be converted to `Duration`, a `None` is returned
+    ///
+    /// See notes on [`PrimitiveArray::value`] regarding nulls and panics
     pub fn value_as_duration(&self, i: usize) -> Option<Duration> {
         as_duration::<T>(i64::from(self.value(i)))
     }

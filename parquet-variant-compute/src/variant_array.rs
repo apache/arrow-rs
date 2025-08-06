@@ -137,7 +137,11 @@ impl VariantArray {
 
     /// Return the [`Variant`] instance stored at the given row
     ///
-    /// Panics if the index is out of bounds.
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still valid) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// if the index is out of bounds.
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.

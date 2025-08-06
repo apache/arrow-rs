@@ -135,6 +135,10 @@ impl FixedSizeBinaryArray {
     }
 
     /// Returns the element at index `i` as a byte slice.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still valid) if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &[u8] {
