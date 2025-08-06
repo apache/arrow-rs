@@ -66,7 +66,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     let mut builder = VariantArrayBuilder::new(input.len());
 
     let input_type = input.data_type();
-    // todo: use `downcast_primitive` to avoid the boilerplate and match more types
+    // todo: handle other types like Boolean, Strings, Date, Timestamp, etc.
     match input_type {
         DataType::Int8 => {
             primitive_conversion!(Int8Type, input, builder);
@@ -107,7 +107,9 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     Ok(builder.build())
 }
 
-// TODO add cast_with_options that allow specifying
+// TODO do we need a cast_with_options to allow specifying conversion behavior,
+// e.g. how to handle overflows, whether to convert to Variant::Null or return
+// an error, etc. ?
 
 #[cfg(test)]
 mod tests {
