@@ -765,7 +765,7 @@ enum BoundaryOrder {
 );
 
 // ----------------------------------------------------------------------
-// Mirrors thrift enum `parquet::EdgeInterpolationAlgorithm`
+// Mirrors thrift enum `crate::format::EdgeInterpolationAlgorithm`
 
 thrift_enum!(
 /// Edge interpolation algorithm for Geography logical type
@@ -1299,53 +1299,6 @@ impl TryFrom<crate::format::CompressionCodec> for Compression {
 
     fn try_from(value: crate::format::CompressionCodec) -> Result<Self> {
         Ok(match value {
-
-impl TryFrom<crate::format::Encoding> for Encoding {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::Encoding) -> Result<Self> {
-        Ok(match value {
-            crate::format::Encoding::PLAIN => Encoding::PLAIN,
-            crate::format::Encoding::PLAIN_DICTIONARY => Encoding::PLAIN_DICTIONARY,
-            crate::format::Encoding::RLE => Encoding::RLE,
-            #[allow(deprecated)]
-            crate::format::Encoding::BIT_PACKED => Encoding::BIT_PACKED,
-            crate::format::Encoding::DELTA_BINARY_PACKED => Encoding::DELTA_BINARY_PACKED,
-            crate::format::Encoding::DELTA_LENGTH_BYTE_ARRAY => Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            crate::format::Encoding::DELTA_BYTE_ARRAY => Encoding::DELTA_BYTE_ARRAY,
-            crate::format::Encoding::RLE_DICTIONARY => Encoding::RLE_DICTIONARY,
-            crate::format::Encoding::BYTE_STREAM_SPLIT => Encoding::BYTE_STREAM_SPLIT,
-            _ => return Err(general_err!("unexpected parquet encoding: {}", value.0)),
-        })
-    }
-}
-
-impl From<Encoding> for crate::format::Encoding {
-    fn from(value: Encoding) -> Self {
-        match value {
-            Encoding::PLAIN => crate::format::Encoding::PLAIN,
-            Encoding::PLAIN_DICTIONARY => crate::format::Encoding::PLAIN_DICTIONARY,
-            Encoding::RLE => crate::format::Encoding::RLE,
-            #[allow(deprecated)]
-            Encoding::BIT_PACKED => crate::format::Encoding::BIT_PACKED,
-            Encoding::DELTA_BINARY_PACKED => crate::format::Encoding::DELTA_BINARY_PACKED,
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => crate::format::Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            Encoding::DELTA_BYTE_ARRAY => crate::format::Encoding::DELTA_BYTE_ARRAY,
-            Encoding::RLE_DICTIONARY => crate::format::Encoding::RLE_DICTIONARY,
-            Encoding::BYTE_STREAM_SPLIT => crate::format::Encoding::BYTE_STREAM_SPLIT,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::CompressionCodec <=> Compression conversion
-
-impl TryFrom<crate::format::CompressionCodec> for Compression {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::CompressionCodec) -> Result<Self> {
-        Ok(match value {
->>>>>>> origin/gh5854_thrift_remodel
             crate::format::CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
             crate::format::CompressionCodec::SNAPPY => Compression::SNAPPY,
             crate::format::CompressionCodec::GZIP => Compression::GZIP(Default::default()),
@@ -2750,15 +2703,15 @@ mod tests {
     #[test]
     fn test_from_boundary_order() {
         assert_eq!(
-            BoundaryOrder::try_from(parquet::BoundaryOrder::ASCENDING).unwrap(),
+            BoundaryOrder::try_from(crate::format::BoundaryOrder::ASCENDING).unwrap(),
             BoundaryOrder::ASCENDING
         );
         assert_eq!(
-            BoundaryOrder::try_from(parquet::BoundaryOrder::DESCENDING).unwrap(),
+            BoundaryOrder::try_from(crate::format::BoundaryOrder::DESCENDING).unwrap(),
             BoundaryOrder::DESCENDING
         );
         assert_eq!(
-            BoundaryOrder::try_from(parquet::BoundaryOrder::UNORDERED).unwrap(),
+            BoundaryOrder::try_from(crate::format::BoundaryOrder::UNORDERED).unwrap(),
             BoundaryOrder::UNORDERED
         );
     }
@@ -2766,15 +2719,15 @@ mod tests {
     #[test]
     fn test_into_boundary_order() {
         assert_eq!(
-            parquet::BoundaryOrder::ASCENDING,
+            crate::format::BoundaryOrder::ASCENDING,
             BoundaryOrder::ASCENDING.into()
         );
         assert_eq!(
-            parquet::BoundaryOrder::DESCENDING,
+            crate::format::BoundaryOrder::DESCENDING,
             BoundaryOrder::DESCENDING.into()
         );
         assert_eq!(
-            parquet::BoundaryOrder::UNORDERED,
+            crate::format::BoundaryOrder::UNORDERED,
             BoundaryOrder::UNORDERED.into()
         );
     }
@@ -2794,27 +2747,33 @@ mod tests {
     #[test]
     fn test_from_edge_algo() {
         assert_eq!(
-            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::SPHERICAL)
-                .unwrap(),
+            EdgeInterpolationAlgorithm::try_from(
+                crate::format::EdgeInterpolationAlgorithm::SPHERICAL
+            )
+            .unwrap(),
             EdgeInterpolationAlgorithm::SPHERICAL
         );
         assert_eq!(
-            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::VINCENTY)
-                .unwrap(),
+            EdgeInterpolationAlgorithm::try_from(
+                crate::format::EdgeInterpolationAlgorithm::VINCENTY
+            )
+            .unwrap(),
             EdgeInterpolationAlgorithm::VINCENTY
         );
         assert_eq!(
-            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::THOMAS)
+            EdgeInterpolationAlgorithm::try_from(crate::format::EdgeInterpolationAlgorithm::THOMAS)
                 .unwrap(),
             EdgeInterpolationAlgorithm::THOMAS
         );
         assert_eq!(
-            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::ANDOYER)
-                .unwrap(),
+            EdgeInterpolationAlgorithm::try_from(
+                crate::format::EdgeInterpolationAlgorithm::ANDOYER
+            )
+            .unwrap(),
             EdgeInterpolationAlgorithm::ANDOYER
         );
         assert_eq!(
-            EdgeInterpolationAlgorithm::try_from(parquet::EdgeInterpolationAlgorithm::KARNEY)
+            EdgeInterpolationAlgorithm::try_from(crate::format::EdgeInterpolationAlgorithm::KARNEY)
                 .unwrap(),
             EdgeInterpolationAlgorithm::KARNEY
         );
@@ -2823,23 +2782,23 @@ mod tests {
     #[test]
     fn test_into_edge_algo() {
         assert_eq!(
-            parquet::EdgeInterpolationAlgorithm::SPHERICAL,
+            crate::format::EdgeInterpolationAlgorithm::SPHERICAL,
             EdgeInterpolationAlgorithm::SPHERICAL.into()
         );
         assert_eq!(
-            parquet::EdgeInterpolationAlgorithm::VINCENTY,
+            crate::format::EdgeInterpolationAlgorithm::VINCENTY,
             EdgeInterpolationAlgorithm::VINCENTY.into()
         );
         assert_eq!(
-            parquet::EdgeInterpolationAlgorithm::THOMAS,
+            crate::format::EdgeInterpolationAlgorithm::THOMAS,
             EdgeInterpolationAlgorithm::THOMAS.into()
         );
         assert_eq!(
-            parquet::EdgeInterpolationAlgorithm::ANDOYER,
+            crate::format::EdgeInterpolationAlgorithm::ANDOYER,
             EdgeInterpolationAlgorithm::ANDOYER.into()
         );
         assert_eq!(
-            parquet::EdgeInterpolationAlgorithm::KARNEY,
+            crate::format::EdgeInterpolationAlgorithm::KARNEY,
             EdgeInterpolationAlgorithm::KARNEY.into()
         );
     }
