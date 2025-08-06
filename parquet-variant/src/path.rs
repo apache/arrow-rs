@@ -46,10 +46,10 @@ use std::{borrow::Cow, ops::Deref};
 /// let path2 = VariantPath::from_iter(["foo".into(), 0.into()]);
 /// assert_eq!(path, path2);
 /// // you can also create a path from a vector of `VariantPathElement` directly
-/// let path3 = VariantPath::from_iter([
+/// let path3 = [
 ///   VariantPathElement::field("foo"),
 ///   VariantPathElement::index(0)
-/// ]);
+/// ].into_iter().collect::<VariantPath>();
 /// assert_eq!(path, path3);
 /// ```
 ///

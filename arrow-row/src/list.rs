@@ -27,14 +27,16 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
     rows: &Rows,
     array: &GenericListArray<O>,
 ) {
+    let shift = array.value_offsets()[0].as_usize();
+
     let offsets = array.value_offsets().windows(2);
     lengths
         .iter_mut()
         .zip(offsets)
         .enumerate()
         .for_each(|(idx, (length, offsets))| {
-            let start = offsets[0].as_usize();
-            let end = offsets[1].as_usize();
+            let start = offsets[0].as_usize() - shift;
+            let end = offsets[1].as_usize() - shift;
             let range = array.is_valid(idx).then_some(start..end);
             *length += encoded_len(rows, range);
         });
@@ -61,14 +63,16 @@ pub fn encode<O: OffsetSizeTrait>(
     opts: SortOptions,
     array: &GenericListArray<O>,
 ) {
+    let shift = array.value_offsets()[0].as_usize();
+
     offsets
         .iter_mut()
         .skip(1)
         .zip(array.value_offsets().windows(2))
         .enumerate()
         .for_each(|(idx, (offset, offsets))| {
-            let start = offsets[0].as_usize();
-            let end = offsets[1].as_usize();
+            let start = offsets[0].as_usize() - shift;
+            let end = offsets[1].as_usize() - shift;
             let range = array.is_valid(idx).then_some(start..end);
             let out = &mut data[*offset..];
             *offset += encode_one(out, rows, range, opts)

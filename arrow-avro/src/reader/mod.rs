@@ -34,8 +34,12 @@
 //! # use std::fs::File;
 //! # use std::io::BufReader;
 //! # use arrow_avro::reader::ReaderBuilder;
-//!
-//! let file = File::open("../testing/data/avro/alltypes_plain.avro").unwrap();
+//! # let path = "avro/alltypes_plain.avro";
+//! # let path = match std::env::var("ARROW_TEST_DATA") {
+//! #   Ok(dir) => format!("{dir}/{path}"),
+//! #   Err(_) => format!("../testing/data/{path}")
+//! # };
+//! let file = File::open(path).unwrap();
 //! let mut avro = ReaderBuilder::new().build(BufReader::new(file)).unwrap();
 //! let batch = avro.next().unwrap();
 //! ```
