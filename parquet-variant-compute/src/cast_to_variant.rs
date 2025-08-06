@@ -23,18 +23,17 @@ use arrow::array::{
     TimestampSecondArray,
 };
 use arrow::datatypes::{
-    i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    LargeBinaryType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    i256, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, Int8Type, LargeBinaryType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::temporal_conversions::{
     timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType, TimeUnit};
-use chrono::NaiveTime;
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use half::f16;
 use parquet_variant::{
     Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
@@ -485,6 +484,24 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(variant);
             }
         }
+        DataType::Date32 => {
+            generic_conversion!(
+                Date32Type,
+                as_primitive,
+                |v: i32| -> NaiveDate { Date32Type::to_naive_date(v) },
+                input,
+                builder
+            );
+        }
+        DataType::Date64 => {
+            generic_conversion!(
+                Date64Type,
+                as_primitive,
+                |v: i64| { Date64Type::to_naive_date_opt(v).unwrap() },
+                input,
+                builder
+            );
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -502,12 +519,13 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array,
-        Decimal64Array, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array,
-        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
-        IntervalYearMonthArray, LargeStringArray, NullArray, StringArray, StringViewArray,
-        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        Decimal256Array, Decimal32Array, Decimal64Array, FixedSizeBinaryBuilder, Float16Array,
+        Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int16Array,
+        Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray, NullArray,
+        StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+        UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow_schema::{Field, Fields};
@@ -1761,6 +1779,45 @@ mod tests {
         let location_obj2 = location_variant2.as_object().unwrap();
         assert_eq!(location_obj2.get("x"), Some(Variant::from(37.8f64)));
         assert_eq!(location_obj2.get("y"), Some(Variant::from(-122.4f64)));
+    }
+
+    #[test]
+    fn test_cast_to_variant_date() {
+        // Date32Array
+        run_test(
+            Arc::new(Date32Array::from(vec![
+                Some(Date32Type::from_naive_date(NaiveDate::MIN)),
+                None,
+                Some(Date32Type::from_naive_date(
+                    NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
+                )),
+                Some(Date32Type::from_naive_date(NaiveDate::MAX)),
+            ])),
+            vec![
+                Some(Variant::Date(NaiveDate::MIN)),
+                None,
+                Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
+                Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
+
+        // Date64Array
+        run_test(
+            Arc::new(Date64Array::from(vec![
+                Some(Date64Type::from_naive_date(NaiveDate::MIN)),
+                None,
+                Some(Date64Type::from_naive_date(
+                    NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
+                )),
+                Some(Date64Type::from_naive_date(NaiveDate::MAX)),
+            ])),
+            vec![
+                Some(Variant::Date(NaiveDate::MIN)),
+                None,
+                Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
+                Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
