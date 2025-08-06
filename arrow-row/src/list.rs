@@ -186,8 +186,9 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     };
 
     let encoded_child: ArrayRef = match element_dt {
+        // If the list's element type is a dictionary, we need to re-encode it,
+        // since it was hydrated (flattened) during the Array → Row conversion.
         DataType::Dictionary(_, _) => {
-            // pick a key type; Int32 is a sensible default
             let target_dt = element_dt.clone();
             cast(child[0].as_ref(), &target_dt)?
         }
