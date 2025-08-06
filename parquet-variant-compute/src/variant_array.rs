@@ -320,7 +320,11 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant {
         }
         // todo other types here
         _ => {
-            todo!(); // Unsupported typed_value type
+            // We shouldn't panic in production code, but this is a
+            // placeholder until we implement more types
+            // TODO tickets: XXXX
+            debug_assert!(false, "Unsupported typed_value type: {:?}", typed_value.data_type());
+            Variant::Null
         }
     }
 }
