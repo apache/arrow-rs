@@ -654,6 +654,22 @@ fn parse(
             let field = &fields[i];
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i, null_regex),
+                DataType::Decimal32(precision, scale) => build_decimal_array::<Decimal32Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
+                DataType::Decimal64(precision, scale) => build_decimal_array::<Decimal64Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
                 DataType::Decimal128(precision, scale) => build_decimal_array::<Decimal128Type>(
                     line_number,
                     rows,
@@ -1301,6 +1317,54 @@ mod tests {
             .column(2)
             .as_any()
             .downcast_ref::<Decimal256Array>()
+            .unwrap();
+
+        assert_eq!("-3.335724", lng.value_as_string(0));
+        assert_eq!("-2.179404", lng.value_as_string(1));
+        assert_eq!("-1.778197", lng.value_as_string(2));
+        assert_eq!("-3.179090", lng.value_as_string(3));
+        assert_eq!("-3.179090", lng.value_as_string(4));
+        assert_eq!("0.290472", lng.value_as_string(5));
+        assert_eq!("0.290472", lng.value_as_string(6));
+        assert_eq!("0.290472", lng.value_as_string(7));
+        assert_eq!("0.290472", lng.value_as_string(8));
+        assert_eq!("0.290472", lng.value_as_string(9));
+    }
+
+    #[test]
+    fn test_csv_reader_with_decimal_3264() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("city", DataType::Utf8, false),
+            Field::new("lat", DataType::Decimal32(9, 6), false),
+            Field::new("lng", DataType::Decimal64(16, 6), false),
+        ]));
+
+        let file = File::open("test/data/decimal_test.csv").unwrap();
+
+        let mut csv = ReaderBuilder::new(schema).build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+        // access data from a primitive array
+        let lat = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Decimal32Array>()
+            .unwrap();
+
+        assert_eq!("57.653484", lat.value_as_string(0));
+        assert_eq!("53.002666", lat.value_as_string(1));
+        assert_eq!("52.412811", lat.value_as_string(2));
+        assert_eq!("51.481583", lat.value_as_string(3));
+        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("50.760000", lat.value_as_string(5));
+        assert_eq!("0.123000", lat.value_as_string(6));
+        assert_eq!("123.000000", lat.value_as_string(7));
+        assert_eq!("123.000000", lat.value_as_string(8));
+        assert_eq!("-50.760000", lat.value_as_string(9));
+
+        let lng = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Decimal64Array>()
             .unwrap();
 
         assert_eq!("-3.335724", lng.value_as_string(0));

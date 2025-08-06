@@ -22,6 +22,7 @@ pub use self::object::VariantObject;
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
+use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};
 use std::ops::Deref;
 
@@ -941,6 +942,8 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Returns `Some(&VariantObject)` for object variants,
     /// `None` for non-object variants.
     ///
+    /// See [`Self::get_path`] to dynamically traverse objects
+    ///
     /// # Examples
     /// ```
     /// # use parquet_variant::{Variant, VariantBuilder, VariantObject};
@@ -997,6 +1000,8 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// Returns `Some(&VariantList)` for list variants,
     /// `None` for non-list variants.
+    ///
+    /// See [`Self::get_path`] to dynamically traverse lists
     ///
     /// # Examples
     /// ```
@@ -1063,6 +1068,46 @@ impl<'m, 'v> Variant<'m, 'v> {
             _ => None,
         }
     }
+
+    /// Return a new Variant with the path followed.
+    ///
+    /// If the path is not found, `None` is returned.
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{Variant, VariantBuilder, VariantObject, VariantPath};
+    /// # let mut builder = VariantBuilder::new();
+    /// # let mut obj = builder.new_object();
+    /// # let mut list = obj.new_list("foo");
+    /// # list.append_value("bar");
+    /// # list.append_value("baz");
+    /// # list.finish();
+    /// # obj.finish().unwrap();
+    /// # let (metadata, value) = builder.finish();
+    /// // given a variant like `{"foo": ["bar", "baz"]}`
+    /// let variant = Variant::new(&metadata, &value);
+    /// // Accessing a non existent path returns None
+    /// assert_eq!(variant.get_path(&VariantPath::from("non_existent")), None);
+    /// // Access obj["foo"]
+    /// let path = VariantPath::from("foo");
+    /// let foo = variant.get_path(&path).expect("field `foo` should exist");
+    /// assert!(foo.as_list().is_some(), "field `foo` should be a list");
+    /// // Access foo[0]
+    /// let path = VariantPath::from(0);
+    /// let bar = foo.get_path(&path).expect("element 0 should exist");
+    /// // bar is a string
+    /// assert_eq!(bar.as_string(), Some("bar"));
+    /// // You can also access nested paths
+    /// let path = VariantPath::from("foo").join(0);
+    /// assert_eq!(variant.get_path(&path).unwrap(), bar);
+    /// ```
+    pub fn get_path(&self, path: &VariantPath) -> Option<Variant> {
+        path.iter()
+            .try_fold(self.clone(), |output, element| match element {
+                VariantPathElement::Field { name } => output.get_object_field(name),
+                VariantPathElement::Index { index } => output.get_list_element(*index),
+            })
+    }
 }
 
 impl From<()> for Variant<'_, '_> {
@@ -1101,6 +1146,50 @@ impl From<i32> for Variant<'_, '_> {
 impl From<i64> for Variant<'_, '_> {
     fn from(value: i64) -> Self {
         Variant::Int64(value)
+    }
+}
+
+impl From<u8> for Variant<'_, '_> {
+    fn from(value: u8) -> Self {
+        // if it fits in i8, use that, otherwise use i16
+        if let Ok(value) = i8::try_from(value) {
+            Variant::Int8(value)
+        } else {
+            Variant::Int16(value as i16)
+        }
+    }
+}
+
+impl From<u16> for Variant<'_, '_> {
+    fn from(value: u16) -> Self {
+        // if it fits in i16, use that, otherwise use i32
+        if let Ok(value) = i16::try_from(value) {
+            Variant::Int16(value)
+        } else {
+            Variant::Int32(value as i32)
+        }
+    }
+}
+impl From<u32> for Variant<'_, '_> {
+    fn from(value: u32) -> Self {
+        // if it fits in i32, use that, otherwise use i64
+        if let Ok(value) = i32::try_from(value) {
+            Variant::Int32(value)
+        } else {
+            Variant::Int64(value as i64)
+        }
+    }
+}
+
+impl From<u64> for Variant<'_, '_> {
+    fn from(value: u64) -> Self {
+        // if it fits in i64, use that, otherwise use Decimal16
+        if let Ok(value) = i64::try_from(value) {
+            Variant::Int64(value)
+        } else {
+            // u64 max is 18446744073709551615, which fits in i128
+            Variant::Decimal16(VariantDecimal16::try_new(value as i128, 0).unwrap())
+        }
     }
 }
 

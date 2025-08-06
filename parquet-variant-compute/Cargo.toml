@@ -41,3 +41,12 @@ name = "parquet_variant_compute"
 bench = false
 
 [dev-dependencies]
+rand = "0.9.1"
+criterion = { version = "0.6", default-features = false }
+arrow = { workspace = true, features = ["test_utils"] }
+
+
+[[bench]]
+name = "variant_kernels"
+harness = false
+
