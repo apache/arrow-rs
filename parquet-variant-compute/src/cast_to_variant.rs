@@ -18,10 +18,12 @@
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
-    BinaryType, BinaryViewType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    BinaryType, BinaryViewType, Date32Type, Date64Type, Float16Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, LargeBinaryType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
 use arrow_schema::{ArrowError, DataType};
+use chrono::NaiveDate;
 use half::f16;
 use parquet_variant::Variant;
 
@@ -43,6 +45,7 @@ macro_rules! primitive_conversion {
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// to downcast the generic array to a specific array type and `cast_fn`
 /// to transform each element to a type compatible with Variant
+/// Note that `cast_fn` returns a result because it could fail.
 macro_rules! cast_conversion {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
         let array = $input.$method::<$t>();
@@ -51,7 +54,7 @@ macro_rules! cast_conversion {
                 $builder.append_null();
                 continue;
             }
-            let cast_value = $cast_fn(array.value(i));
+            let cast_value = $cast_fn(array.value(i))?;
             $builder.append_variant(Variant::from(cast_value));
         }
     }};
@@ -87,13 +90,31 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // todo: handle other types like Boolean, Strings, Date, Timestamp, etc.
     match input_type {
         DataType::Binary => {
-            cast_conversion!(BinaryType, as_bytes, |v| v, input, builder);
+            cast_conversion!(
+                BinaryType,
+                as_bytes,
+                |v| -> Result<&[u8], ArrowError> { Ok(v) },
+                input,
+                builder
+            );
         }
         DataType::LargeBinary => {
-            cast_conversion!(LargeBinaryType, as_bytes, |v| v, input, builder);
+            cast_conversion!(
+                LargeBinaryType,
+                as_bytes,
+                |v| -> Result<&[u8], ArrowError> { Ok(v) },
+                input,
+                builder
+            );
         }
         DataType::BinaryView => {
-            cast_conversion!(BinaryViewType, as_byte_view, |v| v, input, builder);
+            cast_conversion!(
+                BinaryViewType,
+                as_byte_view,
+                |v| -> Result<&[u8], ArrowError> { Ok(v) },
+                input,
+                builder
+            );
         }
         DataType::Int8 => {
             primitive_conversion!(Int8Type, input, builder);
@@ -123,7 +144,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             cast_conversion!(
                 Float16Type,
                 as_primitive,
-                |v: f16| -> f32 { v.into() },
+                |v: f16| -> Result<f32, ArrowError> { Ok(v.into()) },
                 input,
                 builder
             );
@@ -133,6 +154,28 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         }
         DataType::Float64 => {
             primitive_conversion!(Float64Type, input, builder);
+        }
+        DataType::Date32 => {
+            cast_conversion!(
+                Date32Type,
+                as_primitive,
+                |v: i32| -> Result<NaiveDate, ArrowError> { Ok(Date32Type::to_naive_date(v)) },
+                input,
+                builder
+            );
+        }
+        DataType::Date64 => {
+            cast_conversion!(
+                Date64Type,
+                as_primitive,
+                |v: i64| {
+                    Date64Type::to_naive_date_opt(v).ok_or(ArrowError::CastError(format!(
+                        "Could not convert `{v}` value to a NaiveDate",
+                    )))
+                },
+                input,
+                builder
+            );
         }
         dt => {
             return Err(ArrowError::CastError(format!(
@@ -151,10 +194,11 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Date32Array, Date64Array, Float16Array, Float32Array, Float64Array,
+        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
+    use half::f16;
     use parquet_variant::{Variant, VariantDecimal16};
     use std::sync::Arc;
 
@@ -439,6 +483,45 @@ mod tests {
                 Some(Variant::Double(f64::MAX)),
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_date() {
+        // Date32Array
+        run_test(
+            Arc::new(Date32Array::from(vec![
+                Some(Date32Type::from_naive_date(NaiveDate::MIN)),
+                None,
+                Some(Date32Type::from_naive_date(
+                    NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
+                )),
+                Some(Date32Type::from_naive_date(NaiveDate::MAX)),
+            ])),
+            vec![
+                Some(Variant::Date(NaiveDate::MIN)),
+                None,
+                Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
+                Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
+
+        // Date64Array
+        run_test(
+            Arc::new(Date64Array::from(vec![
+                Some(Date64Type::from_naive_date(NaiveDate::MIN)),
+                None,
+                Some(Date64Type::from_naive_date(
+                    NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
+                )),
+                Some(Date64Type::from_naive_date(NaiveDate::MAX)),
+            ])),
+            vec![
+                Some(Variant::Date(NaiveDate::MIN)),
+                None,
+                Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
+                Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
