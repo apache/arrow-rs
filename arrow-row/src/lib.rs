@@ -2286,6 +2286,40 @@ mod tests {
         let _ = converter.convert_rows(&rows);
     }
 
+    #[test]
+    fn test_list_of_primitive_dictionary() {
+        let mut builder =
+            ListBuilder::<PrimitiveDictionaryBuilder<Int32Type, Int32Type>>::default();
+        builder.values().append(2).unwrap();
+        builder.values().append(3).unwrap();
+        builder.values().append(0).unwrap();
+        builder.values().append_null();
+        builder.values().append(5).unwrap();
+        builder.values().append(3).unwrap();
+        builder.values().append(-1).unwrap();
+        builder.append(true);
+        builder.append(false); // null row
+        builder.values().append(10).unwrap();
+        builder.values().append(20).unwrap();
+        builder.append(true);
+
+        let a = Arc::new(builder.finish()) as ArrayRef;
+        let data_type = a.data_type().clone();
+
+        let field = SortField::new(data_type.clone());
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&a)]).unwrap();
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        let [a2] = back.try_into().unwrap();
+
+        assert_eq!(&a.data_type(), &a2.data_type());
+        assert_eq!(a.len(), a2.len());
+        assert_eq!(a.null_count(), a2.null_count());
+        assert!(a.as_ref().eq(a2.as_ref()));
+    }
+
     fn test_single_list<O: OffsetSizeTrait>() {
         let mut builder = GenericListBuilder::<O, _>::new(Int32Builder::new());
         builder.values().append_value(32);

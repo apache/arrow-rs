@@ -16,8 +16,11 @@
 // under the License.
 
 use crate::{fixed, null_sentinel, LengthTracker, RowConverter, Rows, SortField};
-use arrow_array::{new_null_array, Array, FixedSizeListArray, GenericListArray, OffsetSizeTrait};
+use arrow_array::{
+    new_null_array, Array, ArrayRef, FixedSizeListArray, GenericListArray, OffsetSizeTrait,
+};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_cast::cast;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::ops::Range;
@@ -177,7 +180,21 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     let child = converter.convert_raw(&mut child_rows, validate_utf8)?;
     assert_eq!(child.len(), 1);
 
-    let child_data = child[0].to_data();
+    let element_dt = match &field.data_type {
+        DataType::List(inner) | DataType::LargeList(inner) => inner.data_type(),
+        _ => unreachable!("decode only called for List types"),
+    };
+
+    let encoded_child: ArrayRef = match element_dt {
+        DataType::Dictionary(_, _) => {
+            // pick a key type; Int32 is a sensible default
+            let target_dt = element_dt.clone();
+            cast(child[0].as_ref(), &target_dt)?
+        }
+        _ => child[0].clone(),
+    };
+
+    let child_data = encoded_child.to_data();
 
     let builder = ArrayDataBuilder::new(field.data_type.clone())
         .len(rows.len())

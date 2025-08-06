@@ -40,6 +40,7 @@ arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
+arrow-cast = { workspace = true}
 
 half = { version = "2.1", default-features = false }
 
