@@ -43,7 +43,7 @@ macro_rules! primitive_conversion {
 /// need to convert a specific data type
 ///
 /// # Arguments
-/// * `input` - A reference to the input [`ArrayRef`] to cast
+/// * `input` - A reference to the input [`Array`] to cast
 ///
 /// # Notes
 /// If the input array element is null, the corresponding element in the
