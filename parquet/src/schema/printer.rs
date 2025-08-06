@@ -277,9 +277,9 @@ impl<'a> Printer<'a> {
 #[inline]
 fn print_timeunit(unit: &TimeUnit) -> &str {
     match unit {
-        TimeUnit::MILLIS(_) => "MILLIS",
-        TimeUnit::MICROS(_) => "MICROS",
-        TimeUnit::NANOS(_) => "NANOS",
+        TimeUnit::MILLIS => "MILLIS",
+        TimeUnit::MICROS => "MICROS",
+        TimeUnit::NANOS => "NANOS",
     }
 }
 
@@ -645,7 +645,7 @@ mod tests {
                     PhysicalType::INT64,
                     Some(LogicalType::Timestamp {
                         is_adjusted_to_u_t_c: true,
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                     }),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
@@ -671,7 +671,7 @@ mod tests {
                     None,
                     PhysicalType::INT32,
                     Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: false,
                     }),
                     ConvertedType::TIME_MILLIS,
@@ -686,7 +686,7 @@ mod tests {
                     Some(42),
                     PhysicalType::INT32,
                     Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: false,
                     }),
                     ConvertedType::TIME_MILLIS,

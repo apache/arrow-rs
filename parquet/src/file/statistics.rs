@@ -41,8 +41,6 @@
 
 use std::fmt;
 
-use crate::format::Statistics as TStatistics;
-
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
@@ -122,7 +120,7 @@ macro_rules! statistics_enum_func {
 /// Converts Thrift definition into `Statistics`.
 pub fn from_thrift(
     physical_type: Type,
-    thrift_stats: Option<TStatistics>,
+    thrift_stats: Option<crate::format::Statistics>,
 ) -> Result<Option<Statistics>> {
     Ok(match thrift_stats {
         Some(stats) => {
@@ -269,7 +267,7 @@ pub fn from_thrift(
 }
 
 /// Convert Statistics into Thrift definition.
-pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
+pub fn to_thrift(stats: Option<&Statistics>) -> Option<crate::format::Statistics> {
     let stats = stats?;
 
     // record null count if it can fit in i64
@@ -282,7 +280,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         .distinct_count_opt()
         .and_then(|value| i64::try_from(value).ok());
 
-    let mut thrift_stats = TStatistics {
+    let mut thrift_stats = crate::format::Statistics {
         max: None,
         min: None,
         null_count,
@@ -702,7 +700,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "General(\"Statistics null count is negative -10\")")]
     fn test_statistics_negative_null_count() {
-        let thrift_stats = TStatistics {
+        let thrift_stats = crate::format::Statistics {
             max: None,
             min: None,
             null_count: Some(-10),
@@ -1017,7 +1015,7 @@ mod tests {
 
     #[test]
     fn test_count_decoding_null_invalid() {
-        let tstatistics = TStatistics {
+        let tstatistics = crate::format::Statistics {
             null_count: Some(-42),
             ..Default::default()
         };

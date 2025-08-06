@@ -20,8 +20,7 @@ use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
-use crate::file::metadata::KeyValue;
-use crate::format::SortingColumn;
+use crate::file::metadata::{KeyValue, SortingColumn};
 use crate::schema::types::ColumnPath;
 use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc};

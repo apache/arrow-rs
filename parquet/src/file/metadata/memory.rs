@@ -18,14 +18,15 @@
 //! Memory calculations for [`ParquetMetadata::memory_size`]
 //!
 //! [`ParquetMetadata::memory_size`]: crate::file::metadata::ParquetMetaData::memory_size
-use crate::basic::{ColumnOrder, Compression, Encoding, PageType};
+use crate::basic::{BoundaryOrder, ColumnOrder, Compression, Encoding, PageType};
 use crate::data_type::private::ParquetValueType;
-use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, KeyValue, RowGroupMetaData};
+use crate::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, KeyValue, RowGroupMetaData, SortingColumn,
+};
 use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::page_index::index::{Index, NativeIndex, PageIndex};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::format::{BoundaryOrder, PageLocation, SortingColumn};
 use std::sync::Arc;
 
 /// Trait for calculating the size of various containers

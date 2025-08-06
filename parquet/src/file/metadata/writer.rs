@@ -31,7 +31,6 @@ use crate::file::writer::{get_file_magic, TrackedWrite};
 use crate::format::EncryptionAlgorithm;
 #[cfg(feature = "encryption")]
 use crate::format::{AesGcmV1, ColumnCryptoMetaData};
-use crate::format::{ColumnChunk, ColumnIndex, FileMetaData, OffsetIndex, RowGroup};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
@@ -46,9 +45,9 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     buf: &'a mut TrackedWrite<W>,
     schema: &'a TypePtr,
     schema_descr: &'a SchemaDescPtr,
-    row_groups: Vec<RowGroup>,
-    column_indexes: Option<&'a [Vec<Option<ColumnIndex>>]>,
-    offset_indexes: Option<&'a [Vec<Option<OffsetIndex>>]>,
+    row_groups: Vec<crate::format::RowGroup>,
+    column_indexes: Option<&'a [Vec<Option<crate::format::ColumnIndex>>]>,
+    offset_indexes: Option<&'a [Vec<Option<crate::format::OffsetIndex>>]>,
     key_value_metadata: Option<Vec<KeyValue>>,
     created_by: Option<String>,
     object_writer: MetadataObjectWriter,
@@ -61,7 +60,10 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// Note: also updates the `ColumnChunk::offset_index_offset` and
     /// `ColumnChunk::offset_index_length` to reflect the position and length
     /// of the serialized offset indexes.
-    fn write_offset_indexes(&mut self, offset_indexes: &[Vec<Option<OffsetIndex>>]) -> Result<()> {
+    fn write_offset_indexes(
+        &mut self,
+        offset_indexes: &[Vec<Option<crate::format::OffsetIndex>>],
+    ) -> Result<()> {
         // iter row group
         // iter each column
         // write offset index to the file
@@ -91,7 +93,10 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// Note: also updates the `ColumnChunk::column_index_offset` and
     /// `ColumnChunk::column_index_length` to reflect the position and length
     /// of the serialized column indexes.
-    fn write_column_indexes(&mut self, column_indexes: &[Vec<Option<ColumnIndex>>]) -> Result<()> {
+    fn write_column_indexes(
+        &mut self,
+        column_indexes: &[Vec<Option<crate::format::ColumnIndex>>],
+    ) -> Result<()> {
         // iter row group
         // iter each column
         // write column index to the file
@@ -146,10 +151,15 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         let (encryption_algorithm, footer_signing_key_metadata) =
             self.object_writer.get_plaintext_footer_crypto_metadata();
-        let mut file_metadata = FileMetaData {
+        let key_value_metadata = self.key_value_metadata.map(|vkv| {
+            vkv.into_iter()
+                .map(|kv| crate::format::KeyValue::new(kv.key, kv.value))
+                .collect::<Vec<crate::format::KeyValue>>()
+        });
+        let mut file_metadata = crate::format::FileMetaData {
             num_rows,
             row_groups,
-            key_value_metadata: self.key_value_metadata.clone(),
+            key_value_metadata,
             version: self.writer_version,
             schema: types::to_thrift(self.schema.as_ref())?,
             created_by: self.created_by.clone(),
@@ -185,7 +195,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         buf: &'a mut TrackedWrite<W>,
         schema: &'a TypePtr,
         schema_descr: &'a SchemaDescPtr,
-        row_groups: Vec<RowGroup>,
+        row_groups: Vec<crate::format::RowGroup>,
         created_by: Option<String>,
         writer_version: i32,
     ) -> Self {
@@ -203,12 +213,18 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         }
     }
 
-    pub fn with_column_indexes(mut self, column_indexes: &'a [Vec<Option<ColumnIndex>>]) -> Self {
+    pub fn with_column_indexes(
+        mut self,
+        column_indexes: &'a [Vec<Option<crate::format::ColumnIndex>>],
+    ) -> Self {
         self.column_indexes = Some(column_indexes);
         self
     }
 
-    pub fn with_offset_indexes(mut self, offset_indexes: &'a [Vec<Option<OffsetIndex>>]) -> Self {
+    pub fn with_offset_indexes(
+        mut self,
+        offset_indexes: &'a [Vec<Option<crate::format::OffsetIndex>>],
+    ) -> Self {
         self.offset_indexes = Some(offset_indexes);
         self
     }
@@ -257,6 +273,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 ///
 /// [`FileMetaData`]: crate::format::FileMetaData
 /// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
+/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 ///
 /// ```text
 /// ┌──────────────────────┐
@@ -365,7 +383,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         Ok(())
     }
 
-    fn convert_column_indexes(&self) -> Vec<Vec<Option<ColumnIndex>>> {
+    fn convert_column_indexes(&self) -> Vec<Vec<Option<crate::format::ColumnIndex>>> {
         if let Some(row_group_column_indexes) = self.metadata.column_index() {
             (0..self.metadata.row_groups().len())
                 .map(|rg_idx| {
@@ -398,7 +416,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         }
     }
 
-    fn convert_offset_index(&self) -> Vec<Vec<Option<OffsetIndex>>> {
+    fn convert_offset_index(&self) -> Vec<Vec<Option<crate::format::OffsetIndex>>> {
         if let Some(row_group_offset_indexes) = self.metadata.offset_index() {
             (0..self.metadata.row_groups().len())
                 .map(|rg_idx| {
@@ -439,15 +457,19 @@ impl MetadataObjectWriter {
 #[cfg(not(feature = "encryption"))]
 impl MetadataObjectWriter {
     /// Write [`FileMetaData`] in Thrift format
-    fn write_file_metadata(&self, file_metadata: &FileMetaData, sink: impl Write) -> Result<()> {
+    fn write_file_metadata(
+        &self,
+        file_metadata: &crate::format::FileMetaData,
+        sink: impl Write,
+    ) -> Result<()> {
         Self::write_object(file_metadata, sink)
     }
 
     /// Write a column [`OffsetIndex`] in Thrift format
     fn write_offset_index(
         &self,
-        offset_index: &OffsetIndex,
-        _column_chunk: &ColumnChunk,
+        offset_index: &crate::format::OffsetIndex,
+        _column_chunk: &crate::format::ColumnChunk,
         _row_group_idx: usize,
         _column_idx: usize,
         sink: impl Write,
@@ -458,8 +480,8 @@ impl MetadataObjectWriter {
     /// Write a column [`ColumnIndex`] in Thrift format
     fn write_column_index(
         &self,
-        column_index: &ColumnIndex,
-        _column_chunk: &ColumnChunk,
+        column_index: &crate::format::ColumnIndex,
+        _column_chunk: &crate::format::ColumnChunk,
         _row_group_idx: usize,
         _column_idx: usize,
         sink: impl Write,
@@ -470,8 +492,11 @@ impl MetadataObjectWriter {
     /// No-op implementation of row-group metadata encryption
     fn apply_row_group_encryption(
         &self,
-        row_groups: Vec<RowGroup>,
-    ) -> Result<(Vec<RowGroup>, Option<Vec<RowGroup>>)> {
+        row_groups: Vec<crate::format::RowGroup>,
+    ) -> Result<(
+        Vec<crate::format::RowGroup>,
+        Option<Vec<crate::format::RowGroup>>,
+    )> {
         Ok((row_groups, None))
     }
 
@@ -497,9 +522,11 @@ impl MetadataObjectWriter {
     }
 
     /// Write [`FileMetaData`] in Thrift format, possibly encrypting it if required
+    ///
+    /// [`FileMetaData`]: crate::format::FileMetaData
     fn write_file_metadata(
         &self,
-        file_metadata: &FileMetaData,
+        file_metadata: &crate::format::FileMetaData,
         mut sink: impl Write,
     ) -> Result<()> {
         match self.file_encryptor.as_ref() {
@@ -524,10 +551,12 @@ impl MetadataObjectWriter {
     }
 
     /// Write a column [`OffsetIndex`] in Thrift format, possibly encrypting it if required
+    ///
+    /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_offset_index(
         &self,
-        offset_index: &OffsetIndex,
-        column_chunk: &ColumnChunk,
+        offset_index: &crate::format::OffsetIndex,
+        column_chunk: &crate::format::ColumnChunk,
         row_group_idx: usize,
         column_idx: usize,
         sink: impl Write,
@@ -547,10 +576,12 @@ impl MetadataObjectWriter {
     }
 
     /// Write a column [`ColumnIndex`] in Thrift format, possibly encrypting it if required
+    ///
+    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
         &self,
-        column_index: &ColumnIndex,
-        column_chunk: &ColumnChunk,
+        column_index: &crate::format::ColumnIndex,
+        column_chunk: &crate::format::ColumnChunk,
         row_group_idx: usize,
         column_idx: usize,
         sink: impl Write,
@@ -574,8 +605,11 @@ impl MetadataObjectWriter {
     /// and possibly unencrypted metadata to be returned to clients if data was encrypted.
     fn apply_row_group_encryption(
         &self,
-        row_groups: Vec<RowGroup>,
-    ) -> Result<(Vec<RowGroup>, Option<Vec<RowGroup>>)> {
+        row_groups: Vec<crate::format::RowGroup>,
+    ) -> Result<(
+        Vec<crate::format::RowGroup>,
+        Option<Vec<crate::format::RowGroup>>,
+    )> {
         match &self.file_encryptor {
             Some(file_encryptor) => {
                 let unencrypted_row_groups = row_groups.clone();
@@ -599,7 +633,7 @@ impl MetadataObjectWriter {
         object: &impl TSerializable,
         mut sink: impl Write,
         file_encryptor: &FileEncryptor,
-        column_metadata: &ColumnChunk,
+        column_metadata: &crate::format::ColumnChunk,
         module_type: ModuleType,
         row_group_index: usize,
         column_index: usize,
@@ -682,14 +716,14 @@ impl MetadataObjectWriter {
     }
 
     fn encrypt_row_groups(
-        row_groups: Vec<RowGroup>,
+        row_groups: Vec<crate::format::RowGroup>,
         file_encryptor: &Arc<FileEncryptor>,
-    ) -> Result<Vec<RowGroup>> {
+    ) -> Result<Vec<crate::format::RowGroup>> {
         row_groups
             .into_iter()
             .enumerate()
             .map(|(rg_idx, mut rg)| {
-                let cols: Result<Vec<ColumnChunk>> = rg
+                let cols: Result<Vec<crate::format::ColumnChunk>> = rg
                     .columns
                     .into_iter()
                     .enumerate()
@@ -705,11 +739,11 @@ impl MetadataObjectWriter {
 
     /// Apply column encryption to column chunk metadata
     fn encrypt_column_chunk(
-        mut column_chunk: ColumnChunk,
+        mut column_chunk: crate::format::ColumnChunk,
         file_encryptor: &Arc<FileEncryptor>,
         row_group_index: usize,
         column_index: usize,
-    ) -> Result<ColumnChunk> {
+    ) -> Result<crate::format::ColumnChunk> {
         // Column crypto metadata should have already been set when the column was created.
         // Here we apply the encryption by encrypting the column metadata if required.
         match column_chunk.crypto_metadata.as_ref() {

@@ -19,9 +19,6 @@
 
 use crate::basic::{Encoding, PageType};
 use crate::errors::Result;
-use crate::format::{
-    Encoding as TEncoding, PageEncodingStats as TPageEncodingStats, PageType as TPageType,
-};
 
 /// PageEncodingStats for a column chunk and data page.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,7 +32,9 @@ pub struct PageEncodingStats {
 }
 
 /// Converts Thrift definition into `PageEncodingStats`.
-pub fn try_from_thrift(thrift_encoding_stats: &TPageEncodingStats) -> Result<PageEncodingStats> {
+pub fn try_from_thrift(
+    thrift_encoding_stats: &crate::format::PageEncodingStats,
+) -> Result<PageEncodingStats> {
     let page_type = PageType::try_from(thrift_encoding_stats.page_type)?;
     let encoding = Encoding::try_from(thrift_encoding_stats.encoding)?;
     let count = thrift_encoding_stats.count;
@@ -48,12 +47,12 @@ pub fn try_from_thrift(thrift_encoding_stats: &TPageEncodingStats) -> Result<Pag
 }
 
 /// Converts `PageEncodingStats` into Thrift definition.
-pub fn to_thrift(encoding_stats: &PageEncodingStats) -> TPageEncodingStats {
-    let page_type = TPageType::from(encoding_stats.page_type);
-    let encoding = TEncoding::from(encoding_stats.encoding);
+pub fn to_thrift(encoding_stats: &PageEncodingStats) -> crate::format::PageEncodingStats {
+    let page_type = crate::format::PageType::from(encoding_stats.page_type);
+    let encoding = crate::format::Encoding::from(encoding_stats.encoding);
     let count = encoding_stats.count;
 
-    TPageEncodingStats {
+    crate::format::PageEncodingStats {
         page_type,
         encoding,
         count,

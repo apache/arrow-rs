@@ -19,8 +19,8 @@
 //! using row group writers and column writers respectively.
 
 use crate::bloom_filter::Sbbf;
-use crate::format as parquet;
-use crate::format::{ColumnIndex, OffsetIndex};
+use crate::file::page_index::index::Index;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::thrift::TSerializable;
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
@@ -128,8 +128,8 @@ pub type OnCloseRowGroup<'a, W> = Box<
             &'a mut TrackedWrite<W>,
             RowGroupMetaData,
             Vec<Option<Sbbf>>,
-            Vec<Option<ColumnIndex>>,
-            Vec<Option<OffsetIndex>>,
+            Vec<Option<Index>>,
+            Vec<Option<OffsetIndexMetaData>>,
         ) -> Result<()>
         + 'a
         + Send,
@@ -154,8 +154,8 @@ pub struct SerializedFileWriter<W: Write> {
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaData>,
     bloom_filters: Vec<Vec<Option<Sbbf>>>,
-    column_indexes: Vec<Vec<Option<ColumnIndex>>>,
-    offset_indexes: Vec<Vec<Option<OffsetIndex>>>,
+    column_indexes: Vec<Vec<Option<Index>>>,
+    offset_indexes: Vec<Vec<Option<OffsetIndexMetaData>>>,
     row_group_index: usize,
     // kv_metadatas will be appended to `props` when `write_metadata`
     kv_metadatas: Vec<KeyValue>,
@@ -290,7 +290,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub fn finish(&mut self) -> Result<parquet::FileMetaData> {
+    pub fn finish(&mut self) -> Result<crate::format::FileMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
         self.buf.flush()?;
@@ -298,7 +298,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Closes and finalises file writer, returning the file metadata.
-    pub fn close(mut self) -> Result<parquet::FileMetaData> {
+    pub fn close(mut self) -> Result<crate::format::FileMetaData> {
         self.finish()
     }
 
@@ -319,7 +319,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Assembles and writes metadata at the end of the file.
-    fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
+    fn write_metadata(&mut self) -> Result<crate::format::FileMetaData> {
         self.finished = true;
 
         // write out any remaining bloom filters after all row groups
@@ -339,6 +339,9 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             .map(|v| v.to_thrift())
             .collect::<Vec<_>>();
 
+        let column_indexes = self.convert_column_indexes();
+        let offset_indexes = self.convert_offset_index();
+
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
             &self.schema,
@@ -356,9 +359,44 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         if let Some(key_value_metadata) = key_value_metadata {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
-        encoder = encoder.with_column_indexes(&self.column_indexes);
-        encoder = encoder.with_offset_indexes(&self.offset_indexes);
+
+        encoder = encoder.with_column_indexes(&column_indexes);
+        encoder = encoder.with_offset_indexes(&offset_indexes);
         encoder.finish()
+    }
+
+    fn convert_column_indexes(&self) -> Vec<Vec<Option<crate::format::ColumnIndex>>> {
+        self.column_indexes
+            .iter()
+            .map(|cis| {
+                cis.iter()
+                    .map(|ci| {
+                        ci.as_ref().map(|column_index| match column_index {
+                            Index::NONE => panic!("trying to serialize missing column index"),
+                            Index::BOOLEAN(column_index) => column_index.to_thrift(),
+                            Index::BYTE_ARRAY(column_index) => column_index.to_thrift(),
+                            Index::DOUBLE(column_index) => column_index.to_thrift(),
+                            Index::FIXED_LEN_BYTE_ARRAY(column_index) => column_index.to_thrift(),
+                            Index::FLOAT(column_index) => column_index.to_thrift(),
+                            Index::INT32(column_index) => column_index.to_thrift(),
+                            Index::INT64(column_index) => column_index.to_thrift(),
+                            Index::INT96(column_index) => column_index.to_thrift(),
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn convert_offset_index(&self) -> Vec<Vec<Option<crate::format::OffsetIndex>>> {
+        self.offset_indexes
+            .iter()
+            .map(|ois| {
+                ois.iter()
+                    .map(|oi| oi.as_ref().map(|offset_index| offset_index.to_thrift()))
+                    .collect()
+            })
+            .collect()
     }
 
     #[inline]
@@ -499,8 +537,8 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
     bloom_filters: Vec<Option<Sbbf>>,
-    column_indexes: Vec<Option<ColumnIndex>>,
-    offset_indexes: Vec<Option<OffsetIndex>>,
+    column_indexes: Vec<Option<Index>>,
+    offset_indexes: Vec<Option<OffsetIndexMetaData>>,
     row_group_index: i16,
     file_offset: i64,
     on_close: Option<OnCloseRowGroup<'a, W>>,
@@ -901,7 +939,7 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     /// Serializes page header into Thrift.
     /// Returns number of bytes that have been written into the sink.
     #[inline]
-    fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
+    fn serialize_page_header(&mut self, header: crate::format::PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
         match self.page_encryptor_and_sink_mut() {
             Some((page_encryptor, sink)) => {
@@ -1032,7 +1070,6 @@ mod tests {
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
         statistics::{from_thrift, to_thrift, Statistics},
     };
-    use crate::format::SortingColumn;
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types;

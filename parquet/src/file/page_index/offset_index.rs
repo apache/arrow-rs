@@ -16,12 +16,49 @@
 // under the License.
 
 //! [`OffsetIndexMetaData`] structure holding decoded [`OffsetIndex`] information
+//!
+//! [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
 use crate::errors::ParquetError;
-use crate::format::{OffsetIndex, PageLocation};
+
+/// Page location information for [`OffsetIndexMetaData`]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageLocation {
+    /// Offset of the page in the file *
+    pub offset: i64,
+    /// Size of the page, including header. Sum of compressed_page_size and header
+    /// length
+    pub compressed_page_size: i32,
+    /// Index within the RowGroup of the first row of the page. When an
+    /// OffsetIndex is present, pages must begin on row boundaries
+    /// (repetition_level = 0).
+    pub first_row_index: i64,
+}
+
+impl From<&crate::format::PageLocation> for PageLocation {
+    fn from(value: &crate::format::PageLocation) -> Self {
+        Self {
+            offset: value.offset,
+            compressed_page_size: value.compressed_page_size,
+            first_row_index: value.first_row_index,
+        }
+    }
+}
+
+impl From<&PageLocation> for crate::format::PageLocation {
+    fn from(value: &PageLocation) -> Self {
+        Self {
+            offset: value.offset,
+            compressed_page_size: value.compressed_page_size,
+            first_row_index: value.first_row_index,
+        }
+    }
+}
 
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
+///
+/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq)]
 pub struct OffsetIndexMetaData {
     /// Vector of [`PageLocation`] objects, one per page in the chunk.
@@ -33,9 +70,12 @@ pub struct OffsetIndexMetaData {
 
 impl OffsetIndexMetaData {
     /// Creates a new [`OffsetIndexMetaData`] from an [`OffsetIndex`].
-    pub(crate) fn try_new(index: OffsetIndex) -> Result<Self, ParquetError> {
+    ///
+    /// [`OffsetIndex`]: crate::format::OffsetIndex
+    pub(crate) fn try_new(index: crate::format::OffsetIndex) -> Result<Self, ParquetError> {
+        let page_locations = index.page_locations.iter().map(|loc| loc.into()).collect();
         Ok(Self {
-            page_locations: index.page_locations,
+            page_locations,
             unencoded_byte_array_data_bytes: index.unencoded_byte_array_data_bytes,
         })
     }
@@ -53,9 +93,10 @@ impl OffsetIndexMetaData {
 
     // TODO: remove annotation after merge
     #[allow(dead_code)]
-    pub(crate) fn to_thrift(&self) -> OffsetIndex {
-        OffsetIndex::new(
-            self.page_locations.clone(),
+    pub(crate) fn to_thrift(&self) -> crate::format::OffsetIndex {
+        let page_locations = self.page_locations.iter().map(|loc| loc.into()).collect();
+        crate::format::OffsetIndex::new(
+            page_locations,
             self.unencoded_byte_array_data_bytes.clone(),
         )
     }

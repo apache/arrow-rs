@@ -33,10 +33,16 @@ pub trait TSerializable: Sized {
     fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()>;
 }
 
-/// Public function to aid benchmarking.
+/// Public function to aid benchmarking. Reads Parquet `FileMetaData` encoded in `bytes`.
 pub fn bench_file_metadata(bytes: &bytes::Bytes) {
     let mut input = TCompactSliceInputProtocol::new(bytes);
     crate::format::FileMetaData::read_from_in_protocol(&mut input).unwrap();
+}
+
+/// Public function to aid benchmarking. Reads Parquet `PageHeader` encoded in `bytes`.
+pub fn bench_page_header(bytes: &bytes::Bytes) {
+    let mut input = TCompactSliceInputProtocol::new(bytes);
+    crate::format::PageHeader::read_from_in_protocol(&mut input).unwrap();
 }
 
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
@@ -323,7 +329,6 @@ fn eof_error() -> thrift::Error {
 
 #[cfg(test)]
 mod tests {
-    use crate::format::{BoundaryOrder, ColumnIndex};
     use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
     #[test]
@@ -334,12 +339,12 @@ mod tests {
         let bytes = vec![0x19, 0x21, 2, 1, 0x19, 8, 0x19, 8, 0x15, 0, 0];
 
         let mut protocol = TCompactSliceInputProtocol::new(bytes.as_slice());
-        let index = ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
-        let expected = ColumnIndex {
+        let index = crate::format::ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
+        let expected = crate::format::ColumnIndex {
             null_pages: vec![false, true],
             min_values: vec![],
             max_values: vec![],
-            boundary_order: BoundaryOrder::UNORDERED,
+            boundary_order: crate::format::BoundaryOrder::UNORDERED,
             null_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
@@ -355,12 +360,12 @@ mod tests {
         let bytes = vec![0x19, 0x22, 0, 1, 0x19, 8, 0x19, 8, 0x15, 0, 0];
 
         let mut protocol = TCompactSliceInputProtocol::new(bytes.as_slice());
-        let index = ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
-        let expected = ColumnIndex {
+        let index = crate::format::ColumnIndex::read_from_in_protocol(&mut protocol).unwrap();
+        let expected = crate::format::ColumnIndex {
             null_pages: vec![false, true],
             min_values: vec![],
             max_values: vec![],
-            boundary_order: BoundaryOrder::UNORDERED,
+            boundary_order: crate::format::BoundaryOrder::UNORDERED,
             null_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,

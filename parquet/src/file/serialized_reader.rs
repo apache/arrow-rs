@@ -25,14 +25,14 @@ use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
 use crate::errors::{ParquetError, Result};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::{
     metadata::*,
     properties::{ReaderProperties, ReaderPropertiesPtr},
     reader::*,
     statistics,
 };
-use crate::format::{PageHeader, PageLocation, PageType};
+use crate::format::{PageHeader, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
@@ -1102,9 +1102,8 @@ mod tests {
     use bytes::Buf;
 
     use crate::file::properties::{EnabledStatistics, WriterProperties};
-    use crate::format::BoundaryOrder;
 
-    use crate::basic::{self, ColumnOrder, SortOrder};
+    use crate::basic::{self, BoundaryOrder, ColumnOrder, SortOrder};
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
