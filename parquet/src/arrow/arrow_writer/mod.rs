@@ -1033,15 +1033,15 @@ impl ArrowColumnWriterFactory {
 
         match data_type {
             _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())?),
-            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => out.push(col(leaves.next().unwrap())?),
+            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => {
+                out.push(col(leaves.next().unwrap())?)
+            }
             ArrowDataType::LargeBinary
             | ArrowDataType::Binary
             | ArrowDataType::Utf8
             | ArrowDataType::LargeUtf8
             | ArrowDataType::BinaryView
-            | ArrowDataType::Utf8View => {
-                out.push(bytes(leaves.next().unwrap())?)
-            }
+            | ArrowDataType::Utf8View => out.push(bytes(leaves.next().unwrap())?),
             ArrowDataType::List(f)
             | ArrowDataType::LargeList(f)
             | ArrowDataType::FixedSizeList(f, _) => {
@@ -1058,21 +1058,30 @@ impl ArrowColumnWriterFactory {
                     self.get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
                 }
                 _ => unreachable!("invalid map type"),
-            }
+            },
             ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
-                    out.push(bytes(leaves.next().unwrap())?)
-                }
+                ArrowDataType::Utf8
+                | ArrowDataType::LargeUtf8
+                | ArrowDataType::Binary
+                | ArrowDataType::LargeBinary => out.push(bytes(leaves.next().unwrap())?),
                 ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
-                ArrowDataType::FixedSizeBinary(_) => {
+                ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
+                _ => out.push(col(leaves.next().unwrap())?),
+            },
+            // TODO: Don't know what I'm doing here!
+            ArrowDataType::RunEndEncoded(_run_ends, value_type) => match value_type.data_type() {
+                ArrowDataType::Utf8
+                | ArrowDataType::LargeUtf8
+                | ArrowDataType::Binary
+                | ArrowDataType::LargeBinary => out.push(bytes(leaves.next().unwrap())?),
+                ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
-                _ => {
-                    out.push(col(leaves.next().unwrap())?)
-                }
-            }
+                ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
+                _ => out.push(col(leaves.next().unwrap())?),
+            },
             _ => return Err(ParquetError::NYI(
                 format!(
                     "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
@@ -1166,6 +1175,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         write_primitive(typed, array.values(), levels)
                     }
                 },
+                ArrowDataType::RunEndEncoded(_run_ends, _value_type) => todo!(),
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array.as_primitive::<Int32Type>();
@@ -1248,6 +1258,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         write_primitive(typed, array.values(), levels)
                     }
                 },
+                ArrowDataType::RunEndEncoded(_run_ends, _values) => todo!(),
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
                     let array = array.as_primitive::<Int64Type>();
@@ -1324,6 +1335,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     let array = column.as_primitive::<Float16Type>();
                     get_float_16_array_slice(array, indices)
                 }
+                ArrowDataType::RunEndEncoded(_run_ends, _values) => todo!(),
                 _ => {
                     return Err(ParquetError::NYI(
                         "Attempting to write an Arrow type that is not yet implemented".to_string(),
@@ -1494,6 +1506,7 @@ mod tests {
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
     use arrow_buffer::{i256, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
+    use arrow_ipc::RunEndEncoded;
     use arrow_schema::Fields;
     use half::f16;
     use num::{FromPrimitive, ToPrimitive};
@@ -4292,5 +4305,36 @@ mod tests {
 
         assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
         assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
+    }
+
+    // TODO: Remove. Just added this to compare with arrow_writer_run_end_encoded
+    #[test]
+    fn arrow_writer_string_dictionary_two() {
+        let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+        builder.extend([Some("alpha"), Some("alpha"), Some("beta")]);
+        let dict_array = builder.finish();
+        println!("dict_array type: {:?}", dict_array.data_type());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "dict",
+            dict_array.data_type().clone(),
+            dict_array.is_nullable(),
+        )]));
+        one_column_roundtrip_with_schema(Arc::new(dict_array), schema);
+    }
+
+    #[test]
+    fn arrow_writer_run_end_encoded() {
+        // Create a run array of strings
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.extend([Some("alpha"), Some("alpha"), Some("beta")]);
+        let run_array: RunArray<Int32Type> = builder.finish();
+        println!("run_array type: {:?}", run_array.data_type());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            run_array.data_type().clone(),
+            run_array.is_nullable(),
+        )]));
+        // This fails because we don't read it back as RunArray?
+        one_column_roundtrip_with_schema(Arc::new(run_array), schema);
     }
 }
