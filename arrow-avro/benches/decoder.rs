@@ -282,7 +282,8 @@ fn gen_nested(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-const DEFAULT_BATCH: usize = 65_536;
+const LARGE_BATCH: usize = 65_536;
+const SMALL_BATCH: usize = 4096;
 
 fn new_decoder(
     schema_json: &'static str,
@@ -368,6 +369,7 @@ fn bench_scenario(
     schema_json: &'static str,
     data_sets: &[Vec<u8>],
     utf8view: bool,
+    batch_size: usize,
 ) {
     let mut group = c.benchmark_group(name);
     for (idx, &rows) in SIZES.iter().enumerate() {
@@ -390,11 +392,10 @@ fn bench_scenario(
         }
         group.bench_function(BenchmarkId::from_parameter(rows), |b| {
             b.iter_batched_ref(
-                || new_decoder(schema_json, DEFAULT_BATCH, utf8view),
+                || new_decoder(schema_json, batch_size, utf8view),
                 |decoder| {
-                    decoder.decode(black_box(datum)).unwrap();
-                    let batch = decoder.flush().unwrap().unwrap();
-                    black_box(batch.get_array_memory_size());
+                    black_box(decoder.decode(datum).unwrap());
+                    black_box(decoder.flush().unwrap().unwrap());
                 },
                 BatchSize::SmallInput,
             )
@@ -404,28 +405,107 @@ fn bench_scenario(
 }
 
 fn criterion_benches(c: &mut Criterion) {
-    bench_scenario(c, "Int32", INT_SCHEMA, &INT_DATA, false);
-    bench_scenario(c, "Int64", LONG_SCHEMA, &LONG_DATA, false);
-    bench_scenario(c, "Float32", FLOAT_SCHEMA, &FLOAT_DATA, false);
-    bench_scenario(c, "Boolean", BOOL_SCHEMA, &BOOL_DATA, false);
-    bench_scenario(c, "Float64", DOUBLE_SCHEMA, &DOUBLE_DATA, false);
-    bench_scenario(c, "Binary(Bytes)", BYTES_SCHEMA, &BYTES_DATA, false);
-    bench_scenario(c, "String", STRING_SCHEMA, &STRING_DATA, false);
-    bench_scenario(c, "StringView", STRING_SCHEMA, &STRING_DATA, true);
-    bench_scenario(c, "Date32", DATE_SCHEMA, &DATE_DATA, false);
-    bench_scenario(c, "TimeMillis", TMILLIS_SCHEMA, &TMILLIS_DATA, false);
-    bench_scenario(c, "TimeMicros", TMICROS_SCHEMA, &TMICROS_DATA, false);
-    bench_scenario(c, "TimestampMillis", TSMILLIS_SCHEMA, &TSMILLIS_DATA, false);
-    bench_scenario(c, "TimestampMicros", TSMICROS_SCHEMA, &TSMICROS_DATA, false);
-    bench_scenario(c, "Map", MAP_SCHEMA, &MAP_DATA, false);
-    bench_scenario(c, "Array", ARRAY_SCHEMA, &ARRAY_DATA, false);
-    bench_scenario(c, "Decimal128", DECIMAL_SCHEMA, &DECIMAL_DATA, false);
-    bench_scenario(c, "UUID", UUID_SCHEMA, &UUID_DATA, false);
-    bench_scenario(c, "FixedSizeBinary", FIXED_SCHEMA, &FIXED_DATA, false);
-    bench_scenario(c, "Interval", INTERVAL_SCHEMA, &INTERVAL_DATA, false);
-    bench_scenario(c, "Enum(Dictionary)", ENUM_SCHEMA, &ENUM_DATA, false);
-    bench_scenario(c, "Mixed", MIX_SCHEMA, &MIX_DATA, false);
-    bench_scenario(c, "Nested(Struct)", NEST_SCHEMA, &NEST_DATA, false);
+    for &batch_size in &[SMALL_BATCH, LARGE_BATCH] {
+        bench_scenario(c, "Int32", INT_SCHEMA, &INT_DATA, false, batch_size);
+        bench_scenario(c, "Int64", LONG_SCHEMA, &LONG_DATA, false, batch_size);
+        bench_scenario(c, "Float32", FLOAT_SCHEMA, &FLOAT_DATA, false, batch_size);
+        bench_scenario(c, "Boolean", BOOL_SCHEMA, &BOOL_DATA, false, batch_size);
+        bench_scenario(c, "Float64", DOUBLE_SCHEMA, &DOUBLE_DATA, false, batch_size);
+        bench_scenario(
+            c,
+            "Binary(Bytes)",
+            BYTES_SCHEMA,
+            &BYTES_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(c, "String", STRING_SCHEMA, &STRING_DATA, false, batch_size);
+        bench_scenario(
+            c,
+            "StringView",
+            STRING_SCHEMA,
+            &STRING_DATA,
+            true,
+            batch_size,
+        );
+        bench_scenario(c, "Date32", DATE_SCHEMA, &DATE_DATA, false, batch_size);
+        bench_scenario(
+            c,
+            "TimeMillis",
+            TMILLIS_SCHEMA,
+            &TMILLIS_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(
+            c,
+            "TimeMicros",
+            TMICROS_SCHEMA,
+            &TMICROS_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(
+            c,
+            "TimestampMillis",
+            TSMILLIS_SCHEMA,
+            &TSMILLIS_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(
+            c,
+            "TimestampMicros",
+            TSMICROS_SCHEMA,
+            &TSMICROS_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(c, "Map", MAP_SCHEMA, &MAP_DATA, false, batch_size);
+        bench_scenario(c, "Array", ARRAY_SCHEMA, &ARRAY_DATA, false, batch_size);
+        bench_scenario(
+            c,
+            "Decimal128",
+            DECIMAL_SCHEMA,
+            &DECIMAL_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(c, "UUID", UUID_SCHEMA, &UUID_DATA, false, batch_size);
+        bench_scenario(
+            c,
+            "FixedSizeBinary",
+            FIXED_SCHEMA,
+            &FIXED_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(
+            c,
+            "Interval",
+            INTERVAL_SCHEMA,
+            &INTERVAL_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(
+            c,
+            "Enum(Dictionary)",
+            ENUM_SCHEMA,
+            &ENUM_DATA,
+            false,
+            batch_size,
+        );
+        bench_scenario(c, "Mixed", MIX_SCHEMA, &MIX_DATA, false, batch_size);
+        bench_scenario(
+            c,
+            "Nested(Struct)",
+            NEST_SCHEMA,
+            &NEST_DATA,
+            false,
+            batch_size,
+        );
+    }
 }
 
 criterion_group! {
