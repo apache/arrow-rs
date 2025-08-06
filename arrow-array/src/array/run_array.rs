@@ -32,12 +32,12 @@ use crate::{
 
 /// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
 ///
-/// This encoding is variation on [run-length encoding (RLE)](https://en.wikipedia.org/wiki/Run-length_encoding)
+/// This encoding is a variation on [run-length encoding (RLE)](https://en.wikipedia.org/wiki/Run-length_encoding)
 /// and is good for representing data containing same values repeated consecutively.
 ///
 /// [`RunArray`] contains `run_ends` array and `values` array of same length.
 /// The `run_ends` array stores the indexes at which the run ends. The `values` array
-/// stores the value of each run. Below example illustrates how a logical array is represented in
+/// stores the value of each run. The below example illustrates how a logical array is represented in
 /// [`RunArray`]
 ///
 ///

@@ -102,6 +102,18 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
                 false => hinted,
             }
         }
+
+        // Potentially preserve run end encoded encoding
+        (_, DataType::RunEndEncoded(_, value)) => {
+            // Apply hint to inner type
+            let hinted = apply_hint(parquet, value.data_type().clone());
+            // If matches run end encoded value - preserve REE type
+            // otherwise use hinted inner type
+            match &hinted == value.data_type() {
+                true => hint,
+                false => hinted,
+            }
+        }
         _ => parquet,
     }
 }

@@ -67,6 +67,28 @@ pub fn make_byte_array_reader(
                 pages, data_type, reader,
             )))
         }
+        // TODO eventually add a dedicated [`ArrayReader`] for REE
+        ArrowType::RunEndEncoded(_, ref val_field) => match val_field.data_type() {
+            ArrowType::Binary
+            | ArrowType::Utf8
+            | ArrowType::Decimal128(_, _)
+            | ArrowType::Decimal256(_, _) => {
+                let reader = GenericRecordReader::new(column_desc);
+                Ok(Box::new(ByteArrayReader::<i32>::new(
+                    pages, data_type, reader,
+                )))
+            }
+            ArrowType::LargeUtf8 | ArrowType::LargeBinary => {
+                let reader = GenericRecordReader::new(column_desc);
+                Ok(Box::new(ByteArrayReader::<i64>::new(
+                    pages, data_type, reader,
+                )))
+            }
+            _ => Err(general_err!(
+                "invalid run end encoded value type for byte array reader - {}",
+                data_type
+            )),
+        },
         _ => Err(general_err!(
             "invalid data type for byte array reader - {}",
             data_type
@@ -146,6 +168,11 @@ impl<I: OffsetSizeTrait> ArrayReader for ByteArrayReader<I> {
                 })
                 .with_precision_and_scale(p, s)?;
                 Arc::new(decimal)
+            }
+            // TODO eventually add a dedicated [`ArrayReader`] for REE
+            ArrowType::RunEndEncoded(_, ref val_field) => {
+                let array = buffer.into_array(null_buffer, val_field.data_type().clone());
+                arrow_cast::cast(&array, &self.data_type)?
             }
             _ => buffer.into_array(null_buffer, self.data_type.clone()),
         };
