@@ -730,6 +730,37 @@ impl ColumnOrder {
     }
 }
 
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
+    type Error = ParquetError;
+
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_struct_begin()?;
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type == FieldType::Stop {
+            return Err(general_err!("Received empty union from remote ColumnOrder"));
+        }
+        let ret = match field_ident.id {
+            1 => {
+                // TODO: the sort order needs to be set correctly after parsing.
+                prot.skip_empty_struct()?;
+                Self::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
+            }
+            _ => {
+                prot.skip(field_ident.field_type)?;
+                Self::UNKNOWN
+            }
+        };
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type != FieldType::Stop {
+            return Err(general_err!(
+                "Received multiple fields for union from remote ColumnOrder"
+            ));
+        }
+        prot.read_struct_end()?;
+        Ok(ret)
+    }
+}
+
 // ----------------------------------------------------------------------
 // Display handlers
 

@@ -162,68 +162,6 @@ macro_rules! thrift_union_all_empty {
     }
 }
 
-/// rust enums from a thrift union definition
-#[macro_export]
-macro_rules! thrift_union {
-    ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $field_type:ident $(< $element_type:ident >)? $field_name:ident $(;)?)* }) => {
-        $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        #[allow(non_camel_case_types)]
-        #[allow(non_snake_case)]
-        #[allow(missing_docs)]
-        pub enum $identifier {
-            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name($crate::__thrift_field_type!($field_type $($element_type)?))),*
-        }
-
-        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
-            type Error = ParquetError;
-
-            fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-                prot.read_struct_begin()?;
-                let field_ident = prot.read_field_begin()?;
-                if field_ident.field_type == FieldType::Stop {
-                    return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
-                }
-                let ret = match field_ident.id {
-                    $($field_id => {
-                        let val = $field_type::try_from(&mut *prot)?;
-                        Self::$field_name(val)
-                    }
-                    )*
-                    _ => {
-                        return Err(general_err!("Unexpected {} {}", stringify!($identifier), field_ident.id));
-                    }
-                };
-                let field_ident = prot.read_field_begin()?;
-                if field_ident.field_type != FieldType::Stop {
-                    return Err(general_err!(
-                        "Received multiple fields for union from remote {}", stringify!($identifier)
-                    ));
-                }
-                prot.read_struct_end()?;
-                Ok(ret)
-            }
-        }
-
-        // TODO: remove when we finally get rid of the format module
-        impl From<crate::format::$identifier> for $identifier {
-            fn from(value: crate::format::$identifier) -> Self {
-                match value {
-                    $(crate::format::$identifier::$field_name(v) => Self::$field_name(v.into()),)*
-                }
-            }
-        }
-
-        impl From<$identifier> for crate::format::$identifier {
-            fn from(value: $identifier) -> Self {
-                match value {
-                    $($identifier::$field_name(v) => Self::$field_name(v.into()),)*
-                }
-            }
-        }
-    }
-}
-
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_field_type {
