@@ -86,6 +86,7 @@ macro_rules! thrift_empty_struct {
             }
         }
 
+        // TODO: remove when we finally get rid of the format module
         impl From<crate::format::$identifier> for $identifier {
             fn from(_: $crate::format::$identifier) -> Self {
                 Self {}
