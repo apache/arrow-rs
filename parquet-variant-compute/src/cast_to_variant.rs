@@ -26,7 +26,7 @@ use parquet_variant::Variant;
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
-macro_rules! primtive_conversion {
+macro_rules! primitive_conversion {
     ($t:ty, $input:expr, $builder:expr) => {{
         let array = $input.as_primitive::<$t>();
         for i in 0..array.len() {
@@ -69,34 +69,34 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // todo: use `downcast_primitive` to avoid the boilerplate and match more types
     match input_type {
         DataType::Int8 => {
-            primtive_conversion!(Int8Type, input, builder);
+            primitive_conversion!(Int8Type, input, builder);
         }
         DataType::Int16 => {
-            primtive_conversion!(Int16Type, input, builder);
+            primitive_conversion!(Int16Type, input, builder);
         }
         DataType::Int32 => {
-            primtive_conversion!(Int32Type, input, builder);
+            primitive_conversion!(Int32Type, input, builder);
         }
         DataType::Int64 => {
-            primtive_conversion!(Int64Type, input, builder);
+            primitive_conversion!(Int64Type, input, builder);
         }
         DataType::UInt8 => {
-            primtive_conversion!(UInt8Type, input, builder);
+            primitive_conversion!(UInt8Type, input, builder);
         }
         DataType::UInt16 => {
-            primtive_conversion!(UInt16Type, input, builder);
+            primitive_conversion!(UInt16Type, input, builder);
         }
         DataType::UInt32 => {
-            primtive_conversion!(UInt32Type, input, builder);
+            primitive_conversion!(UInt32Type, input, builder);
         }
         DataType::UInt64 => {
-            primtive_conversion!(UInt64Type, input, builder);
+            primitive_conversion!(UInt64Type, input, builder);
         }
         DataType::Float32 => {
-            primtive_conversion!(Float32Type, input, builder);
+            primitive_conversion!(Float32Type, input, builder);
         }
         DataType::Float64 => {
-            primtive_conversion!(Float64Type, input, builder);
+            primitive_conversion!(Float64Type, input, builder);
         }
         dt => {
             return Err(ArrowError::CastError(format!(
