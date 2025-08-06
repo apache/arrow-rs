@@ -566,24 +566,28 @@ union BloomFilterAlgorithm {
 // ----------------------------------------------------------------------
 // Mirrors thrift union `parquet::BloomFilterHash`
 
+thrift_empty_struct!(XxHash);
+
+thrift_union!(
 /// The hash function used in Bloom filter. This function takes the hash of a column value
 /// using plain encoding.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BloomFilterHash {
-    /// xxHash is an extremely fast non-cryptographic hash algorithm. It uses 64 bits version
-    /// of xxHash.
-    XXHASH,
+union BloomFilterHash {
+  /** xxHash Strategy. **/
+  1: XxHash XXHASH;
 }
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `parquet::BloomFilterCompression`
 
+thrift_empty_struct!(Uncompressed);
+
+thrift_union!(
 /// The compression used in the Bloom filter.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BloomFilterCompression {
-    /// No compression is used.
-    UNCOMPRESSED,
+union BloomFilterCompression {
+  1: Uncompressed UNCOMPRESSED;
 }
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `parquet::ColumnOrder`
@@ -625,9 +629,13 @@ pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
     TYPE_DEFINED_ORDER(SortOrder),
+    // The following are not defined in the Parquet spec and should always be last.
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
     UNDEFINED,
+    /// An unknown but present ColumnOrder. Statistics with an unknown `ColumnOrder`
+    /// will be ignored.
+    UNKNOWN,
 }
 
 impl ColumnOrder {
@@ -727,6 +735,7 @@ impl ColumnOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
+            ColumnOrder::UNKNOWN => SortOrder::UNDEFINED,
         }
     }
 }
@@ -833,48 +842,6 @@ impl From<ConvertedType> for Option<parquet::ConvertedType> {
             ConvertedType::JSON => Some(parquet::ConvertedType::JSON),
             ConvertedType::BSON => Some(parquet::ConvertedType::BSON),
             ConvertedType::INTERVAL => Some(parquet::ConvertedType::INTERVAL),
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::BloomFilterHash <=> BloomFilterHash conversion
-
-impl From<parquet::BloomFilterHash> for BloomFilterHash {
-    fn from(value: parquet::BloomFilterHash) -> Self {
-        match value {
-            parquet::BloomFilterHash::XXHASH(_) => BloomFilterHash::XXHASH,
-        }
-    }
-}
-
-impl From<BloomFilterHash> for parquet::BloomFilterHash {
-    fn from(value: BloomFilterHash) -> Self {
-        match value {
-            BloomFilterHash::XXHASH => parquet::BloomFilterHash::XXHASH(Default::default()),
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// parquet::BloomFilterCompression <=> BloomFilterCompression conversion
-
-impl From<parquet::BloomFilterCompression> for BloomFilterCompression {
-    fn from(value: parquet::BloomFilterCompression) -> Self {
-        match value {
-            parquet::BloomFilterCompression::UNCOMPRESSED(_) => {
-                BloomFilterCompression::UNCOMPRESSED
-            }
-        }
-    }
-}
-
-impl From<BloomFilterCompression> for parquet::BloomFilterCompression {
-    fn from(value: BloomFilterCompression) -> Self {
-        match value {
-            BloomFilterCompression::UNCOMPRESSED => {
-                parquet::BloomFilterCompression::UNCOMPRESSED(Default::default())
-            }
         }
     }
 }
