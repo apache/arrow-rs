@@ -120,7 +120,7 @@ use crate::schema::types::{
 };
 #[cfg(feature = "encryption")]
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
-pub use reader::{FooterTail, ParquetMetaDataReader};
+pub use reader::{FooterTail, PageIndexPolicy, ParquetMetaDataReader};
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
