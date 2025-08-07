@@ -41,6 +41,7 @@ use tempfile::NamedTempFile;
 mod bad_data;
 #[cfg(feature = "crc")]
 mod checksum;
+mod int96_stats_roundtrip;
 #[cfg(feature = "async")]
 mod predicate_cache;
 mod statistics;
