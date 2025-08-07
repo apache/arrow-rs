@@ -145,11 +145,11 @@ impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
         self.builder.insert(self.key, value);
     }
 
-    fn new_list(&mut self) -> ListBuilder {
+    fn new_list(&mut self) -> ListBuilder<'_> {
         self.builder.new_list(self.key)
     }
 
-    fn new_object(&mut self) -> ObjectBuilder {
+    fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.builder.new_object(self.key)
     }
 }
