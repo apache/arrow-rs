@@ -73,7 +73,7 @@ impl _MutableArrayData<'_> {
     }
 }
 
-fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits {
+fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<'_> {
     if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
         Box::new(move |mutable, start, len| {
@@ -190,7 +190,7 @@ impl std::fmt::Debug for MutableArrayData<'_> {
 /// Builds an extend that adds `offset` to the source primitive
 /// Additionally validates that `max` fits into the
 /// the underlying primitive returning None if not
-fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend> {
+fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend<'_>> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
             let _: $dt = max.try_into().ok()?;
@@ -215,7 +215,7 @@ fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Opti
 }
 
 /// Builds an extend that adds `buffer_offset` to any buffer indices encountered
-fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
+fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     let views = array.buffer::<u128>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
@@ -234,7 +234,7 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
     )
 }
 
-fn build_extend(array: &ArrayData) -> Extend {
+fn build_extend(array: &ArrayData) -> Extend<'_> {
     match array.data_type() {
         DataType::Null => null::build_extend(array),
         DataType::Boolean => boolean::build_extend(array),

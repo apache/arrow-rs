@@ -1036,7 +1036,7 @@ impl VariantBuilder {
     }
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state(&mut self) -> (ParentState, bool) {
+    fn parent_state(&mut self) -> (ParentState<'_>, bool) {
         let state = ParentState::Variant {
             buffer: &mut self.buffer,
             metadata_builder: &mut self.metadata_builder,
@@ -1047,7 +1047,7 @@ impl VariantBuilder {
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
-    pub fn new_list(&mut self) -> ListBuilder {
+    pub fn new_list(&mut self) -> ListBuilder<'_> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ListBuilder::new(parent_state, validate_unique_fields)
     }
@@ -1055,7 +1055,7 @@ impl VariantBuilder {
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
-    pub fn new_object(&mut self) -> ObjectBuilder {
+    pub fn new_object(&mut self) -> ObjectBuilder<'_> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
@@ -1151,7 +1151,7 @@ impl<'a> ListBuilder<'a> {
     }
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state(&mut self) -> (ParentState, bool) {
+    fn parent_state(&mut self) -> (ParentState<'_>, bool) {
         let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
 
         let state = ParentState::List {
@@ -1166,7 +1166,7 @@ impl<'a> ListBuilder<'a> {
     /// Returns an object builder that can be used to append a new (nested) object to this list.
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
-    pub fn new_object(&mut self) -> ObjectBuilder {
+    pub fn new_object(&mut self) -> ObjectBuilder<'_> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
@@ -1174,7 +1174,7 @@ impl<'a> ListBuilder<'a> {
     /// Returns a list builder that can be used to append a new (nested) list to this list.
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
-    pub fn new_list(&mut self) -> ListBuilder {
+    pub fn new_list(&mut self) -> ListBuilder<'_> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ListBuilder::new(parent_state, validate_unique_fields)
     }
@@ -1542,9 +1542,9 @@ impl Drop for ObjectBuilder<'_> {
 pub trait VariantBuilderExt {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
-    fn new_list(&mut self) -> ListBuilder;
+    fn new_list(&mut self) -> ListBuilder<'_>;
 
-    fn new_object(&mut self) -> ObjectBuilder;
+    fn new_object(&mut self) -> ObjectBuilder<'_>;
 }
 
 impl VariantBuilderExt for ListBuilder<'_> {
@@ -1552,11 +1552,11 @@ impl VariantBuilderExt for ListBuilder<'_> {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder {
+    fn new_list(&mut self) -> ListBuilder<'_> {
         self.new_list()
     }
 
-    fn new_object(&mut self) -> ObjectBuilder {
+    fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.new_object()
     }
 }
@@ -1566,11 +1566,11 @@ impl VariantBuilderExt for VariantBuilder {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder {
+    fn new_list(&mut self) -> ListBuilder<'_> {
         self.new_list()
     }
 
-    fn new_object(&mut self) -> ObjectBuilder {
+    fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.new_object()
     }
 }
