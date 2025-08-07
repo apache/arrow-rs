@@ -104,7 +104,7 @@ impl BooleanBuffer {
     /// Returns a `BitChunks` instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
     #[inline]
-    pub fn bit_chunks(&self) -> BitChunks {
+    pub fn bit_chunks(&self) -> BitChunks<'_> {
         BitChunks::new(self.values(), self.offset, self.len)
     }
 

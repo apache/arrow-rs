@@ -19,7 +19,7 @@ use super::{Extend, _MutableArrayData};
 use crate::ArrayData;
 use arrow_schema::DataType;
 
-pub(super) fn build_extend(array: &ArrayData) -> Extend {
+pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
     let size = match array.data_type() {
         DataType::FixedSizeBinary(i) => *i as usize,
         _ => unreachable!(),
