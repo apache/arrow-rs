@@ -25,28 +25,27 @@ use arrow_schema::{ArrowError, DataType};
 use half::f16;
 use parquet_variant::Variant;
 
-/// Convert the input array to a `VariantArray` row by row, using `method`
-/// to downcast the generic array to a specific array type and `cast_fn`
-/// to transform each element to a type compatible with Variant
-macro_rules! conversion {
-    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.$method::<$t>();
+/// Convert the input array of a specific primitive type to a `VariantArray`
+/// row by row
+macro_rules! primitive_conversion {
+    ($t:ty, $input:expr, $builder:expr) => {{
+        let array = $input.as_primitive::<$t>();
         for i in 0..array.len() {
             if array.is_null(i) {
                 $builder.append_null();
                 continue;
             }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
+            $builder.append_variant(Variant::from(array.value(i)));
         }
     }};
 }
 
-/// Convert the input array to a `VariantArray` row by row,
-/// transforming each element with `cast_fn`
+/// Convert the input array to a `VariantArray` row by row, using `method`
+/// to downcast the generic array to a specific array type and `cast_fn`
+/// to transform each element to a type compatible with Variant
 macro_rules! cast_conversion {
-    ($t:ty, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.as_primitive::<$t>();
+    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
+        let array = $input.$method::<$t>();
         for i in 0..array.len() {
             if array.is_null(i) {
                 $builder.append_null();
@@ -88,46 +87,52 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // todo: handle other types like Boolean, Strings, Date, Timestamp, etc.
     match input_type {
         DataType::Binary => {
-            conversion!(BinaryType, as_bytes, |v| v, input, builder);
+            cast_conversion!(BinaryType, as_bytes, |v| v, input, builder);
         }
         DataType::LargeBinary => {
-            conversion!(LargeBinaryType, as_bytes, |v| v, input, builder);
+            cast_conversion!(LargeBinaryType, as_bytes, |v| v, input, builder);
         }
         DataType::BinaryView => {
-            conversion!(BinaryViewType, as_byte_view, |v| v, input, builder);
+            cast_conversion!(BinaryViewType, as_byte_view, |v| v, input, builder);
         }
         DataType::Int8 => {
-            conversion!(Int8Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(Int8Type, input, builder);
         }
         DataType::Int16 => {
-            conversion!(Int16Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(Int16Type, input, builder);
         }
         DataType::Int32 => {
-            conversion!(Int32Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(Int32Type, input, builder);
         }
         DataType::Int64 => {
-            conversion!(Int64Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(Int64Type, input, builder);
         }
         DataType::UInt8 => {
-            conversion!(UInt8Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(UInt8Type, input, builder);
         }
         DataType::UInt16 => {
-            conversion!(UInt16Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(UInt16Type, input, builder);
         }
         DataType::UInt32 => {
-            conversion!(UInt32Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(UInt32Type, input, builder);
         }
         DataType::UInt64 => {
-            conversion!(UInt64Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(UInt64Type, input, builder);
         }
         DataType::Float16 => {
-            cast_conversion!(Float16Type, |v: f16| -> f32 { v.into() }, input, builder);
+            cast_conversion!(
+                Float16Type,
+                as_primitive,
+                |v: f16| -> f32 { v.into() },
+                input,
+                builder
+            );
         }
         DataType::Float32 => {
-            conversion!(Float32Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(Float32Type, input, builder);
         }
         DataType::Float64 => {
-            conversion!(Float64Type, as_primitive, |v| v, input, builder);
+            primitive_conversion!(Float64Type, input, builder);
         }
         dt => {
             return Err(ArrowError::CastError(format!(
