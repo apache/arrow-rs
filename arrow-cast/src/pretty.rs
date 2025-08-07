@@ -1240,9 +1240,10 @@ mod tests {
         // Pretty formatting
         let opts = FormatOptions::default().with_null("null");
         let opts = opts.with_duration_format(DurationFormat::Pretty);
-        let pretty = pretty_format_columns_with_options("pretty", &[array.clone()], &opts)
-            .unwrap()
-            .to_string();
+        let pretty =
+            pretty_format_columns_with_options("pretty", std::slice::from_ref(&array), &opts)
+                .unwrap()
+                .to_string();
 
         // Expected output
         let expected_pretty = vec![
