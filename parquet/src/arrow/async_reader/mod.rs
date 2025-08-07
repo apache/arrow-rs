@@ -635,12 +635,15 @@ where
 
                 // (pre) Fetch only the columns that are selected by the predicate
                 let selection = plan_builder.selection();
+                // Fetch predicate columns; expand selection only for cached predicate columns
+                let cache_mask = Some(&cache_projection);
                 row_group
                     .fetch(
                         &mut self.input,
                         predicate.projection(),
                         selection,
                         batch_size,
+                        cache_mask,
                     )
                     .await?;
 
@@ -688,11 +691,13 @@ where
         }
         // fetch the pages needed for decoding
         row_group
+            // Final projection fetch shouldn't expand selection for cache; pass None
             .fetch(
                 &mut self.input,
                 &projection,
                 plan_builder.selection(),
                 batch_size,
+                None,
             )
             .await?;
 
@@ -718,12 +723,7 @@ where
         cache_projection.intersect(projection);
         self.exclude_nested_columns_from_cache(&cache_projection)
     }
-}
 
-impl<T> ReaderFactory<T>
-where
-    T: AsyncFileReader + Send,
-{
     /// Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
     fn exclude_nested_columns_from_cache(&self, mask: &ProjectionMask) -> Option<ProjectionMask> {
         let schema = self.metadata.file_metadata().schema_descr();
@@ -984,10 +984,12 @@ impl InMemoryRowGroup<'_> {
         projection: &ProjectionMask,
         selection: Option<&RowSelection>,
         batch_size: usize,
+        cache_mask: Option<&ProjectionMask>,
     ) -> Result<()> {
         let metadata = self.metadata.row_group(self.row_group_idx);
         if let Some((selection, offset_index)) = selection.zip(self.offset_index) {
-            let selection = selection.expand_to_batch_boundaries(batch_size, self.row_count);
+            let expanded_selection =
+                selection.expand_to_batch_boundaries(batch_size, self.row_count);
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
             let mut page_start_offsets: Vec<Vec<u64>> = vec![];
@@ -1012,7 +1014,15 @@ impl InMemoryRowGroup<'_> {
                         _ => (),
                     }
 
-                    ranges.extend(selection.scan_ranges(&offset_index[idx].page_locations));
+                    // Expand selection to batch boundaries only for cached columns
+                    let use_expanded = cache_mask.map(|m| m.leaf_included(idx)).unwrap_or(false);
+                    if use_expanded {
+                        ranges.extend(
+                            expanded_selection.scan_ranges(&offset_index[idx].page_locations),
+                        );
+                    } else {
+                        ranges.extend(selection.scan_ranges(&offset_index[idx].page_locations));
+                    }
                     page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
 
                     ranges
@@ -1920,7 +1930,6 @@ mod tests {
         assert_eq!(total_rows, 730);
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_in_memory_row_group_sparse() {
         let testdata = arrow::util::test_util::parquet_test_data();
