@@ -18,11 +18,6 @@
 name: Prepare Rust Builder
 description: 'Prepare Rust Build Environment'
 inputs:
-  rust-version:
-    description: 'version of rust to install (e.g. stable)'
-    required: false
-    # default to the version specified in rust-toolchain.toml
-    default: ''
   target:
     description: 'target architecture(s)'
     required: false
@@ -48,8 +43,8 @@ runs:
       shell: bash
       run: |
         echo "Installing ${{ inputs.rust-version }}"
-        rustup install ${{ inputs.rust-version }} --target ${{ inputs.target }}
-        rustup default ${{ inputs.rust-version }}
+        rustup install --target ${{ inputs.target }}
+        rustup default
     - name: Generate lockfile
       shell: bash
       run: cargo fetch
