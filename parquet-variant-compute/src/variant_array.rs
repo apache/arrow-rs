@@ -112,7 +112,7 @@ impl VariantArray {
                     ArrowError::NotYetImplemented(format!(
                         "VariantArray 'value' field must be BinaryView, got {}",
                         v.data_type()
-                    ));
+                    ))
                 })
             })
             .transpose()?;
