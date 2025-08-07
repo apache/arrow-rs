@@ -51,7 +51,7 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
             value,
             typed_value,
         } => output_builder.partially_shredded(variant_array, metadata, value, typed_value),
-        ShreddingState::FullyShredded {
+        ShreddingState::Typed {
             metadata,
             typed_value,
         } => output_builder.fully_shredded(variant_array, metadata, typed_value),

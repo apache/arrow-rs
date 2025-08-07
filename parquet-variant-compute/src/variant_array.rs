@@ -80,8 +80,6 @@ impl VariantArray {
     /// int8.
     ///
     /// Currently, only [`BinaryViewArray`] are supported.
-    ///
-    /// [`BinaryViewArray`]: arrow::array::BinaryViewArray
     pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
         let Some(inner) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
@@ -171,7 +169,7 @@ impl VariantArray {
             ShreddingState::Unshredded { metadata, value } => {
                 Variant::new(metadata.value(index), value.value(index))
             }
-            ShreddingState::FullyShredded { typed_value, .. } => {
+            ShreddingState::Typed { typed_value, .. } => {
                 if typed_value.is_null(index) {
                     Variant::Null
                 } else {
@@ -208,23 +206,45 @@ impl VariantArray {
     }
 }
 
-/// Variant arrays can be shredded in one of three states, encoded here
+/// Represents the shredding state of a [`VariantArray`]
+///
+/// [`VariantArray`]s can be shredded according to the [Parquet Variant
+/// Shredding Spec]. Shredding means that the actual value is stored in a typed
+/// `typed_field` instead of the generic `value` field.
+///
+/// Both value and typed_value are optional fields used together to encode a
+/// single value. Values in the two fields must be interpreted according to the
+/// following table (see [Parquet Variant Shredding Spec] for more details):
+///
+/// | value | typed_value | Meaning |
+/// |----------|--------------|---------|
+/// | null     | null         | The value is missing; only valid for shredded object fields |
+/// | non-null | null         | The value is present and may be any type, including `null` |
+/// | null     | non-null     | The value is present and is the shredded type |
+/// | non-null | non-null     | The value is present and is a partially shredded object |
+///
+/// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
 #[derive(Debug)]
 pub enum ShreddingState {
+    // TODO: add missing state where there is neither value nor typed_value
+    // Missing { metadata: BinaryViewArray },
     /// This variant has no typed_value field
     Unshredded {
         metadata: BinaryViewArray,
         value: BinaryViewArray,
     },
     /// This variant has a typed_value field and no value field
-    /// meaning it is fully shredded (aka the value is stored in typed_value)
-    FullyShredded {
+    /// meaning it is the shredded type
+    Typed {
         metadata: BinaryViewArray,
         typed_value: ArrayRef,
     },
-    /// This variant has both a value field and a typed_value field
-    /// meaning it is partially shredded: first the typed_value is used, and
-    /// if that is null, the value field is used.
+    /// Partially shredded:
+    /// * value is an object
+    /// * typed_value is a shredded object.
+    ///
+    /// Note the spec says "Writers must not produce data where both value and
+    /// typed_value are non-null, unless the Variant value is an object."
     PartiallyShredded {
         metadata: BinaryViewArray,
         value: BinaryViewArray,
@@ -246,7 +266,7 @@ impl ShreddingState {
                 typed_value,
             }),
             (metadata, Some(value), None) => Ok(Self::Unshredded { metadata, value }),
-            (metadata, None, Some(typed_value)) => Ok(Self::FullyShredded {
+            (metadata, None, Some(typed_value)) => Ok(Self::Typed {
                 metadata,
                 typed_value,
             }),
@@ -260,7 +280,7 @@ impl ShreddingState {
     pub fn metadata_field(&self) -> &BinaryViewArray {
         match self {
             ShreddingState::Unshredded { metadata, .. } => metadata,
-            ShreddingState::FullyShredded { metadata, .. } => metadata,
+            ShreddingState::Typed { metadata, .. } => metadata,
             ShreddingState::PartiallyShredded { metadata, .. } => metadata,
         }
     }
@@ -269,7 +289,7 @@ impl ShreddingState {
     pub fn value_field(&self) -> Option<&BinaryViewArray> {
         match self {
             ShreddingState::Unshredded { value, .. } => Some(value),
-            ShreddingState::FullyShredded { .. } => None,
+            ShreddingState::Typed { .. } => None,
             ShreddingState::PartiallyShredded { value, .. } => Some(value),
         }
     }
@@ -278,7 +298,7 @@ impl ShreddingState {
     pub fn typed_value_field(&self) -> Option<&ArrayRef> {
         match self {
             ShreddingState::Unshredded { .. } => None,
-            ShreddingState::FullyShredded { typed_value, .. } => Some(typed_value),
+            ShreddingState::Typed { typed_value, .. } => Some(typed_value),
             ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
         }
     }
@@ -290,10 +310,10 @@ impl ShreddingState {
                 metadata: metadata.slice(offset, length),
                 value: value.slice(offset, length),
             },
-            ShreddingState::FullyShredded {
+            ShreddingState::Typed {
                 metadata,
                 typed_value,
-            } => ShreddingState::FullyShredded {
+            } => ShreddingState::Typed {
                 metadata: metadata.slice(offset, length),
                 typed_value: typed_value.slice(offset, length),
             },
