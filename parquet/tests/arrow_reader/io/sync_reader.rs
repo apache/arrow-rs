@@ -368,7 +368,7 @@ fn sync_builder(
         .expect("ParquetRecordBatchReaderBuilder")
 }
 
-/// run
+/// build the reader, and read all batches from it, returning the recorded IO operations
 fn run(
     test_file: &TestParquetFile,
     builder: ParquetRecordBatchReaderBuilder<RecordingChunkReader>,

@@ -37,24 +37,23 @@ async fn test_read_entire_file() {
     // read entire file without any filtering or projection
     let test_file = test_file();
     let builder = async_builder(&test_file, test_options()).await;
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
-        [
-            "Get Provided Metadata",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Read Multi:",
-            "  Row Group 0, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
-            "  Row Group 0, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
-            "  Row Group 0, column 'c': MultiPage(dictionary_page: true, data_pages: [0, 1])  (7346 bytes, 1 requests) [data]",
-            "Read Multi:",
-            "  Row Group 1, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
-            "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
-            "  Row Group 1, column 'c': MultiPage(dictionary_page: true, data_pages: [0, 1])  (7456 bytes, 1 requests) [data]",
-        ]
-    )
-    .await;
+        builder).await, @r#"
+    [
+        "Get Provided Metadata",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Read Multi:",
+        "  Row Group 0, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
+        "  Row Group 0, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
+        "  Row Group 0, column 'c': MultiPage(dictionary_page: true, data_pages: [0, 1])  (7346 bytes, 1 requests) [data]",
+        "Read Multi:",
+        "  Row Group 1, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
+        "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
+        "  Row Group 1, column 'c': MultiPage(dictionary_page: true, data_pages: [0, 1])  (7456 bytes, 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[tokio::test]
@@ -66,9 +65,9 @@ async fn test_read_single_group() {
         .with_row_groups(vec![1]);
 
     // Expect to see only IO for Row Group 1. Should see no IO for Row Group 0.
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
+        builder).await, @r#"
         [
             "Get Provided Metadata",
             "Event: Builder Configured",
@@ -78,7 +77,7 @@ async fn test_read_single_group() {
             "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
             "  Row Group 1, column 'c': MultiPage(dictionary_page: true, data_pages: [0, 1])  (7456 bytes, 1 requests) [data]",
         ]
-    ).await;
+    "#);
 }
 
 #[tokio::test]
@@ -88,9 +87,9 @@ async fn test_read_single_column() {
     let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
     let builder = builder.with_projection(ProjectionMask::columns(&schema_descr, ["b"]));
     // Expect to see only IO for column "b". Should see no IO for columns "a" or "c".
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
+        builder).await, @r#"
         [
             "Get Provided Metadata",
             "Event: Builder Configured",
@@ -100,7 +99,7 @@ async fn test_read_single_column() {
             "Read Multi:",
             "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
         ]
-    ).await;
+    "#);
 }
 
 #[tokio::test]
@@ -118,26 +117,25 @@ async fn test_read_row_selection() {
         ]));
 
     // Expect to see only data IO for one page for each column for each row group
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
-        [
-            "Get Provided Metadata",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Read Multi:",
-            "  Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "  Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "  Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "  Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Read Multi:",
-            "  Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "  Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "  Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "  Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-        ],
-    )
-    .await;
+        builder).await, @r#"
+    [
+        "Get Provided Metadata",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Read Multi:",
+        "  Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "  Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "  Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "  Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Read Multi:",
+        "  Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "  Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "  Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "  Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[tokio::test]
@@ -151,20 +149,19 @@ async fn test_read_limit() {
         .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
         .with_limit(125);
 
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
-        [
-            "Get Provided Metadata",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Read Multi:",
-            "  Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "  Row Group 0, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "  Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-        ],
-    )
-    .await;
+        builder).await, @r#"
+    [
+        "Get Provided Metadata",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Read Multi:",
+        "  Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "  Row Group 0, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "  Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[tokio::test]
@@ -182,9 +179,9 @@ async fn test_read_single_row_filter() {
 
     // Expect to see I/O for column b in both row groups to evaluate filter,
     // then a single pages for the "a" column in each row group
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
+        builder).await, @r#"
         [
             "Get Provided Metadata",
             "Event: Builder Configured",
@@ -200,7 +197,7 @@ async fn test_read_single_row_filter() {
             "  Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
             "  Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
         ]
-    ).await;
+    "#);
 }
 
 #[tokio::test]
@@ -221,9 +218,9 @@ async fn test_read_single_row_filter_no_page_index() {
     // 1. I/O for all pages of column b to evaluate the filter
     // 2. IO for all pages of column a as the reader doesn't know where the page
     //    boundaries are so needs to scan them.
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
+        builder).await, @r#"
         [
             "Get Provided Metadata",
             "Event: Builder Configured",
@@ -237,7 +234,7 @@ async fn test_read_single_row_filter_no_page_index() {
             "Read Multi:",
             "  Row Group 1, column 'a': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
         ]
-    ).await;
+    "#);
 }
 
 #[tokio::test]
@@ -259,9 +256,9 @@ async fn test_read_multiple_row_filter() {
     // 1. IO for all pages of column A (to evaluate the first filter)
     // 2. IO for pages of column b that passed the first filter (to evaluate the second filter)
     // 3. IO after reader is built only for column c for the rows that passed both filters
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
+        builder).await, @r#"
         [
             "Get Provided Metadata",
             "Event: Builder Configured",
@@ -284,7 +281,7 @@ async fn test_read_multiple_row_filter() {
             "  Row Group 1, column 'c': DictionaryPage   (7217 bytes, 1 requests) [data]",
             "  Row Group 1, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
         ]
-    ).await
+    "#);
 }
 
 #[tokio::test]
@@ -301,9 +298,9 @@ async fn test_read_single_row_filter_all() {
 
     // Expect to see reads for column "b" to evaluate the filter, but no reads
     // for column "a" as no rows pass the filter
-    run_test(
+    insta::assert_debug_snapshot!(run(
         &test_file,
-        builder,
+        builder).await, @r#"
         [
             "Get Provided Metadata",
             "Event: Builder Configured",
@@ -313,7 +310,7 @@ async fn test_read_single_row_filter_all() {
             "Read Multi:",
             "  Row Group 1, column 'b': MultiPage(dictionary_page: true, data_pages: [0, 1])  (1856 bytes, 1 requests) [data]",
         ]
-    ).await;
+    "#);
 }
 
 /// Return a [`ParquetRecordBatchStreamBuilder`] for reading this file
@@ -348,12 +345,11 @@ async fn async_builder(
 }
 
 /// Build the reader from the specified builder and read all batches from it,
-/// and assert that the operations log contains the expected entries.
-async fn run_test<'a>(
+/// and return the operations log.
+async fn run(
     test_file: &TestParquetFile,
     builder: ParquetRecordBatchStreamBuilder<RecordingAsyncFileReader>,
-    expected: impl IntoIterator<Item = &'a str>,
-) {
+) -> Vec<String> {
     let ops = test_file.ops();
     ops.add_entry(LogEntry::event("Builder Configured"));
     let mut stream = builder.build().unwrap();
@@ -364,7 +360,7 @@ async fn run_test<'a>(
             Err(e) => panic!("Error reading batch: {e}"),
         }
     }
-    ops.assert(expected)
+    ops.snapshot()
 }
 
 struct RecordingAsyncFileReader {

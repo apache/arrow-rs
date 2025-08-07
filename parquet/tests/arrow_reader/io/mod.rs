@@ -700,24 +700,4 @@ impl OperationLog {
             .for_each(|s| s.append_string(&mut actual, indent));
         actual
     }
-
-    /// Assert that the operations in the log match the expected operations
-    /// with an error message that can be copy/pasted to update a test on failure.
-    fn assert<'a>(&self, expected: impl IntoIterator<Item = &'a str>) {
-        let expected = expected.into_iter().collect::<Vec<&str>>();
-
-        self.coalesce_entries();
-        let ops = self.ops.lock().unwrap();
-
-        let mut actual = vec![];
-        let indent = 0;
-        ops.iter()
-            .for_each(|s| s.append_string(&mut actual, indent));
-        assert_eq!(
-            // use pretty print for easier diff comparison
-            format!("{actual:#?}"),
-            format!("{expected:#?}"),
-            "Operation log mismatch\n\nactual:\n{actual:#?}\nexpected:\n{expected:#?}"
-        );
-    }
 }
