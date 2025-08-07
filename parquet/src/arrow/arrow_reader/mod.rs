@@ -315,7 +315,7 @@ pub struct ArrowReaderOptions {
     ///
     /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
-    /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
+    /// Policy for reading offset and column indexes.
     pub(crate) page_index_policy: PageIndexPolicy,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
