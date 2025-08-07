@@ -167,7 +167,7 @@ impl VariantArray {
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn value(&self, index: usize) -> Variant {
+    pub fn value(&self, index: usize) -> Variant<'_, '_> {
         match &self.shredding_state {
             ShreddingState::Unshredded { metadata, value } => {
                 Variant::new(metadata.value(index), value.value(index))
@@ -312,7 +312,7 @@ impl ShreddingState {
 }
 
 /// returns the non-null element at index as a Variant
-fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant {
+fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '_> {
     match typed_value.data_type() {
         DataType::Int32 => {
             let typed_value = typed_value.as_primitive::<Int32Type>();
