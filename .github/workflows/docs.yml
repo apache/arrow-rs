@@ -35,7 +35,7 @@ jobs:
     name: Rustdocs are clean
     runs-on: ubuntu-latest
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
