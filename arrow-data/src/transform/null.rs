@@ -18,7 +18,7 @@
 use super::{Extend, _MutableArrayData};
 use crate::ArrayData;
 
-pub(super) fn build_extend(_: &ArrayData) -> Extend {
+pub(super) fn build_extend(_: &ArrayData) -> Extend<'_> {
     Box::new(move |_, _, _, _| {})
 }
 

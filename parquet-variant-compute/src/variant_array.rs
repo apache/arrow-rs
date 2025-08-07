@@ -141,7 +141,7 @@ impl VariantArray {
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn value(&self, index: usize) -> Variant {
+    pub fn value(&self, index: usize) -> Variant<'_, '_> {
         let metadata = self.metadata_field().as_binary_view().value(index);
         let value = self.value_field().as_binary_view().value(index);
         Variant::new(metadata, value)

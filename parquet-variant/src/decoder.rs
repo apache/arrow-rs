@@ -308,7 +308,10 @@ pub(crate) fn decode_long_string(data: &[u8]) -> Result<&str, ArrowError> {
 }
 
 /// Decodes a short string from the value section of a variant.
-pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<ShortString, ArrowError> {
+pub(crate) fn decode_short_string(
+    metadata: u8,
+    data: &[u8],
+) -> Result<ShortString<'_>, ArrowError> {
     let len = (metadata >> 2) as usize;
     let string = string_from_slice(data, 0, 0..len)?;
     ShortString::try_new(string)

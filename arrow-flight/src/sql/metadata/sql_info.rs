@@ -444,7 +444,7 @@ pub struct GetSqlInfoBuilder<'a> {
 
 impl CommandGetSqlInfo {
     /// Create a builder suitable for constructing a response
-    pub fn into_builder(self, infos: &SqlInfoData) -> GetSqlInfoBuilder {
+    pub fn into_builder(self, infos: &SqlInfoData) -> GetSqlInfoBuilder<'_> {
         GetSqlInfoBuilder {
             info: self.info,
             infos,

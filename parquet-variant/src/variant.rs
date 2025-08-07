@@ -1061,7 +1061,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Return the metadata associated with this variant, if any.
     ///
     /// Returns `Some(&VariantMetadata)` for object and list variants,
-    pub fn metadata(&self) -> Option<&'m VariantMetadata> {
+    pub fn metadata(&self) -> Option<&'m VariantMetadata<'_>> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
             | Variant::List(VariantList { metadata, .. }) => Some(metadata),
@@ -1101,7 +1101,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let path = VariantPath::from("foo").join(0);
     /// assert_eq!(variant.get_path(&path).unwrap(), bar);
     /// ```
-    pub fn get_path(&self, path: &VariantPath) -> Option<Variant> {
+    pub fn get_path(&self, path: &VariantPath) -> Option<Variant<'_, '_>> {
         path.iter()
             .try_fold(self.clone(), |output, element| match element {
                 VariantPathElement::Field { name } => output.get_object_field(name),
