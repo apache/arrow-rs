@@ -73,7 +73,7 @@ impl<'a> VariantPath<'a> {
     }
 
     /// Return the inner path elements.
-    pub fn path(&self) -> &Vec<VariantPathElement> {
+    pub fn path(&self) -> &Vec<VariantPathElement<'_>> {
         &self.0
     }
 
