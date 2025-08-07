@@ -15,6 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`VariantArray`] and compute kernels for the [Variant Binary Encoding] from [Apache Parquet].
+//!
+//! ## Main APIs
+//! - [`VariantArray`] : Represents an array of `Variant` values.
+//! - [`batch_json_string_to_variant`]: Function to convert a batch of JSON strings to a `VariantArray`.
+//! - [`batch_variant_to_json_string`]: Function to convert a `VariantArray` to a batch of JSON strings.
+//! - [`cast_to_variant`]: Module to cast other Arrow arrays to `VariantArray`.
+//! - [`variant_get`]: Module to get values from a `VariantArray` using a specified [`VariantPath`]
+//!
+//! ## 🚧 Work In Progress
+//!
+//! This crate is under active development and is not yet ready for production use.
+//! If you are interested in helping, you can find more information on the GitHub [Variant issue]
+//!
+//! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+//! [Apache Parquet]: https://parquet.apache.org/
+//! [`VariantPath`]: parquet_variant::VariantPath
+//! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
+
+
 pub mod cast_to_variant;
 mod from_json;
 mod to_json;
