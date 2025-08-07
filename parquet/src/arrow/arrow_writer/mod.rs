@@ -128,6 +128,44 @@ mod levels;
 /// [`ListArray`]: https://docs.rs/arrow/latest/arrow/array/type.ListArray.html
 /// [`IntervalMonthDayNanoArray`]: https://docs.rs/arrow/latest/arrow/array/type.IntervalMonthDayNanoArray.html
 /// [support nanosecond intervals]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
+///
+/// ## Type Compatibility
+/// The writer can write Arrow [`RecordBatch`]s that are logically equivalent. This means that for
+/// a  given column, the writer can accept multiple Arrow [`DataType`]s that contain the same
+/// value type.
+///
+/// Currently, only compatibility between Arrow dictionary and native arrays are supported.
+/// Additional type compatibility may be added in future (see [issue #8012](https://github.com/apache/arrow-rs/issues/8012))
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{DictionaryArray, RecordBatch, StringArray, UInt8Array};
+/// # use arrow_schema::{DataType, Field, Schema};
+/// # use parquet::arrow::arrow_writer::ArrowWriter;
+/// let record_batch1 = RecordBatch::try_new(
+///    Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)])),
+///    vec![Arc::new(StringArray::from_iter_values(vec!["a", "b"]))]
+///  )
+/// .unwrap();
+///
+/// let mut buffer = Vec::new();
+/// let mut writer = ArrowWriter::try_new(&mut buffer, record_batch1.schema(), None).unwrap();
+/// writer.write(&record_batch1).unwrap();
+///
+/// let record_batch2 = RecordBatch::try_new(
+///     Arc::new(Schema::new(vec![Field::new(
+///         "col",
+///         DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+///          false,
+///     )])),
+///     vec![Arc::new(DictionaryArray::new(
+///          UInt8Array::from_iter_values(vec![0, 1]),
+///          Arc::new(StringArray::from_iter_values(vec!["b", "c"])),
+///      ))],
+///  )
+///  .unwrap();
+///  writer.write(&record_batch2).unwrap();
+///  writer.close();
+/// ```
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
@@ -198,10 +236,12 @@ impl<W: Write + Send> ArrowWriter<W> {
 
         let max_row_group_size = props.max_row_group_size();
 
+        let props_ptr = Arc::new(props);
         let file_writer =
-            SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::new(props))?;
+            SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::clone(&props_ptr))?;
 
-        let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&file_writer);
+        let row_group_writer_factory =
+            ArrowRowGroupWriterFactory::new(&file_writer, schema, arrow_schema.clone(), props_ptr);
 
         Ok(Self {
             writer: file_writer,
@@ -272,12 +312,10 @@ impl<W: Write + Send> ArrowWriter<W> {
 
         let in_progress = match &mut self.in_progress {
             Some(in_progress) => in_progress,
-            x => x.insert(self.row_group_writer_factory.create_row_group_writer(
-                self.writer.schema_descr(),
-                self.writer.properties(),
-                &self.arrow_schema,
-                self.writer.flushed_row_groups().len(),
-            )?),
+            x => x.insert(
+                self.row_group_writer_factory
+                    .create_row_group_writer(self.writer.flushed_row_groups().len())?,
+            ),
         };
 
         // If would exceed max_row_group_size, split batch
@@ -363,6 +401,25 @@ impl<W: Write + Send> ArrowWriter<W> {
     /// Close and finalize the underlying Parquet writer
     pub fn close(mut self) -> Result<crate::format::FileMetaData> {
         self.finish()
+    }
+
+    /// Create a new row group writer and return its column writers.
+    pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
+        self.flush()?;
+        let in_progress = self
+            .row_group_writer_factory
+            .create_row_group_writer(self.writer.flushed_row_groups().len())?;
+        Ok(in_progress.writers)
+    }
+
+    /// Append the given column chunks to the file as a new row group.
+    pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
+        let mut row_group_writer = self.writer.next_row_group()?;
+        for chunk in chunks {
+            chunk.append_to_row_group(&mut row_group_writer)?;
+        }
+        row_group_writer.close()?;
+        Ok(())
     }
 }
 
@@ -790,51 +847,59 @@ impl ArrowRowGroupWriter {
 }
 
 struct ArrowRowGroupWriterFactory {
+    schema: SchemaDescriptor,
+    arrow_schema: SchemaRef,
+    props: WriterPropertiesPtr,
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
 impl ArrowRowGroupWriterFactory {
     #[cfg(feature = "encryption")]
-    fn new<W: Write + Send>(file_writer: &SerializedFileWriter<W>) -> Self {
+    fn new<W: Write + Send>(
+        file_writer: &SerializedFileWriter<W>,
+        schema: SchemaDescriptor,
+        arrow_schema: SchemaRef,
+        props: WriterPropertiesPtr,
+    ) -> Self {
         Self {
+            schema,
+            arrow_schema,
+            props,
             file_encryptor: file_writer.file_encryptor(),
         }
     }
 
     #[cfg(not(feature = "encryption"))]
-    fn new<W: Write + Send>(_file_writer: &SerializedFileWriter<W>) -> Self {
-        Self {}
+    fn new<W: Write + Send>(
+        _file_writer: &SerializedFileWriter<W>,
+        schema: SchemaDescriptor,
+        arrow_schema: SchemaRef,
+        props: WriterPropertiesPtr,
+    ) -> Self {
+        Self {
+            schema,
+            arrow_schema,
+            props,
+        }
     }
 
     #[cfg(feature = "encryption")]
-    fn create_row_group_writer(
-        &self,
-        parquet: &SchemaDescriptor,
-        props: &WriterPropertiesPtr,
-        arrow: &SchemaRef,
-        row_group_index: usize,
-    ) -> Result<ArrowRowGroupWriter> {
+    fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
         let writers = get_column_writers_with_encryptor(
-            parquet,
-            props,
-            arrow,
+            &self.schema,
+            &self.props,
+            &self.arrow_schema,
             self.file_encryptor.clone(),
             row_group_index,
         )?;
-        Ok(ArrowRowGroupWriter::new(writers, arrow))
+        Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
 
     #[cfg(not(feature = "encryption"))]
-    fn create_row_group_writer(
-        &self,
-        parquet: &SchemaDescriptor,
-        props: &WriterPropertiesPtr,
-        arrow: &SchemaRef,
-        _row_group_index: usize,
-    ) -> Result<ArrowRowGroupWriter> {
-        let writers = get_column_writers(parquet, props, arrow)?;
-        Ok(ArrowRowGroupWriter::new(writers, arrow))
+    fn create_row_group_writer(&self, _row_group_index: usize) -> Result<ArrowRowGroupWriter> {
+        let writers = get_column_writers(&self.schema, &self.props, &self.arrow_schema)?;
+        Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
 }
 
@@ -1432,6 +1497,7 @@ mod tests {
     use arrow_schema::Fields;
     use half::f16;
     use num::{FromPrimitive, ToPrimitive};
+    use tempfile::tempfile;
 
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
@@ -3023,6 +3089,109 @@ mod tests {
 
         // build a record batch
         one_column_roundtrip_with_schema(Arc::new(d), schema);
+    }
+
+    #[test]
+    fn arrow_writer_dict_and_native_compatibility() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let rb1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values(vec![0, 1, 0]),
+                Arc::new(StringArray::from_iter_values(vec!["parquet", "barquet"])),
+            ))],
+        )
+        .unwrap();
+
+        let file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), rb1.schema(), None).unwrap();
+        writer.write(&rb1).unwrap();
+
+        // check can append another record batch where the field has the same type
+        // as the dictionary values from the first batch
+        let schema2 = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let rb2 = RecordBatch::try_new(
+            schema2,
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "barquet", "curious",
+            ]))],
+        )
+        .unwrap();
+        writer.write(&rb2).unwrap();
+
+        writer.close().unwrap();
+
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
+        let actual_batch = record_batch_reader.next().unwrap().unwrap();
+
+        let expected_batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values(vec![0, 1, 0, 1, 2]),
+                Arc::new(StringArray::from_iter_values(vec![
+                    "parquet", "barquet", "curious",
+                ])),
+            ))],
+        )
+        .unwrap();
+
+        assert_eq!(actual_batch, expected_batch)
+    }
+
+    #[test]
+    fn arrow_writer_native_and_dict_compatibility() {
+        let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let rb1 = RecordBatch::try_new(
+            schema1.clone(),
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "parquet", "barquet",
+            ]))],
+        )
+        .unwrap();
+
+        let file = tempfile().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), rb1.schema(), None).unwrap();
+        writer.write(&rb1).unwrap();
+
+        let schema2 = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let rb2 = RecordBatch::try_new(
+            schema2.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values(vec![0, 1, 0]),
+                Arc::new(StringArray::from_iter_values(vec!["barquet", "curious"])),
+            ))],
+        )
+        .unwrap();
+        writer.write(&rb2).unwrap();
+
+        writer.close().unwrap();
+
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
+        let actual_batch = record_batch_reader.next().unwrap().unwrap();
+
+        let expected_batch = RecordBatch::try_new(
+            schema1,
+            vec![Arc::new(StringArray::from_iter_values(vec![
+                "parquet", "barquet", "barquet", "curious", "barquet",
+            ]))],
+        )
+        .unwrap();
+
+        assert_eq!(actual_batch, expected_batch)
     }
 
     #[test]
