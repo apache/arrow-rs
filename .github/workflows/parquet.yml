@@ -133,10 +133,8 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Install wasm32 targets
-        run: |
-          rustup target add wasm32-unknown-unknown
-          rustup target add wasm32-wasip1
+        with:
+          target: wasm32-unknown-unknown,wasm32-wasip1
       - name: Install clang # Needed for zlib compilation
         run: apt-get update && apt-get install -y clang gcc-multilib
       - name: Build wasm32-unknown-unknown

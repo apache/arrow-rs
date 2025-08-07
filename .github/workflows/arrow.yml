@@ -146,10 +146,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Install wasm32 targets
-        run: |
-          rustup target add wasm32-unknown-unknown
-          rustup target add wasm32-wasip1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          target: wasm32-unknown-unknown,wasm32-wasip1
       - name: Build wasm32-unknown-unknown
         run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-unknown-unknown
       - name: Build wasm32-wasip1

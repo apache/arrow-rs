@@ -34,8 +34,12 @@ jobs:
   docs:
     name: Rustdocs are clean
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [ amd64 ]
+        rust: [ nightly ]
     container:
-      image: amd64/rust
+      image: ${{ matrix.arch }}/rust
       env:
         RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
@@ -48,10 +52,10 @@ jobs:
           apt install -y libpython3.11-dev
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Install nightly toolchain
-        run: rustup install nightly
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run cargo doc
-        run: cargo +nightly doc --document-private-items --no-deps --workspace --all-features
+        run: cargo doc --document-private-items --no-deps --workspace --all-features
       - name: Fix file permissions
         shell: sh
         run: |
