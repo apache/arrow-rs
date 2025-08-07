@@ -68,7 +68,7 @@ impl<'a, T: ArrowPrimitiveVariant> PrimitiveOutputBuilder<'a, T> {
     }
 }
 
-impl<'a, T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'a, T> {
+impl<T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'_, T> {
     fn partially_shredded(
         &self,
         variant_array: &VariantArray,
