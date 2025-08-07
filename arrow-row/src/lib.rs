@@ -561,7 +561,7 @@ impl Codec {
                     },
                     _ => unreachable!(),
                 };
-                let rows = converter.convert_columns(&[values.clone()])?;
+                let rows = converter.convert_columns(std::slice::from_ref(values))?;
                 Ok(Encoder::RunEndEncoded(rows))
             }
         }
@@ -3141,7 +3141,9 @@ mod tests {
 
         for array in arrays.iter() {
             rows.clear();
-            converter.append(&mut rows, &[array.clone()]).unwrap();
+            converter
+                .append(&mut rows, std::slice::from_ref(array))
+                .unwrap();
             let back = converter.convert_rows(&rows).unwrap();
             assert_eq!(&back[0], array);
         }
@@ -3179,7 +3181,9 @@ mod tests {
 
         rows.clear();
         let array = Arc::new(dict_array) as ArrayRef;
-        converter.append(&mut rows, &[array.clone()]).unwrap();
+        converter
+            .append(&mut rows, std::slice::from_ref(&array))
+            .unwrap();
         let back = converter.convert_rows(&rows).unwrap();
 
         dictionary_eq(&back[0], &array);
