@@ -59,7 +59,7 @@ fn test_page_index_policy() {
     let f = write_parquet_file(false).unwrap();
     read_and_check(f.as_file(), PageIndexPolicy::Required).unwrap();
     read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
-    read_and_check(f.as_file(), PageIndexPolicy::Off).unwrap();
+    read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
 
     // Without page index
     let f = write_parquet_file(true).unwrap();
@@ -69,5 +69,5 @@ fn test_page_index_policy() {
         Err(ParquetError::General(e)) if e == "missing offset index"
     ));
     read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
-    read_and_check(f.as_file(), PageIndexPolicy::Off).unwrap();
+    read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
 }

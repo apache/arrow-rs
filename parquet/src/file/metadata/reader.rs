@@ -87,11 +87,20 @@ pub struct ParquetMetaDataReader {
 pub enum PageIndexPolicy {
     /// Do not read the page index.
     #[default]
-    Off,
+    Skip,
     /// Read the page index if it exists, otherwise do not error.
     Optional,
     /// Require the page index to exist, and error if it does not.
     Required,
+}
+
+impl From<bool> for PageIndexPolicy {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Self::Required,
+            false => Self::Skip,
+        }
+    }
 }
 
 /// Describes how the footer metadata is stored
@@ -119,8 +128,8 @@ impl ParquetMetaDataReader {
     pub fn new() -> Self {
         Self {
             metadata: None,
-            column_index: PageIndexPolicy::Off,
-            offset_index: PageIndexPolicy::Off,
+            column_index: PageIndexPolicy::Skip,
+            offset_index: PageIndexPolicy::Skip,
             prefetch_hint: None,
             metadata_size: None,
             #[cfg(feature = "encryption")]
@@ -142,11 +151,7 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_indexes(self, val: bool) -> Self {
-        let policy = if val {
-            PageIndexPolicy::Required
-        } else {
-            PageIndexPolicy::Off
-        };
+        let policy = PageIndexPolicy::from(val);
         self.with_column_index_policy(policy)
             .with_offset_index_policy(policy)
     }
@@ -155,11 +160,7 @@ impl ParquetMetaDataReader {
     ///
     /// [ColumnIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_column_indexes(self, val: bool) -> Self {
-        let policy = if val {
-            PageIndexPolicy::Required
-        } else {
-            PageIndexPolicy::Off
-        };
+        let policy = PageIndexPolicy::from(val);
         self.with_column_index_policy(policy)
     }
 
@@ -167,11 +168,7 @@ impl ParquetMetaDataReader {
     ///
     /// [OffsetIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_offset_indexes(self, val: bool) -> Self {
-        let policy = if val {
-            PageIndexPolicy::Required
-        } else {
-            PageIndexPolicy::Off
-        };
+        let policy = PageIndexPolicy::from(val);
         self.with_offset_index_policy(policy)
     }
 
@@ -358,7 +355,8 @@ impl ParquetMetaDataReader {
         };
 
         // we can return if page indexes aren't requested
-        if self.column_index == PageIndexPolicy::Off && self.offset_index == PageIndexPolicy::Off {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -472,7 +470,8 @@ impl ParquetMetaDataReader {
         self.metadata = Some(metadata);
 
         // we can return if page indexes aren't requested
-        if self.column_index == PageIndexPolicy::Off && self.offset_index == PageIndexPolicy::Off {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -494,7 +493,8 @@ impl ParquetMetaDataReader {
         self.metadata = Some(metadata);
 
         // we can return if page indexes aren't requested
-        if self.column_index == PageIndexPolicy::Off && self.offset_index == PageIndexPolicy::Off {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -548,7 +548,7 @@ impl ParquetMetaDataReader {
 
     fn parse_column_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
-        if self.column_index != PageIndexPolicy::Off {
+        if self.column_index != PageIndexPolicy::Skip {
             let index = metadata
                 .row_groups()
                 .iter()
@@ -621,7 +621,7 @@ impl ParquetMetaDataReader {
 
     fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
-        if self.offset_index != PageIndexPolicy::Off {
+        if self.offset_index != PageIndexPolicy::Skip {
             let index = metadata
                 .row_groups()
                 .iter()
@@ -708,10 +708,10 @@ impl ParquetMetaDataReader {
         let mut range = None;
         let metadata = self.metadata.as_ref().unwrap();
         for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-            if self.column_index != PageIndexPolicy::Off {
+            if self.column_index != PageIndexPolicy::Skip {
                 range = acc_range(range, c.column_index_range());
             }
-            if self.offset_index != PageIndexPolicy::Off {
+            if self.offset_index != PageIndexPolicy::Skip {
                 range = acc_range(range, c.offset_index_range());
             }
         }
