@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
+use crate::schema::{
+    Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName,
+    AVRO_ENUM_SYMBOLS_METADATA_KEY,
+};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
     TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
@@ -594,7 +597,7 @@ fn make_data_type<'a>(
                 let symbols_json = serde_json::to_string(&e.symbols).map_err(|e| {
                     ArrowError::ParseError(format!("Failed to serialize enum symbols: {e}"))
                 })?;
-                metadata.insert("avro.enum.symbols".to_string(), symbols_json);
+                metadata.insert(AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(), symbols_json);
                 let field = AvroDataType {
                     nullability: None,
                     metadata,

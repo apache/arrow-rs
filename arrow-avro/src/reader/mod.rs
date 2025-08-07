@@ -396,6 +396,7 @@ mod test {
     use crate::reader::record::RecordDecoder;
     use crate::reader::vlq::VLQDecoder;
     use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
+    use crate::schema::AVRO_ENUM_SYMBOLS_METADATA_KEY;
     use crate::test_util::arrow_test_data;
     use arrow::array::ArrayDataBuilder;
     use arrow_array::builder::{
@@ -1071,19 +1072,19 @@ mod test {
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
             let mut md_f1 = HashMap::new();
             md_f1.insert(
-                "avro.enum.symbols".to_string(),
+                AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["a","b","c","d"]"#.to_string(),
             );
             let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
             let mut md_f2 = HashMap::new();
             md_f2.insert(
-                "avro.enum.symbols".to_string(),
+                AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["e","f","g","h"]"#.to_string(),
             );
             let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
             let mut md_f3 = HashMap::new();
             md_f3.insert(
-                "avro.enum.symbols".to_string(),
+                AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["i","j","k"]"#.to_string(),
             );
             let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
