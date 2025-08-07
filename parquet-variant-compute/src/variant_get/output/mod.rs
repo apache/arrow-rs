@@ -44,7 +44,7 @@ pub(crate) trait OutputBuilder {
     ) -> Result<ArrayRef>;
 
     /// output for a perfectly shredded variant array
-    fn fully_shredded(
+    fn typed(
         &self,
         variant_array: &VariantArray,
         metadata: &BinaryViewArray,

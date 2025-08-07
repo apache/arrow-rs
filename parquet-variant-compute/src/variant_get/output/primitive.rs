@@ -126,7 +126,7 @@ impl<'a, T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'a, 
         Ok(Arc::new(array))
     }
 
-    fn fully_shredded(
+    fn typed(
         &self,
         _variant_array: &VariantArray,
         _metadata: &BinaryViewArray,

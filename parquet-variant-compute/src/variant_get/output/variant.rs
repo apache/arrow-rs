@@ -79,7 +79,7 @@ impl<'a> OutputBuilder for VariantOutputBuilder<'a> {
         Ok(Arc::new(array_builder.build()))
     }
 
-    fn fully_shredded(
+    fn typed(
         &self,
         variant_array: &VariantArray,
         // TODO(perf): can reuse the metadata field here to avoid re-creating it
