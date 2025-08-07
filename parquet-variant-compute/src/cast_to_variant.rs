@@ -211,7 +211,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     let mut builder = VariantArrayBuilder::new(input.len());
 
     let input_type = input.data_type();
-    // todo: handle other types like Boolean, Strings, Date, Timestamp, etc.
+    // todo: handle other types like Boolean, Date, Timestamp, etc.
     match input_type {
         DataType::Boolean => {
             non_generic_conversion!(as_boolean, |v| v, input, builder);
@@ -328,6 +328,39 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                     .to_string(),
             ));
         }
+        DataType::Utf8 => {
+            let array = input.as_string::<i32>();
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+                let cast_value = array.value(i);
+                builder.append_variant(Variant::from(cast_value));
+            }
+        }
+        DataType::LargeUtf8 => {
+            let array = input.as_string::<i64>();
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+                let cast_value = array.value(i);
+                builder.append_variant(Variant::from(cast_value));
+            }
+        }
+        DataType::Utf8View => {
+            let array = input.as_string_view();
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+                let cast_value = array.value(i);
+                builder.append_variant(Variant::from(cast_value));
+            }
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -347,7 +380,7 @@ mod tests {
     use arrow::array::{
         ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringBuilder, StringBuilder, StringViewBuilder,
         IntervalYearMonthArray, NullArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow_schema::{
@@ -1150,6 +1183,137 @@ mod tests {
                 Some(Variant::Null),
             ],
         )
+    }
+
+    fn test_cast_to_variant_utf8() {
+        // Test with short strings (should become ShortString variants)
+        let short_strings = vec![
+            Some("hello"),
+            Some(""),
+            None,
+            Some("world"),
+            Some("test"),
+        ];
+        let mut string_builder = StringBuilder::new();
+        for s in short_strings.iter() {
+            match s {
+                Some(value) => string_builder.append_value(value),
+                None => string_builder.append_null(),
+            }
+        }
+        let string_array = string_builder.finish();
+        
+        run_test(
+            Arc::new(string_array),
+            vec![
+                Some(Variant::from("hello")),
+                Some(Variant::from("")),
+                None,
+                Some(Variant::from("world")),
+                Some(Variant::from("test")),
+            ],
+        );
+
+        // Test with a long string (should become String variant)
+        let long_string = "a".repeat(100); // > 63 bytes, so will be Variant::String
+        let mut string_builder = StringBuilder::new();
+        string_builder.append_value(&long_string);
+        string_builder.append_null();
+        string_builder.append_value("short");
+        let string_array = string_builder.finish();
+        
+        run_test(
+            Arc::new(string_array),
+            vec![
+                Some(Variant::from(long_string.as_str())),
+                None,
+                Some(Variant::from("short")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_large_utf8() {
+        // Test with short strings (should become ShortString variants)
+        let short_strings = vec![
+            Some("hello"),
+            Some(""),
+            None,
+            Some("world"),
+        ];
+        let mut string_builder = LargeStringBuilder::new();
+        for s in short_strings.iter() {
+            match s {
+                Some(value) => string_builder.append_value(value),
+                None => string_builder.append_null(),
+            }
+        }
+        let string_array = string_builder.finish();
+        
+        run_test(
+            Arc::new(string_array),
+            vec![
+                Some(Variant::from("hello")),
+                Some(Variant::from("")),
+                None,
+                Some(Variant::from("world")),
+            ],
+        );
+
+        // Test with a long string (should become String variant)
+        let long_string = "b".repeat(100); // > 63 bytes, so will be Variant::String
+        let mut string_builder = LargeStringBuilder::new();
+        string_builder.append_value(&long_string);
+        string_builder.append_null();
+        string_builder.append_value("short");
+        let string_array = string_builder.finish();
+        
+        run_test(
+            Arc::new(string_array),
+            vec![
+                Some(Variant::from(long_string.as_str())),
+                None,
+                Some(Variant::from("short")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_utf8_view() {
+        // Test with short strings (should become ShortString variants)
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("hello");
+        builder.append_value("");
+        builder.append_null();
+        builder.append_value("world");
+        let string_view_array = builder.finish();
+        
+        run_test(
+            Arc::new(string_view_array),
+            vec![
+                Some(Variant::from("hello")),
+                Some(Variant::from("")),
+                None,
+                Some(Variant::from("world")),
+            ],
+        );
+
+        // Test with a long string (should become String variant)
+        let long_string = "c".repeat(100); // > 63 bytes, so will be Variant::String
+        let mut builder = StringViewBuilder::new();
+        builder.append_value(&long_string);
+        builder.append_null();
+        builder.append_value("short");
+        let string_view_array = builder.finish();
+        
+        run_test(
+            Arc::new(string_view_array),
+            vec![
+                Some(Variant::from(long_string.as_str())),
+                None,
+                Some(Variant::from("short")),
+            ],
+        );
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
