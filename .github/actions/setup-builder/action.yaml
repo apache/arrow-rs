@@ -17,11 +17,6 @@
 
 name: Prepare Rust Builder
 description: 'Prepare Rust Build Environment'
-inputs:
-  target:
-    description: 'target architecture(s)'
-    required: false
-    default: 'x86_64-unknown-linux-gnu'
 runs:
   using: "composite"
   steps:
@@ -41,10 +36,7 @@ runs:
         restore-keys: cargo-cache3-
     - name: Setup Rust toolchain
       shell: bash
-      run: |
-        echo "Installing ${{ inputs.rust-version }}"
-        rustup install --target ${{ inputs.target }}
-        rustup default
+      run: rustup install
     - name: Generate lockfile
       shell: bash
       run: cargo fetch
