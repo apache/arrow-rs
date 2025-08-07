@@ -41,7 +41,7 @@ macro_rules! primitive_conversion {
 }
 
 /// Convert the input array to a `VariantArray` row by row, using `method`
-/// requiring a generic type to downcast the generic array to a specific 
+/// requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
 macro_rules! generic_conversion {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
@@ -58,7 +58,7 @@ macro_rules! generic_conversion {
 }
 
 /// Convert the input array to a `VariantArray` row by row, using `method`
-/// not requiring a generic type to downcast the generic array to a specific 
+/// not requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
 macro_rules! non_generic_conversion {
     ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
