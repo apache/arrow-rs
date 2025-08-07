@@ -34,7 +34,7 @@ use arrow::temporal_conversions::{
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use half::f16;
-use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use parquet_variant::{Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
@@ -367,6 +367,38 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Utf8View => {
             cast_conversion_nongeneric!(as_string_view, |v| v, input, builder);
         }
+        DataType::Struct(_) => {
+            let struct_array = input.as_struct();
+            for i in 0..struct_array.len() {
+                if struct_array.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+                
+                // Create a VariantBuilder for this struct instance
+                let mut variant_builder = VariantBuilder::new();
+                let mut object_builder = variant_builder.new_object();
+                
+                // Iterate through all fields in the struct
+                for (field_idx, field_name) in struct_array.column_names().iter().enumerate() {
+                    let field_array = struct_array.column(field_idx);
+                    
+                    // Recursively convert the field value to a variant
+                    if !field_array.is_null(i) {
+                        let field_variant_array = cast_to_variant(field_array)?;
+                        let field_variant = field_variant_array.value(i);
+                        object_builder.insert(field_name, field_variant);
+                    }
+                    // Note: we skip null fields rather than inserting Variant::Null
+                    // to match Arrow struct semantics where null fields are omitted
+                }
+                
+                object_builder.finish()?;
+                let (metadata, value) = variant_builder.finish();
+                let variant = Variant::try_new(&metadata, &value)?;
+                builder.append_variant(variant);
+            }
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -388,11 +420,13 @@ mod tests {
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
         GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
         IntervalYearMonthArray, LargeStringArray, NullArray, StringArray, StringViewArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
+    use arrow_schema::{Field, Fields};
+    use arrow::buffer::NullBuffer;
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
 
@@ -1284,6 +1318,138 @@ mod tests {
                 Some(Variant::from("short")),
             ],
         );
+    }
+
+    #[test]
+    fn test_cast_to_variant_struct() {
+        // Test a simple struct with two fields: id (int64) and age (int32)
+        let id_array = Int64Array::from(vec![Some(1001), Some(1002), None, Some(1003)]);
+        let age_array = Int32Array::from(vec![Some(25), Some(30), Some(35), None]);
+        
+        let fields = Fields::from(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("age", DataType::Int32, true),
+        ]);
+        
+        let struct_array = StructArray::new(
+            fields,
+            vec![Arc::new(id_array), Arc::new(age_array)],
+            None, // no nulls at the struct level
+        );
+        
+        let result = cast_to_variant(&struct_array).unwrap();
+        assert_eq!(result.len(), 4);
+        
+        // Check first row: {"id": 1001, "age": 25}
+        let variant1 = result.value(0);
+        let obj1 = variant1.as_object().unwrap();
+        assert_eq!(obj1.get("id"), Some(Variant::from(1001i64)));
+        assert_eq!(obj1.get("age"), Some(Variant::from(25i32)));
+        
+        // Check second row: {"id": 1002, "age": 30}
+        let variant2 = result.value(1);
+        let obj2 = variant2.as_object().unwrap();
+        assert_eq!(obj2.get("id"), Some(Variant::from(1002i64)));
+        assert_eq!(obj2.get("age"), Some(Variant::from(30i32)));
+        
+        // Check third row: {"age": 35} (id is null, so omitted)
+        let variant3 = result.value(2);
+        let obj3 = variant3.as_object().unwrap();
+        assert_eq!(obj3.get("id"), None);
+        assert_eq!(obj3.get("age"), Some(Variant::from(35i32)));
+        
+        // Check fourth row: {"id": 1003} (age is null, so omitted)
+        let variant4 = result.value(3);
+        let obj4 = variant4.as_object().unwrap();
+        assert_eq!(obj4.get("id"), Some(Variant::from(1003i64)));
+        assert_eq!(obj4.get("age"), None);
+    }
+
+    #[test]
+    fn test_cast_to_variant_struct_with_nulls() {
+        // Test struct with null values at the struct level
+        let id_array = Int64Array::from(vec![Some(1001), Some(1002)]);
+        let age_array = Int32Array::from(vec![Some(25), Some(30)]);
+        
+        let fields = Fields::from(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("age", DataType::Int32, false),
+        ]);
+        
+        // Create null buffer to make second row null
+        let null_buffer = NullBuffer::from(vec![true, false]);
+        
+        let struct_array = StructArray::new(
+            fields,
+            vec![Arc::new(id_array), Arc::new(age_array)],
+            Some(null_buffer),
+        );
+        
+        let result = cast_to_variant(&struct_array).unwrap();
+        assert_eq!(result.len(), 2);
+        
+        // Check first row: {"id": 1001, "age": 25}
+        assert!(!result.is_null(0));
+        let variant1 = result.value(0);
+        let obj1 = variant1.as_object().unwrap();
+        assert_eq!(obj1.get("id"), Some(Variant::from(1001i64)));
+        assert_eq!(obj1.get("age"), Some(Variant::from(25i32)));
+        
+        // Check second row: null struct
+        assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn test_cast_to_variant_nested_struct() {
+        // Test nested struct: person with location struct
+        let id_array = Int64Array::from(vec![Some(1001), Some(1002)]);
+        let x_array = Float64Array::from(vec![Some(40.7), Some(37.8)]);
+        let y_array = Float64Array::from(vec![Some(-74.0), Some(-122.4)]);
+        
+        // Create location struct
+        let location_fields = Fields::from(vec![
+            Field::new("x", DataType::Float64, true),
+            Field::new("y", DataType::Float64, true),
+        ]);
+        let location_struct = StructArray::new(
+            location_fields.clone(),
+            vec![Arc::new(x_array), Arc::new(y_array)],
+            None,
+        );
+        
+        // Create person struct containing location
+        let person_fields = Fields::from(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("location", DataType::Struct(location_fields), true),
+        ]);
+        let person_struct = StructArray::new(
+            person_fields,
+            vec![Arc::new(id_array), Arc::new(location_struct)],
+            None,
+        );
+        
+        let result = cast_to_variant(&person_struct).unwrap();
+        assert_eq!(result.len(), 2);
+        
+        // Check first row
+        let variant1 = result.value(0);
+        let obj1 = variant1.as_object().unwrap();
+        assert_eq!(obj1.get("id"), Some(Variant::from(1001i64)));
+        
+        let location_variant1 = obj1.get("location").unwrap();
+        let location_obj1 = location_variant1.as_object().unwrap();
+        assert_eq!(location_obj1.get("x"), Some(Variant::from(40.7f64)));
+        assert_eq!(location_obj1.get("y"), Some(Variant::from(-74.0f64)));
+        
+        // Check second row
+        let variant2 = result.value(1);
+        let obj2 = variant2.as_object().unwrap();
+        assert_eq!(obj2.get("id"), Some(Variant::from(1002i64)));
+        
+        let location_variant2 = obj2.get("location").unwrap();
+        let location_obj2 = location_variant2.as_object().unwrap();
+        assert_eq!(location_obj2.get("x"), Some(Variant::from(37.8f64)));
+        assert_eq!(location_obj2.get("y"), Some(Variant::from(-122.4f64)));
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
