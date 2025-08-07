@@ -742,7 +742,7 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
 /// Parse an encapsulated message
 ///
 /// <https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format>
-fn parse_message(buf: &[u8]) -> Result<Message, ArrowError> {
+fn parse_message(buf: &[u8]) -> Result<Message<'_>, ArrowError> {
     let buf = match buf[..4] == CONTINUATION_MARKER {
         true => &buf[8..],
         false => &buf[4..],

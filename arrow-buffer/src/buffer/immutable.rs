@@ -350,7 +350,7 @@ impl Buffer {
     /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
     /// in larger chunks and starting at arbitrary bit offsets.
     /// Note that both `offset` and `length` are measured in bits.
-    pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks {
+    pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks<'_> {
         BitChunks::new(self.as_slice(), offset, len)
     }
 

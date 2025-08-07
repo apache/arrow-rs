@@ -33,6 +33,12 @@ pub trait TSerializable: Sized {
     fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()>;
 }
 
+/// Public function to aid benchmarking.
+pub fn bench_file_metadata(bytes: &bytes::Bytes) {
+    let mut input = TCompactSliceInputProtocol::new(bytes);
+    crate::format::FileMetaData::read_from_in_protocol(&mut input).unwrap();
+}
+
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
 ///
 /// [`TCompactInputProtocol`]: thrift::protocol::TCompactInputProtocol
