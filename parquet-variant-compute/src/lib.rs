@@ -17,6 +17,7 @@
 
 pub mod cast_to_variant;
 mod from_json;
+pub mod shredding;
 mod to_json;
 mod variant_array;
 mod variant_array_builder;

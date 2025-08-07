@@ -24,6 +24,8 @@ use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::shredding::VariantSchema;
+
 /// An array of Parquet [`Variant`] values
 ///
 /// A [`VariantArray`] wraps an Arrow [`StructArray`] that stores the underlying
@@ -60,11 +62,7 @@ pub struct VariantArray {
     /// int8.
     inner: StructArray,
 
-    /// Reference to the metadata column of inner
-    metadata_ref: ArrayRef,
-
-    /// Reference to the value column of inner
-    value_ref: ArrayRef,
+    variant_schema: VariantSchema,
 }
 
 impl VariantArray {
@@ -93,35 +91,12 @@ impl VariantArray {
                 "Invalid VariantArray: requires StructArray as input".to_string(),
             ));
         };
-        // Ensure the StructArray has a metadata field of BinaryView
 
-        let Some(metadata_field) = VariantArray::find_metadata_field(inner) else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: StructArray must contain a 'metadata' field".to_string(),
-            ));
-        };
-        if metadata_field.data_type() != &DataType::BinaryView {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "VariantArray 'metadata' field must be BinaryView, got {}",
-                metadata_field.data_type()
-            )));
-        }
-        let Some(value_field) = VariantArray::find_value_field(inner) else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Invalid VariantArray: StructArray must contain a 'value' field".to_string(),
-            ));
-        };
-        if value_field.data_type() != &DataType::BinaryView {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "VariantArray 'value' field must be BinaryView, got {}",
-                value_field.data_type()
-            )));
-        }
+        let variant_schema = VariantSchema::try_new(inner.fields().clone())?;
 
         Ok(Self {
             inner: inner.clone(),
-            metadata_ref: metadata_field,
-            value_ref: value_field,
+            variant_schema,
         })
     }
 
@@ -137,34 +112,41 @@ impl VariantArray {
 
     /// Return the [`Variant`] instance stored at the given row
     ///
-    /// Panics if the index is out of bounds.
+    /// Panics if the index is out of bounds or value array does not exist.
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
+    ///
+    /// Todo: reconstruct partially shredded or shredded variants
     pub fn value(&self, index: usize) -> Variant {
         let metadata = self.metadata_field().as_binary_view().value(index);
-        let value = self.value_field().as_binary_view().value(index);
+        let value = self
+            .value_field()
+            .expect("value field does not exist")
+            .as_binary_view()
+            .value(index);
         Variant::new(metadata, value)
-    }
-
-    fn find_metadata_field(array: &StructArray) -> Option<ArrayRef> {
-        array.column_by_name("metadata").cloned()
-    }
-
-    fn find_value_field(array: &StructArray) -> Option<ArrayRef> {
-        array.column_by_name("value").cloned()
     }
 
     /// Return a reference to the metadata field of the [`StructArray`]
     pub fn metadata_field(&self) -> &ArrayRef {
-        // spec says fields order is not guaranteed, so we search by name
-        &self.metadata_ref
+        let metadata_idx = self.variant_schema.metadata_idx();
+
+        self.inner.column(metadata_idx)
     }
 
     /// Return a reference to the value field of the `StructArray`
-    pub fn value_field(&self) -> &ArrayRef {
-        // spec says fields order is not guaranteed, so we search by name
-        &self.value_ref
+    pub fn value_field(&self) -> Option<&ArrayRef> {
+        self.variant_schema
+            .value_idx()
+            .map(|i| self.inner.column(i))
+    }
+
+    /// Return a reference to the shredded value field of the `StructArray`
+    pub fn shredded_value_field(&self) -> Option<&ArrayRef> {
+        self.variant_schema
+            .shredded_value_idx()
+            .map(|i| self.inner.column(i))
     }
 }
 
@@ -187,12 +169,9 @@ impl Array for VariantArray {
 
     fn slice(&self, offset: usize, length: usize) -> ArrayRef {
         let slice = self.inner.slice(offset, length);
-        let met = self.metadata_ref.slice(offset, length);
-        let val = self.value_ref.slice(offset, length);
         Arc::new(Self {
             inner: slice,
-            metadata_ref: met,
-            value_ref: val,
+            variant_schema: self.variant_schema.clone(),
         })
     }
 
@@ -258,14 +237,14 @@ mod test {
         let err = VariantArray::try_new(Arc::new(array));
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Invalid argument error: Invalid VariantArray: StructArray must contain a 'value' field"
+            "Invalid argument error: Invalid VariantArray: StructArray must contain either `value` or `typed_value` fields or both."
         );
     }
 
     #[test]
     fn invalid_metadata_field_type() {
         let fields = Fields::from(vec![
-            Field::new("metadata", DataType::Binary, true), // Not yet supported
+            Field::new("metadata", DataType::Binary, false), // Not yet supported
             Field::new("value", DataType::BinaryView, true),
         ]);
         let array = StructArray::new(
@@ -283,7 +262,7 @@ mod test {
     #[test]
     fn invalid_value_field_type() {
         let fields = Fields::from(vec![
-            Field::new("metadata", DataType::BinaryView, true),
+            Field::new("metadata", DataType::BinaryView, false),
             Field::new("value", DataType::Binary, true), // Not yet supported
         ]);
         let array = StructArray::new(
