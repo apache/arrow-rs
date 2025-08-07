@@ -18,24 +18,26 @@
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    BinaryType, BinaryViewType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, Int8Type, LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::{ArrowError, DataType};
 use half::f16;
 use parquet_variant::Variant;
 
-/// Convert the input array of a specific primitive type to a `VariantArray`
-/// row by row
-macro_rules! primitive_conversion {
-    ($t:ty, $input:expr, $builder:expr) => {{
-        let array = $input.as_primitive::<$t>();
+/// Convert the input array to a `VariantArray` row by row, using `method`
+/// to downcast the generic array to a specific array type and `cast_fn`
+/// to transform each element to a type compatible with Variant
+macro_rules! conversion {
+    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
+        let array = $input.$method::<$t>();
         for i in 0..array.len() {
             if array.is_null(i) {
                 $builder.append_null();
                 continue;
             }
-            $builder.append_variant(Variant::from(array.value(i)));
+            let cast_value = $cast_fn(array.value(i));
+            $builder.append_variant(Variant::from(cast_value));
         }
     }};
 }
@@ -85,38 +87,47 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     let input_type = input.data_type();
     // todo: handle other types like Boolean, Strings, Date, Timestamp, etc.
     match input_type {
+        DataType::Binary => {
+            conversion!(BinaryType, as_bytes, |v| v, input, builder);
+        }
+        DataType::LargeBinary => {
+            conversion!(LargeBinaryType, as_bytes, |v| v, input, builder);
+        }
+        DataType::BinaryView => {
+            conversion!(BinaryViewType, as_byte_view, |v| v, input, builder);
+        }
         DataType::Int8 => {
-            primitive_conversion!(Int8Type, input, builder);
+            conversion!(Int8Type, as_primitive, |v| v, input, builder);
         }
         DataType::Int16 => {
-            primitive_conversion!(Int16Type, input, builder);
+            conversion!(Int16Type, as_primitive, |v| v, input, builder);
         }
         DataType::Int32 => {
-            primitive_conversion!(Int32Type, input, builder);
+            conversion!(Int32Type, as_primitive, |v| v, input, builder);
         }
         DataType::Int64 => {
-            primitive_conversion!(Int64Type, input, builder);
+            conversion!(Int64Type, as_primitive, |v| v, input, builder);
         }
         DataType::UInt8 => {
-            primitive_conversion!(UInt8Type, input, builder);
+            conversion!(UInt8Type, as_primitive, |v| v, input, builder);
         }
         DataType::UInt16 => {
-            primitive_conversion!(UInt16Type, input, builder);
+            conversion!(UInt16Type, as_primitive, |v| v, input, builder);
         }
         DataType::UInt32 => {
-            primitive_conversion!(UInt32Type, input, builder);
+            conversion!(UInt32Type, as_primitive, |v| v, input, builder);
         }
         DataType::UInt64 => {
-            primitive_conversion!(UInt64Type, input, builder);
+            conversion!(UInt64Type, as_primitive, |v| v, input, builder);
         }
         DataType::Float16 => {
             cast_conversion!(Float16Type, |v: f16| -> f32 { v.into() }, input, builder);
         }
         DataType::Float32 => {
-            primitive_conversion!(Float32Type, input, builder);
+            conversion!(Float32Type, as_primitive, |v| v, input, builder);
         }
         DataType::Float64 => {
-            primitive_conversion!(Float64Type, input, builder);
+            conversion!(Float64Type, as_primitive, |v| v, input, builder);
         }
         dt => {
             return Err(ArrowError::CastError(format!(
@@ -135,11 +146,66 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
     use parquet_variant::{Variant, VariantDecimal16};
     use std::sync::Arc;
+
+    #[test]
+    fn test_cast_to_variant_binary() {
+        // BinaryType
+        let mut builder = GenericByteBuilder::<BinaryType>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"world");
+        let binary_array = builder.finish();
+        run_test(
+            Arc::new(binary_array),
+            vec![
+                Some(Variant::Binary(b"hello")),
+                Some(Variant::Binary(b"")),
+                None,
+                Some(Variant::Binary(b"world")),
+            ],
+        );
+
+        // LargeBinaryType
+        let mut builder = GenericByteBuilder::<LargeBinaryType>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"world");
+        let large_binary_array = builder.finish();
+        run_test(
+            Arc::new(large_binary_array),
+            vec![
+                Some(Variant::Binary(b"hello")),
+                Some(Variant::Binary(b"")),
+                None,
+                Some(Variant::Binary(b"world")),
+            ],
+        );
+
+        // BinaryViewType
+        let mut builder = GenericByteViewBuilder::<BinaryViewType>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"world");
+        let byte_view_array = builder.finish();
+        run_test(
+            Arc::new(byte_view_array),
+            vec![
+                Some(Variant::Binary(b"hello")),
+                Some(Variant::Binary(b"")),
+                None,
+                Some(Variant::Binary(b"world")),
+            ],
+        );
+    }
 
     #[test]
     fn test_cast_to_variant_int8() {
