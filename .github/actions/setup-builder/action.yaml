@@ -56,7 +56,7 @@ runs:
       shell: bash
       run: |
         echo "Installing ${{ inputs.rust-version }}"
-        rustup toolchain install ${{ inputs.rust-version }} --target ${{ inputs.target }}
+        rustup install ${{ inputs.rust-version }} --target ${{ inputs.target }}
         rustup default ${{ inputs.rust-version }}
     - name: Disable debuginfo generation
       # Disable full debug symbol generation to speed up CI build and keep memory down
