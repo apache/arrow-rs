@@ -108,13 +108,12 @@ impl VariantArray {
         let value = inner
             .column_by_name("value")
             .map(|v| {
-                let Some(binary_view) = v.as_binary_view_opt() else {
-                    return Err(ArrowError::NotYetImplemented(format!(
+                v.as_binary_view_opt().ok_or_else(|| {
+                    ArrowError::NotYetImplemented(format!(
                         "VariantArray 'value' field must be BinaryView, got {}",
                         v.data_type()
-                    )));
-                };
-                Ok(binary_view)
+                    ));
+                })
             })
             .transpose()?;
 
