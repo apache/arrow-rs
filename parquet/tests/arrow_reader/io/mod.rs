@@ -690,6 +690,17 @@ impl OperationLog {
         }
     }
 
+    /// return a snapshot of the current operations in the log.
+    fn snapshot(&self) -> Vec<String> {
+        self.coalesce_entries();
+        let ops = self.ops.lock().unwrap();
+        let mut actual = vec![];
+        let indent = 0;
+        ops.iter()
+            .for_each(|s| s.append_string(&mut actual, indent));
+        actual
+    }
+
     /// Assert that the operations in the log match the expected operations
     /// with an error message that can be copy/pasted to update a test on failure.
     fn assert<'a>(&self, expected: impl IntoIterator<Item = &'a str>) {

@@ -37,35 +37,34 @@ fn test_read_entire_file() {
     let test_file = test_file();
     // Expect to see IO for all data pages for each row group and column
     let builder = sync_builder(&test_file, test_options());
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "UNKNOWN: 22230..22877 (maybe Page Index)",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 0, column 'c': DictionaryPage   (7107 bytes, 1 requests) [data]",
-            "Row Group 0, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 0, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'c': DictionaryPage   (7217 bytes, 1 requests) [data]",
-            "Row Group 1, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "UNKNOWN: 22230..22877 (maybe Page Index)",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'c': DictionaryPage   (7107 bytes, 1 requests) [data]",
+        "Row Group 0, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 0, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'c': DictionaryPage   (7217 bytes, 1 requests) [data]",
+        "Row Group 1, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[test]
@@ -74,26 +73,25 @@ fn test_read_single_group() {
     let builder = sync_builder(&test_file, test_options()).with_row_groups(vec![1]); // read only second row group
 
     // Expect to see only IO for Row Group 1. Should see no IO for Row Group 0.
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "UNKNOWN: 22230..22877 (maybe Page Index)",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'c': DictionaryPage   (7217 bytes, 1 requests) [data]",
-            "Row Group 1, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "UNKNOWN: 22230..22877 (maybe Page Index)",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'c': DictionaryPage   (7217 bytes, 1 requests) [data]",
+        "Row Group 1, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[test]
@@ -103,23 +101,22 @@ fn test_read_single_column() {
     let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
     let builder = builder.with_projection(ProjectionMask::columns(&schema_descr, ["b"]));
     // Expect to see only IO for column "b". Should see no IO for columns "a" or "c".
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "UNKNOWN: 22230..22877 (maybe Page Index)",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "UNKNOWN: 22230..22877 (maybe Page Index)",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[test]
@@ -133,28 +130,27 @@ fn test_read_single_column_no_page_index() {
     //
     // Note that we need to read all data page headers to find the pages for column b
     // so there are many more small reads than in the test_read_single_column test above
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Row Group 0, column 'b': DictionaryPage   (17 bytes  , 17 requests) [header]",
-            "Row Group 0, column 'b': DictionaryPage   (1600 bytes, 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(0)      (20 bytes  , 20 requests) [header]",
-            "Row Group 0, column 'b': DataPage(0)      (93 bytes  , 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(1)      (20 bytes  , 20 requests) [header]",
-            "Row Group 0, column 'b': DataPage(1)      (106 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (17 bytes  , 17 requests) [header]",
-            "Row Group 1, column 'b': DictionaryPage   (1600 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (20 bytes  , 20 requests) [header]",
-            "Row Group 1, column 'b': DataPage(0)      (93 bytes  , 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(1)      (20 bytes  , 20 requests) [header]",
-            "Row Group 1, column 'b': DataPage(1)      (106 bytes , 1 requests) [data]",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Row Group 0, column 'b': DictionaryPage   (17 bytes  , 17 requests) [header]",
+        "Row Group 0, column 'b': DictionaryPage   (1600 bytes, 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(0)      (20 bytes  , 20 requests) [header]",
+        "Row Group 0, column 'b': DataPage(0)      (93 bytes  , 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(1)      (20 bytes  , 20 requests) [header]",
+        "Row Group 0, column 'b': DataPage(1)      (106 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (17 bytes  , 17 requests) [header]",
+        "Row Group 1, column 'b': DictionaryPage   (1600 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (20 bytes  , 20 requests) [header]",
+        "Row Group 1, column 'b': DataPage(0)      (93 bytes  , 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(1)      (20 bytes  , 20 requests) [header]",
+        "Row Group 1, column 'b': DataPage(1)      (106 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[test]
@@ -176,25 +172,24 @@ fn test_read_row_selection() {
 
     // Expect to see only data IO for one page for each column for each row group
     // Note the data page headers for all pages need to be read to find the correct pages
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "UNKNOWN: 22230..22877 (maybe Page Index)",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "UNKNOWN: 22230..22877 (maybe Page Index)",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[test]
@@ -208,20 +203,19 @@ fn test_read_limit() {
         .with_projection(ProjectionMask::columns(&schema_descr, ["a"]))
         .with_limit(125);
 
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "UNKNOWN: 22230..22877 (maybe Page Index)",
-            "Event: Builder Configured",
-            "Event: Reader Built",
-            "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "UNKNOWN: 22230..22877 (maybe Page Index)",
+        "Event: Builder Configured",
+        "Event: Reader Built",
+        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[test]
@@ -246,31 +240,30 @@ fn test_read_single_row_filter() {
     //
     // Note there is significant IO that happens during the construction of the
     // reader (between "Builder Configured" and "Reader Built")
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "UNKNOWN: 22230..22877 (maybe Page Index)",
-            "Event: Builder Configured",
-            "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Event: Reader Built",
-            "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "UNKNOWN: 22230..22877 (maybe Page Index)",
+        "Event: Builder Configured",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Event: Reader Built",
+        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[test]
@@ -298,32 +291,31 @@ fn test_read_multiple_row_filter() {
     //
     // Note there is significant IO that happens during the construction of the
     // reader (between "Builder Configured" and "Reader Built")
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "UNKNOWN: 22230..22877 (maybe Page Index)",
-            "Event: Builder Configured",
-            "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Event: Reader Built",
-            "Row Group 0, column 'c': DictionaryPage   (7107 bytes, 1 requests) [data]",
-            "Row Group 0, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'c': DictionaryPage   (7217 bytes, 1 requests) [data]",
-            "Row Group 1, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "UNKNOWN: 22230..22877 (maybe Page Index)",
+        "Event: Builder Configured",
+        "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 0, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'a': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'a': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Event: Reader Built",
+        "Row Group 0, column 'c': DictionaryPage   (7107 bytes, 1 requests) [data]",
+        "Row Group 0, column 'c': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'c': DictionaryPage   (7217 bytes, 1 requests) [data]",
+        "Row Group 1, column 'c': DataPage(0)      (113 bytes , 1 requests) [data]",
+    ]
+    "#);
 }
 
 #[test]
@@ -345,23 +337,22 @@ fn test_read_single_row_filter_all() {
     //
     // Note that all IO that happens during the construction of the reader
     // (between "Builder Configured" and "Reader Built")
-    run_test(
-        &test_file,
-        builder,
-        [
-            "Footer: 8 bytes",
-            "Metadata: 1162",
-            "UNKNOWN: 22230..22877 (maybe Page Index)",
-            "Event: Builder Configured",
-            "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
-            "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
-            "Event: Reader Built",
-        ],
-    );
+    insta::assert_debug_snapshot!(run(&test_file, builder),
+        @r#"
+    [
+        "Footer: 8 bytes",
+        "Metadata: 1162",
+        "UNKNOWN: 22230..22877 (maybe Page Index)",
+        "Event: Builder Configured",
+        "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 0, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(0)      (113 bytes , 1 requests) [data]",
+        "Row Group 1, column 'b': DataPage(1)      (126 bytes , 1 requests) [data]",
+        "Event: Reader Built",
+    ]
+    "#);
 }
 
 /// Return a [`ParquetRecordBatchReaderBuilder`] for reading this file
@@ -377,13 +368,11 @@ fn sync_builder(
         .expect("ParquetRecordBatchReaderBuilder")
 }
 
-/// Build the reader from the specified builder and read all batches from it,
-/// and assert that the operations log contains the expected entries.
-fn run_test<'a>(
+/// run
+fn run(
     test_file: &TestParquetFile,
     builder: ParquetRecordBatchReaderBuilder<RecordingChunkReader>,
-    expected: impl IntoIterator<Item = &'a str>,
-) {
+) -> Vec<String> {
     let ops = test_file.ops();
     ops.add_entry(LogEntry::event("Builder Configured"));
     let reader = builder.build().unwrap();
@@ -394,7 +383,7 @@ fn run_test<'a>(
             Err(e) => panic!("Error reading batch: {e}"),
         }
     }
-    ops.assert(expected)
+    ops.snapshot()
 }
 
 /// Records IO operations on an in-memory chunk reader
