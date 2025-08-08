@@ -37,7 +37,7 @@ use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::schema::types::SchemaDescriptor;
@@ -383,8 +383,8 @@ pub struct ArrowReaderOptions {
     ///
     /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
-    /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
-    pub(crate) page_index: bool,
+    /// Policy for reading offset and column indexes.
+    pub(crate) page_index_policy: PageIndexPolicy,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
     pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
@@ -486,7 +486,20 @@ impl ArrowReaderOptions {
     /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
     /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
-        Self { page_index, ..self }
+        let page_index_policy = PageIndexPolicy::from(page_index);
+
+        Self {
+            page_index_policy,
+            ..self
+        }
+    }
+
+    /// Set the [`PageIndexPolicy`] to determine how page indexes should be read.
+    pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
+        Self {
+            page_index_policy: policy,
+            ..self
+        }
     }
 
     /// Provide the file decryption properties to use when reading encrypted parquet files.
@@ -507,7 +520,7 @@ impl ArrowReaderOptions {
     ///
     /// This can be set via [`with_page_index`][Self::with_page_index].
     pub fn page_index(&self) -> bool {
-        self.page_index
+        self.page_index_policy != PageIndexPolicy::Skip
     }
 
     /// Retrieve the currently set file decryption properties.
@@ -556,7 +569,8 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
+        let metadata =
+            ParquetMetaDataReader::new().with_page_index_policy(options.page_index_policy);
         #[cfg(feature = "encryption")]
         let metadata =
             metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
