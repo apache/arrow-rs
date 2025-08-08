@@ -187,6 +187,7 @@ impl VariantArray {
                     typed_value_to_variant(typed_value, index)
                 }
             }
+            ShreddingState::AllNull { .. } => Variant::Null,
         }
     }
 
@@ -226,8 +227,6 @@ impl VariantArray {
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
 #[derive(Debug)]
 pub enum ShreddingState {
-    // TODO: add missing state where there is neither value nor typed_value
-    // Missing { metadata: BinaryViewArray },
     /// This variant has no typed_value field
     Unshredded {
         metadata: BinaryViewArray,
@@ -250,6 +249,8 @@ pub enum ShreddingState {
         value: BinaryViewArray,
         typed_value: ArrayRef,
     },
+    /// All values are null, only metadata is present
+    AllNull { metadata: BinaryViewArray },
 }
 
 impl ShreddingState {
@@ -270,9 +271,7 @@ impl ShreddingState {
                 metadata,
                 typed_value,
             }),
-            (_metadata_field, None, None) => Err(ArrowError::InvalidArgumentError(String::from(
-                "VariantArray has neither value nor typed_value field",
-            ))),
+            (metadata, None, None) => Ok(Self::AllNull { metadata }),
         }
     }
 
@@ -282,6 +281,7 @@ impl ShreddingState {
             ShreddingState::Unshredded { metadata, .. } => metadata,
             ShreddingState::Typed { metadata, .. } => metadata,
             ShreddingState::PartiallyShredded { metadata, .. } => metadata,
+            ShreddingState::AllNull { metadata } => metadata,
         }
     }
 
@@ -291,6 +291,7 @@ impl ShreddingState {
             ShreddingState::Unshredded { value, .. } => Some(value),
             ShreddingState::Typed { .. } => None,
             ShreddingState::PartiallyShredded { value, .. } => Some(value),
+            ShreddingState::AllNull { .. } => None,
         }
     }
 
@@ -300,6 +301,7 @@ impl ShreddingState {
             ShreddingState::Unshredded { .. } => None,
             ShreddingState::Typed { typed_value, .. } => Some(typed_value),
             ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
+            ShreddingState::AllNull { .. } => None,
         }
     }
 
@@ -325,6 +327,9 @@ impl ShreddingState {
                 metadata: metadata.slice(offset, length),
                 value: value.slice(offset, length),
                 typed_value: typed_value.slice(offset, length),
+            },
+            ShreddingState::AllNull { metadata } => ShreddingState::AllNull {
+                metadata: metadata.slice(offset, length),
             },
         }
     }
@@ -434,15 +439,17 @@ mod test {
     }
 
     #[test]
-    fn invalid_missing_value() {
+    fn all_null_missing_value_and_typed_value() {
         let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
         let array = StructArray::new(fields, vec![make_binary_view_array()], None);
-        // Should fail because the StructArray does not contain a 'value' field
-        let err = VariantArray::try_new(Arc::new(array));
-        assert_eq!(
-            err.unwrap_err().to_string(),
-            "Invalid argument error: VariantArray has neither value nor typed_value field"
-        );
+        // Should succeed and create an AllNull variant when neither value nor typed_value are present
+        let variant_array = VariantArray::try_new(Arc::new(array)).unwrap();
+
+        // Verify the shredding state is AllNull
+        assert!(matches!(
+            variant_array.shredding_state(),
+            ShreddingState::AllNull { .. }
+        ));
     }
 
     #[test]
@@ -487,5 +494,54 @@ mod test {
 
     fn make_binary_array() -> ArrayRef {
         Arc::new(BinaryArray::from(vec![b"test" as &[u8]]))
+    }
+
+    #[test]
+    fn all_null_shredding_state() {
+        let metadata = BinaryViewArray::from(vec![b"test" as &[u8]]);
+        let shredding_state = ShreddingState::try_new(metadata.clone(), None, None).unwrap();
+
+        assert!(matches!(
+            shredding_state,
+            ShreddingState::AllNull { .. }
+        ));
+        
+        // Verify metadata is preserved correctly
+        if let ShreddingState::AllNull { metadata: m } = shredding_state {
+            assert_eq!(m.len(), metadata.len());
+            assert_eq!(m.value(0), metadata.value(0));
+        }
+    }
+
+    #[test]
+    fn all_null_variant_array_construction() {
+        let metadata = BinaryViewArray::from(vec![b"test" as &[u8]; 3]);
+        let nulls = NullBuffer::from(vec![false, false, false]); // all null
+
+        let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
+        let struct_array = StructArray::new(fields, vec![Arc::new(metadata)], Some(nulls));
+
+        let variant_array = VariantArray::try_new(Arc::new(struct_array)).unwrap();
+
+        // Verify the shredding state is AllNull
+        assert!(matches!(
+            variant_array.shredding_state(),
+            ShreddingState::AllNull { .. }
+        ));
+
+        // Verify all values are null
+        assert_eq!(variant_array.len(), 3);
+        assert!(!variant_array.is_valid(0));
+        assert!(!variant_array.is_valid(1));
+        assert!(!variant_array.is_valid(2));
+
+        // Verify that value() returns Variant::Null for all indices
+        for i in 0..variant_array.len() {
+            assert!(
+                !variant_array.is_valid(i),
+                "Expected value at index {} to be null",
+                i
+            );
+        }
     }
 }

@@ -143,4 +143,17 @@ impl<'a> OutputBuilder for VariantOutputBuilder<'a> {
 
         Ok(Arc::new(builder.build()))
     }
+
+    fn all_null(
+        &self,
+        variant_array: &VariantArray,
+        _metadata: &BinaryViewArray,
+    ) -> arrow::error::Result<ArrayRef> {
+        // For all-null case, simply create a VariantArray with all null values
+        let mut builder = VariantArrayBuilder::new(variant_array.len());
+        for _i in 0..variant_array.len() {
+            builder.append_null();
+        }
+        Ok(Arc::new(builder.build()))
+    }
 }
