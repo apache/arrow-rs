@@ -166,7 +166,7 @@ fn test_single_same_value_sequence() {
         ],
     );
 
-    run_delta_sequence_test(
+    run_resend_sequence_test(
         batches,
         &[
             MessageType::Dict,
