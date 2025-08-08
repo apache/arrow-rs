@@ -1402,6 +1402,12 @@ impl<R: Read> StreamReader<R> {
             i32::from_le_bytes(meta_size)
         };
 
+        if meta_len < 0 {
+            return Err(ArrowError::ParseError(format!(
+                "Invalid metadata length: {meta_len}"
+            )));
+        }
+
         let mut meta_buffer = vec![0; meta_len as usize];
         reader.read_exact(&mut meta_buffer)?;
 
@@ -1483,6 +1489,12 @@ impl<R: Read> StreamReader<R> {
             }
             i32::from_le_bytes(meta_size)
         };
+
+        if meta_len < 0 {
+            return Err(ArrowError::ParseError(format!(
+                "Invalid metadata length: {meta_len}"
+            )));
+        }
 
         if meta_len == 0 {
             // the stream has ended, mark the reader as finished
@@ -1594,6 +1606,8 @@ impl<R: Read> RecordBatchReader for StreamReader<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use crate::convert::fb_to_schema;
     use crate::writer::{
         unslice_run_array, write_message, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
@@ -1738,6 +1752,40 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn test_negative_meta_len_start_stream() {
+        let bytes = i32::to_le_bytes(-1);
+        let mut buf = vec![];
+        buf.extend(CONTINUATION_MARKER);
+        buf.extend(bytes);
+
+        let reader = StreamReader::try_new(Cursor::new(buf), None);
+        assert!(reader.is_err());
+    }
+
+    #[test]
+    fn test_negative_meta_len_mid_stream() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let mut buf = Vec::new();
+        {
+            let mut writer = crate::writer::StreamWriter::try_new(&mut buf, &schema).unwrap();
+            let batch =
+                RecordBatch::try_new(Arc::new(schema), vec![Arc::new(Int32Array::from(vec![1]))])
+                    .unwrap();
+            writer.write(&batch).unwrap();
+        }
+
+        let bytes = i32::to_le_bytes(-1);
+        buf.extend(CONTINUATION_MARKER);
+        buf.extend(bytes);
+
+        let mut reader = StreamReader::try_new(Cursor::new(buf), None).unwrap();
+        // Read the valid value
+        assert!(reader.maybe_next().is_ok());
+        // Read the invalid meta len
+        assert!(reader.maybe_next().is_err());
     }
 
     #[test]
