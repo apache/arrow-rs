@@ -58,6 +58,7 @@ pub mod statistics;
 ///
 /// * synchronous API: [`ParquetRecordBatchReaderBuilder::try_new`]
 /// * `async` API: [`ParquetRecordBatchStreamBuilder::new`]
+/// * decoder API: [`ParquetDecoderBuilder::new`]
 ///
 /// # Features
 /// * Projection pushdown: [`Self::with_projection`]
@@ -93,6 +94,7 @@ pub mod statistics;
 /// Millisecond Latency] Arrow blog post.
 ///
 /// [`ParquetRecordBatchStreamBuilder::new`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new
+/// [`ParquetDecoderBuilder::new`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::new
 /// [Apache Arrow]: https://arrow.apache.org/
 /// [`StatisticsConverter`]: statistics::StatisticsConverter
 /// [Querying Parquet with Millisecond Latency]: https://arrow.apache.org/blog/2022/12/26/querying-parquet-with-millisecond-latency/
@@ -991,10 +993,24 @@ impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 
 /// An `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]
 /// read from a parquet data source
+///
+/// This reader is created by [`ParquetRecordBatchReaderBuilder`], and has all
+/// the buffered state (DataPages, etc) necessary to decode the parquet data into
+/// Arrow arrays.
 pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     read_plan: ReadPlan,
+}
+
+impl Debug for ParquetRecordBatchReader {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParquetRecordBatchReader")
+            .field("array_reader", &"...")
+            .field("schema", &self.schema)
+            .field("read_plan", &self.read_plan)
+            .finish()
+    }
 }
 
 impl Iterator for ParquetRecordBatchReader {
