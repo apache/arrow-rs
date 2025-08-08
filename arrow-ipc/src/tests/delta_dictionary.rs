@@ -44,13 +44,13 @@ fn test_mixed_delta() {
     run_delta_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
-            MessageType::DeltaDict,
+            MessageType::DeltaDict(str_vec(&["B"])),
             MessageType::RecordBatch,
-            MessageType::DeltaDict,
+            MessageType::DeltaDict(str_vec(&["C"])),
             MessageType::RecordBatch,
-            MessageType::DeltaDict,
+            MessageType::DeltaDict(str_vec(&["D", "E"])),
             MessageType::RecordBatch,
             MessageType::RecordBatch,
         ],
@@ -59,13 +59,13 @@ fn test_mixed_delta() {
     run_resend_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B"])),
             MessageType::RecordBatch,
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B", "C"])),
             MessageType::RecordBatch,
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B", "C", "D", "E"])),
             MessageType::RecordBatch,
             MessageType::RecordBatch,
         ],
@@ -78,11 +78,11 @@ fn test_disjoint_delta() {
     run_delta_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
-            MessageType::DeltaDict,
+            MessageType::DeltaDict(str_vec(&["B"])),
             MessageType::RecordBatch,
-            MessageType::DeltaDict,
+            MessageType::DeltaDict(str_vec(&["C", "E"])),
             MessageType::RecordBatch,
         ],
     );
@@ -90,11 +90,11 @@ fn test_disjoint_delta() {
     run_resend_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B"])),
             MessageType::RecordBatch,
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B", "C", "E"])),
             MessageType::RecordBatch,
         ],
     );
@@ -106,11 +106,11 @@ fn test_increasing_delta() {
     run_delta_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
-            MessageType::DeltaDict,
+            MessageType::DeltaDict(str_vec(&["B"])),
             MessageType::RecordBatch,
-            MessageType::DeltaDict,
+            MessageType::DeltaDict(str_vec(&["C"])),
             MessageType::RecordBatch,
         ],
     );
@@ -118,11 +118,11 @@ fn test_increasing_delta() {
     run_resend_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B"])),
             MessageType::RecordBatch,
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B", "C"])),
             MessageType::RecordBatch,
         ],
     );
@@ -134,9 +134,9 @@ fn test_single_delta() {
     run_delta_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B", "C"])),
             MessageType::RecordBatch,
-            MessageType::DeltaDict,
+            MessageType::DeltaDict(str_vec(&["D"])),
             MessageType::RecordBatch,
         ],
     );
@@ -144,9 +144,9 @@ fn test_single_delta() {
     run_resend_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B", "C"])),
             MessageType::RecordBatch,
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A", "B", "C", "D"])),
             MessageType::RecordBatch,
         ],
     );
@@ -158,7 +158,7 @@ fn test_single_same_value_sequence() {
     run_delta_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
             MessageType::RecordBatch,
             MessageType::RecordBatch,
@@ -169,7 +169,7 @@ fn test_single_same_value_sequence() {
     run_resend_sequence_test(
         batches,
         &[
-            MessageType::Dict,
+            MessageType::Dict(str_vec(&["A"])),
             MessageType::RecordBatch,
             MessageType::RecordBatch,
             MessageType::RecordBatch,
@@ -178,35 +178,28 @@ fn test_single_same_value_sequence() {
     );
 }
 
+fn str_vec(strings: &[&str]) -> Vec<String> {
+    strings.into_iter().map(|s| s.to_string()).collect()
+}
+
 #[test]
 fn test_multi_same_value_sequence() {
     let batches: &[&[&str]] = &[&["A", "B", "C"], &["A", "B", "C"]];
-    run_delta_sequence_test(batches, &[MessageType::Dict, MessageType::RecordBatch]);
+    run_delta_sequence_test(
+        batches,
+        &[
+            MessageType::Dict(str_vec(&["A", "B", "C"])),
+            MessageType::RecordBatch,
+        ],
+    );
 }
 
 #[derive(Debug, PartialEq)]
 enum MessageType {
     Schema,
-    Dict,
-    DeltaDict,
+    Dict(Vec<String>),
+    DeltaDict(Vec<String>),
     RecordBatch,
-}
-
-impl From<&IpcMessage> for MessageType {
-    fn from(value: &IpcMessage) -> Self {
-        match value {
-            IpcMessage::Schema(_) => MessageType::Schema,
-            IpcMessage::DictionaryBatch {
-                id: _,
-                is_delta,
-                values: _,
-            } => match is_delta {
-                true => MessageType::DeltaDict,
-                false => MessageType::Dict,
-            },
-            IpcMessage::RecordBatch(_) => MessageType::RecordBatch,
-        }
-    }
 }
 
 fn run_resend_sequence_test(batches: &[&[&str]], sequence: &[MessageType]) {
@@ -222,9 +215,47 @@ fn run_delta_sequence_test(batches: &[&[&str]], sequence: &[MessageType]) {
 fn run_sequence_test(batches: &[&[&str]], sequence: &[MessageType], options: IpcWriteOptions) {
     let stream_buf = write_all_to_stream(options.clone(), batches);
     let ipc_stream = get_ipc_message_stream(stream_buf);
-    for (message, expected_type) in ipc_stream.iter().zip(sequence.iter()) {
-        let actual_type: MessageType = message.into();
-        assert_eq!(actual_type, *expected_type, "Message type mismatch");
+    for (message, expected) in ipc_stream.iter().zip(sequence.iter()) {
+        match message {
+            IpcMessage::Schema(_) => {
+                assert_eq!(expected, &MessageType::Schema, "Expected schema message");
+            }
+            IpcMessage::RecordBatch(_) => {
+                assert_eq!(
+                    expected,
+                    &MessageType::RecordBatch,
+                    "Expected record batch message"
+                );
+            }
+            IpcMessage::DictionaryBatch {
+                id: _,
+                is_delta,
+                values,
+            } => {
+                let expected_values = if *is_delta {
+                    let MessageType::DeltaDict(values) = expected else {
+                        panic!("Expected DeltaDict message type");
+                    };
+
+                    values
+                } else {
+                    let MessageType::Dict(values) = expected else {
+                        panic!("Expected Dict message type");
+                    };
+                    values
+                };
+
+                let values: Vec<String> = values
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.map(|s| s.to_string()).unwrap_or_default())
+                    .collect();
+
+                assert_eq!(*expected_values, values)
+            }
+        }
     }
 }
 
