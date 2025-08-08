@@ -35,7 +35,7 @@ impl<'a> VariantOutputBuilder<'a> {
     }
 }
 
-impl<'a> OutputBuilder for VariantOutputBuilder<'a> {
+impl OutputBuilder for VariantOutputBuilder<'_> {
     fn partially_shredded(
         &self,
         variant_array: &VariantArray,
