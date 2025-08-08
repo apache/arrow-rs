@@ -575,34 +575,14 @@ impl LevelInfoBuilder {
         // then we consider the type compatible
         match a {
             // String, StringView and LargeString are compatible
-            DataType::Utf8 => match b {
-                DataType::LargeUtf8 | DataType::Utf8View => true,
-                _ => false,
-            },
-            DataType::Utf8View => match b {
-                DataType::LargeUtf8 | DataType::Utf8 => true,
-                _ => false,
-            },
-            DataType::LargeUtf8 => match b {
-                DataType::Utf8 | DataType::Utf8View => true,
-                _ => false,
-            },
+            DataType::Utf8 => matches!(b, DataType::LargeUtf8 | DataType::Utf8View),
+            DataType::Utf8View => matches!(b, DataType::LargeUtf8 | DataType::Utf8),
+            DataType::LargeUtf8 => matches!(b, DataType::Utf8 | DataType::Utf8View),
 
             // Binary, BinaryView and LargeBinary are compatible
-            DataType::Binary => match b {
-                DataType::LargeBinary | DataType::BinaryView => true,
-                _ => false,
-            },
-
-            DataType::BinaryView => match b {
-                DataType::LargeBinary | DataType::Binary => true,
-                _ => false,
-            },
-
-            DataType::LargeBinary => match b {
-                DataType::Binary | DataType::BinaryView => true,
-                _ => false,
-            },
+            DataType::Binary => matches!(b, DataType::LargeBinary | DataType::BinaryView),
+            DataType::BinaryView => matches!(b, DataType::LargeBinary | DataType::Binary),
+            DataType::LargeBinary => matches!(b, DataType::Binary | DataType::BinaryView),
 
             // otherwise we have incompatible types
             _ => false,
