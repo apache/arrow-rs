@@ -55,25 +55,28 @@
 //! ## Reading and Writing Arrow (`arrow` feature)
 //!
 //! The [`arrow`] module supports reading and writing Parquet data to/from
-//! Arrow `RecordBatch`es. Using Arrow is simple and performant, and allows workloads
+//! Arrow [`RecordBatch`]es. Using Arrow is simple and performant, and allows workloads
 //! to leverage the wide range of data transforms provided by the [arrow] crate, and by the
 //! ecosystem of [Arrow] compatible systems.
 //!
 //! Most users will use [`ArrowWriter`] for writing and [`ParquetRecordBatchReaderBuilder`] for
-//! reading.
+//! reading from synchronous IO sources such as files or in-memory buffers.
 //!
-//! Lower level APIs include [`ArrowColumnWriter`] for writing using multiple
-//! threads, and [`RowFilter`] to apply filters during decode.
+//! Lower level APIs include
+//! * [`ParquetPushDecoder`] for file grained control over interleaving of IO and CPU.
+//! * [`ArrowColumnWriter`] for writing using multiple threads,
+//! * [`RowFilter`] to apply filters during decode
 //!
 //! [`ArrowWriter`]: arrow::arrow_writer::ArrowWriter
 //! [`ParquetRecordBatchReaderBuilder`]: arrow::arrow_reader::ParquetRecordBatchReaderBuilder
+//! [`ParquetPushDecoder`]: arrow::push_decoder::ParquetPushDecoder
 //! [`ArrowColumnWriter`]: arrow::arrow_writer::ArrowColumnWriter
 //! [`RowFilter`]: arrow::arrow_reader::RowFilter
 //!
-//! ## `async` Reading and Writing Arrow (`async` feature)
+//! ## `async` Reading and Writing Arrow (`arrow` feature + `async` feature)
 //!
 //! The [`async_reader`] and [`async_writer`] modules provide async APIs to
-//! read and write `RecordBatch`es  asynchronously.
+//! read and write [`RecordBatch`]es  asynchronously.
 //!
 //! Most users will use [`AsyncArrowWriter`] for writing and [`ParquetRecordBatchStreamBuilder`]
 //! for reading. When the `object_store` feature is enabled, [`ParquetObjectReader`]
@@ -96,6 +99,7 @@
 //!
 //! [arrow]: https://docs.rs/arrow/latest/arrow/index.html
 //! [Arrow]: https://arrow.apache.org/
+//! [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/array/struct.RecordBatch.html
 //! [CSV]: https://en.wikipedia.org/wiki/Comma-separated_values
 //! [Dremel]: https://research.google/pubs/pub36632/
 //! [Logical Types]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md

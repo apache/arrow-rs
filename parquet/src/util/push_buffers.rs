@@ -119,6 +119,31 @@ impl PushBuffers {
         self.offset = offset;
         self
     }
+
+    /// Return the total of all buffered ranges
+    #[cfg(feature = "arrow")]
+    pub fn buffered_bytes(&self) -> u64 {
+        self.ranges.iter().map(|r| r.end - r.start).sum()
+    }
+
+    /// Clear any range and corresponding buffer that is exactly in the ranges_to_clear
+    #[cfg(feature = "arrow")]
+    pub fn clear_ranges(&mut self, ranges_to_clear: &[Range<u64>]) {
+        let mut new_ranges = Vec::new();
+        let mut new_buffers = Vec::new();
+
+        for (range, buffer) in self.iter() {
+            if !ranges_to_clear
+                .iter()
+                .any(|r| r.start == range.start && r.end == range.end)
+            {
+                new_ranges.push(range.clone());
+                new_buffers.push(buffer.clone());
+            }
+        }
+        self.ranges = new_ranges;
+        self.buffers = new_buffers;
+    }
 }
 
 impl Length for PushBuffers {
