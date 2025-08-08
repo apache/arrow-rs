@@ -1402,11 +1402,8 @@ impl<R: Read> StreamReader<R> {
             i32::from_le_bytes(meta_size)
         };
 
-        let Ok(meta_len) = usize::try_from(meta_len) else {
-            return Err(ArrowError::ParseError(format!(
-                "Invalid metadata length: {meta_len}"
-            )));
-        };
+        let meta_len = usize::try_from(meta_len)
+            .map_err(|_| ArrowError::ParseError(format!("Invalid metadata length: {meta_len}")))?;
         let mut meta_buffer = vec![0; meta_len];
         reader.read_exact(&mut meta_buffer)?;
 
