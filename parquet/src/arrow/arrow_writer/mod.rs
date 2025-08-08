@@ -134,16 +134,21 @@ mod levels;
 /// a  given column, the writer can accept multiple Arrow [`DataType`]s that contain the same
 /// value type.
 ///
-/// Currently, only compatibility between Arrow dictionary and native arrays are supported.
-/// Additional type compatibility may be added in future (see [issue #8012](https://github.com/apache/arrow-rs/issues/8012))
+/// For example, the following [`DataType`]s are all logically equivalent and can be written
+/// to the same column:
+/// * String, LargeString, StringView
+/// * Binary, LargeBinary, BinaryView
+///
+/// The writer can will also accept both native and dictionary encoded arrays if the dictionaries
+/// contain compatible values.
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_array::{DictionaryArray, RecordBatch, StringArray, UInt8Array};
+/// # use arrow_array::{DictionaryArray, LargeStringArray, RecordBatch, StringArray, UInt8Array};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use parquet::arrow::arrow_writer::ArrowWriter;
 /// let record_batch1 = RecordBatch::try_new(
-///    Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)])),
-///    vec![Arc::new(StringArray::from_iter_values(vec!["a", "b"]))]
+///    Arc::new(Schema::new(vec![Field::new("col", DataType::LargeUtf8, false)])),
+///    vec![Arc::new(LargeStringArray::from_iter_values(vec!["a", "b"]))]
 ///  )
 /// .unwrap();
 ///
