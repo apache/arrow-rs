@@ -614,41 +614,43 @@ impl ParquetMetaDataReader {
     fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
         if self.offset_index != PageIndexPolicy::Skip {
-            let index = metadata
-                .row_groups()
-                .iter()
-                .enumerate()
-                .map(|(rg_idx, x)| {
-                    x.columns()
-                        .iter()
-                        .enumerate()
-                        .map(|(col_idx, c)| match c.offset_index_range() {
-                            Some(r) => {
-                                let r_start = usize::try_from(r.start - start_offset)?;
-                                let r_end = usize::try_from(r.end - start_offset)?;
-                                Self::parse_single_offset_index(
-                                    &bytes[r_start..r_end],
-                                    metadata,
-                                    c,
-                                    rg_idx,
-                                    col_idx,
-                                )
-                            }
-                            None => {
-                                if self.offset_index == PageIndexPolicy::Required {
-                                    return Err(general_err!("missing offset index"));
-                                }
-                                Ok(OffsetIndexMetaData {
-                                    page_locations: vec![],
-                                    unencoded_byte_array_data_bytes: None,
-                                })
-                            }
-                        })
-                        .collect::<Result<Vec<_>>>()
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let row_groups = metadata.row_groups();
+            let mut all_indexes = Vec::with_capacity(row_groups.len());
+            for (rg_idx, x) in row_groups.iter().enumerate() {
+                let mut row_group_indexes = Vec::with_capacity(x.columns().len());
+                for (col_idx, c) in x.columns().iter().enumerate() {
+                    let result = match c.offset_index_range() {
+                        Some(r) => {
+                            let r_start = usize::try_from(r.start - start_offset)?;
+                            let r_end = usize::try_from(r.end - start_offset)?;
+                            Self::parse_single_offset_index(
+                                &bytes[r_start..r_end],
+                                metadata,
+                                c,
+                                rg_idx,
+                                col_idx,
+                            )
+                        }
+                        None => Err(general_err!("missing offset index")),
+                    };
 
-            metadata.set_offset_index(Some(index));
+                    match result {
+                        Ok(index) => row_group_indexes.push(index),
+                        Err(e) => {
+                            if self.offset_index == PageIndexPolicy::Required {
+                                return Err(e);
+                            } else {
+                                // Invalidate and return
+                                metadata.set_column_index(None);
+                                metadata.set_offset_index(None);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                all_indexes.push(row_group_indexes);
+            }
+            metadata.set_offset_index(Some(all_indexes));
         }
         Ok(())
     }
