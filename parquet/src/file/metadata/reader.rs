@@ -126,15 +126,7 @@ impl FooterTail {
 impl ParquetMetaDataReader {
     /// Create a new [`ParquetMetaDataReader`]
     pub fn new() -> Self {
-        Self {
-            metadata: None,
-            column_index: PageIndexPolicy::Skip,
-            offset_index: PageIndexPolicy::Skip,
-            prefetch_hint: None,
-            metadata_size: None,
-            #[cfg(feature = "encryption")]
-            file_decryption_properties: None,
-        }
+        Default::default()
     }
 
     /// Create a new [`ParquetMetaDataReader`] populated with a [`ParquetMetaData`] struct
