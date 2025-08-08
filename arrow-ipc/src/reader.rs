@@ -1782,7 +1782,12 @@ mod tests {
         // Read the valid value
         assert!(reader.maybe_next().is_ok());
         // Read the invalid meta len
-        assert!(reader.maybe_next().is_err());
+        let batch_err = reader.maybe_next().err();
+        assert!(batch_err.is_some());
+        assert_eq!(
+            batch_err.unwrap().to_string(),
+            "Parser error: Invalid metadata length: -1"
+        );
     }
 
     #[test]
