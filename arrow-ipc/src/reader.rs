@@ -1754,8 +1754,12 @@ mod tests {
         buf.extend(CONTINUATION_MARKER);
         buf.extend(bytes);
 
-        let reader = StreamReader::try_new(Cursor::new(buf), None);
-        assert!(reader.is_err());
+        let reader_err = StreamReader::try_new(Cursor::new(buf), None).err();
+        assert!(reader_err.is_some());
+        assert_eq!(
+            reader_err.unwrap().to_string(),
+            "Parser error: Invalid metadata length: -1"
+        );
     }
 
     #[test]
