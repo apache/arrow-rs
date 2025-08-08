@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["intersect_row_selections","union_row_selections"],"struct":["RowSelection","RowSelector"]};

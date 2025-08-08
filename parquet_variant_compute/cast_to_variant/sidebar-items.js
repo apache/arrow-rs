@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["cast_to_variant"],"macro":["cast_conversion","primitive_conversion"]};

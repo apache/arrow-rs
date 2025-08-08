@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["parse_message","read_block","read_buffer","read_dictionary","read_dictionary_impl","read_footer_length","read_record_batch"],"mod":["stream"],"struct":["FileDecoder","FileReader","FileReaderBuilder","RecordBatchDecoder","StreamDecoder","StreamReader"]};

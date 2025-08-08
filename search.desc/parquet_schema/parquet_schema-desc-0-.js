@@ -1,0 +1,1 @@
+searchState.loadedDescShard("parquet_schema", 0, "Binary file to print the schema and metadata of a Parquet …\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.")

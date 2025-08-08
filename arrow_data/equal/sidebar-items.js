@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["equal","equal_range","equal_values"],"mod":["boolean","byte_view","dictionary","fixed_binary","fixed_list","list","null","primitive","run","structure","union","utils","variable_size"]};

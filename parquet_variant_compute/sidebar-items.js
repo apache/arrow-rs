@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ShreddingState"],"fn":["batch_json_string_to_variant","batch_variant_to_json_string"],"mod":["cast_to_variant","from_json","to_json","variant_array","variant_array_builder","variant_get"],"struct":["VariantArray","VariantArrayBuilder","VariantArrayVariantBuilder"]};
