@@ -1407,7 +1407,7 @@ impl<R: Read> StreamReader<R> {
                 "Invalid metadata length: {meta_len}"
             )));
         };
-        let mut meta_buffer = vec![0; meta_len as usize];
+        let mut meta_buffer = vec![0; meta_len];
         reader.read_exact(&mut meta_buffer)?;
 
         let message = crate::root_as_message(meta_buffer.as_slice()).map_err(|err| {
@@ -1501,7 +1501,7 @@ impl<R: Read> StreamReader<R> {
             return Ok(None);
         }
 
-        let mut meta_buffer = vec![0; meta_len as usize];
+        let mut meta_buffer = vec![0; meta_len];
         self.reader.read_exact(&mut meta_buffer)?;
 
         let vecs = &meta_buffer.to_vec();
