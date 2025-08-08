@@ -501,11 +501,8 @@ mod test {
         let metadata = BinaryViewArray::from(vec![b"test" as &[u8]]);
         let shredding_state = ShreddingState::try_new(metadata.clone(), None, None).unwrap();
 
-        assert!(matches!(
-            shredding_state,
-            ShreddingState::AllNull { .. }
-        ));
-        
+        assert!(matches!(shredding_state, ShreddingState::AllNull { .. }));
+
         // Verify metadata is preserved correctly
         if let ShreddingState::AllNull { metadata: m } = shredding_state {
             assert_eq!(m.len(), metadata.len());
