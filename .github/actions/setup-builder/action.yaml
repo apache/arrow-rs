@@ -17,15 +17,6 @@
 
 name: Prepare Rust Builder
 description: 'Prepare Rust Build Environment'
-inputs:
-  rust-version:
-    description: 'version of rust to install (e.g. stable)'
-    required: false
-    default: 'stable'
-  target:
-    description: 'target architecture(s)'
-    required: false
-    default: 'x86_64-unknown-linux-gnu'
 runs:
   using: "composite"
   steps:
@@ -43,6 +34,9 @@ runs:
           /usr/local/cargo/git/db/
         key: cargo-cache3-${{ hashFiles('**/Cargo.toml') }}
         restore-keys: cargo-cache3-
+    - name: Setup Rust toolchain
+      shell: bash
+      run: rustup install
     - name: Generate lockfile
       shell: bash
       run: cargo fetch
@@ -51,12 +45,6 @@ runs:
       run: |
         apt-get update
         apt-get install -y protobuf-compiler
-    - name: Setup Rust toolchain
-      shell: bash
-      run: |
-        echo "Installing ${{ inputs.rust-version }}"
-        rustup toolchain install ${{ inputs.rust-version }} --target ${{ inputs.target }}
-        rustup default ${{ inputs.rust-version }}
     - name: Disable debuginfo generation
       # Disable full debug symbol generation to speed up CI build and keep memory down
       # "1" means line tables only, which is useful for panic tracebacks.
