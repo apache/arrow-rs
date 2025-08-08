@@ -32,6 +32,36 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 #[test]
+fn test_zero_row_dict() {
+    let batches: &[&[&str]] = &[&[], &["A"], &[], &["B", "C"], &[]];
+    run_delta_sequence_test(
+        batches,
+        &[
+            MessageType::Dict(vec![]),
+            MessageType::RecordBatch,
+            MessageType::DeltaDict(str_vec(&["A"])),
+            MessageType::RecordBatch,
+            MessageType::RecordBatch,
+            MessageType::DeltaDict(str_vec(&["B", "C"])),
+            MessageType::RecordBatch,
+        ],
+    );
+
+    run_resend_sequence_test(
+        batches,
+        &[
+            MessageType::Dict(vec![]),
+            MessageType::RecordBatch,
+            MessageType::Dict(str_vec(&["A"])),
+            MessageType::RecordBatch,
+            MessageType::RecordBatch,
+            MessageType::Dict(str_vec(&["A", "B", "C"])),
+            MessageType::RecordBatch,
+        ],
+    );
+}
+
+#[test]
 fn test_mixed_delta() {
     let batches: &[&[&str]] = &[
         &["A"],

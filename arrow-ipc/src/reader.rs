@@ -1607,8 +1607,8 @@ impl<R: Read> StreamReader<R> {
 
                 IpcMessage::DictionaryBatch {
                     id: dict.id(),
-                    is_delta: dbg!(dict.isDelta()),
-                    values: dbg!(dict_values),
+                    is_delta: (dict.isDelta()),
+                    values: (dict_values),
                 }
             }
             x => {
