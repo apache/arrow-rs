@@ -550,13 +550,61 @@ impl LevelInfoBuilder {
     /// and the other is a native array, the dictionary values must have the same type as the
     /// native array
     fn types_compatible(a: &DataType, b: &DataType) -> bool {
+        // if the Arrow data types are the same, the types are clearly compatible
         if a == b {
             return true;
         }
 
-        match (a, b) {
-            (DataType::Dictionary(_, v), b) => v.as_ref() == b,
-            (a, DataType::Dictionary(_, v)) => a == v.as_ref(),
+        // get the values out of the dictionaries
+        let (a, b) = match (a, b) {
+            (DataType::Dictionary(_, va), DataType::Dictionary(_, vb)) => {
+                (va.as_ref(), vb.as_ref())
+            }
+            (DataType::Dictionary(_, v), b) => (v.as_ref(), b),
+            (a, DataType::Dictionary(_, v)) => (a, v.as_ref()),
+            _ => (a, b),
+        };
+
+        // now that we've got the values from one/both dictionaries, if the values
+        // have the same Arrow data type, they're compatible
+        if a == b {
+            return true;
+        }
+
+        // here we have different Arrow data types, but if the array contains the same type of data
+        // then we consider the type compatible
+        match a {
+            // String, StringView and LargeString are compatible
+            DataType::Utf8 => match b {
+                DataType::LargeUtf8 | DataType::Utf8View => true,
+                _ => false,
+            },
+            DataType::Utf8View => match b {
+                DataType::LargeUtf8 | DataType::Utf8 => true,
+                _ => false,
+            },
+            DataType::LargeUtf8 => match b {
+                DataType::Utf8 | DataType::Utf8View => true,
+                _ => false,
+            },
+
+            // Binary, BinaryView and LargeBinary are compatible
+            DataType::Binary => match b {
+                DataType::LargeBinary | DataType::BinaryView => true,
+                _ => false,
+            },
+
+            DataType::BinaryView => match b {
+                DataType::LargeBinary | DataType::Binary => true,
+                _ => false,
+            },
+
+            DataType::LargeBinary => match b {
+                DataType::Binary | DataType::BinaryView => true,
+                _ => false,
+            },
+
+            // otherwise we have incompatible types
             _ => false,
         }
     }
