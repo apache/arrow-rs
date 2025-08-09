@@ -18,12 +18,13 @@
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
-    BinaryType, BinaryViewType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::{ArrowError, DataType};
 use half::f16;
-use parquet_variant::Variant;
+use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
@@ -69,6 +70,31 @@ macro_rules! cast_conversion_nongeneric {
             $builder.append_variant(Variant::from(cast_value));
         }
     }};
+}
+
+/// Convert a decimal value to a `VariantDecimal`
+macro_rules! decimal_to_variant_decimal {
+    ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {
+        if *$scale < 0 {
+            // For negative scale, we need to multiply the value by 10^|scale|
+            // For example: 123 with scale -2 becomes 12300
+            let multiplier = (10 as $value_type).pow((-*$scale) as u32);
+            // Check for overflow
+            if $v > 0 && $v > <$value_type>::MAX / multiplier {
+                return Variant::Null;
+            }
+            if $v < 0 && $v < <$value_type>::MIN / multiplier {
+                return Variant::Null;
+            }
+            <$variant_type>::try_new($v * multiplier, 0)
+                .map(|v| v.into())
+                .unwrap_or(Variant::Null)
+        } else {
+            <$variant_type>::try_new($v, *$scale as u8)
+                .map(|v| v.into())
+                .unwrap_or(Variant::Null)
+        }
+    };
 }
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
@@ -148,6 +174,50 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Float64 => {
             primitive_conversion!(Float64Type, input, builder);
         }
+        DataType::Decimal32(_, scale) => {
+            cast_conversion!(
+                Decimal32Type,
+                as_primitive,
+                |v| decimal_to_variant_decimal!(v, scale, i32, VariantDecimal4),
+                input,
+                builder
+            );
+        }
+        DataType::Decimal64(_, scale) => {
+            cast_conversion!(
+                Decimal64Type,
+                as_primitive,
+                |v| decimal_to_variant_decimal!(v, scale, i64, VariantDecimal8),
+                input,
+                builder
+            );
+        }
+        DataType::Decimal128(_, scale) => {
+            cast_conversion!(
+                Decimal128Type,
+                as_primitive,
+                |v| decimal_to_variant_decimal!(v, scale, i128, VariantDecimal16),
+                input,
+                builder
+            );
+        }
+        DataType::Decimal256(_, scale) => {
+            cast_conversion!(
+                Decimal256Type,
+                as_primitive,
+                |v: i256| {
+                    // Since `i128::MAX` is larger than the max value of `VariantDecimal16`,
+                    // we can safely convert `i256` to `i128` first and process it like `VariantDecimal16`
+                    if let Some(v) = v.to_i128() {
+                        decimal_to_variant_decimal!(v, scale, i128, VariantDecimal16)
+                    } else {
+                        Variant::Null
+                    }
+                },
+                input,
+                builder
+            );
+        }
         DataType::FixedSizeBinary(_) => {
             cast_conversion_nongeneric!(as_fixed_size_binary, |v| v, input, builder);
         }
@@ -168,12 +238,28 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array,
-        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+        FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
+    };
+    use arrow_schema::{
+        DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
+
+    macro_rules! max_unscaled_value {
+        (32, $precision:expr) => {
+            (u32::pow(10, $precision as u32) - 1) as i32
+        };
+        (64, $precision:expr) => {
+            (u64::pow(10, $precision as u32) - 1) as i64
+        };
+        (128, $precision:expr) => {
+            (u128::pow(10, $precision as u32) - 1) as i128
+        };
+    }
 
     #[test]
     fn test_cast_to_variant_fixed_size_binary() {
@@ -478,6 +564,302 @@ mod tests {
                 Some(Variant::Double(0.0)),
                 Some(Variant::Double(1.5)),
                 Some(Variant::Double(f64::MAX)),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal32() {
+        run_test(
+            Arc::new(
+                Decimal32Array::from(vec![
+                    Some(i32::MIN),
+                    Some(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)),
+                    None,
+                    Some(-123),
+                    Some(0),
+                    Some(123),
+                    Some(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)),
+                    Some(i32::MAX),
+                ])
+                .with_precision_and_scale(DECIMAL32_MAX_PRECISION, 3)
+                .unwrap(),
+            ),
+            vec![
+                Some(Variant::Null),
+                Some(
+                    VariantDecimal4::try_new(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION), 3)
+                        .unwrap()
+                        .into(),
+                ),
+                None,
+                Some(VariantDecimal4::try_new(-123, 3).unwrap().into()),
+                Some(VariantDecimal4::try_new(0, 3).unwrap().into()),
+                Some(VariantDecimal4::try_new(123, 3).unwrap().into()),
+                Some(
+                    VariantDecimal4::try_new(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION), 3)
+                        .unwrap()
+                        .into(),
+                ),
+                Some(Variant::Null),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal32_negative_scale() {
+        run_test(
+            Arc::new(
+                Decimal32Array::from(vec![
+                    Some(i32::MIN),
+                    Some(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)),
+                    None,
+                    Some(-123),
+                    Some(0),
+                    Some(123),
+                    Some(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)),
+                    Some(i32::MAX),
+                ])
+                .with_precision_and_scale(DECIMAL32_MAX_PRECISION, -3)
+                .unwrap(),
+            ),
+            vec![
+                Some(Variant::Null),
+                Some(Variant::Null),
+                None,
+                Some(VariantDecimal4::try_new(-123_000, 0).unwrap().into()),
+                Some(VariantDecimal4::try_new(0, 0).unwrap().into()),
+                Some(VariantDecimal4::try_new(123_000, 0).unwrap().into()),
+                Some(Variant::Null),
+                Some(Variant::Null),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal64() {
+        run_test(
+            Arc::new(
+                Decimal64Array::from(vec![
+                    Some(i64::MIN),
+                    Some(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)),
+                    None,
+                    Some(-123),
+                    Some(0),
+                    Some(123),
+                    Some(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)),
+                    Some(i64::MAX),
+                ])
+                .with_precision_and_scale(DECIMAL64_MAX_PRECISION, 3)
+                .unwrap(),
+            ),
+            vec![
+                Some(Variant::Null),
+                Some(
+                    VariantDecimal8::try_new(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION), 3)
+                        .unwrap()
+                        .into(),
+                ),
+                None,
+                Some(VariantDecimal8::try_new(-123, 3).unwrap().into()),
+                Some(VariantDecimal8::try_new(0, 3).unwrap().into()),
+                Some(VariantDecimal8::try_new(123, 3).unwrap().into()),
+                Some(
+                    VariantDecimal8::try_new(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION), 3)
+                        .unwrap()
+                        .into(),
+                ),
+                Some(Variant::Null),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal64_negative_scale() {
+        run_test(
+            Arc::new(
+                Decimal64Array::from(vec![
+                    Some(i64::MIN),
+                    Some(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)),
+                    None,
+                    Some(-123),
+                    Some(0),
+                    Some(123),
+                    Some(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)),
+                    Some(i64::MAX),
+                ])
+                .with_precision_and_scale(DECIMAL64_MAX_PRECISION, -3)
+                .unwrap(),
+            ),
+            vec![
+                Some(Variant::Null),
+                Some(Variant::Null),
+                None,
+                Some(VariantDecimal8::try_new(-123_000, 0).unwrap().into()),
+                Some(VariantDecimal8::try_new(0, 0).unwrap().into()),
+                Some(VariantDecimal8::try_new(123_000, 0).unwrap().into()),
+                Some(Variant::Null),
+                Some(Variant::Null),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal128() {
+        run_test(
+            Arc::new(
+                Decimal128Array::from(vec![
+                    Some(i128::MIN),
+                    Some(-max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)),
+                    None,
+                    Some(-123),
+                    Some(0),
+                    Some(123),
+                    Some(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)),
+                    Some(i128::MAX),
+                ])
+                .with_precision_and_scale(DECIMAL128_MAX_PRECISION, 3)
+                .unwrap(),
+            ),
+            vec![
+                Some(Variant::Null),
+                Some(
+                    VariantDecimal16::try_new(
+                        -max_unscaled_value!(128, DECIMAL128_MAX_PRECISION),
+                        3,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
+                None,
+                Some(VariantDecimal16::try_new(-123, 3).unwrap().into()),
+                Some(VariantDecimal16::try_new(0, 3).unwrap().into()),
+                Some(VariantDecimal16::try_new(123, 3).unwrap().into()),
+                Some(
+                    VariantDecimal16::try_new(
+                        max_unscaled_value!(128, DECIMAL128_MAX_PRECISION),
+                        3,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
+                Some(Variant::Null),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal128_negative_scale() {
+        run_test(
+            Arc::new(
+                Decimal128Array::from(vec![
+                    Some(i128::MIN),
+                    Some(-max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)),
+                    None,
+                    Some(-123),
+                    Some(0),
+                    Some(123),
+                    Some(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)),
+                    Some(i128::MAX),
+                ])
+                .with_precision_and_scale(DECIMAL128_MAX_PRECISION, -3)
+                .unwrap(),
+            ),
+            vec![
+                Some(Variant::Null),
+                Some(Variant::Null),
+                None,
+                Some(VariantDecimal16::try_new(-123_000, 0).unwrap().into()),
+                Some(VariantDecimal16::try_new(0, 0).unwrap().into()),
+                Some(VariantDecimal16::try_new(123_000, 0).unwrap().into()),
+                Some(Variant::Null),
+                Some(Variant::Null),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal256() {
+        run_test(
+            Arc::new(
+                Decimal256Array::from(vec![
+                    Some(i256::MIN),
+                    Some(i256::from_i128(-max_unscaled_value!(
+                        128,
+                        DECIMAL128_MAX_PRECISION
+                    ))),
+                    None,
+                    Some(i256::from_i128(-123)),
+                    Some(i256::from_i128(0)),
+                    Some(i256::from_i128(123)),
+                    Some(i256::from_i128(max_unscaled_value!(
+                        128,
+                        DECIMAL128_MAX_PRECISION
+                    ))),
+                    Some(i256::MAX),
+                ])
+                .with_precision_and_scale(DECIMAL128_MAX_PRECISION, 3)
+                .unwrap(),
+            ),
+            vec![
+                Some(Variant::Null),
+                Some(
+                    VariantDecimal16::try_new(
+                        -max_unscaled_value!(128, DECIMAL128_MAX_PRECISION),
+                        3,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
+                None,
+                Some(VariantDecimal16::try_new(-123, 3).unwrap().into()),
+                Some(VariantDecimal16::try_new(0, 3).unwrap().into()),
+                Some(VariantDecimal16::try_new(123, 3).unwrap().into()),
+                Some(
+                    VariantDecimal16::try_new(
+                        max_unscaled_value!(128, DECIMAL128_MAX_PRECISION),
+                        3,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
+                Some(Variant::Null),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_to_variant_decimal256_negative_scale() {
+        run_test(
+            Arc::new(
+                Decimal256Array::from(vec![
+                    Some(i256::MIN),
+                    Some(i256::from_i128(-max_unscaled_value!(
+                        128,
+                        DECIMAL128_MAX_PRECISION
+                    ))),
+                    None,
+                    Some(i256::from_i128(-123)),
+                    Some(i256::from_i128(0)),
+                    Some(i256::from_i128(123)),
+                    Some(i256::from_i128(max_unscaled_value!(
+                        128,
+                        DECIMAL128_MAX_PRECISION
+                    ))),
+                    Some(i256::MAX),
+                ])
+                .with_precision_and_scale(DECIMAL128_MAX_PRECISION, -3)
+                .unwrap(),
+            ),
+            vec![
+                Some(Variant::Null),
+                Some(Variant::Null),
+                None,
+                Some(VariantDecimal16::try_new(-123_000, 0).unwrap().into()),
+                Some(VariantDecimal16::try_new(0, 0).unwrap().into()),
+                Some(VariantDecimal16::try_new(123_000, 0).unwrap().into()),
+                Some(Variant::Null),
+                Some(Variant::Null),
             ],
         )
     }
