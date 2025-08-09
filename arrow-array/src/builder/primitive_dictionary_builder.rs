@@ -849,4 +849,45 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_finish_preserve_values() {
+        // Create the first dictionary
+        let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::new();
+        builder.append(10).unwrap();
+        builder.append(20).unwrap();
+        let array = builder.finish_preserve_values();
+        assert_eq!(array.keys(), &UInt8Array::from(vec![Some(0), Some(1)]));
+        let values: &[u32] = array
+            .values()
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap()
+            .values();
+        assert_eq!(values, &[10, 20]);
+
+        // Create a new dictionary
+        builder.append(30).unwrap();
+        builder.append(40).unwrap();
+        let array2 = builder.finish_preserve_values();
+
+        // Make sure the keys are assigned after the old ones
+        // and that we have the right values
+        assert_eq!(array2.keys(), &UInt8Array::from(vec![Some(2), Some(3)]));
+        let values = array2
+            .downcast_dict::<UInt32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![Some(30), Some(40)]);
+
+        // Check that we have all of the expected values
+        let all_values: &[u32] = array2
+            .values()
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap()
+            .values();
+        assert_eq!(all_values, &[10, 20, 30, 40]);
+    }
 }
