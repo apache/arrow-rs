@@ -324,17 +324,26 @@ impl ReaderBuilder {
     fn make_record_decoder(
         &self,
         writer_schema: &Schema,
-        reader_schema: Option<&AvroSchema>,
+        reader_schema: Option<&Schema>,
     ) -> Result<RecordDecoder, ArrowError> {
         let mut builder = AvroFieldBuilder::new(writer_schema);
         if let Some(reader_schema) = reader_schema {
-            builder = builder.with_reader_schema(reader_schema.clone());
+            builder = builder.with_reader_schema(reader_schema);
         }
         let root = builder
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
             .build()?;
         RecordDecoder::try_new_with_options(root.data_type(), self.utf8_view)
+    }
+
+    fn make_record_decoder_from_schemas(
+        &self,
+        writer_schema: &Schema,
+        reader_schema: Option<&AvroSchema>,
+    ) -> Result<RecordDecoder, ArrowError> {
+        let reader_schema_raw = reader_schema.map(|s| s.schema()).transpose()?;
+        self.make_record_decoder(writer_schema, reader_schema_raw.as_ref())
     }
 
     fn make_decoder_with_parts(
@@ -371,7 +380,8 @@ impl ReaderBuilder {
                 .ok_or_else(|| {
                     ArrowError::ParseError("No Avro schema present in file header".into())
                 })?;
-            let record_decoder = self.make_record_decoder(&writer_schema, reader_schema)?;
+            let record_decoder =
+                self.make_record_decoder_from_schemas(&writer_schema, reader_schema)?;
             return Ok(self.make_decoder_with_parts(
                 record_decoder,
                 None,
@@ -407,11 +417,12 @@ impl ReaderBuilder {
                 }
             };
             let writer_schema = avro_schema.schema()?;
-            let decoder = self.make_record_decoder(&writer_schema, reader_schema)?;
+            let record_decoder =
+                self.make_record_decoder_from_schemas(&writer_schema, reader_schema)?;
             if fingerprint == start_fingerprint {
-                active_decoder = Some(decoder);
+                active_decoder = Some(record_decoder);
             } else {
-                cache.insert(fingerprint, decoder);
+                cache.insert(fingerprint, record_decoder);
             }
         }
         let active_decoder = active_decoder.ok_or_else(|| {
