@@ -381,8 +381,11 @@ impl IpcDataGenerator {
                     ArrowError::IpcError(format!("no dict id for field {}", field.name()))
                 })?;
 
-                let compute_delta = write_options.dictionary_handling == DictionaryHandling::Delta;
-                match dictionary_tracker.insert(dict_id, column, compute_delta)? {
+                match dictionary_tracker.insert_column(
+                    dict_id,
+                    column,
+                    write_options.dictionary_handling,
+                )? {
                     DictionaryUpdate::None => {}
                     DictionaryUpdate::New | DictionaryUpdate::Replaced => {
                         encoded_dictionaries.push(self.dictionary_batch_to_bytes(
@@ -812,11 +815,56 @@ impl DictionaryTracker {
     /// * If the tracker has not been configured to error on replacement or this dictionary
     ///   has never been seen before, return `Ok(true)` to indicate that the dictionary was just
     ///   inserted.
-    pub fn insert(
+    #[deprecated(since = "56.1.0", note = "Use `insert_column` instead")]
+    pub fn insert(&mut self, dict_id: i64, column: &ArrayRef) -> Result<bool, ArrowError> {
+        let dict_data = column.to_data();
+        let dict_values = &dict_data.child_data()[0];
+
+        // If a dictionary with this id was already emitted, check if it was the same.
+        if let Some(last) = self.written.get(&dict_id) {
+            if ArrayData::ptr_eq(&last.child_data()[0], dict_values) {
+                // Same dictionary values => no need to emit it again
+                return Ok(false);
+            }
+            if self.error_on_replacement {
+                // If error on replacement perform a logical comparison
+                if last.child_data()[0] == *dict_values {
+                    // Same dictionary values => no need to emit it again
+                    return Ok(false);
+                }
+                return Err(ArrowError::InvalidArgumentError(
+                    "Dictionary replacement detected when writing IPC file format. \
+                     Arrow IPC files only support a single dictionary for a given field \
+                     across all batches."
+                        .to_string(),
+                ));
+            }
+        }
+
+        self.written.insert(dict_id, dict_data);
+        Ok(true)
+    }
+
+    /// Keep track of the dictionary with the given ID and values. The return
+    /// value indicates what, if any, update to the internal map took place
+    /// and how it should be interpreted based on the `dict_handling` parameter.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Dictionary::New)` - If the dictionary was not previously written
+    /// * `Ok(Dictionary::Replaced)` - If the dictionary was previously written
+    ///    with completely different data, or if the data is a delta of the existing,
+    ///    but with `dict_handling` set to `DictionaryHandling::Resend`
+    /// * `Ok(Dictionary::Delta)` - If the dictionary was previously written, but
+    ///   the new data is a delta of the old and the `dict_handling` is set to
+    ///   `DictionaryHandling::Delta`
+    /// * `Err(e)` - If the dictionary was previously written with different data,
+    ///   and `error_on_replacement` is set to `true`.
+    pub fn insert_column(
         &mut self,
         dict_id: i64,
         column: &ArrayRef,
-        compute_delta: bool,
+        dict_handling: DictionaryHandling,
     ) -> Result<DictionaryUpdate, ArrowError> {
         let new_data = column.to_data();
         let new_values = &new_data.child_data()[0];
@@ -856,13 +904,8 @@ impl DictionaryTracker {
                 self.written.insert(dict_id, new_data);
                 Ok(DictionaryUpdate::Replaced)
             }
-            DictionaryComparison::Delta => {
-                if compute_delta {
-                    let delta =
-                        new_values.slice(old_values.len(), new_values.len() - old_values.len());
-                    self.written.insert(dict_id, new_data);
-                    Ok(DictionaryUpdate::Delta(delta))
-                } else {
+            DictionaryComparison::Delta => match dict_handling {
+                DictionaryHandling::Resend => {
                     if self.error_on_replacement {
                         return Err(ArrowError::InvalidArgumentError(
                             REPLACEMENT_ERROR.to_string(),
@@ -872,7 +915,13 @@ impl DictionaryTracker {
                     self.written.insert(dict_id, new_data);
                     Ok(DictionaryUpdate::Replaced)
                 }
-            }
+                DictionaryHandling::Delta => {
+                    let delta =
+                        new_values.slice(old_values.len(), new_values.len() - old_values.len());
+                    self.written.insert(dict_id, new_data);
+                    Ok(DictionaryUpdate::Delta(delta))
+                }
+            },
             DictionaryComparison::Equal => unreachable!("Already checked equal case"),
         }
     }
