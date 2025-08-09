@@ -543,4 +543,62 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_finish_preserve_values() {
+        // Create the first dictionary
+        let mut builder = FixedSizeBinaryDictionaryBuilder::<Int32Type>::new(3);
+        builder.append_value("aaa");
+        builder.append_value("bbb");
+        builder.append_value("ccc");
+        let dict = builder.finish_preserve_values();
+        assert_eq!(dict.keys().values(), &[0, 1, 2]);
+        let values = dict
+            .downcast_dict::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec![
+                Some("aaa".as_bytes()),
+                Some("bbb".as_bytes()),
+                Some("ccc".as_bytes())
+            ]
+        );
+
+        // Create a new dictionary
+        builder.append_value("ddd");
+        builder.append_value("eee");
+        let dict2 = builder.finish_preserve_values();
+
+        // Make sure the keys are assigned after the old ones and we have the
+        // right values
+        assert_eq!(dict2.keys().values(), &[3, 4]);
+        let values = dict2
+            .downcast_dict::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, [Some("ddd".as_bytes()), Some("eee".as_bytes())]);
+
+        // Check that we have all of the expected values
+        let all_values = dict2
+            .values()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_values,
+            [
+                Some("aaa".as_bytes()),
+                Some("bbb".as_bytes()),
+                Some("ccc".as_bytes()),
+                Some("ddd".as_bytes()),
+                Some("eee".as_bytes())
+            ]
+        );
+    }
 }

@@ -17,7 +17,7 @@
 
 use arrow_array::{
     builder::{ListBuilder, PrimitiveDictionaryBuilder, StringDictionaryBuilder},
-    Array, ArrayRef, DictionaryArray, RecordBatch, StringArray,
+    Array, ArrayRef, DictionaryArray, ListArray, RecordBatch, StringArray,
 };
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::{DictionaryHandling, IpcWriteOptions, StreamWriter};
@@ -79,42 +79,47 @@ fn test_nested_dictionary_with_delta() -> Result<(), ArrowError> {
         writer.finish()?;
     }
 
-    // Verify it writes without error
-    assert!(!buffer.is_empty());
-
-    Ok(())
-}
-
-#[test]
-fn test_read_delta_dictionary_error() -> Result<(), ArrowError> {
-    // This test verifies that reading delta dictionaries returns appropriate error
-    // until the feature is fully implemented
-
-    // Create a dictionary array
-    let mut builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
-    builder.append_value("test");
-    let array = builder.finish();
-
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "dict",
-        array.data_type().clone(),
-        true,
-    )]));
-
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array) as ArrayRef])?;
-
-    // Write normally (not delta)
-    let mut buffer = Vec::new();
-    {
-        let mut writer = StreamWriter::try_new(&mut buffer, &schema)?;
-        writer.write(&batch)?;
-        writer.finish()?;
-    }
-
-    // Reading should work for non-delta dictionaries
+    // Read back and verify
     let reader = StreamReader::try_new(Cursor::new(buffer), None)?;
-    let batches: Result<Vec<_>, _> = reader.collect();
-    assert!(batches.is_ok());
+    let read_batches: Result<Vec<_>, _> = reader.collect();
+    let read_batches = read_batches?;
+    assert_eq!(read_batches.len(), 1);
+
+    let read_batch = &read_batches[0];
+    assert_eq!(read_batch.num_columns(), 2);
+    assert_eq!(read_batch.num_rows(), 2);
+    let dict_array = read_batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+    let dict_values = dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(dict_values.len(), 2);
+    assert_eq!(dict_values.value(0), "hello");
+    assert_eq!(dict_values.value(1), "world");
+    let list_array = read_batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+    let list_dict_array = list_array
+        .values()
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+    let list_values = list_dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(list_values.len(), 3);
+    assert_eq!(list_values.value(0), "item1");
+    assert_eq!(list_values.value(1), "item2");
+    assert_eq!(list_values.value(2), "item3");
 
     Ok(())
 }
@@ -186,6 +191,44 @@ fn test_complex_nested_dictionaries() -> Result<(), ArrowError> {
     let read_batches = read_batches?;
 
     assert_eq!(read_batches.len(), 1);
+
+    let read_batch = &read_batches[0];
+    assert_eq!(read_batch.num_columns(), 2);
+    assert_eq!(read_batch.num_rows(), 2);
+    let outer_dict_array = read_batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+    let outer_dict_values = outer_dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(outer_dict_values.len(), 2);
+    assert_eq!(outer_dict_values.value(0), "outer_1");
+    assert_eq!(outer_dict_values.value(1), "outer_2");
+
+    let nested_list_array = read_batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<ListArray>()
+        .unwrap();
+    let nested_dict_array = nested_list_array
+        .values()
+        .as_any()
+        .downcast_ref::<DictionaryArray<arrow_array::types::Int32Type>>()
+        .unwrap();
+    let nested_dict_values = nested_dict_array
+        .values()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(nested_dict_values.len(), 4);
+    assert_eq!(nested_dict_values.value(0), "inner_a");
+    assert_eq!(nested_dict_values.value(1), "inner_b");
+    assert_eq!(nested_dict_values.value(2), "inner_c");
+    assert_eq!(nested_dict_values.value(3), "inner_d");
 
     Ok(())
 }

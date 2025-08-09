@@ -604,7 +604,7 @@ mod tests {
     use crate::array::Int8Array;
     use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt16Type, UInt8Type, Utf8Type};
-    use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
+    use crate::{ArrowPrimitiveType, BinaryArray, StringArray, StringArrayType};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
     where
@@ -1037,5 +1037,52 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(values, [None, None]);
+    }
+
+    #[test]
+    fn test_finish_preserve_values() {
+        // Create the first dictionary
+        let mut builder = GenericByteDictionaryBuilder::<Int32Type, Utf8Type>::new();
+        builder.append("a").unwrap();
+        builder.append("b").unwrap();
+        builder.append("c").unwrap();
+        let dict = builder.finish_preserve_values();
+        assert_eq!(dict.keys().values(), &[0, 1, 2]);
+        assert_eq!(dict.values().len(), 3);
+        let values = dict
+            .downcast_dict::<GenericByteArray<Utf8Type>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, [Some("a"), Some("b"), Some("c")]);
+
+        // Create a new dictionary
+        builder.append("d").unwrap();
+        builder.append("e").unwrap();
+        let dict2 = builder.finish_preserve_values();
+
+        // Make sure the keys are assigned after the old ones and we have the
+        // right values
+        assert_eq!(dict2.keys().values(), &[3, 4]);
+        let values = dict2
+            .downcast_dict::<GenericByteArray<Utf8Type>>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, [Some("d"), Some("e")]);
+
+        // Check that we have all of the expected values
+        assert_eq!(dict2.values().len(), 5);
+        let all_values = dict2
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_values,
+            [Some("a"), Some("b"), Some("c"), Some("d"), Some("e"),]
+        );
     }
 }
