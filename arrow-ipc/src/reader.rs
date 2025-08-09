@@ -25,9 +25,9 @@
 //! [`Seek`]: std::io::Seek
 
 mod stream;
+pub use stream::*;
 
 use arrow_select::concat;
-pub use stream::*;
 
 use flatbuffers::{VectorIter, VerifierOptions};
 use std::collections::{HashMap, VecDeque};
@@ -41,8 +41,8 @@ use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
-use crate::gen::Message::Message;
-use crate::{Block, FieldNode, IpcDecoder, IpcMessage, MetadataVersion, CONTINUATION_MARKER};
+use crate::gen::Message::{self};
+use crate::{Block, FieldNode, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Read a buffer based on offset and length
@@ -369,8 +369,7 @@ impl RecordBatchDecoder<'_> {
 ///
 /// [IPC RecordBatch]: crate::RecordBatch
 ///
-/// TODO(jakedern): Change visibility back to private?
-pub(crate) struct RecordBatchDecoder<'a> {
+pub struct RecordBatchDecoder<'a> {
     /// The flatbuffers encoded record batch
     batch: crate::RecordBatch<'a>,
     /// The output schema
@@ -683,6 +682,61 @@ fn read_dictionary_impl(
     skip_validation: UnsafeFlag,
 ) -> Result<(), ArrowError> {
     let id = batch.id();
+
+    let dictionary_values = get_dictionary_values(
+        buf,
+        batch,
+        schema,
+        dictionaries_by_id,
+        metadata,
+        require_alignment,
+        skip_validation,
+    )?;
+
+    update_dictionaries(dictionaries_by_id, batch.isDelta(), id, dictionary_values)?;
+
+    Ok(())
+}
+
+fn update_dictionaries(
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    is_delta: bool,
+    dict_id: i64,
+    dict_values: ArrayRef,
+) -> Result<(), ArrowError> {
+    if !is_delta {
+        // We don't currently record the isOrdered field. This could be general
+        // attributes of arrays.
+        // Add (possibly multiple) array refs to the dictionaries array.
+        dictionaries_by_id.insert(dict_id, dict_values.clone());
+        return Ok(());
+    }
+
+    let existing = dictionaries_by_id.get(&dict_id).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(format!(
+            "No existing dictionary for delta dictionary with id '{dict_id}'"
+        ))
+    })?;
+
+    let combined = concat::concat(&[existing, &dict_values]).map_err(|e| {
+        ArrowError::InvalidArgumentError(format!("Failed to concat delta dictionary: {e}"))
+    })?;
+
+    dictionaries_by_id.insert(dict_id, combined);
+
+    Ok(())
+}
+
+fn get_dictionary_values(
+    buf: &Buffer,
+    batch: crate::DictionaryBatch,
+    schema: &Schema,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &MetadataVersion,
+    require_alignment: bool,
+    skip_validation: UnsafeFlag,
+) -> Result<ArrayRef, ArrowError> {
+    let id = batch.id();
     #[allow(deprecated)]
     let fields_using_this_dictionary = schema.fields_with_dict_id(id);
     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
@@ -717,27 +771,7 @@ fn read_dictionary_impl(
         ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
-    if !batch.isDelta() {
-        // We don't currently record the isOrdered field. This could be general
-        // attributes of arrays.
-        // Add (possibly multiple) array refs to the dictionaries array.
-        dictionaries_by_id.insert(id, dictionary_values.clone());
-        return Ok(());
-    }
-
-    let existing = dictionaries_by_id.get(&id).ok_or_else(|| {
-        ArrowError::InvalidArgumentError(format!(
-            "No existing dictionary for delta dictionary with id '{id}'"
-        ))
-    })?;
-
-    let combined = concat::concat(&[existing, &dictionary_values]).map_err(|e| {
-        ArrowError::InvalidArgumentError(format!("Failed to concat delta dictionary: {e}"))
-    })?;
-
-    dictionaries_by_id.insert(id, combined);
-
-    Ok(())
+    Ok(dictionary_values)
 }
 
 /// Read the data for a given block
@@ -755,7 +789,7 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
 /// Parse an encapsulated message
 ///
 /// <https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format>
-fn parse_message(buf: &[u8]) -> Result<Message<'_>, ArrowError> {
+fn parse_message(buf: &[u8]) -> Result<Message::Message, ArrowError> {
     let buf = match buf[..4] == CONTINUATION_MARKER {
         true => &buf[8..],
         false => &buf[4..],
@@ -906,7 +940,7 @@ impl FileDecoder {
         self
     }
 
-    fn read_message<'a>(&self, buf: &'a [u8]) -> Result<Message<'a>, ArrowError> {
+    fn read_message<'a>(&self, buf: &'a [u8]) -> Result<Message::Message<'a>, ArrowError> {
         let message = parse_message(buf)?;
 
         // some old test data's footer metadata is not set, so we account for that
@@ -1342,7 +1376,7 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
 /// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamReader<R> {
     /// Stream reader
-    reader: IpcDecoder<R>,
+    reader: MessageReader<R>,
 
     /// The schema that is read from the stream's first message
     schema: SchemaRef,
@@ -1403,13 +1437,25 @@ impl<R: Read> StreamReader<R> {
         reader: R,
         projection: Option<Vec<usize>>,
     ) -> Result<StreamReader<R>, ArrowError> {
-        let mut reader = IpcDecoder::new(reader);
-        let IpcMessage::Schema(_, _, schema) = reader.read_message()? else {
-            // TODO(jakedern): Include the type of message we got somehow
-            return Err(ArrowError::IpcError(format!(
-                "Expected a schema as the first message in the stream, got"
-            )));
+        let mut msg_reader = MessageReader::new(reader);
+        let message = msg_reader.maybe_next()?;
+        let Some((message, _)) = message else {
+            return Err(ArrowError::IpcError(
+                "Expected schema message, found empty stream.".to_string(),
+            ));
         };
+
+        if message.header_type() != Message::MessageHeader::Schema {
+            return Err(ArrowError::IpcError(format!(
+                "Expected a schema as the first message in the stream, got: {:?}",
+                message.header_type()
+            )));
+        }
+
+        let schema = message.header_as_schema().ok_or_else(|| {
+            ArrowError::ParseError("Failed to parse schema from message header".to_string())
+        })?;
+        let schema = crate::convert::fb_to_schema(schema);
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
@@ -1423,7 +1469,7 @@ impl<R: Read> StreamReader<R> {
         };
 
         Ok(Self {
-            reader,
+            reader: msg_reader,
             schema: Arc::new(schema),
             finished: false,
             dictionaries_by_id,
@@ -1456,30 +1502,55 @@ impl<R: Read> StreamReader<R> {
             return Ok(None);
         }
 
-        let message = self.reader.read_message();
-        let message = match message {
-            Ok(m) => m,
-            Err(ArrowError::IoError(_, e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                // Handle EOF without the "0xFFFFFFFF 0x00000000"
-                // valid according to:
-                // https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+        // Read messages until we get a record batch or end of stream
+        loop {
+            let message = self.next_ipc_message()?;
+            let Some(message) = message else {
+                // If the message is None, we have reached the end of the stream.
                 self.finished = true;
                 return Ok(None);
-            }
-            Err(e) => {
-                return Err(e);
-            }
+            };
+
+            match message {
+                IpcMessage::Schema(_) => {
+                    return Err(ArrowError::IpcError(
+                        "Expected a record batch, but found a schema".to_string(),
+                    ));
+                }
+                IpcMessage::RecordBatch(record_batch) => {
+                    return Ok(Some(record_batch));
+                }
+                IpcMessage::DictionaryBatch { .. } => {
+                    continue;
+                }
+            };
+        }
+    }
+
+    pub(crate) fn next_ipc_message(&mut self) -> Result<Option<IpcMessage>, ArrowError> {
+        let message = self.reader.maybe_next()?;
+        let Some((message, body)) = message else {
+            // If the message is None, we have reached the end of the stream.
+            return Ok(None);
         };
 
-        match message {
-            crate::IpcMessage::Schema(_, _, _) => Err(ArrowError::IpcError(
-                "Not expecting a schema when messages are read".to_string(),
-            )),
-            crate::IpcMessage::RecordBatch(message, batch, buf) => {
+        let ipc_message = match message.header_type() {
+            Message::MessageHeader::Schema => {
+                let schema = message.header_as_schema().ok_or_else(|| {
+                    ArrowError::ParseError("Failed to parse schema from message header".to_string())
+                })?;
+                let arrow_schema = crate::convert::fb_to_schema(schema);
+                IpcMessage::Schema(arrow_schema)
+            }
+            Message::MessageHeader::RecordBatch => {
+                let batch = message.header_as_record_batch().ok_or_else(|| {
+                    ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
+                })?;
+
                 let version = message.version();
                 let schema = self.schema.clone();
-                RecordBatchDecoder::try_new(
-                    &buf.into(),
+                let record_batch = RecordBatchDecoder::try_new(
+                    &body.into(),
                     batch,
                     schema,
                     &self.dictionaries_by_id,
@@ -1488,38 +1559,63 @@ impl<R: Read> StreamReader<R> {
                 .with_projection(self.projection.as_ref().map(|x| x.0.as_ref()))
                 .with_require_alignment(false)
                 .with_skip_validation(self.skip_validation.clone())
-                .read_record_batch()
-                .map(Some)
+                .read_record_batch()?;
+                IpcMessage::RecordBatch(record_batch)
             }
-            crate::IpcMessage::DictionaryBatch(message, batch, buf) => {
-                read_dictionary_impl(
-                    &buf.into(),
-                    batch,
+            Message::MessageHeader::DictionaryBatch => {
+                let dict = message.header_as_dictionary_batch().ok_or_else(|| {
+                    ArrowError::ParseError(
+                        "Failed to parse dictionary batch from message header".to_string(),
+                    )
+                })?;
+
+                let version = message.version();
+                let dict_values = get_dictionary_values(
+                    &body.into(),
+                    dict,
                     &self.schema,
                     &mut self.dictionaries_by_id,
-                    &message.version(),
+                    &version,
                     false,
                     self.skip_validation.clone(),
                 )?;
 
-                // read the next message until we encounter a RecordBatch
-                self.maybe_next()
+                update_dictionaries(
+                    &mut self.dictionaries_by_id,
+                    dict.isDelta(),
+                    dict.id(),
+                    dict_values.clone(),
+                )?;
+
+                IpcMessage::DictionaryBatch {
+                    id: dict.id(),
+                    is_delta: dbg!(dict.isDelta()),
+                    values: dbg!(dict_values),
+                }
             }
-        }
+            x => {
+                return Err(ArrowError::ParseError(format!(
+                    "Unsupported message header type in IPC stream: '{:?}'",
+                    x
+                )));
+            }
+        };
+
+        Ok(Some(ipc_message))
     }
 
     /// Gets a reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_ref(&self) -> &R {
-        self.reader.get_ref()
+        self.reader.inner()
     }
 
     /// Gets a mutable reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_mut(&mut self) -> &mut R {
-        self.reader.get_mut()
+        self.reader.inner_mut()
     }
 
     /// Specifies if validation should be skipped when reading data (defaults to `false`)
@@ -1544,6 +1640,105 @@ impl<R: Read> Iterator for StreamReader<R> {
 impl<R: Read> RecordBatchReader for StreamReader<R> {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum IpcMessage {
+    Schema(arrow_schema::Schema),
+    RecordBatch(RecordBatch),
+    DictionaryBatch {
+        id: i64,
+        is_delta: bool,
+        values: ArrayRef,
+    },
+}
+
+struct MessageReader<R> {
+    reader: R,
+    buf: Vec<u8>,
+}
+
+impl<R: Read> MessageReader<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buf: Vec::new(),
+        }
+    }
+
+    fn maybe_next(&mut self) -> Result<Option<(Message::Message, MutableBuffer)>, ArrowError> {
+        let meta_len = self.read_meta_len()?;
+        let Some(meta_len) = meta_len else {
+            return Ok(None);
+        };
+
+        self.buf.resize(meta_len as usize, 0);
+        self.reader.read_exact(&mut self.buf)?;
+
+        let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
+            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+        })?;
+
+        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
+        self.reader.read_exact(&mut buf)?;
+
+        Ok(Some((message, buf)))
+    }
+
+    fn inner_mut(&mut self) -> &mut R {
+        &mut self.reader
+    }
+
+    fn inner(&self) -> &R {
+        &self.reader
+    }
+
+    /// Read the metadata length for the next message from the underlying stream.
+    ///
+    /// # Returns
+    /// - `Ok(None)` if the the reader signals the end of stream with EOF on
+    /// the first read
+    /// - `Err(_)` if the reader returns an error other than on the first
+    /// read, or if the metadata length is less than 0.
+    /// - Returns `Ok(Some(_))` with the length otherwise.
+    pub fn read_meta_len(&mut self) -> Result<Option<i32>, ArrowError> {
+        let mut meta_len: [u8; 4] = [0; 4];
+        match self.reader.read_exact(&mut meta_len) {
+            Ok(_) => {}
+            Err(e) => {
+                return if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    // Handle EOF without the "0xFFFFFFFF 0x00000000"
+                    // valid according to:
+                    // https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+                    Ok(None)
+                } else {
+                    Err(ArrowError::from(e))
+                };
+            }
+        };
+
+        let meta_len = {
+            // If a continuation marker is encountered, skip over it and read
+            // the size from the next four bytes.
+            if meta_len == CONTINUATION_MARKER {
+                self.reader.read_exact(&mut meta_len)?;
+            }
+
+            i32::from_le_bytes(meta_len)
+        };
+
+        if meta_len == 0 {
+            return Ok(None);
+        }
+
+        if meta_len < 0 {
+            return Err(ArrowError::ParseError(
+                "Invalid IPC message size: less than 0".to_string(),
+            ));
+        }
+
+        Ok(Some(meta_len))
     }
 }
 
@@ -2870,5 +3065,16 @@ mod tests {
         let new_schema = fb_to_schema(ipc_schema);
 
         assert_eq!(schema, new_schema);
+    }
+
+    #[test]
+    fn test_negative_meta_len() {
+        let bytes = i32::to_le_bytes(-1);
+        let mut buf = vec![];
+        buf.extend(CONTINUATION_MARKER);
+        buf.extend(bytes);
+
+        let reader = StreamReader::try_new(Cursor::new(buf), None);
+        assert!(reader.is_err());
     }
 }

@@ -463,6 +463,38 @@ where
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
+    /// Builds the `DictionaryArray` without resetting the values builder or
+    /// the internal de-duplication map.
+    ///
+    /// The advantage of doing this is that the values will represent the entire
+    /// set of what has been built so-far by this builder and ensures
+    /// consistency in the assignment of keys to values across multiple calls
+    /// to `finish_preserve_values`. This enables ipc writers to efficiently
+    /// emit delta dictionaries.
+    ///
+    /// The downside to this is that building the record requires creating a
+    /// copy of the values, which can become slowly more expensive if the
+    /// dictionary grows.
+    ///
+    /// Additionally, if record batches from multiple different dictionary
+    /// builders for the same column are fed into a single ipc writer, beware
+    /// that entire dictionaries are likely to be re-sent frequently even when
+    /// the majority of the values are not used by the current record batch.
+    pub fn finish_preserve_values(&mut self) -> DictionaryArray<K> {
+        let values = self.values_builder.finish_cloned();
+        let keys = self.keys_builder.finish();
+
+        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
+
     /// Returns the current null buffer as a slice
     pub fn validity_slice(&self) -> Option<&[u8]> {
         self.keys_builder.validity_slice()
