@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arrow::schema::primitive::convert_primitive;
-use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
-use crate::basic::{ConvertedType, Repetition};
+use crate::arrow::{ProjectionMask, ADJUSTED_TO_UTC_KEY, PARQUET_FIELD_ID_META_KEY};
+use crate::basic::{ConvertedType, LogicalType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
@@ -568,12 +568,20 @@ fn convert_field(parquet_type: &Type, field: &ParquetField, arrow_hint: Option<&
             let mut ret = Field::new(name, data_type, nullable);
             let basic_info = parquet_type.get_basic_info();
             if basic_info.has_id() {
-                let mut meta = HashMap::with_capacity(1);
-                meta.insert(
+                ret.metadata_mut().insert(
                     PARQUET_FIELD_ID_META_KEY.to_string(),
                     basic_info.id().to_string(),
                 );
-                ret.set_metadata(meta);
+            }
+            if matches!(
+                basic_info.logical_type(),
+                Some(LogicalType::Time {
+                    is_adjusted_to_u_t_c: true,
+                    ..
+                })
+            ) {
+                ret.metadata_mut()
+                    .insert(ADJUSTED_TO_UTC_KEY.to_string(), String::new());
             }
             ret
         }
