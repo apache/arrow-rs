@@ -89,7 +89,6 @@
 //! }
 //! ```
 //!
-
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
     compare_schemas, generate_fingerprint, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema,
@@ -140,15 +139,6 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
     )
 }
 
-#[derive(Debug)]
-enum DecoderState {
-    Magic,
-    Fingerprint,
-    Record,
-    SchemaChange,
-    Finished,
-}
-
 /// A low-level interface for decoding Avro-encoded bytes into Arrow `RecordBatch`.
 #[derive(Debug)]
 pub struct Decoder {
@@ -161,9 +151,7 @@ pub struct Decoder {
     utf8_view: bool,
     strict_mode: bool,
     pending_schema: Option<(Fingerprint, RecordDecoder)>,
-    state: DecoderState,
-    bytes_remaining: usize,
-    fingerprint_buf: Vec<u8>,
+    awaiting_body: bool,
 }
 
 impl Decoder {
@@ -182,139 +170,135 @@ impl Decoder {
     /// - reach `batch_size` decoded rows.
     ///
     /// Returns the number of bytes consumed.
-    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
-        let max_read = buf.len();
-        while !buf.is_empty() {
-            match self.state {
-                DecoderState::Magic => {
-                    self.fingerprint_buf.clear();
-                    let remaining =
-                        &SINGLE_OBJECT_MAGIC[SINGLE_OBJECT_MAGIC.len() - self.bytes_remaining..];
-                    let to_decode = buf.len().min(remaining.len());
-                    if !buf.starts_with(&remaining[..to_decode]) {
-                        return Err(ArrowError::ParseError(
-                            "Invalid avro single object encoding magic".to_string(),
-                        ));
+    pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
+        let mut total_consumed = 0usize;
+        while total_consumed < data.len() && self.remaining_capacity > 0 {
+            if !self.awaiting_body {
+                if let Some(n) = self.handle_prefix(&data[total_consumed..])? {
+                    if n == 0 {
+                        break;
                     }
-                    self.bytes_remaining -= to_decode;
-                    buf = &buf[to_decode..];
-                    if self.bytes_remaining == 0 {
-                        match self.fingerprint_algorithm {
-                            FingerprintAlgorithm::Rabin => {
-                                self.bytes_remaining = 8;
-                            }
-                        }
-                        self.state = DecoderState::Fingerprint;
+                    total_consumed += n;
+                    self.awaiting_body = true;
+                    if self.remaining_capacity == self.batch_size && self.pending_schema.is_some() {
+                        self.apply_pending_schema_if_batch_empty();
+                    }
+                    if self.remaining_capacity == 0 {
+                        break;
                     }
                 }
-                DecoderState::Fingerprint => {
-                    let to_decode = self.bytes_remaining.min(buf.len());
-                    self.fingerprint_buf.extend_from_slice(&buf[..to_decode]);
-                    self.bytes_remaining -= to_decode;
-                    buf = &buf[to_decode..];
-                    if self.bytes_remaining == 0 {
-                        let fingerprint: Fingerprint = match self.fingerprint_algorithm {
-                            FingerprintAlgorithm::Rabin => Fingerprint::Rabin(u64::from_le_bytes(
-                                self.fingerprint_buf.as_slice().try_into().map_err(|e| {
-                                    ArrowError::ParseError(format!(
-                                        "Fingerprint buffer too small: {e}"
-                                    ))
-                                })?,
-                            )),
-                        };
-                        match self.active_fingerprint {
-                            Some(active_fp) if active_fp == fingerprint => {
-                                self.state = DecoderState::Record;
-                            }
-                            _ => match self.cache.shift_remove(&fingerprint) {
-                                Some(new_decoder) => {
-                                    self.pending_schema = Some((fingerprint, new_decoder));
-                                    self.state = if self.remaining_capacity < self.batch_size {
-                                        self.remaining_capacity = 0;
-                                        DecoderState::Finished
-                                    } else {
-                                        DecoderState::SchemaChange
-                                    };
-                                }
-                                None => {
-                                    return Err(ArrowError::ParseError(format!(
-                                        "Unknown fingerprint: {fingerprint:?}"
-                                    )));
-                                }
-                            },
-                        }
+            }
+            match self.active_decoder.decode(&data[total_consumed..], 1) {
+                Ok(n) if n > 0 => {
+                    self.remaining_capacity -= 1;
+                    total_consumed += n;
+                    self.awaiting_body = false;
+                }
+                Ok(_) => {
+                    return Err(ArrowError::ParseError(
+                        "Record decoder consumed 0 bytes".into(),
+                    ));
+                }
+                Err(e) => {
+                    return if is_incomplete_data(&e) {
+                        Ok(total_consumed)
+                    } else {
+                        Err(e)
                     }
                 }
-                DecoderState::Record => match self.active_decoder.decode(buf, 1) {
-                    Ok(n) if n > 0 => {
-                        self.remaining_capacity -= 1;
-                        buf = &buf[n..];
-                        if self.remaining_capacity == 0 {
-                            self.state = DecoderState::Finished;
-                        } else {
-                            self.bytes_remaining = SINGLE_OBJECT_MAGIC.len();
-                            self.state = DecoderState::Magic;
-                        }
-                    }
-                    Ok(_) => {
-                        return Err(ArrowError::ParseError(
-                            "Record decoder consumed 0 bytes".into(),
-                        ));
-                    }
-                    Err(e) => {
-                        if !is_incomplete_data(&e) {
-                            return Err(e);
-                        }
-                        return Ok(max_read - buf.len());
-                    }
-                },
-                DecoderState::SchemaChange => {
-                    if let Some((new_fingerprint, new_decoder)) = self.pending_schema.take() {
-                        if let Some(old_fingerprint) =
-                            self.active_fingerprint.replace(new_fingerprint)
-                        {
-                            let old_decoder =
-                                std::mem::replace(&mut self.active_decoder, new_decoder);
-                            self.cache.shift_remove(&old_fingerprint);
-                            self.cache.insert(old_fingerprint, old_decoder);
-                        } else {
-                            self.active_decoder = new_decoder;
-                        }
-                    }
-                    self.state = DecoderState::Record;
-                }
-                DecoderState::Finished => return Ok(max_read - buf.len()),
             }
         }
-        Ok(max_read)
+        Ok(total_consumed)
+    }
+
+    // Attempt to handle a single‑object‑encoding prefix at the current position.
+    //
+    // * Ok(None) – buffer does not start with the prefix.
+    // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
+    // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
+    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
+        // Need at least the magic bytes to decide (2 bytes).
+        let Some(magic_bytes) = buf.get(..SINGLE_OBJECT_MAGIC.len()) else {
+            return Ok(Some(0)); // Get more bytes
+        };
+        // Bail out early if the magic does not match.
+        if magic_bytes != SINGLE_OBJECT_MAGIC {
+            return Ok(None); // Continue to decode the next record
+        }
+        // Try to parse the fingerprint that follows the magic.
+        let fingerprint_size = match self.fingerprint_algorithm {
+            FingerprintAlgorithm::Rabin => self
+                .handle_fingerprint(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
+                    Fingerprint::Rabin(u64::from_le_bytes(bytes))
+                })?,
+        };
+        // Convert the inner result into a “bytes consumed” count.
+        // NOTE: Incomplete fingerprint consumes no bytes.
+        let consumed = fingerprint_size.map_or(0, |n| n + SINGLE_OBJECT_MAGIC.len());
+        Ok(Some(consumed))
+    }
+
+    // Attempts to read and install a new fingerprint of `N` bytes.
+    //
+    // * Ok(None) – insufficient bytes (`buf.len() < `N`).
+    // * Ok(Some(N)) – fingerprint consumed (always `N`).
+    fn handle_fingerprint<const N: usize>(
+        &mut self,
+        buf: &[u8],
+        fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
+    ) -> Result<Option<usize>, ArrowError> {
+        // Need enough bytes to get fingerprint (next N bytes)
+        let Some(fingerprint_bytes) = buf.get(..N) else {
+            return Ok(None); // Insufficient bytes
+        };
+        // SAFETY: length checked above.
+        let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
+        // If the fingerprint indicates a schema change, prepare to switch decoders.
+        if self.active_fingerprint != Some(new_fingerprint) {
+            let Some(new_decoder) = self.cache.shift_remove(&new_fingerprint) else {
+                return Err(ArrowError::ParseError(format!(
+                    "Unknown fingerprint: {new_fingerprint:?}"
+                )));
+            };
+            self.pending_schema = Some((new_fingerprint, new_decoder));
+            // If there are already decoded rows, we must flush them first.
+            // Reducing `remaining_capacity` to 0 ensures `flush` is called next.
+            if self.remaining_capacity < self.batch_size {
+                self.remaining_capacity = 0;
+            }
+        }
+        Ok(Some(N))
+    }
+
+    fn apply_pending_schema(&mut self) {
+        if let Some((new_fingerprint, new_decoder)) = self.pending_schema.take() {
+            if let Some(old_fingerprint) = self.active_fingerprint.replace(new_fingerprint) {
+                let old_decoder = std::mem::replace(&mut self.active_decoder, new_decoder);
+                self.cache.shift_remove(&old_fingerprint);
+                self.cache.insert(old_fingerprint, old_decoder);
+            } else {
+                self.active_decoder = new_decoder;
+            }
+        }
+    }
+
+    fn apply_pending_schema_if_batch_empty(&mut self) {
+        if self.remaining_capacity != self.batch_size {
+            return;
+        }
+        self.apply_pending_schema();
     }
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
     /// `Ok(None)` if no new rows are available.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        match self.state {
-            DecoderState::Finished => {
-                let batch = self.active_decoder.flush()?;
-                self.remaining_capacity = self.batch_size;
-                if self.pending_schema.is_some() {
-                    self.state = DecoderState::SchemaChange;
-                } else {
-                    self.bytes_remaining = SINGLE_OBJECT_MAGIC.len();
-                    self.state = DecoderState::Magic;
-                }
-                Ok(Some(batch))
-            }
-            DecoderState::Magic | DecoderState::Record => {
-                if self.remaining_capacity < self.batch_size {
-                    let batch = self.active_decoder.flush()?;
-                    self.remaining_capacity = self.batch_size;
-                    Ok(Some(batch))
-                } else {
-                    Ok(None)
-                }
-            }
-            _ => Ok(None),
+        if self.remaining_capacity == self.batch_size {
+            return Ok(None);
         }
+        let batch = self.active_decoder.flush()?;
+        self.remaining_capacity = self.batch_size;
+        self.apply_pending_schema();
+        Ok(Some(batch))
     }
 
     /// Returns the number of rows that can be added to this decoder before it is full.
@@ -423,9 +407,7 @@ impl ReaderBuilder {
             fingerprint_algorithm,
             strict_mode: self.strict_mode,
             pending_schema: None,
-            state: DecoderState::Magic,
-            bytes_remaining: SINGLE_OBJECT_MAGIC.len(),
-            fingerprint_buf: Vec::new(),
+            awaiting_body: false,
         }
     }
 
@@ -840,47 +822,12 @@ mod test {
     }
 
     #[test]
-    fn test_missing_initial_fingerprint_error() {
-        let (store, _fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
-        let mut decoder = ReaderBuilder::new()
-            .with_batch_size(8)
-            .with_reader_schema(schema_int.clone())
-            .with_writer_schema_store(store)
-            .build_decoder()
-            .unwrap();
-        let buf = [0x02u8, 0x00u8];
-        let err = decoder.decode(&buf).expect_err("decode should error");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Invalid avro single object encoding magic"),
-            "unexpected message: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_handle_prefix_no_schema_store() {
-        let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
-        let mut decoder = make_decoder(&store, fp_int, &schema_int);
-        let consumed = decoder
-            .decode(&SINGLE_OBJECT_MAGIC[..])
-            .expect("decode magic");
-        assert_eq!(consumed, SINGLE_OBJECT_MAGIC.len());
-        assert!(matches!(decoder.state, super::DecoderState::Fingerprint));
-        match decoder.fingerprint_algorithm {
-            FingerprintAlgorithm::Rabin => assert_eq!(decoder.bytes_remaining, 8),
-        }
-        assert!(decoder.pending_schema.is_none());
-    }
-
-    #[test]
     fn test_handle_prefix_incomplete_magic() {
         let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
         let buf = &SINGLE_OBJECT_MAGIC[..1];
-        let consumed = decoder.decode(buf).unwrap();
-        assert_eq!(consumed, buf.len());
-        assert!(matches!(decoder.state, super::DecoderState::Magic));
-        assert_eq!(decoder.bytes_remaining, SINGLE_OBJECT_MAGIC.len() - 1);
+        let res = decoder.handle_prefix(buf).unwrap();
+        assert_eq!(res, Some(0));
         assert!(decoder.pending_schema.is_none());
     }
 
@@ -889,12 +836,8 @@ mod test {
         let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
         let buf = [0xFFu8, 0x00u8, 0x01u8];
-        let err = decoder.decode(&buf).expect_err("decode should error");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("Invalid avro single object encoding magic"),
-            "unexpected message: {msg}"
-        );
+        let res = decoder.handle_prefix(&buf).unwrap();
+        assert!(res.is_none());
     }
 
     #[test]
@@ -906,13 +849,8 @@ mod test {
         };
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         buf.extend_from_slice(&long_bytes[..4]);
-        let consumed = decoder.decode(&buf).unwrap();
-        assert_eq!(consumed, buf.len());
-        assert!(matches!(decoder.state, super::DecoderState::Fingerprint));
-        assert_eq!(decoder.fingerprint_buf.len(), 4);
-        match decoder.fingerprint_algorithm {
-            FingerprintAlgorithm::Rabin => assert_eq!(decoder.bytes_remaining, 4),
-        }
+        let res = decoder.handle_prefix(&buf).unwrap();
+        assert_eq!(res, Some(0));
         assert!(decoder.pending_schema.is_none());
     }
 
@@ -928,11 +866,10 @@ mod test {
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         let Fingerprint::Rabin(v) = fp_long;
         buf.extend_from_slice(&v.to_le_bytes());
-        let consumed = decoder.decode(&buf).unwrap();
+        let consumed = decoder.handle_prefix(&buf).unwrap().unwrap();
         assert_eq!(consumed, buf.len());
         assert!(decoder.pending_schema.is_some());
         assert_eq!(decoder.pending_schema.as_ref().unwrap().0, fp_long);
-        assert!(matches!(decoder.state, super::DecoderState::SchemaChange));
     }
 
     #[test]
