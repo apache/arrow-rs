@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, Type, TypeName};
+use crate::schema::{
+    Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, Type, TypeName,
+};
 use arrow_schema::{
-    ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
-    TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE,
 };
 use serde_json::Value;
 use std::borrow::Cow;
@@ -245,6 +247,22 @@ impl AvroField {
     /// It's used to identify fields within a record structure.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Performs schema resolution between a writer and reader schema.
+    ///
+    /// This is the primary entry point for handling schema evolution. It produces an
+    /// `AvroField` that contains all the necessary information to read data written
+    /// with the `writer` schema as if it were written with the `reader` schema.
+    pub(crate) fn resolve_from_writer_and_reader<'a>(
+        writer_schema: &'a Schema<'a>,
+        reader_schema: &'a Schema<'a>,
+        use_utf8view: bool,
+        strict_mode: bool,
+    ) -> Result<Self, ArrowError> {
+        Err(ArrowError::NotYetImplemented(
+            "Resolving schema from a writer and reader schema is not yet implemented".to_string(),
+        ))
     }
 }
 
@@ -585,7 +603,7 @@ impl<'a> Maker<'a> {
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
         match reader_schema {
-            Some(r) => self.resolve_type(writer_schema, r, namespace),
+            Some(reader_schema) => self.resolve_type(writer_schema, reader_schema, namespace),
             None => self.parse_type(writer_schema, namespace),
         }
     }
