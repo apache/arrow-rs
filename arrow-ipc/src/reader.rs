@@ -1698,18 +1698,18 @@ impl<R: Read> MessageReader<R> {
     ///
     /// # Returns
     /// - `Ok(None)` if the the reader signals the end of stream with EOF on
-    /// the first read
+    ///   the first read
     /// - `Err(_)` if the reader returns an error other than on the first
-    /// read, or if the metadata length is invalid
+    ///   read, or if the metadata length is invalid
     /// - `Ok(Some(_))` with the Message and buffer containiner the
-    /// body bytes otherwise.
+    ///   body bytes otherwise.
     fn maybe_next(&mut self) -> Result<Option<(Message::Message, MutableBuffer)>, ArrowError> {
         let meta_len = self.read_meta_len()?;
         let Some(meta_len) = meta_len else {
             return Ok(None);
         };
 
-        self.buf.resize(meta_len as usize, 0);
+        self.buf.resize(meta_len, 0);
         self.reader.read_exact(&mut self.buf)?;
 
         let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
@@ -1736,11 +1736,11 @@ impl<R: Read> MessageReader<R> {
     ///
     /// # Returns
     /// - `Ok(None)` if the the reader signals the end of stream with EOF on
-    /// the first read
+    ///   the first read
     /// - `Err(_)` if the reader returns an error other than on the first
-    /// read, or if the metadata length is less than 0.
+    ///   read, or if the metadata length is less than 0.
     /// - `Ok(Some(_))` with the length otherwise.
-    pub fn read_meta_len(&mut self) -> Result<Option<i32>, ArrowError> {
+    pub fn read_meta_len(&mut self) -> Result<Option<usize>, ArrowError> {
         let mut meta_len: [u8; 4] = [0; 4];
         match self.reader.read_exact(&mut meta_len) {
             Ok(_) => {}
@@ -1770,11 +1770,8 @@ impl<R: Read> MessageReader<R> {
             return Ok(None);
         }
 
-        if meta_len < 0 {
-            return Err(ArrowError::ParseError(
-                "Invalid IPC message size: less than 0".to_string(),
-            ));
-        }
+        let meta_len = usize::try_from(meta_len)
+            .map_err(|_| ArrowError::ParseError(format!("Invalid metadata length: {meta_len}")))?;
 
         Ok(Some(meta_len))
     }
