@@ -23,6 +23,7 @@ use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, BinaryViewArray, NullBufferBuilder,
     PrimitiveArray,
 };
+use arrow::buffer::NullBuffer;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::Int32Type;
 use arrow_schema::{ArrowError, FieldRef};
@@ -154,6 +155,19 @@ impl<'a, T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'a, 
         Err(ArrowError::NotYetImplemented(String::from(
             "variant_get unshredded to primitive types is not implemented yet",
         )))
+    }
+
+    fn all_null(
+        &self,
+        variant_array: &VariantArray,
+        _metadata: &BinaryViewArray,
+    ) -> Result<ArrayRef> {
+        // For all-null case, create a primitive array with all null values
+        let nulls = NullBuffer::from(vec![false; variant_array.len()]);
+        let values = vec![T::default_value(); variant_array.len()];
+        let array = PrimitiveArray::<T>::new(values.into(), Some(nulls))
+            .with_data_type(self.as_type.data_type().clone());
+        Ok(Arc::new(array))
     }
 }
 
