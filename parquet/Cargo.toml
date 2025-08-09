@@ -244,5 +244,10 @@ name = "row_selector"
 harness = false
 required-features = ["arrow"]
 
+[[bench]]
+name = "rle"
+harness = false
+required-features = ["experimental"]
+
 [lib]
 bench = false
