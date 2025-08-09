@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, TypeName};
+use crate::schema::{
+    Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, TypeName,
+    AVRO_ENUM_SYMBOLS_METADATA_KEY,
+};
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
     DECIMAL128_MAX_SCALE,
@@ -623,7 +626,7 @@ fn make_data_type<'a>(
                 let symbols_json = serde_json::to_string(&e.symbols).map_err(|e| {
                     ArrowError::ParseError(format!("Failed to serialize enum symbols: {e}"))
                 })?;
-                metadata.insert("avro.enum.symbols".to_string(), symbols_json);
+                metadata.insert(AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(), symbols_json);
                 let field = AvroDataType {
                     nullability: None,
                     metadata,
@@ -780,11 +783,9 @@ mod tests {
     #[test]
     fn test_uuid_type() {
         let mut codec = Codec::Fixed(16);
-
         if let c @ Codec::Fixed(16) = &mut codec {
             *c = Codec::Uuid;
         }
-
         assert!(matches!(codec, Codec::Uuid));
     }
 
