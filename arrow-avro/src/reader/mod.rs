@@ -130,6 +130,25 @@ fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
     })
 }
 
+fn is_incomplete_data(err: &ArrowError) -> bool {
+    matches!(
+        err,
+        ArrowError::ParseError(msg)
+            if msg.contains("Unexpected EOF")
+            || msg.contains("bad varint")
+            || msg.contains("offset overflow")
+    )
+}
+
+#[derive(Debug)]
+enum DecoderState {
+    Magic,
+    Fingerprint,
+    Record,
+    SchemaChange,
+    Finished,
+}
+
 /// A low-level interface for decoding Avro-encoded bytes into Arrow `RecordBatch`.
 #[derive(Debug)]
 pub struct Decoder {
@@ -139,10 +158,12 @@ pub struct Decoder {
     remaining_capacity: usize,
     cache: IndexMap<Fingerprint, RecordDecoder>,
     fingerprint_algorithm: FingerprintAlgorithm,
-    expect_prefix: bool,
     utf8_view: bool,
     strict_mode: bool,
     pending_schema: Option<(Fingerprint, RecordDecoder)>,
+    state: DecoderState,
+    bytes_remaining: usize,
+    fingerprint_buf: Vec<u8>,
 }
 
 impl Decoder {
@@ -161,116 +182,139 @@ impl Decoder {
     /// - reach `batch_size` decoded rows.
     ///
     /// Returns the number of bytes consumed.
-    pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
-        if self.expect_prefix
-            && data.len() >= SINGLE_OBJECT_MAGIC.len()
-            && !data.starts_with(&SINGLE_OBJECT_MAGIC)
-        {
-            return Err(ArrowError::ParseError(
-                "Expected single‑object encoding fingerprint prefix for first message \
-                 (writer_schema_store is set but active_fingerprint is None)"
-                    .into(),
-            ));
-        }
-        let mut total_consumed = 0usize;
-        // The loop stops when the batch is full, a schema change is staged,
-        // or handle_prefix indicates we need more bytes (Some(0)).
-        while total_consumed < data.len() && self.remaining_capacity > 0 {
-            if let Some(n) = self.handle_prefix(&data[total_consumed..])? {
-                // We either consumed a prefix (n > 0) and need a schema switch, or we need
-                // more bytes to make a decision. Either way, this decoding attempt is finished.
-                total_consumed += n;
+    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
+        let max_read = buf.len();
+        while !buf.is_empty() {
+            match self.state {
+                DecoderState::Magic => {
+                    self.fingerprint_buf.clear();
+                    let remaining =
+                        &SINGLE_OBJECT_MAGIC[SINGLE_OBJECT_MAGIC.len() - self.bytes_remaining..];
+                    let to_decode = buf.len().min(remaining.len());
+                    if !buf.starts_with(&remaining[..to_decode]) {
+                        return Err(ArrowError::ParseError(
+                            "Invalid avro single object encoding magic".to_string(),
+                        ));
+                    }
+                    self.bytes_remaining -= to_decode;
+                    buf = &buf[to_decode..];
+                    if self.bytes_remaining == 0 {
+                        match self.fingerprint_algorithm {
+                            FingerprintAlgorithm::Rabin => {
+                                self.bytes_remaining = 8;
+                            }
+                        }
+                        self.state = DecoderState::Fingerprint;
+                    }
+                }
+                DecoderState::Fingerprint => {
+                    let to_decode = self.bytes_remaining.min(buf.len());
+                    self.fingerprint_buf.extend_from_slice(&buf[..to_decode]);
+                    self.bytes_remaining -= to_decode;
+                    buf = &buf[to_decode..];
+                    if self.bytes_remaining == 0 {
+                        let fingerprint: Fingerprint = match self.fingerprint_algorithm {
+                            FingerprintAlgorithm::Rabin => Fingerprint::Rabin(u64::from_le_bytes(
+                                self.fingerprint_buf.as_slice().try_into().map_err(|e| {
+                                    ArrowError::ParseError(format!(
+                                        "Fingerprint buffer too small: {e}"
+                                    ))
+                                })?,
+                            )),
+                        };
+                        match self.active_fingerprint {
+                            Some(active_fp) if active_fp == fingerprint => {
+                                self.state = DecoderState::Record;
+                            }
+                            _ => match self.cache.shift_remove(&fingerprint) {
+                                Some(new_decoder) => {
+                                    self.pending_schema = Some((fingerprint, new_decoder));
+                                    self.state = if self.remaining_capacity < self.batch_size {
+                                        self.remaining_capacity = 0;
+                                        DecoderState::Finished
+                                    } else {
+                                        DecoderState::SchemaChange
+                                    };
+                                }
+                                None => {
+                                    return Err(ArrowError::ParseError(format!(
+                                        "Unknown fingerprint: {fingerprint:?}"
+                                    )));
+                                }
+                            },
+                        }
+                    }
+                }
+                DecoderState::Record => match self.active_decoder.decode(buf, 1) {
+                    Ok(n) if n > 0 => {
+                        self.remaining_capacity -= 1;
+                        buf = &buf[n..];
+                        if self.remaining_capacity == 0 {
+                            self.state = DecoderState::Finished;
+                        } else {
+                            self.bytes_remaining = SINGLE_OBJECT_MAGIC.len();
+                            self.state = DecoderState::Magic;
+                        }
+                    }
+                    Ok(_) => {
+                        return Err(ArrowError::ParseError(
+                            "Record decoder consumed 0 bytes".into(),
+                        ));
+                    }
+                    Err(e) => {
+                        if !is_incomplete_data(&e) {
+                            return Err(e);
+                        }
+                        return Ok(max_read - buf.len());
+                    }
+                },
+                DecoderState::SchemaChange => {
+                    if let Some((new_fingerprint, new_decoder)) = self.pending_schema.take() {
+                        if let Some(old_fingerprint) =
+                            self.active_fingerprint.replace(new_fingerprint)
+                        {
+                            let old_decoder =
+                                std::mem::replace(&mut self.active_decoder, new_decoder);
+                            self.cache.shift_remove(&old_fingerprint);
+                            self.cache.insert(old_fingerprint, old_decoder);
+                        } else {
+                            self.active_decoder = new_decoder;
+                        }
+                    }
+                    self.state = DecoderState::Record;
+                }
+                DecoderState::Finished => return Ok(max_read - buf.len()),
             }
-            // No prefix: decode one row and keep going.
-            let n = self.active_decoder.decode(&data[total_consumed..], 1)?;
-            self.remaining_capacity -= 1;
-            total_consumed += n;
         }
-        Ok(total_consumed)
-    }
-
-    // Attempt to handle a single‑object‑encoding prefix at the current position.
-    //
-    // * Ok(None) – buffer does not start with the prefix.
-    // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
-    // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
-    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
-        // If there is no schema store, prefixes are unrecognized.
-        if !self.expect_prefix {
-            return Ok(None);
-        }
-        // Need at least the magic bytes to decide (2 bytes).
-        let Some(magic_bytes) = buf.get(..SINGLE_OBJECT_MAGIC.len()) else {
-            return Ok(Some(0)); // Get more bytes
-        };
-        // Bail out early if the magic does not match.
-        if magic_bytes != SINGLE_OBJECT_MAGIC {
-            return Ok(None); // Continue to decode the next record
-        }
-        // Try to parse the fingerprint that follows the magic.
-        let fingerprint_size = match self.fingerprint_algorithm {
-            FingerprintAlgorithm::Rabin => self
-                .handle_fingerprint(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
-                    Fingerprint::Rabin(u64::from_le_bytes(bytes))
-                })?,
-        };
-        // Convert the inner result into a “bytes consumed” count.
-        // NOTE: Incomplete fingerprint consumes no bytes.
-        let consumed = fingerprint_size.map_or(0, |n| n + SINGLE_OBJECT_MAGIC.len());
-        Ok(Some(consumed))
-    }
-
-    // Attempts to read and install a new fingerprint of `N` bytes.
-    //
-    // * Ok(None) – insufficient bytes (`buf.len() < `N`).
-    // * Ok(Some(N)) – fingerprint consumed (always `N`).
-    fn handle_fingerprint<const N: usize>(
-        &mut self,
-        buf: &[u8],
-        fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>, ArrowError> {
-        // Need enough bytes to get fingerprint (next N bytes)
-        let Some(fingerprint_bytes) = buf.get(..N) else {
-            return Ok(None); // Insufficient bytes
-        };
-        // SAFETY: length checked above.
-        let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
-        // If the fingerprint indicates a schema change, prepare to switch decoders.
-        if self.active_fingerprint != Some(new_fingerprint) {
-            let Some(new_decoder) = self.cache.shift_remove(&new_fingerprint) else {
-                return Err(ArrowError::ParseError(format!(
-                    "Unknown fingerprint: {new_fingerprint:?}"
-                )));
-            };
-            self.pending_schema = Some((new_fingerprint, new_decoder));
-            // If there are already decoded rows, we must flush them first.
-            // Reducing `remaining_capacity` to 0 ensures `flush` is called next.
-            if self.remaining_capacity < self.batch_size {
-                self.remaining_capacity = 0;
-            }
-        }
-        Ok(Some(N))
+        Ok(max_read)
     }
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
     /// `Ok(None)` if no new rows are available.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        if self.remaining_capacity == self.batch_size {
-            return Ok(None);
-        }
-        let batch = self.active_decoder.flush()?;
-        self.remaining_capacity = self.batch_size;
-        // Apply any staged schema switch.
-        if let Some((new_fingerprint, new_decoder)) = self.pending_schema.take() {
-            if let Some(old_fingerprint) = self.active_fingerprint.replace(new_fingerprint) {
-                let old_decoder = std::mem::replace(&mut self.active_decoder, new_decoder);
-                self.cache.shift_remove(&old_fingerprint);
-                self.cache.insert(old_fingerprint, old_decoder);
-            } else {
-                self.active_decoder = new_decoder;
+        match self.state {
+            DecoderState::Finished => {
+                let batch = self.active_decoder.flush()?;
+                self.remaining_capacity = self.batch_size;
+                if self.pending_schema.is_some() {
+                    self.state = DecoderState::SchemaChange;
+                } else {
+                    self.bytes_remaining = SINGLE_OBJECT_MAGIC.len();
+                    self.state = DecoderState::Magic;
+                }
+                Ok(Some(batch))
             }
+            DecoderState::Magic | DecoderState::Record => {
+                if self.remaining_capacity < self.batch_size {
+                    let batch = self.active_decoder.flush()?;
+                    self.remaining_capacity = self.batch_size;
+                    Ok(Some(batch))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
         }
-        Ok(Some(batch))
     }
 
     /// Returns the number of rows that can be added to this decoder before it is full.
@@ -281,6 +325,31 @@ impl Decoder {
     /// Returns true if the decoder has reached its capacity for the current batch.
     pub fn batch_is_full(&self) -> bool {
         self.remaining_capacity == 0
+    }
+
+    // Decode either the block count of remaining capacity from `data` (an OCF block payload).
+    //
+    // Returns the number of bytes consumed from `data` along with the number of records decoded.
+    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize), ArrowError> {
+        // OCF decoding never interleaves records across blocks, so no chunking.
+        let to_decode = std::cmp::min(count, self.remaining_capacity);
+        if to_decode == 0 {
+            return Ok((0, 0));
+        }
+        let consumed = self.active_decoder.decode(data, to_decode)?;
+        self.remaining_capacity -= to_decode;
+        Ok((consumed, to_decode))
+    }
+
+    // Produce a `RecordBatch` if at least one row is fully decoded, returning
+    // `Ok(None)` if no new rows are available.
+    fn flush_block(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        if self.remaining_capacity == self.batch_size {
+            return Ok(None);
+        }
+        let batch = self.active_decoder.flush()?;
+        self.remaining_capacity = self.batch_size;
+        Ok(Some(batch))
     }
 }
 
@@ -342,7 +411,6 @@ impl ReaderBuilder {
         active_decoder: RecordDecoder,
         active_fingerprint: Option<Fingerprint>,
         cache: IndexMap<Fingerprint, RecordDecoder>,
-        expect_prefix: bool,
         fingerprint_algorithm: FingerprintAlgorithm,
     ) -> Decoder {
         Decoder {
@@ -351,11 +419,13 @@ impl ReaderBuilder {
             active_fingerprint,
             active_decoder,
             cache,
-            expect_prefix,
             utf8_view: self.utf8_view,
             fingerprint_algorithm,
             strict_mode: self.strict_mode,
             pending_schema: None,
+            state: DecoderState::Magic,
+            bytes_remaining: SINGLE_OBJECT_MAGIC.len(),
+            fingerprint_buf: Vec::new(),
         }
     }
 
@@ -376,7 +446,6 @@ impl ReaderBuilder {
                 record_decoder,
                 None,
                 IndexMap::new(),
-                false,
                 FingerprintAlgorithm::Rabin,
             ));
         }
@@ -423,7 +492,6 @@ impl ReaderBuilder {
             active_decoder,
             Some(start_fingerprint),
             cache,
-            true,
             store.fingerprint_algorithm(),
         ))
     }
@@ -496,6 +564,7 @@ impl ReaderBuilder {
             decoder,
             block_decoder: BlockDecoder::default(),
             block_data: Vec::new(),
+            block_count: 0,
             block_cursor: 0,
             finished: false,
         })
@@ -521,6 +590,7 @@ pub struct Reader<R: BufRead> {
     decoder: Decoder,
     block_decoder: BlockDecoder,
     block_data: Vec<u8>,
+    block_count: usize,
     block_cursor: usize,
     finished: bool,
 }
@@ -550,12 +620,12 @@ impl<R: BufRead> Reader<R> {
                 self.reader.consume(consumed);
                 if let Some(block) = self.block_decoder.flush() {
                     // Successfully decoded a block.
-                    let block_data = if let Some(ref codec) = self.header.compression()? {
+                    self.block_data = if let Some(ref codec) = self.header.compression()? {
                         codec.decompress(&block.data)?
                     } else {
                         block.data
                     };
-                    self.block_data = block_data;
+                    self.block_count = block.count;
                     self.block_cursor = 0;
                 } else if consumed == 0 {
                     // The block decoder made no progress on a non-empty buffer.
@@ -564,11 +634,16 @@ impl<R: BufRead> Reader<R> {
                     ));
                 }
             }
-            // Try to decode more rows from the current block.
-            let consumed = self.decoder.decode(&self.block_data[self.block_cursor..])?;
-            self.block_cursor += consumed;
+            // Decode as many rows as will fit in the current batch
+            if self.block_cursor < self.block_data.len() {
+                let (consumed, records_decoded) = self
+                    .decoder
+                    .decode_block(&self.block_data[self.block_cursor..], self.block_count)?;
+                self.block_cursor += consumed;
+                self.block_count -= records_decoded;
+            }
         }
-        self.decoder.flush()
+        self.decoder.flush_block()
     }
 }
 
@@ -709,6 +784,35 @@ mod test {
             .expect("decoder")
     }
 
+    fn make_value_schema(pt: PrimitiveType) -> AvroSchema {
+        let json_schema = format!(
+            r#"{{"type":"record","name":"S","fields":[{{"name":"v","type":"{}"}}]}}"#,
+            pt.as_ref()
+        );
+        AvroSchema::new(json_schema)
+    }
+
+    fn encode_zigzag(value: i64) -> Vec<u8> {
+        let mut n = ((value << 1) ^ (value >> 63)) as u64;
+        let mut out = Vec::new();
+        loop {
+            if (n & !0x7F) == 0 {
+                out.push(n as u8);
+                break;
+            } else {
+                out.push(((n & 0x7F) | 0x80) as u8);
+                n >>= 7;
+            }
+        }
+        out
+    }
+
+    fn make_message(fp: Fingerprint, value: i64) -> Vec<u8> {
+        let mut msg = make_prefix(fp);
+        msg.extend_from_slice(&encode_zigzag(value));
+        msg
+    }
+
     #[test]
     fn test_schema_store_register_lookup() {
         let schema_int = make_record_schema(PrimitiveType::Int);
@@ -748,7 +852,7 @@ mod test {
         let err = decoder.decode(&buf).expect_err("decode should error");
         let msg = err.to_string();
         assert!(
-            msg.contains("Expected single‑object encoding fingerprint"),
+            msg.contains("Invalid avro single object encoding magic"),
             "unexpected message: {msg}"
         );
     }
@@ -757,11 +861,15 @@ mod test {
     fn test_handle_prefix_no_schema_store() {
         let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
-        decoder.expect_prefix = false;
-        let res = decoder
-            .handle_prefix(&SINGLE_OBJECT_MAGIC[..])
-            .expect("handle_prefix");
-        assert!(res.is_none(), "Expected None when expect_prefix is false");
+        let consumed = decoder
+            .decode(&SINGLE_OBJECT_MAGIC[..])
+            .expect("decode magic");
+        assert_eq!(consumed, SINGLE_OBJECT_MAGIC.len());
+        assert!(matches!(decoder.state, super::DecoderState::Fingerprint));
+        match decoder.fingerprint_algorithm {
+            FingerprintAlgorithm::Rabin => assert_eq!(decoder.bytes_remaining, 8),
+        }
+        assert!(decoder.pending_schema.is_none());
     }
 
     #[test]
@@ -769,8 +877,10 @@ mod test {
         let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
         let buf = &SINGLE_OBJECT_MAGIC[..1];
-        let res = decoder.handle_prefix(buf).unwrap();
-        assert_eq!(res, Some(0));
+        let consumed = decoder.decode(buf).unwrap();
+        assert_eq!(consumed, buf.len());
+        assert!(matches!(decoder.state, super::DecoderState::Magic));
+        assert_eq!(decoder.bytes_remaining, SINGLE_OBJECT_MAGIC.len() - 1);
         assert!(decoder.pending_schema.is_none());
     }
 
@@ -779,8 +889,12 @@ mod test {
         let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
         let mut decoder = make_decoder(&store, fp_int, &schema_int);
         let buf = [0xFFu8, 0x00u8, 0x01u8];
-        let res = decoder.handle_prefix(&buf).unwrap();
-        assert!(res.is_none());
+        let err = decoder.decode(&buf).expect_err("decode should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Invalid avro single object encoding magic"),
+            "unexpected message: {msg}"
+        );
     }
 
     #[test]
@@ -792,8 +906,13 @@ mod test {
         };
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         buf.extend_from_slice(&long_bytes[..4]);
-        let res = decoder.handle_prefix(&buf).unwrap();
-        assert_eq!(res, Some(0));
+        let consumed = decoder.decode(&buf).unwrap();
+        assert_eq!(consumed, buf.len());
+        assert!(matches!(decoder.state, super::DecoderState::Fingerprint));
+        assert_eq!(decoder.fingerprint_buf.len(), 4);
+        match decoder.fingerprint_algorithm {
+            FingerprintAlgorithm::Rabin => assert_eq!(decoder.bytes_remaining, 4),
+        }
         assert!(decoder.pending_schema.is_none());
     }
 
@@ -809,10 +928,224 @@ mod test {
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         let Fingerprint::Rabin(v) = fp_long;
         buf.extend_from_slice(&v.to_le_bytes());
-        let consumed = decoder.handle_prefix(&buf).unwrap().unwrap();
+        let consumed = decoder.decode(&buf).unwrap();
         assert_eq!(consumed, buf.len());
         assert!(decoder.pending_schema.is_some());
         assert_eq!(decoder.pending_schema.as_ref().unwrap().0, fp_long);
+        assert!(matches!(decoder.state, super::DecoderState::SchemaChange));
+    }
+
+    #[test]
+    fn test_two_messages_same_schema() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let msg1 = make_message(fp, 42);
+        let msg2 = make_message(fp, 11);
+        let input = [msg1.clone(), msg2.clone()].concat();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(reader_schema.clone())
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .build_decoder()
+            .unwrap();
+        let _ = decoder.decode(&input).unwrap();
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 2);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.value(0), 42);
+        assert_eq!(col.value(1), 11);
+    }
+
+    #[test]
+    fn test_two_messages_schema_switch() {
+        let w_int = make_value_schema(PrimitiveType::Int);
+        let w_long = make_value_schema(PrimitiveType::Long);
+        let r_long = w_long.clone();
+        let mut store = SchemaStore::new();
+        let fp_int = store.register(w_int).unwrap();
+        let fp_long = store.register(w_long).unwrap();
+        let msg_int = make_message(fp_int, 1);
+        let msg_long = make_message(fp_long, 123456789_i64);
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp_int)
+            .build_decoder()
+            .unwrap();
+        let _ = decoder.decode(&msg_int).unwrap();
+        let batch1 = decoder.flush().unwrap().expect("batch1");
+        assert_eq!(batch1.num_rows(), 1);
+        assert_eq!(
+            batch1
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+        let _ = decoder.decode(&msg_long).unwrap();
+        let batch2 = decoder.flush().unwrap().expect("batch2");
+        assert_eq!(batch2.num_rows(), 1);
+        assert_eq!(
+            batch2
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            123456789_i64
+        );
+    }
+
+    #[test]
+    fn test_split_message_across_chunks() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let mut store = SchemaStore::new();
+        let fp = store.register(writer_schema).unwrap();
+        let msg1 = make_message(fp, 7);
+        let msg2 = make_message(fp, 8);
+        let msg3 = make_message(fp, 9);
+        let (pref2, body2) = msg2.split_at(10);
+        let (pref3, body3) = msg3.split_at(10);
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(reader_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(fp)
+            .build_decoder()
+            .unwrap();
+        let _ = decoder.decode(&msg1).unwrap();
+        let batch1 = decoder.flush().unwrap().expect("batch1");
+        assert_eq!(batch1.num_rows(), 1);
+        assert_eq!(
+            batch1
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            7
+        );
+        let _ = decoder.decode(pref2).unwrap();
+        assert!(decoder.flush().unwrap().is_none());
+        let mut chunk3 = Vec::from(body2);
+        chunk3.extend_from_slice(pref3);
+        let _ = decoder.decode(&chunk3).unwrap();
+        let batch2 = decoder.flush().unwrap().expect("batch2");
+        assert_eq!(batch2.num_rows(), 1);
+        assert_eq!(
+            batch2
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            8
+        );
+        let _ = decoder.decode(body3).unwrap();
+        let batch3 = decoder.flush().unwrap().expect("batch3");
+        assert_eq!(batch3.num_rows(), 1);
+        assert_eq!(
+            batch3
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            9
+        );
+    }
+
+    #[test]
+    fn test_decode_stream_with_schema() {
+        struct TestCase<'a> {
+            name: &'a str,
+            schema: &'a str,
+            expected_error: Option<&'a str>,
+        }
+        let tests = vec![
+            TestCase {
+                name: "success",
+                schema: r#"{"type":"record","name":"test","fields":[{"name":"f2","type":"string"}]}"#,
+                expected_error: None,
+            },
+            TestCase {
+                name: "valid schema invalid data",
+                schema: r#"{"type":"record","name":"test","fields":[{"name":"f2","type":"long"}]}"#,
+                expected_error: Some("did not consume all bytes"),
+            },
+        ];
+        for test in tests {
+            let avro_schema = AvroSchema::new(test.schema.to_string());
+            let mut store = SchemaStore::new();
+            let fp = store.register(avro_schema.clone()).unwrap();
+            let prefix = make_prefix(fp);
+            let record_val = "some_string";
+            let mut body = prefix;
+            body.push((record_val.len() as u8) << 1);
+            body.extend_from_slice(record_val.as_bytes());
+            let decoder_res = ReaderBuilder::new()
+                .with_batch_size(1)
+                .with_writer_schema_store(store)
+                .with_active_fingerprint(fp)
+                .build_decoder();
+            let decoder = match decoder_res {
+                Ok(d) => d,
+                Err(e) => {
+                    if let Some(expected) = test.expected_error {
+                        assert!(
+                            e.to_string().contains(expected),
+                            "Test '{}' failed at build – expected '{expected}', got '{e}'",
+                            test.name
+                        );
+                        continue;
+                    } else {
+                        panic!("Test '{}' failed during build: {e}", test.name);
+                    }
+                }
+            };
+            let stream = Box::pin(stream::once(async { Bytes::from(body) }));
+            let decoded_stream = decode_stream(decoder, stream);
+            let batches_result: Result<Vec<RecordBatch>, ArrowError> =
+                block_on(decoded_stream.try_collect());
+            match (batches_result, test.expected_error) {
+                (Ok(batches), None) => {
+                    let batch =
+                        arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
+                    let expected_field = Field::new("f2", DataType::Utf8, false);
+                    let expected_schema = Arc::new(Schema::new(vec![expected_field]));
+                    let expected_array = Arc::new(StringArray::from(vec![record_val]));
+                    let expected_batch =
+                        RecordBatch::try_new(expected_schema, vec![expected_array]).unwrap();
+                    assert_eq!(batch, expected_batch, "Test '{}'", test.name);
+                }
+                (Err(e), Some(expected)) => {
+                    assert!(
+                        e.to_string().contains(expected),
+                        "Test '{}' – expected error containing '{expected}', got '{e}'",
+                        test.name
+                    );
+                }
+                (Ok(_), Some(expected)) => {
+                    panic!(
+                        "Test '{}' expected failure ('{expected}') but succeeded",
+                        test.name
+                    );
+                }
+                (Err(e), None) => {
+                    panic!("Test '{}' unexpectedly failed with '{e}'", test.name);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1126,89 +1459,6 @@ mod test {
         )])
         .unwrap();
         assert_eq!(batch, expected);
-    }
-
-    #[test]
-    fn test_decode_stream_with_schema() {
-        struct TestCase<'a> {
-            name: &'a str,
-            schema: &'a str,
-            expected_error: Option<&'a str>,
-        }
-        let tests = vec![
-            TestCase {
-                name: "success",
-                schema: r#"{"type":"record","name":"test","fields":[{"name":"f2","type":"string"}]}"#,
-                expected_error: None,
-            },
-            TestCase {
-                name: "valid schema invalid data",
-                schema: r#"{"type":"record","name":"test","fields":[{"name":"f2","type":"long"}]}"#,
-                expected_error: Some("did not consume all bytes"),
-            },
-        ];
-        for test in tests {
-            let avro_schema = AvroSchema::new(test.schema.to_string());
-            let mut store = SchemaStore::new();
-            let fp = store.register(avro_schema.clone()).unwrap();
-            let prefix = make_prefix(fp);
-            let record_val = "some_string";
-            let mut body = prefix;
-            body.push((record_val.len() as u8) << 1);
-            body.extend_from_slice(record_val.as_bytes());
-            let decoder_res = ReaderBuilder::new()
-                .with_batch_size(1)
-                .with_writer_schema_store(store)
-                .with_active_fingerprint(fp)
-                .build_decoder();
-            let decoder = match decoder_res {
-                Ok(d) => d,
-                Err(e) => {
-                    if let Some(expected) = test.expected_error {
-                        assert!(
-                            e.to_string().contains(expected),
-                            "Test '{}' failed at build – expected '{expected}', got '{e}'",
-                            test.name
-                        );
-                        continue;
-                    } else {
-                        panic!("Test '{}' failed during build: {e}", test.name);
-                    }
-                }
-            };
-            let stream = Box::pin(stream::once(async { Bytes::from(body) }));
-            let decoded_stream = decode_stream(decoder, stream);
-            let batches_result: Result<Vec<RecordBatch>, ArrowError> =
-                block_on(decoded_stream.try_collect());
-            match (batches_result, test.expected_error) {
-                (Ok(batches), None) => {
-                    let batch =
-                        arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
-                    let expected_field = Field::new("f2", DataType::Utf8, false);
-                    let expected_schema = Arc::new(Schema::new(vec![expected_field]));
-                    let expected_array = Arc::new(StringArray::from(vec![record_val]));
-                    let expected_batch =
-                        RecordBatch::try_new(expected_schema, vec![expected_array]).unwrap();
-                    assert_eq!(batch, expected_batch, "Test '{}'", test.name);
-                }
-                (Err(e), Some(expected)) => {
-                    assert!(
-                        e.to_string().contains(expected),
-                        "Test '{}' – expected error containing '{expected}', got '{e}'",
-                        test.name
-                    );
-                }
-                (Ok(_), Some(expected)) => {
-                    panic!(
-                        "Test '{}' expected failure ('{expected}') but succeeded",
-                        test.name
-                    );
-                }
-                (Err(e), None) => {
-                    panic!("Test '{}' unexpectedly failed with '{e}'", test.name);
-                }
-            }
-        }
     }
 
     #[test]
