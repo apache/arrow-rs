@@ -1217,7 +1217,7 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 ///
 /// * [`FileWriter`] for writing IPC Files
 ///
-/// # Example
+/// # Example - Basic usage
 /// ```
 /// # use arrow_array::record_batch;
 /// # use arrow_ipc::writer::StreamWriter;
@@ -1230,7 +1230,57 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 /// // When all batches are written, call finish to flush all buffers
 /// writer.finish().unwrap();
 /// ```
+/// # Example - Efficient delta dictionaries
+/// ```
+/// # use arrow_array::record_batch;
+/// # use arrow_ipc::writer::{StreamWriter, IpcWriteOptions};
+/// # use arrow_ipc::writer::DictionaryHandling;
+/// # use arrow_schema::{DataType, Field, Schema, SchemaRef};
+/// # use arrow_array::{
+/// #    builder::StringDictionaryBuilder, types::Int32Type, Array, ArrayRef, DictionaryArray,
+/// #    RecordBatch, StringArray,
+/// # };
+/// # use std::sync::Arc;
 ///
+/// let schema = Arc::new(Schema::new(vec![Field::new(
+///    "col1",
+///    DataType::Dictionary(Box::from(DataType::Int32), Box::from(DataType::Utf8)),
+///    true,
+/// )]));
+///
+/// let mut builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+///
+/// // `finish_preserve_values` will keep the dictionary values along with their
+/// // key assignments so that they can be re-used in the next batch.
+/// builder.append("a").unwrap();
+/// builder.append("b").unwrap();
+/// let array1 = builder.finish_preserve_values();
+/// let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(array1) as ArrayRef]).unwrap();
+///
+/// // In this batch, 'a' will have the same dictionary key as 'a' in the previous batch,
+/// // and 'd' will take the next available key.
+/// builder.append("a").unwrap();
+/// builder.append("d").unwrap();
+/// let array2 = builder.finish_preserve_values();
+/// let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(array2) as ArrayRef]).unwrap();
+///
+/// let mut stream = vec![];
+/// // You must set `.with_dictionary_handling(DictionaryHandling::Delta)` to
+/// // enable delta dictionaries in the writer
+/// let options = IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+/// let mut writer = StreamWriter::try_new(&mut stream, &schema).unwrap();
+///
+/// // When writing the first batch, a dictionary message with 'a' and 'b' will be written
+/// // prior to the record batch.
+/// writer.write(&batch1).unwrap();
+/// // With the second batch only a delta dictionary with 'd' will be written
+/// // prior to the record batch. This is only possible with `finish_preserve_values`.
+/// // Without it, 'a' and 'd' in this batch would have different keys than the
+/// // first batch and so we'd have to send a replacement dictionary with new keys
+/// // for both.
+/// writer.write(&batch2).unwrap();
+/// writer.finish().unwrap();
+/// ```
 /// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamWriter<W> {
     /// The object to write to

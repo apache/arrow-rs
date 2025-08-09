@@ -209,7 +209,7 @@ fn test_single_same_value_sequence() {
 }
 
 fn str_vec(strings: &[&str]) -> Vec<String> {
-    strings.into_iter().map(|s| s.to_string()).collect()
+    strings.iter().map(|s| s.to_string()).collect()
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn run_parity_test(batches: &[&[&str]]) {
 
     let delta_file_buf = write_all_to_file(delta_options, batches);
 
-    let mut streams = vec![
+    let mut streams = [
         get_stream_batches(delta_stream_buf),
         get_stream_batches(resend_stream_buf),
         get_file_batches(delta_file_buf),
@@ -367,8 +367,7 @@ fn run_parity_test(batches: &[&[&str]]) {
 
     let (first_stream, other_streams) = streams.split_first_mut().unwrap();
 
-    let mut idx = 0;
-    while let Some(batch) = first_stream.next() {
+    for (idx, batch) in first_stream.by_ref().enumerate() {
         let first_dict = extract_dictionary(batch);
         let expected_values = batches[idx];
         assert_eq!(expected_values, &dict_to_vec(first_dict.clone()));
@@ -381,8 +380,6 @@ fn run_parity_test(batches: &[&[&str]]) {
             assert_eq!(expected_values, &dict_to_vec(next_dict.clone()));
             assert_eq!(first_dict, next_dict);
         }
-
-        idx += 1;
     }
 
     for stream in other_streams.iter_mut() {
