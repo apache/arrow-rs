@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::schema::{
-    Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName,
+    Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, TypeName,
     AVRO_ENUM_SYMBOLS_METADATA_KEY,
 };
 use arrow_schema::{
-    ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
-    TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -142,6 +142,22 @@ impl AvroField {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// Performs schema resolution between a writer and reader schema.
+    ///
+    /// This is the primary entry point for handling schema evolution. It produces an
+    /// `AvroField` that contains all the necessary information to read data written
+    /// with the `writer` schema as if it were written with the `reader` schema.
+    pub(crate) fn resolve_from_writer_and_reader<'a>(
+        writer_schema: &'a Schema<'a>,
+        reader_schema: &'a Schema<'a>,
+        use_utf8view: bool,
+        strict_mode: bool,
+    ) -> Result<Self, ArrowError> {
+        Err(ArrowError::NotYetImplemented(
+            "Resolving schema from a writer and reader schema is not yet implemented".to_string(),
+        ))
+    }
 }
 
 impl<'a> TryFrom<&Schema<'a>> for AvroField {
@@ -167,19 +183,31 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
 /// Builder for an [`AvroField`]
 #[derive(Debug)]
 pub struct AvroFieldBuilder<'a> {
-    schema: &'a Schema<'a>,
+    writer_schema: &'a Schema<'a>,
+    reader_schema: Option<AvroSchema>,
     use_utf8view: bool,
     strict_mode: bool,
 }
 
 impl<'a> AvroFieldBuilder<'a> {
-    /// Creates a new [`AvroFieldBuilder`]
-    pub fn new(schema: &'a Schema<'a>) -> Self {
+    /// Creates a new [`AvroFieldBuilder`] for a given writer schema.
+    pub fn new(writer_schema: &'a Schema<'a>) -> Self {
         Self {
-            schema,
+            writer_schema,
+            reader_schema: None,
             use_utf8view: false,
             strict_mode: false,
         }
+    }
+
+    /// Sets the reader schema for schema resolution.
+    ///
+    /// If a reader schema is provided, the builder will produce a resolved `AvroField`
+    /// that can handle differences between the writer's and reader's schemas.
+    #[inline]
+    pub fn with_reader_schema(mut self, reader_schema: AvroSchema) -> Self {
+        self.reader_schema = Some(reader_schema);
+        self
     }
 
     /// Enable or disable Utf8View support
@@ -196,11 +224,11 @@ impl<'a> AvroFieldBuilder<'a> {
 
     /// Build an [`AvroField`] from the builder
     pub fn build(self) -> Result<AvroField, ArrowError> {
-        match self.schema {
+        match self.writer_schema {
             Schema::Complex(ComplexType::Record(r)) => {
                 let mut resolver = Resolver::default();
                 let data_type = make_data_type(
-                    self.schema,
+                    self.writer_schema,
                     None,
                     &mut resolver,
                     self.use_utf8view,
@@ -213,11 +241,12 @@ impl<'a> AvroFieldBuilder<'a> {
             }
             _ => Err(ArrowError::ParseError(format!(
                 "Expected a Record schema to build an AvroField, but got {:?}",
-                self.schema
+                self.writer_schema
             ))),
         }
     }
 }
+
 /// An Avro encoding
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#encodings>
@@ -449,7 +478,7 @@ impl<'a> Resolver<'a> {
     }
 }
 
-/// Parses a [`AvroDataType`] from the provided [`Schema`] and the given `name` and `namespace`
+/// Parses a [`AvroDataType`] from the provided `schema` and the given `name` and `namespace`
 ///
 /// `name`: is name used to refer to `schema` in its parent
 /// `namespace`: an optional qualifier used as part of a type hierarchy
@@ -754,11 +783,9 @@ mod tests {
     #[test]
     fn test_uuid_type() {
         let mut codec = Codec::Fixed(16);
-
         if let c @ Codec::Fixed(16) = &mut codec {
             *c = Codec::Uuid;
         }
-
         assert!(matches!(codec, Codec::Uuid));
     }
 
