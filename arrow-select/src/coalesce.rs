@@ -20,7 +20,7 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::filter::filter_record_batch;
+use crate::filter::{compute_filter_plan, filter_record_batch, FilterPlan};
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{downcast_primitive, Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
@@ -198,96 +198,138 @@ impl BatchCoalescer {
     /// let expected_batch = record_batch!(("a", Int32, [1, 3, 4, 6])).unwrap();
     /// assert_eq!(completed_batch, expected_batch);
     /// ```
+    /// 使用 compute_filter_plan 的零拷贝实现
     pub fn push_batch_with_filter(
         &mut self,
         batch: RecordBatch,
         predicate: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        // Avoid materializing filtered batch
-        let (_schema, arrays, num_rows) = batch.into_parts();
-        if num_rows == 0 {
-            return Ok(());
-        }
+        // 先根据 predicate 计算 plan（会调用 FilterBuilder::optimize()）
+        let plan = compute_filter_plan(predicate);
 
-        assert_eq!(arrays.len(), self.in_progress_arrays.len());
-
-        // Set sources (same as push_batch)
-        self.in_progress_arrays
-            .iter_mut()
-            .zip(arrays)
-            .for_each(|(in_progress, array)| {
-                in_progress.set_source(Some(array));
-            });
-
-        // Scan predicate to find contiguous true segments, then copy segments to in_progress
-        // src_idx is the row index in the original batch
-        let mut src_idx: usize = 0;
-
-        while src_idx < num_rows {
-            // Find the start of the next true segment
-            // Skip false/null values
-
-            unsafe {
-                while src_idx < num_rows {
-                    if predicate.value_unchecked(src_idx) {
-                        break;
-                    }
-                    src_idx += 1;
-                }
+        match plan {
+            FilterPlan::None => {
+                // nothing selected
+                return Ok(());
             }
-
-            if src_idx >= num_rows {
-                break;
+            FilterPlan::All => {
+                // 全选：直接调用 push_batch（不消耗 batch）
+                return self.push_batch(batch);
             }
+            FilterPlan::Slices(slices) => {
+                // We'll consume the batch and set the sources on in_progress arrays
+                let (_schema, arrays, _nrows) = batch.into_parts();
+                assert_eq!(arrays.len(), self.in_progress_arrays.len());
 
-            // Now src_idx points to a true value, find the length of this contiguous true segment
-            let run_start = src_idx;
-            let mut run_len = 0usize;
+                self.in_progress_arrays
+                    .iter_mut()
+                    .zip(arrays.into_iter())
+                    .for_each(|(in_progress, array)| {
+                        in_progress.set_source(Some(array));
+                    });
 
-            unsafe {
-                while src_idx < num_rows {
-                    if predicate.value_unchecked(src_idx) {
-                        run_len += 1;
-                        src_idx += 1;
-                    } else {
-                        break;
+                // For each contiguous slice, copy ranges in chunks fitting target_batch_size
+                for (mut start, end) in slices {
+                    let mut remaining = end - start;
+                    while remaining > 0 {
+                        let space = self.target_batch_size - self.buffered_rows;
+                        debug_assert!(space > 0);
+                        let to_copy = remaining.min(space);
+
+                        for in_progress in self.in_progress_arrays.iter_mut() {
+                            // copy_rows(offset, len)
+                            in_progress.copy_rows(start, to_copy)?;
+                        }
+
+                        self.buffered_rows += to_copy;
+                        start += to_copy;
+                        remaining -= to_copy;
+
+                        if self.buffered_rows == self.target_batch_size {
+                            self.finish_buffered_batch()?;
+                        }
                     }
                 }
-            }
 
-            // Now we have a segment [run_start, run_len] of contiguous trues that need to be copied to in_progress
-            // But we need to consider the remaining space in the target batch (may need to split the run into multiple segments)
-            let mut run_offset_in_src = run_start;
-            let mut remaining_in_run = run_len;
-
-            while remaining_in_run > 0 {
-                let space = self.target_batch_size - self.buffered_rows;
-                debug_assert!(space > 0);
-
-                let to_copy = remaining_in_run.min(space);
-
-                // Copy this contiguous region for each column (reusing copy_rows)
+                // Clear sources to allow memory free
                 for in_progress in self.in_progress_arrays.iter_mut() {
-                    in_progress.copy_rows(run_offset_in_src, to_copy)?;
+                    in_progress.set_source(None);
                 }
 
-                self.buffered_rows += to_copy;
-                run_offset_in_src += to_copy;
-                remaining_in_run -= to_copy;
+                return Ok(());
+            }
+            FilterPlan::Indices(indices) => {
+                // Consume batch and set sources (same as slices path)
+                let (_schema, arrays, _nrows) = batch.into_parts();
+                assert_eq!(arrays.len(), self.in_progress_arrays.len());
 
-                // If target batch is full, finish and produce completed batch
-                if self.buffered_rows == self.target_batch_size {
-                    self.finish_buffered_batch()?;
+                self.in_progress_arrays
+                    .iter_mut()
+                    .zip(arrays.into_iter())
+                    .for_each(|(in_progress, array)| {
+                        in_progress.set_source(Some(array));
+                    });
+
+                // Merge consecutive indices into ranges to reduce copy_rows calls.
+                let mut it = indices.into_iter();
+                if let Some(mut cur) = it.next() {
+                    let mut run_start = cur;
+                    let mut run_end = cur + 1; // exclusive
+                    for idx in it {
+                        if idx == run_end {
+                            // extend current run
+                            run_end += 1;
+                        } else {
+                            // flush current run [run_start, run_end)
+                            let mut remaining = run_end - run_start;
+                            let mut src_off = run_start;
+                            while remaining > 0 {
+                                let space = self.target_batch_size - self.buffered_rows;
+                                debug_assert!(space > 0);
+                                let to_copy = remaining.min(space);
+                                for in_progress in self.in_progress_arrays.iter_mut() {
+                                    in_progress.copy_rows(src_off, to_copy)?;
+                                }
+                                self.buffered_rows += to_copy;
+                                src_off += to_copy;
+                                remaining -= to_copy;
+                                if self.buffered_rows == self.target_batch_size {
+                                    self.finish_buffered_batch()?;
+                                }
+                            }
+                            // start new run
+                            run_start = idx;
+                            run_end = idx + 1;
+                        }
+                    }
+
+                    // flush last run
+                    let mut remaining = run_end - run_start;
+                    let mut src_off = run_start;
+                    while remaining > 0 {
+                        let space = self.target_batch_size - self.buffered_rows;
+                        debug_assert!(space > 0);
+                        let to_copy = remaining.min(space);
+                        for in_progress in self.in_progress_arrays.iter_mut() {
+                            in_progress.copy_rows(src_off, to_copy)?;
+                        }
+                        self.buffered_rows += to_copy;
+                        src_off += to_copy;
+                        remaining -= to_copy;
+                        if self.buffered_rows == self.target_batch_size {
+                            self.finish_buffered_batch()?;
+                        }
+                    }
                 }
+
+                // Clear sources
+                for in_progress in self.in_progress_arrays.iter_mut() {
+                    in_progress.set_source(None);
+                }
+
+                return Ok(());
             }
         }
-
-        // Clear sources (allow memory free)
-        for in_progress in self.in_progress_arrays.iter_mut() {
-            in_progress.set_source(None);
-        }
-
-        Ok(())
     }
 
     /// Push all the rows from `batch` into the Coalescer

@@ -164,6 +164,50 @@ fn multiple_arrays(data_type: &DataType) -> bool {
     }
 }
 
+/// A public, lightweight plan describing how to apply a Boolean filter.
+///
+/// 用于在外部（例如 BatchCoalescer）中以零拷贝方式执行 filter：
+/// - `None`：不选中任何行
+/// - `All`：全选
+/// - `Slices`：连续区间 `[start, end)` 的列表（可以直接用来 copy_rows）
+/// - `Indices`：单点索引列表（外部可以合并连续索引为区间）
+#[derive(Debug, Clone)]
+pub enum FilterPlan {
+    None,
+    All,
+    Slices(Vec<(usize, usize)>),
+    Indices(Vec<usize>),
+}
+
+/// 计算过滤计划（基于 FilterBuilder::optimize）
+///
+/// 该函数会调用 `FilterBuilder::new(filter).optimize()`，并把优化后的
+/// IterationStrategy 转成上面的 `FilterPlan` 导出，便于外部零拷贝执行。
+pub fn compute_filter_plan(filter: &BooleanArray) -> FilterPlan {
+    // Build and force optimization so we get concrete Slices / Indices if applicable
+    let mut fb = FilterBuilder::new(filter);
+    fb = fb.optimize();
+    let pred = fb.build();
+
+    match pred.strategy {
+        IterationStrategy::None => FilterPlan::None,
+        IterationStrategy::All => FilterPlan::All,
+        IterationStrategy::Slices(ref s) => FilterPlan::Slices(s.clone()),
+        IterationStrategy::Indices(ref i) => FilterPlan::Indices(i.clone()),
+        // After optimize we shouldn't get SlicesIterator / IndexIterator,
+        // but just in case handle them conservatively by materializing indices.
+        IterationStrategy::SlicesIterator => {
+            // materialize slices from iterator
+            let slices: Vec<(usize, usize)> = SlicesIterator::new(&pred.filter).collect();
+            FilterPlan::Slices(slices)
+        }
+        IterationStrategy::IndexIterator => {
+            let indices: Vec<usize> = IndexIterator::new(&pred.filter, pred.count).collect();
+            FilterPlan::Indices(indices)
+        }
+    }
+}
+
 /// Returns a filtered [RecordBatch] where the corresponding elements of
 /// `predicate` are true.
 ///
