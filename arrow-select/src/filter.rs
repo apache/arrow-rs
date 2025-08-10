@@ -185,8 +185,7 @@ pub enum FilterPlan {
 /// converts the optimized `IterationStrategy` into the above `FilterPlan`
 /// to enable zero-copy execution externally.
 pub fn compute_filter_plan(filter: &BooleanArray) -> FilterPlan {
-    let mut fb = FilterBuilder::new(filter);
-    fb = fb.optimize();
+    let fb = FilterBuilder::new(filter);
     let pred = fb.build();
 
     match pred.strategy {
