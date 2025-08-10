@@ -176,7 +176,7 @@ impl Decoder {
             if !self.awaiting_body {
                 if let Some(n) = self.handle_prefix(&data[total_consumed..])? {
                     if n == 0 {
-                        break;
+                        break; // insufficient bytes
                     }
                     total_consumed += n;
                     self.awaiting_body = true;
