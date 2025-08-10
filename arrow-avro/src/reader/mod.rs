@@ -197,12 +197,8 @@ impl Decoder {
                         "Record decoder consumed 0 bytes".into(),
                     ));
                 }
-                Err(e) => {
-                    return if is_incomplete_data(&e) {
-                        Ok(total_consumed)
-                    } else {
-                        Err(e)
-                    }
+                Err(ref e) if is_incomplete_data(&e) => return Ok(total_consumed),
+                err => return err,
                 }
             }
         }
