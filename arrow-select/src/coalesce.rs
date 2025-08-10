@@ -214,7 +214,7 @@ impl BatchCoalescer {
         // Set sources (same as push_batch)
         self.in_progress_arrays
             .iter_mut()
-            .zip(arrays.into_iter())
+            .zip(arrays)
             .for_each(|(in_progress, array)| {
                 in_progress.set_source(Some(array));
             });
@@ -229,7 +229,7 @@ impl BatchCoalescer {
 
             unsafe {
                 while src_idx < num_rows {
-                    if predicate.is_valid(src_idx) && predicate.value_unchecked(src_idx) {
+                    if predicate.value_unchecked(src_idx) {
                         break;
                     }
                     src_idx += 1;
@@ -246,7 +246,7 @@ impl BatchCoalescer {
 
             unsafe {
                 while src_idx < num_rows {
-                    if predicate.is_valid(src_idx) && predicate.value_unchecked(src_idx) {
+                    if predicate.value_unchecked(src_idx) {
                         run_len += 1;
                         src_idx += 1;
                     } else {
