@@ -205,6 +205,11 @@ impl ParquetMetaDataReader {
         self.finish()
     }
 
+    pub fn parse_and_finish_with_columns<R: ChunkReader>(mut self, reader: &R, columns_id: Option<&[usize]>) -> Result<ParquetMetaData> {
+        self.try_parse_sized_with_columns(reader, reader.len(), columns_id)?;
+        self.finish()
+    }
+
     /// Attempts to parse the footer metadata (and optionally page indexes) given a [`ChunkReader`].
     ///
     /// If `reader` is [`Bytes`] based, then the buffer must contain sufficient bytes to complete
@@ -287,6 +292,10 @@ impl ParquetMetaDataReader {
     /// let metadata = reader.finish().unwrap();
     /// ```
     pub fn try_parse_sized<R: ChunkReader>(&mut self, reader: &R, file_size: u64) -> Result<()> {
+        self.try_parse_sized_with_columns(reader, file_size, None)
+    }
+
+    pub fn try_parse_sized_with_columns<R: ChunkReader>(&mut self, reader: &R, file_size: u64, column_ids: Option<&[usize]>) -> Result<()> {
         self.metadata = match self.parse_metadata(reader) {
             Ok(metadata) => Some(metadata),
             Err(ParquetError::NeedMoreData(needed)) => {
@@ -311,7 +320,7 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.read_page_indexes_sized(reader, file_size)
+        self.read_page_indexes_sized_with_columns(reader, file_size, column_ids)
     }
 
     /// Read the page index structures when a [`ParquetMetaData`] has already been obtained.
@@ -329,6 +338,15 @@ impl ParquetMetaDataReader {
         &mut self,
         reader: &R,
         file_size: u64,
+    ) -> Result<()> {
+       self.read_page_indexes_sized_with_columns(reader, file_size, None)
+    }
+
+    pub fn read_page_indexes_sized_with_columns<R: ChunkReader>(
+        &mut self,
+        reader: &R,
+        file_size: u64,
+        column_ids: Option<&[usize]>,
     ) -> Result<()> {
         if self.metadata.is_none() {
             return Err(general_err!(
@@ -376,8 +394,8 @@ impl ParquetMetaDataReader {
         let bytes = reader.get_bytes(range.start - file_range.start, bytes_needed)?;
         let offset = range.start;
 
-        self.parse_column_index(&bytes, offset)?;
-        self.parse_offset_index(&bytes, offset)?;
+        self.parse_column_index(&bytes, offset, column_ids)?;
+        self.parse_offset_index(&bytes, offset, column_ids)?;
 
         Ok(())
     }
@@ -428,7 +446,7 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.load_page_index_with_remainder(fetch, remainder).await
+        self.load_page_index_with_remainder(fetch, remainder, None).await
     }
 
     /// Attempts to (asynchronously) parse the footer metadata (and optionally page indexes)
@@ -450,14 +468,22 @@ impl ParquetMetaDataReader {
             return Ok(());
         }
 
-        self.load_page_index_with_remainder(fetch, remainder).await
+        self.load_page_index_with_remainder(fetch, remainder, None).await
     }
 
     /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
     /// been obtained. See [`Self::new_with_metadata()`].
     #[cfg(all(feature = "async", feature = "arrow"))]
     pub async fn load_page_index<F: MetadataFetch>(&mut self, fetch: F) -> Result<()> {
-        self.load_page_index_with_remainder(fetch, None).await
+        self.load_page_index_with_remainder(fetch, None, None).await
+    }
+
+    /// Asynchronously fetch the page index structures when a [`ParquetMetaData`] has already
+    /// been obtained. See [`Self::new_with_metadata()`].
+    /// But we only materialize the page index for the requested columns.
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn load_page_index_with_columns<F: MetadataFetch>(&mut self, fetch: F, column_ids: &[usize]) -> Result<()> {
+        self.load_page_index_with_remainder(fetch, None, Some(column_ids)).await
     }
 
     #[cfg(all(feature = "async", feature = "arrow"))]
@@ -465,6 +491,7 @@ impl ParquetMetaDataReader {
         &mut self,
         mut fetch: F,
         remainder: Option<(usize, Bytes)>,
+        column_ids: Option<&[usize]>,
     ) -> Result<()> {
         if self.metadata.is_none() {
             return Err(general_err!("Footer metadata is not present"));
@@ -492,44 +519,69 @@ impl ParquetMetaDataReader {
         // Sanity check
         assert_eq!(bytes.len() as u64, range.end - range.start);
 
-        self.parse_column_index(&bytes, range.start)?;
-        self.parse_offset_index(&bytes, range.start)?;
+        // Parse, but only materialize for the requested column_ids:
+        self.parse_column_index(&bytes, range.start, column_ids)?;
+        self.parse_offset_index(&bytes, range.start, column_ids)?;
 
         Ok(())
     }
 
-    fn parse_column_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
+    fn parse_column_index(
+        &mut self,
+        bytes: &Bytes,
+        start_offset: u64,
+        column_ids: Option<&[usize]>,
+    ) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
+
         if self.column_index {
-            let index = metadata
+            let filter_ids = column_ids; // Copy
+
+            let index: Vec<Vec<Index>> = metadata
                 .row_groups()
                 .iter()
                 .enumerate()
-                .map(|(rg_idx, x)| {
-                    x.columns()
+                .map(|(rg_idx, rg_meta)| {
+                    rg_meta
+                        .columns()
                         .iter()
                         .enumerate()
-                        .map(|(col_idx, c)| match c.column_index_range() {
-                            Some(r) => {
-                                let r_start = usize::try_from(r.start - start_offset)?;
-                                let r_end = usize::try_from(r.end - start_offset)?;
-                                Self::parse_single_column_index(
-                                    &bytes[r_start..r_end],
-                                    metadata,
-                                    c,
-                                    rg_idx,
-                                    col_idx,
-                                )
+                        .map(|(col_idx, col_meta)| {
+                            // 1) Skip any column not in the filter
+                            if let Some(ids) = filter_ids {
+                                if !ids.contains(&col_idx) {
+                                    return Ok(Index::NONE);
+                                }
                             }
-                            None => Ok(Index::NONE),
+                            // 2) Parse only the selected columns
+                            match col_meta.column_index_range() {
+                                Some(r) => {
+                                    let r_start = usize::try_from(r.start - start_offset)?;
+                                    let r_end   = usize::try_from(r.end   - start_offset)?;
+                                    // Make sure parse_single_column_index only borrows metadata:
+                                    Self::parse_single_column_index(
+                                        &bytes[r_start..r_end],
+                                        &*metadata,  // or `metadata` if signature is &ParquetMetaData
+                                        col_meta,
+                                        rg_idx,
+                                        col_idx,
+                                    )
+                                }
+                                None => Ok(Index::NONE),
+                            }
                         })
-                        .collect::<Result<Vec<_>>>()
+                        .collect::<Result<Vec<Index>>>()
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<Vec<Index>>>>()?;
+
             metadata.set_column_index(Some(index));
         }
+
         Ok(())
     }
+
+
+
 
     #[cfg(feature = "encryption")]
     fn parse_single_column_index(
@@ -570,7 +622,7 @@ impl ParquetMetaDataReader {
         decode_column_index(bytes, column.column_type())
     }
 
-    fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
+    fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64, column_ids: Option<&[usize]>) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
         if self.offset_index {
             let index = metadata
