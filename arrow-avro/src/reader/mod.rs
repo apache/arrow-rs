@@ -305,7 +305,7 @@ impl Decoder {
         self.remaining_capacity == 0
     }
 
-    // Decode either the block count of remaining capacity from `data` (an OCF block payload).
+    // Decode either the block count or remaining capacity from `data` (an OCF block payload).
     //
     // Returns the number of bytes consumed from `data` along with the number of records decoded.
     fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize), ArrowError> {
