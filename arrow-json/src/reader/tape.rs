@@ -338,6 +338,7 @@ impl TapeDecoder {
         }
     }
 
+    /// Decodes JSON data from the provided buffer, returning the number of bytes consumed
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         let mut iter = BufIter::new(buf);
 
