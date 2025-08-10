@@ -180,9 +180,7 @@ impl Decoder {
                     }
                     total_consumed += n;
                     self.awaiting_body = true;
-                    if self.remaining_capacity == self.batch_size && self.pending_schema.is_some() {
-                        self.apply_pending_schema_if_batch_empty();
-                    }
+                    self.apply_pending_schema_if_batch_empty();
                     if self.remaining_capacity == 0 {
                         break;
                     }
