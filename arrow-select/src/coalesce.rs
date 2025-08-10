@@ -201,12 +201,93 @@ impl BatchCoalescer {
     pub fn push_batch_with_filter(
         &mut self,
         batch: RecordBatch,
-        filter: &BooleanArray,
+        predicate: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        // TODO: optimize this to avoid materializing (copying the results
-        // of filter to a new batch)
-        let filtered_batch = filter_record_batch(&batch, filter)?;
-        self.push_batch(filtered_batch)
+        // Avoid materializing filtered batch
+        let (_schema, arrays, num_rows) = batch.into_parts();
+        if num_rows == 0 {
+            return Ok(());
+        }
+
+        assert_eq!(arrays.len(), self.in_progress_arrays.len());
+
+        // Set sources (same as push_batch)
+        self.in_progress_arrays
+            .iter_mut()
+            .zip(arrays.into_iter())
+            .for_each(|(in_progress, array)| {
+                in_progress.set_source(Some(array));
+            });
+
+        // Scan predicate to find contiguous true segments, then copy segments to in_progress
+        // src_idx is the row index in the original batch
+        let mut src_idx: usize = 0;
+
+        while src_idx < num_rows {
+            // Find the start of the next true segment
+            // Skip false/null values
+
+            unsafe {
+                while src_idx < num_rows {
+                    if predicate.is_valid(src_idx) && predicate.value_unchecked(src_idx) {
+                        break;
+                    }
+                    src_idx += 1;
+                }
+            }
+
+            if src_idx >= num_rows {
+                break;
+            }
+
+            // Now src_idx points to a true value, find the length of this contiguous true segment
+            let run_start = src_idx;
+            let mut run_len = 0usize;
+
+            unsafe {
+                while src_idx < num_rows {
+                    if predicate.is_valid(src_idx) && predicate.value_unchecked(src_idx) {
+                        run_len += 1;
+                        src_idx += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // Now we have a segment [run_start, run_len] of contiguous trues that need to be copied to in_progress
+            // But we need to consider the remaining space in the target batch (may need to split the run into multiple segments)
+            let mut run_offset_in_src = run_start;
+            let mut remaining_in_run = run_len;
+
+            while remaining_in_run > 0 {
+                let space = self.target_batch_size - self.buffered_rows;
+                debug_assert!(space > 0);
+
+                let to_copy = remaining_in_run.min(space);
+
+                // Copy this contiguous region for each column (reusing copy_rows)
+                for in_progress in self.in_progress_arrays.iter_mut() {
+                    in_progress.copy_rows(run_offset_in_src, to_copy)?;
+                }
+
+                self.buffered_rows += to_copy;
+                run_offset_in_src += to_copy;
+                remaining_in_run -= to_copy;
+
+                // If target batch is full, finish and produce completed batch
+                if self.buffered_rows == self.target_batch_size {
+                    self.finish_buffered_batch()?;
+                }
+            }
+        }
+
+        // Clear sources (allow memory free)
+        for in_progress in self.in_progress_arrays.iter_mut() {
+            in_progress.set_source(None);
+        }
+
+        Ok(())
     }
 
     /// Push all the rows from `batch` into the Coalescer
