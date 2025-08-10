@@ -182,7 +182,7 @@ impl Decoder {
                     self.awaiting_body = true;
                     self.apply_pending_schema_if_batch_empty();
                     if self.remaining_capacity == 0 {
-                        break;
+                        break; // pending schema change ends the batch
                     }
                 }
             }
