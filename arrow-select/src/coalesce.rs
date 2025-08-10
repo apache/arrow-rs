@@ -20,7 +20,7 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::filter::{compute_filter_plan, filter_record_batch, FilterPlan};
+use crate::filter::{compute_filter_plan, FilterPlan};
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{downcast_primitive, Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
@@ -210,11 +210,11 @@ impl BatchCoalescer {
         match plan {
             FilterPlan::None => {
                 // nothing selected
-                return Ok(());
+                Ok(())
             }
             FilterPlan::All => {
                 // 全选：直接调用 push_batch（不消耗 batch）
-                return self.push_batch(batch);
+                 self.push_batch(batch)
             }
             FilterPlan::Slices(slices) => {
                 // We'll consume the batch and set the sources on in_progress arrays
@@ -223,7 +223,7 @@ impl BatchCoalescer {
 
                 self.in_progress_arrays
                     .iter_mut()
-                    .zip(arrays.into_iter())
+                    .zip(arrays)
                     .for_each(|(in_progress, array)| {
                         in_progress.set_source(Some(array));
                     });
@@ -256,7 +256,7 @@ impl BatchCoalescer {
                     in_progress.set_source(None);
                 }
 
-                return Ok(());
+                Ok(())
             }
             FilterPlan::Indices(indices) => {
                 // Consume batch and set sources (same as slices path)
@@ -265,7 +265,7 @@ impl BatchCoalescer {
 
                 self.in_progress_arrays
                     .iter_mut()
-                    .zip(arrays.into_iter())
+                    .zip(arrays)
                     .for_each(|(in_progress, array)| {
                         in_progress.set_source(Some(array));
                     });
@@ -523,6 +523,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use rand::{Rng, SeedableRng};
     use std::ops::Range;
+    use crate::filter::filter_record_batch;
 
     #[test]
     fn test_coalesce() {
