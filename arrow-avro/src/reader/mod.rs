@@ -173,32 +173,29 @@ impl Decoder {
     pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
         let mut total_consumed = 0usize;
         while total_consumed < data.len() && self.remaining_capacity > 0 {
-            if !self.awaiting_body {
-                if let Some(n) = self.handle_prefix(&data[total_consumed..])? {
-                    if n == 0 {
-                        break; // insufficient bytes
+            if self.awaiting_body {
+                match self.active_decoder.decode(&data[total_consumed..], 1) {
+                    Ok(n) => {
+                        self.remaining_capacity -= 1;
+                        total_consumed += n;
+                        self.awaiting_body = false;
+                        continue;
                     }
-                    total_consumed += n;
-                    self.awaiting_body = true;
-                    self.apply_pending_schema_if_batch_empty();
-                    if self.remaining_capacity == 0 {
-                        break; // pending schema change ends the batch
-                    }
-                }
+                    Err(ref e) if is_incomplete_data(e) => return Ok(total_consumed),
+                    err => return err,
+                };
             }
-            match self.active_decoder.decode(&data[total_consumed..], 1) {
-                Ok(n) if n > 0 => {
-                    self.remaining_capacity -= 1;
+            match self.handle_prefix(&data[total_consumed..])? {
+                Some(0) => break, // insufficient bytes
+                Some(n) => {
                     total_consumed += n;
-                    self.awaiting_body = false;
+                    self.apply_pending_schema_if_batch_empty();
+                    self.awaiting_body = true;
                 }
-                Ok(_) => {
+                None => {
                     return Err(ArrowError::ParseError(
-                        "Record decoder consumed 0 bytes".into(),
-                    ));
-                }
-                Err(ref e) if is_incomplete_data(&e) => return Ok(total_consumed),
-                err => return err,
+                        "Missing magic bytes and fingerprint".to_string(),
+                    ))
                 }
             }
         }
