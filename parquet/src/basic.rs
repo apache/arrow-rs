@@ -24,6 +24,8 @@ use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
+use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::{thrift_enum, thrift_private_struct, thrift_union_all_empty};
 
 use crate::errors::{ParquetError, Result};
 
@@ -33,35 +35,29 @@ use crate::errors::{ParquetError, Result};
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::Type`
 
+thrift_enum!(
 /// Types supported by Parquet.
 ///
 /// These physical types are intended to be used in combination with the encodings to
 /// control the on disk storage format.
 /// For example INT16 is not included as a type since a good encoding of INT32
 /// would handle this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(non_camel_case_types)]
-pub enum Type {
-    /// A boolean value.
-    BOOLEAN,
-    /// 32-bit signed integer.
-    INT32,
-    /// 64-bit signed integer.
-    INT64,
-    /// 96-bit signed integer for timestamps.
-    INT96,
-    /// IEEE 754 single-precision floating point value.
-    FLOAT,
-    /// IEEE 754 double-precision floating point value.
-    DOUBLE,
-    /// Arbitrary length byte array.
-    BYTE_ARRAY,
-    /// Fixed length byte array.
-    FIXED_LEN_BYTE_ARRAY,
+enum Type {
+  BOOLEAN = 0;
+  INT32 = 1;
+  INT64 = 2;
+  INT96 = 3;  // deprecated, only used by legacy implementations.
+  FLOAT = 4;
+  DOUBLE = 5;
+  BYTE_ARRAY = 6;
+  FIXED_LEN_BYTE_ARRAY = 7;
 }
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::ConvertedType`
+//
+// Cannot use macros because of added field `None`
 
 /// Common types (converted types) used by frameworks when using Parquet.
 ///
@@ -165,22 +161,150 @@ pub enum ConvertedType {
     INTERVAL,
 }
 
-// ----------------------------------------------------------------------
-// Mirrors thrift union `crate::format::TimeUnit`
-
-/// Time unit for `Time` and `Timestamp` logical types.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TimeUnit {
-    /// Milliseconds.
-    MILLIS,
-    /// Microseconds.
-    MICROS,
-    /// Nanoseconds.
-    NANOS,
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ConvertedType {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let val = prot.read_i32()?;
+        Ok(match val {
+            0 => Self::UTF8,
+            1 => Self::MAP,
+            2 => Self::MAP_KEY_VALUE,
+            3 => Self::LIST,
+            4 => Self::ENUM,
+            5 => Self::DECIMAL,
+            6 => Self::DATE,
+            7 => Self::TIME_MILLIS,
+            8 => Self::TIME_MICROS,
+            9 => Self::TIMESTAMP_MILLIS,
+            10 => Self::TIMESTAMP_MICROS,
+            11 => Self::UINT_8,
+            12 => Self::UINT_16,
+            13 => Self::UINT_32,
+            14 => Self::UINT_64,
+            15 => Self::INT_8,
+            16 => Self::INT_16,
+            17 => Self::INT_32,
+            18 => Self::INT_64,
+            19 => Self::JSON,
+            20 => Self::BSON,
+            21 => Self::INTERVAL,
+            _ => return Err(general_err!("Unexpected ConvertedType {}", val)),
+        })
+    }
 }
 
 // ----------------------------------------------------------------------
+// Mirrors thrift union `crate::format::TimeUnit`
+
+thrift_union_all_empty!(
+/// Time unit for `Time` and `Timestamp` logical types.
+union TimeUnit {
+  1: MilliSeconds MILLIS
+  2: MicroSeconds MICROS
+  3: NanoSeconds NANOS
+}
+);
+
+// ----------------------------------------------------------------------
 // Mirrors thrift union `crate::format::LogicalType`
+
+// private structs for decoding logical type
+
+thrift_private_struct!(
+struct DecimalType {
+  1: required i32 scale
+  2: required i32 precision
+}
+);
+
+thrift_private_struct!(
+struct TimestampType {
+  1: required bool is_adjusted_to_u_t_c
+  2: required TimeUnit unit
+}
+);
+
+// they are identical
+use TimestampType as TimeType;
+
+thrift_private_struct!(
+struct IntType {
+  1: required i8 bit_width
+  2: required bool is_signed
+}
+);
+
+thrift_private_struct!(
+struct VariantType {
+  // The version of the variant specification that the variant was
+  // written with.
+  1: optional i8 specification_version
+}
+);
+
+// TODO need macro for structs that need lifetime annotation
+struct GeometryType<'a> {
+    crs: Option<&'a str>,
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for GeometryType<'a> {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let mut crs: Option<&str> = None;
+        prot.read_struct_begin()?;
+        loop {
+            let field_ident = prot.read_field_begin()?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = prot.read_string()?;
+                    crs = Some(val);
+                }
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+        }
+        Ok(Self { crs })
+    }
+}
+
+struct GeographyType<'a> {
+    crs: Option<&'a str>,
+    algorithm: Option<EdgeInterpolationAlgorithm>,
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for GeographyType<'a> {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let mut crs: Option<&str> = None;
+        let mut algorithm: Option<EdgeInterpolationAlgorithm> = None;
+        prot.read_struct_begin()?;
+        loop {
+            let field_ident = prot.read_field_begin()?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = prot.read_string()?;
+                    crs = Some(val);
+                }
+                2 => {
+                    let val = EdgeInterpolationAlgorithm::try_from(&mut *prot)?;
+                    algorithm = Some(val);
+                }
+
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+        }
+        Ok(Self { crs, algorithm })
+    }
+}
 
 /// Logical types used by version 2.4.0+ of the Parquet format.
 ///
@@ -238,15 +362,149 @@ pub enum LogicalType {
     /// A 16-bit floating point number.
     Float16,
     /// A Variant value.
-    Variant,
+    Variant {
+        /// The version of the variant specification that the variant was written with.
+        specification_version: Option<i8>,
+    },
     /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
-    Geometry,
+    Geometry {
+        /// A custom CRS. If unset the defaults to `OGC:CRS84`.
+        crs: Option<String>,
+    },
     /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
-    Geography,
+    Geography {
+        /// A custom CRS. If unset the defaults to `OGC:CRS84`.
+        crs: Option<String>,
+        /// An optional algorithm can be set to correctly interpret edges interpolation
+        /// of the geometries. If unset, the algorithm defaults to `SPHERICAL``.
+        algorithm: Option<EdgeInterpolationAlgorithm>,
+    },
+    /// For forward compatibility; used when an unknown union value is encountered.
+    _Unknown {
+        /// The field id encountered when parsing the unknown logical type.
+        field_id: i16,
+    },
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_struct_begin()?;
+
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type == FieldType::Stop {
+            return Err(general_err!("received empty union from remote LogicalType"));
+        }
+        let ret = match field_ident.id {
+            1 => {
+                prot.skip_empty_struct()?;
+                Self::String
+            }
+            2 => {
+                prot.skip_empty_struct()?;
+                Self::Map
+            }
+            3 => {
+                prot.skip_empty_struct()?;
+                Self::List
+            }
+            4 => {
+                prot.skip_empty_struct()?;
+                Self::Enum
+            }
+            5 => {
+                let val = DecimalType::try_from(&mut *prot)?;
+                Self::Decimal {
+                    scale: val.scale,
+                    precision: val.precision,
+                }
+            }
+            6 => {
+                prot.skip_empty_struct()?;
+                Self::Date
+            }
+            7 => {
+                let val = TimeType::try_from(&mut *prot)?;
+                Self::Time {
+                    is_adjusted_to_u_t_c: val.is_adjusted_to_u_t_c,
+                    unit: val.unit,
+                }
+            }
+            8 => {
+                let val = TimestampType::try_from(&mut *prot)?;
+                Self::Timestamp {
+                    is_adjusted_to_u_t_c: val.is_adjusted_to_u_t_c,
+                    unit: val.unit,
+                }
+            }
+            10 => {
+                let val = IntType::try_from(&mut *prot)?;
+                Self::Integer {
+                    is_signed: val.is_signed,
+                    bit_width: val.bit_width,
+                }
+            }
+            11 => {
+                prot.skip_empty_struct()?;
+                Self::Unknown
+            }
+            12 => {
+                prot.skip_empty_struct()?;
+                Self::Json
+            }
+            13 => {
+                prot.skip_empty_struct()?;
+                Self::Bson
+            }
+            14 => {
+                prot.skip_empty_struct()?;
+                Self::Uuid
+            }
+            15 => {
+                prot.skip_empty_struct()?;
+                Self::Float16
+            }
+            16 => {
+                let val = VariantType::try_from(&mut *prot)?;
+                Self::Variant {
+                    specification_version: val.specification_version,
+                }
+            }
+            17 => {
+                let val = GeometryType::try_from(&mut *prot)?;
+                Self::Geometry {
+                    crs: val.crs.map(|s| s.to_owned()),
+                }
+            }
+            18 => {
+                let val = GeographyType::try_from(&mut *prot)?;
+                Self::Geography {
+                    crs: val.crs.map(|s| s.to_owned()),
+                    algorithm: val.algorithm,
+                }
+            }
+            _ => {
+                prot.skip(field_ident.field_type)?;
+                Self::_Unknown {
+                    field_id: field_ident.id,
+                }
+            }
+        };
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type != FieldType::Stop {
+            return Err(general_err!(
+                "Received multiple fields for union from remote LogicalType"
+            ));
+        }
+        prot.read_struct_end()?;
+        Ok(ret)
+    }
 }
 
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::FieldRepetitionType`
+//
+// Cannot use macro since the name is changed
 
 /// Representation of field types in schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,9 +518,23 @@ pub enum Repetition {
     REPEATED,
 }
 
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Repetition {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let val = prot.read_i32()?;
+        Ok(match val {
+            0 => Self::REQUIRED,
+            1 => Self::OPTIONAL,
+            2 => Self::REPEATED,
+            _ => return Err(general_err!("Unexpected FieldRepetitionType {}", val)),
+        })
+    }
+}
+
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::Encoding`
 
+thrift_enum!(
 /// Encodings supported by Parquet.
 ///
 /// Not all encodings are valid for all types. These enums are also used to specify the
@@ -279,80 +551,19 @@ pub enum Repetition {
 /// performance impact when evaluating these encodings.
 ///
 /// [WriterVersion]: crate::file::properties::WriterVersion
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
-#[allow(non_camel_case_types)]
-pub enum Encoding {
-    /// Default byte encoding.
-    /// - BOOLEAN - 1 bit per value, 0 is false; 1 is true.
-    /// - INT32 - 4 bytes per value, stored as little-endian.
-    /// - INT64 - 8 bytes per value, stored as little-endian.
-    /// - FLOAT - 4 bytes per value, stored as little-endian.
-    /// - DOUBLE - 8 bytes per value, stored as little-endian.
-    /// - BYTE_ARRAY - 4 byte length stored as little endian, followed by bytes.
-    /// - FIXED_LEN_BYTE_ARRAY - just the bytes are stored.
-    PLAIN,
-
-    /// **Deprecated** dictionary encoding.
-    ///
-    /// The values in the dictionary are encoded using PLAIN encoding.
-    /// Since it is deprecated, RLE_DICTIONARY encoding is used for a data page, and
-    /// PLAIN encoding is used for dictionary page.
-    PLAIN_DICTIONARY,
-
-    /// Group packed run length encoding.
-    ///
-    /// Usable for definition/repetition levels encoding and boolean values.
-    RLE,
-
-    /// **Deprecated** Bit-packed encoding.
-    ///
-    /// This can only be used if the data has a known max width.
-    /// Usable for definition/repetition levels encoding.
-    ///
-    /// There are compatibility issues with files using this encoding.
-    /// The parquet standard specifies the bits to be packed starting from the
-    /// most-significant bit, several implementations do not follow this bit order.
-    /// Several other implementations also have issues reading this encoding
-    /// because of incorrect assumptions about the length of the encoded data.
-    ///
-    /// The RLE/bit-packing hybrid is more cpu and memory efficient and should be used instead.
-    #[deprecated(
-        since = "51.0.0",
-        note = "Please see documentation for compatibility issues and use the RLE/bit-packing hybrid encoding instead"
-    )]
-    BIT_PACKED,
-
-    /// Delta encoding for integers, either INT32 or INT64.
-    ///
-    /// Works best on sorted data.
-    DELTA_BINARY_PACKED,
-
-    /// Encoding for byte arrays to separate the length values and the data.
-    ///
-    /// The lengths are encoded using DELTA_BINARY_PACKED encoding.
-    DELTA_LENGTH_BYTE_ARRAY,
-
-    /// Incremental encoding for byte arrays.
-    ///
-    /// Prefix lengths are encoded using DELTA_BINARY_PACKED encoding.
-    /// Suffixes are stored using DELTA_LENGTH_BYTE_ARRAY encoding.
-    DELTA_BYTE_ARRAY,
-
-    /// Dictionary encoding.
-    ///
-    /// The ids are encoded using the RLE encoding.
-    RLE_DICTIONARY,
-
-    /// Encoding for fixed-width data.
-    ///
-    /// K byte-streams are created where K is the size in bytes of the data type.
-    /// The individual bytes of a value are scattered to the corresponding stream and
-    /// the streams are concatenated.
-    /// This itself does not reduce the size of the data but can lead to better compression
-    /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
-    /// perform poorly for large values of N.
-    BYTE_STREAM_SPLIT,
+enum Encoding {
+  PLAIN = 0;
+  //  GROUP_VAR_INT = 1;
+  PLAIN_DICTIONARY = 2;
+  RLE = 3;
+  BIT_PACKED = 4;
+  DELTA_BINARY_PACKED = 5;
+  DELTA_LENGTH_BYTE_ARRAY = 6;
+  DELTA_BYTE_ARRAY = 7;
+  RLE_DICTIONARY = 8;
+  BYTE_STREAM_SPLIT = 9;
 }
+);
 
 impl FromStr for Encoding {
     type Err = ParquetError;
@@ -413,6 +624,24 @@ pub enum Compression {
     ZSTD(ZstdLevel),
     /// [LZ4 compression](https://lz4.org/).
     LZ4_RAW,
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Compression {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let val = prot.read_i32()?;
+        Ok(match val {
+            0 => Self::UNCOMPRESSED,
+            1 => Self::SNAPPY,
+            2 => Self::GZIP(Default::default()),
+            3 => Self::LZO,
+            4 => Self::BROTLI(Default::default()),
+            5 => Self::LZ4,
+            6 => Self::ZSTD(Default::default()),
+            7 => Self::LZ4_RAW,
+            _ => return Err(general_err!("Unexpected CompressionCodec {}", val)),
+        })
+    }
 }
 
 impl Compression {
@@ -506,69 +735,78 @@ impl FromStr for Compression {
 }
 
 // ----------------------------------------------------------------------
-/// Mirrors thrift enum `crate::format::PageType`
-///
+// Mirrors thrift enum `crate::format::PageType`
+
+thrift_enum!(
 /// Available data pages for Parquet file format.
 /// Note that some of the page types may not be supported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum PageType {
-    /// Data page Parquet 1.0
-    DATA_PAGE,
-    /// Index page
-    INDEX_PAGE,
-    /// Dictionary page
-    DICTIONARY_PAGE,
-    /// Data page Parquet 2.0
-    DATA_PAGE_V2,
+enum PageType {
+  DATA_PAGE = 0;
+  INDEX_PAGE = 1;
+  DICTIONARY_PAGE = 2;
+  DATA_PAGE_V2 = 3;
 }
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::BoundaryOrder`
 
+thrift_enum!(
 /// Enum to annotate whether lists of min/max elements inside ColumnIndex
 /// are ordered and if so, in which direction.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum BoundaryOrder {
-    /// Min/max stats are unordered.
-    UNORDERED,
-    /// Min/max stats are ordered in an ascending fashion.
-    ASCENDING,
-    /// Min/max stats are ordered in an descending fashion.
-    DESCENDING,
+enum BoundaryOrder {
+  UNORDERED = 0;
+  ASCENDING = 1;
+  DESCENDING = 2;
 }
+);
+
+// ----------------------------------------------------------------------
+// Mirrors thrift enum `crate::format::EdgeInterpolationAlgorithm`
+
+thrift_enum!(
+/// Edge interpolation algorithm for Geography logical type
+enum EdgeInterpolationAlgorithm {
+  SPHERICAL = 0;
+  VINCENTY = 1;
+  THOMAS = 2;
+  ANDOYER = 3;
+  KARNEY = 4;
+}
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `crate::format::BloomFilterAlgorithm`
 
+thrift_union_all_empty!(
 /// The algorithm used in Bloom filter.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BloomFilterAlgorithm {
-    /// Block-based Bloom filter.
-    BLOCK,
+union BloomFilterAlgorithm {
+  /** Block-based Bloom filter. **/
+  1: SplitBlockAlgorithm BLOCK;
 }
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `crate::format::BloomFilterHash`
 
+thrift_union_all_empty!(
 /// The hash function used in Bloom filter. This function takes the hash of a column value
 /// using plain encoding.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BloomFilterHash {
-    /// xxHash is an extremely fast non-cryptographic hash algorithm. It uses 64 bits version
-    /// of xxHash.
-    XXHASH,
+union BloomFilterHash {
+  /** xxHash Strategy. **/
+  1: XxHash XXHASH;
 }
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `crate::format::BloomFilterCompression`
 
+thrift_union_all_empty!(
 /// The compression used in the Bloom filter.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BloomFilterCompression {
-    /// No compression is used.
-    UNCOMPRESSED,
+union BloomFilterCompression {
+  1: Uncompressed UNCOMPRESSED;
 }
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `crate::format::ColumnOrder`
@@ -610,9 +848,13 @@ pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
     TYPE_DEFINED_ORDER(SortOrder),
+    // The following are not defined in the Parquet spec and should always be last.
     /// Undefined column order, means legacy behaviour before parquet-format 2.4.0.
     /// Sort order is always SIGNED.
     UNDEFINED,
+    /// An unknown but present ColumnOrder. Statistics with an unknown `ColumnOrder`
+    /// will be ignored.
+    UNKNOWN,
 }
 
 impl ColumnOrder {
@@ -640,9 +882,10 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
-                LogicalType::Variant | LogicalType::Geometry | LogicalType::Geography => {
-                    SortOrder::UNDEFINED
-                }
+                LogicalType::Variant { .. }
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. }
+                | LogicalType::_Unknown { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -712,18 +955,44 @@ impl ColumnOrder {
         match *self {
             ColumnOrder::TYPE_DEFINED_ORDER(order) => order,
             ColumnOrder::UNDEFINED => SortOrder::SIGNED,
+            ColumnOrder::UNKNOWN => SortOrder::UNDEFINED,
         }
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
+    type Error = ParquetError;
+
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_struct_begin()?;
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type == FieldType::Stop {
+            return Err(general_err!("Received empty union from remote ColumnOrder"));
+        }
+        let ret = match field_ident.id {
+            1 => {
+                // TODO: the sort order needs to be set correctly after parsing.
+                prot.skip_empty_struct()?;
+                Self::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
+            }
+            _ => {
+                prot.skip(field_ident.field_type)?;
+                Self::UNKNOWN
+            }
+        };
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type != FieldType::Stop {
+            return Err(general_err!(
+                "Received multiple fields for union from remote ColumnOrder"
+            ));
+        }
+        prot.read_struct_end()?;
+        Ok(ret)
     }
 }
 
 // ----------------------------------------------------------------------
 // Display handlers
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
 
 impl fmt::Display for ConvertedType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -737,19 +1006,7 @@ impl fmt::Display for Repetition {
     }
 }
 
-impl fmt::Display for Encoding {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
 impl fmt::Display for Compression {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl fmt::Display for PageType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
     }
@@ -764,42 +1021,6 @@ impl fmt::Display for SortOrder {
 impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::Type <=> Type conversion
-
-impl TryFrom<crate::format::Type> for Type {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::Type) -> Result<Self> {
-        Ok(match value {
-            crate::format::Type::BOOLEAN => Type::BOOLEAN,
-            crate::format::Type::INT32 => Type::INT32,
-            crate::format::Type::INT64 => Type::INT64,
-            crate::format::Type::INT96 => Type::INT96,
-            crate::format::Type::FLOAT => Type::FLOAT,
-            crate::format::Type::DOUBLE => Type::DOUBLE,
-            crate::format::Type::BYTE_ARRAY => Type::BYTE_ARRAY,
-            crate::format::Type::FIXED_LEN_BYTE_ARRAY => Type::FIXED_LEN_BYTE_ARRAY,
-            _ => return Err(general_err!("unexpected parquet type: {}", value.0)),
-        })
-    }
-}
-
-impl From<Type> for crate::format::Type {
-    fn from(value: Type) -> Self {
-        match value {
-            Type::BOOLEAN => crate::format::Type::BOOLEAN,
-            Type::INT32 => crate::format::Type::INT32,
-            Type::INT64 => crate::format::Type::INT64,
-            Type::INT96 => crate::format::Type::INT96,
-            Type::FLOAT => crate::format::Type::FLOAT,
-            Type::DOUBLE => crate::format::Type::DOUBLE,
-            Type::BYTE_ARRAY => crate::format::Type::BYTE_ARRAY,
-            Type::FIXED_LEN_BYTE_ARRAY => crate::format::Type::FIXED_LEN_BYTE_ARRAY,
-        }
     }
 }
 
@@ -877,92 +1098,6 @@ impl From<ConvertedType> for Option<crate::format::ConvertedType> {
 }
 
 // ----------------------------------------------------------------------
-// crate::format::BloomFilterHash <=> BloomFilterHash conversion
-
-impl From<crate::format::BloomFilterHash> for BloomFilterHash {
-    fn from(value: crate::format::BloomFilterHash) -> Self {
-        match value {
-            crate::format::BloomFilterHash::XXHASH(_) => BloomFilterHash::XXHASH,
-        }
-    }
-}
-
-impl From<BloomFilterHash> for crate::format::BloomFilterHash {
-    fn from(value: BloomFilterHash) -> Self {
-        match value {
-            BloomFilterHash::XXHASH => crate::format::BloomFilterHash::XXHASH(Default::default()),
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::BloomFilterAlgorithm <=> BloomFilterAlgorithm conversion
-
-impl From<crate::format::BloomFilterAlgorithm> for BloomFilterAlgorithm {
-    fn from(value: crate::format::BloomFilterAlgorithm) -> Self {
-        match value {
-            crate::format::BloomFilterAlgorithm::BLOCK(_) => BloomFilterAlgorithm::BLOCK,
-        }
-    }
-}
-
-impl From<BloomFilterAlgorithm> for crate::format::BloomFilterAlgorithm {
-    fn from(value: BloomFilterAlgorithm) -> Self {
-        match value {
-            BloomFilterAlgorithm::BLOCK => {
-                crate::format::BloomFilterAlgorithm::BLOCK(Default::default())
-            }
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::BloomFilterCompression <=> BloomFilterCompression conversion
-
-impl From<crate::format::BloomFilterCompression> for BloomFilterCompression {
-    fn from(value: crate::format::BloomFilterCompression) -> Self {
-        match value {
-            crate::format::BloomFilterCompression::UNCOMPRESSED(_) => {
-                BloomFilterCompression::UNCOMPRESSED
-            }
-        }
-    }
-}
-
-impl From<BloomFilterCompression> for crate::format::BloomFilterCompression {
-    fn from(value: BloomFilterCompression) -> Self {
-        match value {
-            BloomFilterCompression::UNCOMPRESSED => {
-                crate::format::BloomFilterCompression::UNCOMPRESSED(Default::default())
-            }
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::TimeUnit <=> TimeUnit conversion
-
-impl From<crate::format::TimeUnit> for TimeUnit {
-    fn from(value: crate::format::TimeUnit) -> Self {
-        match value {
-            crate::format::TimeUnit::MILLIS(_) => TimeUnit::MILLIS,
-            crate::format::TimeUnit::MICROS(_) => TimeUnit::MICROS,
-            crate::format::TimeUnit::NANOS(_) => TimeUnit::NANOS,
-        }
-    }
-}
-
-impl From<TimeUnit> for crate::format::TimeUnit {
-    fn from(value: TimeUnit) -> Self {
-        match value {
-            TimeUnit::MILLIS => crate::format::TimeUnit::MILLIS(crate::format::MilliSeconds {}),
-            TimeUnit::MICROS => crate::format::TimeUnit::MICROS(crate::format::MicroSeconds {}),
-            TimeUnit::NANOS => crate::format::TimeUnit::NANOS(crate::format::NanoSeconds {}),
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
 // crate::format::LogicalType <=> LogicalType conversion
 
 impl From<crate::format::LogicalType> for LogicalType {
@@ -994,9 +1129,14 @@ impl From<crate::format::LogicalType> for LogicalType {
             crate::format::LogicalType::BSON(_) => LogicalType::Bson,
             crate::format::LogicalType::UUID(_) => LogicalType::Uuid,
             crate::format::LogicalType::FLOAT16(_) => LogicalType::Float16,
-            crate::format::LogicalType::VARIANT(_) => LogicalType::Variant,
-            crate::format::LogicalType::GEOMETRY(_) => LogicalType::Geometry,
-            crate::format::LogicalType::GEOGRAPHY(_) => LogicalType::Geography,
+            crate::format::LogicalType::VARIANT(vt) => LogicalType::Variant {
+                specification_version: vt.specification_version,
+            },
+            crate::format::LogicalType::GEOMETRY(gt) => LogicalType::Geometry { crs: gt.crs },
+            crate::format::LogicalType::GEOGRAPHY(gt) => LogicalType::Geography {
+                crs: gt.crs,
+                algorithm: gt.algorithm.map(|a| a.try_into().unwrap()),
+            },
         }
     }
 }
@@ -1038,9 +1178,23 @@ impl From<LogicalType> for crate::format::LogicalType {
             LogicalType::Bson => crate::format::LogicalType::BSON(Default::default()),
             LogicalType::Uuid => crate::format::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => crate::format::LogicalType::FLOAT16(Default::default()),
-            LogicalType::Variant => crate::format::LogicalType::VARIANT(Default::default()),
-            LogicalType::Geometry => crate::format::LogicalType::GEOMETRY(Default::default()),
-            LogicalType::Geography => crate::format::LogicalType::GEOGRAPHY(Default::default()),
+            LogicalType::Variant {
+                specification_version,
+            } => crate::format::LogicalType::VARIANT(crate::format::VariantType {
+                specification_version,
+            }),
+            LogicalType::Geometry { crs } => {
+                crate::format::LogicalType::GEOMETRY(crate::format::GeometryType { crs })
+            }
+            LogicalType::Geography { crs, algorithm } => {
+                crate::format::LogicalType::GEOGRAPHY(crate::format::GeographyType {
+                    crs,
+                    algorithm: algorithm.map(|a| a.into()),
+                })
+            }
+            LogicalType::_Unknown { .. } => {
+                panic!("Trying to convert unknown LogicalType to thrift");
+            }
         }
     }
 }
@@ -1092,9 +1246,10 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Bson => ConvertedType::BSON,
                 LogicalType::Uuid
                 | LogicalType::Float16
-                | LogicalType::Variant
-                | LogicalType::Geometry
-                | LogicalType::Geography
+                | LogicalType::Variant { .. }
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. }
+                | LogicalType::_Unknown { .. }
                 | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
@@ -1129,46 +1284,6 @@ impl From<Repetition> for crate::format::FieldRepetitionType {
             Repetition::REQUIRED => crate::format::FieldRepetitionType::REQUIRED,
             Repetition::OPTIONAL => crate::format::FieldRepetitionType::OPTIONAL,
             Repetition::REPEATED => crate::format::FieldRepetitionType::REPEATED,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::Encoding <=> Encoding conversion
-
-impl TryFrom<crate::format::Encoding> for Encoding {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::Encoding) -> Result<Self> {
-        Ok(match value {
-            crate::format::Encoding::PLAIN => Encoding::PLAIN,
-            crate::format::Encoding::PLAIN_DICTIONARY => Encoding::PLAIN_DICTIONARY,
-            crate::format::Encoding::RLE => Encoding::RLE,
-            #[allow(deprecated)]
-            crate::format::Encoding::BIT_PACKED => Encoding::BIT_PACKED,
-            crate::format::Encoding::DELTA_BINARY_PACKED => Encoding::DELTA_BINARY_PACKED,
-            crate::format::Encoding::DELTA_LENGTH_BYTE_ARRAY => Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            crate::format::Encoding::DELTA_BYTE_ARRAY => Encoding::DELTA_BYTE_ARRAY,
-            crate::format::Encoding::RLE_DICTIONARY => Encoding::RLE_DICTIONARY,
-            crate::format::Encoding::BYTE_STREAM_SPLIT => Encoding::BYTE_STREAM_SPLIT,
-            _ => return Err(general_err!("unexpected parquet encoding: {}", value.0)),
-        })
-    }
-}
-
-impl From<Encoding> for crate::format::Encoding {
-    fn from(value: Encoding) -> Self {
-        match value {
-            Encoding::PLAIN => crate::format::Encoding::PLAIN,
-            Encoding::PLAIN_DICTIONARY => crate::format::Encoding::PLAIN_DICTIONARY,
-            Encoding::RLE => crate::format::Encoding::RLE,
-            #[allow(deprecated)]
-            Encoding::BIT_PACKED => crate::format::Encoding::BIT_PACKED,
-            Encoding::DELTA_BINARY_PACKED => crate::format::Encoding::DELTA_BINARY_PACKED,
-            Encoding::DELTA_LENGTH_BYTE_ARRAY => crate::format::Encoding::DELTA_LENGTH_BYTE_ARRAY,
-            Encoding::DELTA_BYTE_ARRAY => crate::format::Encoding::DELTA_BYTE_ARRAY,
-            Encoding::RLE_DICTIONARY => crate::format::Encoding::RLE_DICTIONARY,
-            Encoding::BYTE_STREAM_SPLIT => crate::format::Encoding::BYTE_STREAM_SPLIT,
         }
     }
 }
@@ -1210,65 +1325,6 @@ impl From<Compression> for crate::format::CompressionCodec {
             Compression::LZ4 => crate::format::CompressionCodec::LZ4,
             Compression::ZSTD(_) => crate::format::CompressionCodec::ZSTD,
             Compression::LZ4_RAW => crate::format::CompressionCodec::LZ4_RAW,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::PageType <=> PageType conversion
-
-impl TryFrom<crate::format::PageType> for PageType {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::PageType) -> Result<Self> {
-        Ok(match value {
-            crate::format::PageType::DATA_PAGE => PageType::DATA_PAGE,
-            crate::format::PageType::INDEX_PAGE => PageType::INDEX_PAGE,
-            crate::format::PageType::DICTIONARY_PAGE => PageType::DICTIONARY_PAGE,
-            crate::format::PageType::DATA_PAGE_V2 => PageType::DATA_PAGE_V2,
-            _ => return Err(general_err!("unexpected parquet page type: {}", value.0)),
-        })
-    }
-}
-
-impl From<PageType> for crate::format::PageType {
-    fn from(value: PageType) -> Self {
-        match value {
-            PageType::DATA_PAGE => crate::format::PageType::DATA_PAGE,
-            PageType::INDEX_PAGE => crate::format::PageType::INDEX_PAGE,
-            PageType::DICTIONARY_PAGE => crate::format::PageType::DICTIONARY_PAGE,
-            PageType::DATA_PAGE_V2 => crate::format::PageType::DATA_PAGE_V2,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::PageType <=> PageType conversion
-
-impl TryFrom<crate::format::BoundaryOrder> for BoundaryOrder {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::BoundaryOrder) -> Result<Self> {
-        Ok(match value {
-            crate::format::BoundaryOrder::UNORDERED => BoundaryOrder::UNORDERED,
-            crate::format::BoundaryOrder::ASCENDING => BoundaryOrder::ASCENDING,
-            crate::format::BoundaryOrder::DESCENDING => BoundaryOrder::DESCENDING,
-            _ => {
-                return Err(general_err!(
-                    "unexpected parquet boundary order type: {}",
-                    value.0
-                ))
-            }
-        })
-    }
-}
-
-impl From<BoundaryOrder> for crate::format::BoundaryOrder {
-    fn from(value: BoundaryOrder) -> Self {
-        match value {
-            BoundaryOrder::UNORDERED => crate::format::BoundaryOrder::UNORDERED,
-            BoundaryOrder::ASCENDING => crate::format::BoundaryOrder::ASCENDING,
-            BoundaryOrder::DESCENDING => crate::format::BoundaryOrder::DESCENDING,
         }
     }
 }
@@ -2631,6 +2687,116 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Parquet error: unknown encoding: gzip(-10)"
+        );
+    }
+
+    #[test]
+    fn test_display_boundary_order() {
+        assert_eq!(BoundaryOrder::ASCENDING.to_string(), "ASCENDING");
+        assert_eq!(BoundaryOrder::DESCENDING.to_string(), "DESCENDING");
+        assert_eq!(BoundaryOrder::UNORDERED.to_string(), "UNORDERED");
+    }
+
+    #[test]
+    fn test_from_boundary_order() {
+        assert_eq!(
+            BoundaryOrder::try_from(crate::format::BoundaryOrder::ASCENDING).unwrap(),
+            BoundaryOrder::ASCENDING
+        );
+        assert_eq!(
+            BoundaryOrder::try_from(crate::format::BoundaryOrder::DESCENDING).unwrap(),
+            BoundaryOrder::DESCENDING
+        );
+        assert_eq!(
+            BoundaryOrder::try_from(crate::format::BoundaryOrder::UNORDERED).unwrap(),
+            BoundaryOrder::UNORDERED
+        );
+    }
+
+    #[test]
+    fn test_into_boundary_order() {
+        assert_eq!(
+            crate::format::BoundaryOrder::ASCENDING,
+            BoundaryOrder::ASCENDING.into()
+        );
+        assert_eq!(
+            crate::format::BoundaryOrder::DESCENDING,
+            BoundaryOrder::DESCENDING.into()
+        );
+        assert_eq!(
+            crate::format::BoundaryOrder::UNORDERED,
+            BoundaryOrder::UNORDERED.into()
+        );
+    }
+
+    #[test]
+    fn test_display_edge_algo() {
+        assert_eq!(
+            EdgeInterpolationAlgorithm::SPHERICAL.to_string(),
+            "SPHERICAL"
+        );
+        assert_eq!(EdgeInterpolationAlgorithm::VINCENTY.to_string(), "VINCENTY");
+        assert_eq!(EdgeInterpolationAlgorithm::THOMAS.to_string(), "THOMAS");
+        assert_eq!(EdgeInterpolationAlgorithm::ANDOYER.to_string(), "ANDOYER");
+        assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
+    }
+
+    #[test]
+    fn test_from_edge_algo() {
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(
+                crate::format::EdgeInterpolationAlgorithm::SPHERICAL
+            )
+            .unwrap(),
+            EdgeInterpolationAlgorithm::SPHERICAL
+        );
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(
+                crate::format::EdgeInterpolationAlgorithm::VINCENTY
+            )
+            .unwrap(),
+            EdgeInterpolationAlgorithm::VINCENTY
+        );
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(crate::format::EdgeInterpolationAlgorithm::THOMAS)
+                .unwrap(),
+            EdgeInterpolationAlgorithm::THOMAS
+        );
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(
+                crate::format::EdgeInterpolationAlgorithm::ANDOYER
+            )
+            .unwrap(),
+            EdgeInterpolationAlgorithm::ANDOYER
+        );
+        assert_eq!(
+            EdgeInterpolationAlgorithm::try_from(crate::format::EdgeInterpolationAlgorithm::KARNEY)
+                .unwrap(),
+            EdgeInterpolationAlgorithm::KARNEY
+        );
+    }
+
+    #[test]
+    fn test_into_edge_algo() {
+        assert_eq!(
+            crate::format::EdgeInterpolationAlgorithm::SPHERICAL,
+            EdgeInterpolationAlgorithm::SPHERICAL.into()
+        );
+        assert_eq!(
+            crate::format::EdgeInterpolationAlgorithm::VINCENTY,
+            EdgeInterpolationAlgorithm::VINCENTY.into()
+        );
+        assert_eq!(
+            crate::format::EdgeInterpolationAlgorithm::THOMAS,
+            EdgeInterpolationAlgorithm::THOMAS.into()
+        );
+        assert_eq!(
+            crate::format::EdgeInterpolationAlgorithm::ANDOYER,
+            EdgeInterpolationAlgorithm::ANDOYER.into()
+        );
+        assert_eq!(
+            crate::format::EdgeInterpolationAlgorithm::KARNEY,
+            EdgeInterpolationAlgorithm::KARNEY.into()
         );
     }
 }
