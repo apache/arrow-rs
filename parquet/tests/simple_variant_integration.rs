@@ -24,6 +24,9 @@
 //! Based on the parquet-testing PR: https://github.com/apache/parquet-testing/pull/90/files
 //! Inspired by the arrow-go implementation: https://github.com/apache/arrow-go/pull/455/files
 
+// These tests require the arrow feature
+#![cfg(feature = "arrow")]
+
 use std::{env, fs, path::PathBuf, error::Error};
 use arrow_array::{Array, StructArray};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
