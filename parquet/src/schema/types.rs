@@ -1449,26 +1449,19 @@ fn next_schema_element<'a>(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<
 }
 
 pub(crate) fn schema_from_thrift_input(prot: &mut ThriftCompactInputProtocol) -> Result<TypePtr> {
-    let mut index = 0;
-    let mut schema_nodes = Vec::new();
+    // need to be at the start of a list<SchemaElement>. read the list header.
     let list_ident = prot.read_list_begin()?;
-    while index < list_ident.size as usize {
-        let t = from_thrift_input_helper(prot, index)?;
-        index = t.0;
-        schema_nodes.push(t.1);
-    }
-    if schema_nodes.len() != 1 {
-        return Err(general_err!(
-            "Expected exactly one root node, but found {}",
-            schema_nodes.len()
-        ));
+
+    let t = from_thrift_input_helper(prot, 0)?;
+    if t.0 != list_ident.size as usize {
+        return Err(general_err!("Expected exactly one root node"));
     }
 
-    if !schema_nodes[0].is_group() {
+    if !t.1.is_group() {
         return Err(general_err!("Expected root node to be a group type"));
     }
 
-    Ok(schema_nodes.remove(0))
+    Ok(t.1)
 }
 
 fn from_thrift_input_helper(
