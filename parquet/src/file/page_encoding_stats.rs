@@ -18,17 +18,39 @@
 //! Per-page encoding information.
 
 use crate::basic::{Encoding, PageType};
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
+use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::thrift_struct;
 
+thrift_struct!(
 /// PageEncodingStats for a column chunk and data page.
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageEncodingStats {
-    /// the page type (data/dic/...)
-    pub page_type: PageType,
-    /// encoding of the page
-    pub encoding: Encoding,
-    /// number of pages of this type with this encoding
-    pub count: i32,
+  1: required PageType page_type;
+  2: required Encoding encoding;
+  3: required i32 count;
+}
+);
+
+// TODO: remove when we finally get rid of the format module
+impl TryFrom<crate::format::PageEncodingStats> for PageEncodingStats {
+    type Error = ParquetError;
+    fn try_from(value: crate::format::PageEncodingStats) -> Result<Self> {
+        Ok(Self {
+            page_type: PageType::try_from(value.page_type)?,
+            encoding: Encoding::try_from(value.encoding)?,
+            count: value.count,
+        })
+    }
+}
+
+impl From<PageEncodingStats> for crate::format::PageEncodingStats {
+    fn from(value: PageEncodingStats) -> Self {
+        Self {
+            page_type: crate::format::PageType::from(value.page_type),
+            encoding: crate::format::Encoding::from(value.encoding),
+            count: value.count,
+        }
+    }
 }
 
 /// Converts Thrift definition into `PageEncodingStats`.

@@ -350,6 +350,11 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
         }
     }
 
+    fn skip_binary(&mut self) -> Result<()> {
+        let len = self.read_vlq()? as usize;
+        self.skip_bytes(len)
+    }
+
     /// Skip a field with type `field_type` recursively until the default
     /// maximum skip depth is reached.
     pub(crate) fn skip(&mut self, field_type: FieldType) -> Result<()> {
@@ -381,10 +386,7 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
             FieldType::I32 => self.skip_vlq().map(|_| ()),
             FieldType::I64 => self.skip_vlq().map(|_| ()),
             FieldType::Double => self.skip_bytes(8).map(|_| ()),
-            FieldType::Binary => {
-                let len = self.read_vlq()? as usize;
-                self.skip_bytes(len)
-            }
+            FieldType::Binary => self.skip_binary().map(|_| ()),
             FieldType::Struct => {
                 self.read_struct_begin()?;
                 loop {
@@ -412,4 +414,74 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
 
 fn eof_error() -> ParquetError {
     eof_err!("Unexpected EOF")
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for bool {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_bool()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i8 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_i8()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i16 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_i16()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i32 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_i32()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i64 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_i64()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for f64 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_double()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for &'a str {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_string()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for String {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        Ok(prot.read_string()?.to_owned())
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for &'a [u8] {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_bytes()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Vec<u8> {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        Ok(prot.read_bytes()?.to_vec())
+    }
 }

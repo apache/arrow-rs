@@ -17,15 +17,28 @@
 
 //! Column chunk encryption metadata
 
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use crate::format::{
     ColumnCryptoMetaData as TColumnCryptoMetaData,
     EncryptionWithColumnKey as TEncryptionWithColumnKey,
     EncryptionWithFooterKey as TEncryptionWithFooterKey,
 };
+use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::thrift_struct;
+
+thrift_struct!(
+/// Encryption metadata for a column chunk encrypted with a column-specific key
+pub struct EncryptionWithColumnKey {
+  /// Path to the column in the Parquet schema
+  1: required list<string> path_in_schema
+
+  /// Path to the column in the Parquet schema
+  2: optional binary key_metadata
+}
+);
 
 /// ColumnCryptoMetadata for a column chunk
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ColumnCryptoMetaData {
     /// The column is encrypted with the footer key
     EncryptionWithFooterKey,
@@ -33,13 +46,37 @@ pub enum ColumnCryptoMetaData {
     EncryptionWithColumnKey(EncryptionWithColumnKey),
 }
 
-/// Encryption metadata for a column chunk encrypted with a column-specific key
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EncryptionWithColumnKey {
-    /// Path to the column in the Parquet schema
-    pub path_in_schema: Vec<String>,
-    /// Metadata required to retrieve the column encryption key
-    pub key_metadata: Option<Vec<u8>>,
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnCryptoMetaData {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_struct_begin()?;
+
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type == FieldType::Stop {
+            return Err(general_err!("received empty union from remote LogicalType"));
+        }
+        let ret = match field_ident.id {
+            1 => {
+                prot.skip_empty_struct()?;
+                Self::EncryptionWithFooterKey
+            }
+            2 => Self::EncryptionWithColumnKey(EncryptionWithColumnKey::try_from(&mut *prot)?),
+            _ => {
+                return Err(general_err!(
+                    "Unexpected EncryptionWithColumnKey {}",
+                    field_ident.id
+                ));
+            }
+        };
+        let field_ident = prot.read_field_begin()?;
+        if field_ident.field_type != FieldType::Stop {
+            return Err(general_err!(
+                "Received multiple fields for union from remote LogicalType"
+            ));
+        }
+        prot.read_struct_end()?;
+        Ok(ret)
+    }
 }
 
 /// Converts Thrift definition into `ColumnCryptoMetadata`.

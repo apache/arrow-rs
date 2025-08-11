@@ -167,21 +167,24 @@ macro_rules! thrift_union_all_empty {
 }
 
 /// macro to generate rust structs from a thrift struct definition
+/// unlike enum and union, this macro will allow for visibility specifier
+/// can also take optional lifetime for struct and elements within it (need e.g.)
 #[macro_export]
-macro_rules! thrift_private_struct {
-    ($(#[$($def_attrs:tt)*])* struct $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
+macro_rules! thrift_struct {
+    ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, PartialEq)]
         #[allow(non_camel_case_types)]
         #[allow(non_snake_case)]
-        struct $identifier {
-            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* pub $field_name: $crate::__thrift_required_or_optional!($required_or_optional $crate::__thrift_field_type!($field_type $($element_type)?))),*
+        #[allow(missing_docs)]
+        $vis struct $identifier $(<$lt>)? {
+            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $vis $field_name: $crate::__thrift_required_or_optional!($required_or_optional $crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?))),*
         }
 
-        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
+        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier $(<$lt>)? {
             type Error = ParquetError;
             fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-                $(let mut $field_name: Option<$field_type> = None;)*
+                $(let mut $field_name: Option<$crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?)> = None;)*
                 prot.read_struct_begin()?;
                 loop {
                     let field_ident = prot.read_field_begin()?;
@@ -190,7 +193,7 @@ macro_rules! thrift_private_struct {
                     }
                     match field_ident.id {
                         $($field_id => {
-                            let val = $crate::__thrift_read_field!(prot $field_type);
+                            let val = $crate::__thrift_read_field!(prot, $field_type $($field_lt)? $($element_type)?);
                             $field_name = Some(val);
                         })*
                         _ => {
@@ -198,12 +201,37 @@ macro_rules! thrift_private_struct {
                         }
                     };
                 }
+                prot.read_struct_end()?;
+                $($crate::__thrift_result_required_or_optional!($required_or_optional $field_name);)*
                 Ok(Self {
-                    $($field_name: $crate::__thrift_result_required_or_optional!($required_or_optional $field_name)),*
+                    $($field_name),*
                 })
             }
         }
     }
+}
+
+/// macro to simplify reading lists from a thrift input stream
+#[macro_export]
+macro_rules! thrift_read_list {
+    ($prot:expr, $identifier:ident) => {{
+        let list_ident = $prot.read_list_begin()?;
+        let mut val: Vec<$crate::__thrift_field_type!($identifier)> =
+            Vec::with_capacity(list_ident.size as usize);
+        for _ in 0..list_ident.size {
+            let pes = $crate::__thrift_read_field!($prot, $identifier);
+            val.push(pes);
+        }
+        val
+    }};
+}
+
+/// macro to use when decoding struct fields
+#[macro_export]
+macro_rules! thrift_read_field {
+    ($field_name:ident, $prot:tt, $field_type:ident) => {
+        $field_name = Some($crate::__thrift_read_field!($prot, $field_type));
+    };
 }
 
 #[doc(hidden)]
@@ -217,35 +245,43 @@ macro_rules! __thrift_required_or_optional {
 #[macro_export]
 macro_rules! __thrift_result_required_or_optional {
     (required $field_name:ident) => {
-        $field_name.expect(&format!(
-            "Required field {} not present",
-            stringify!($field_name)
-        ))
+        let $field_name = $field_name.expect(concat!(
+            "Required field ",
+            stringify!($field_name),
+            " is missing",
+        ));
     };
-    (optional $field_name:ident) => {
-        $field_name
-    };
+    (optional $field_name:ident) => {};
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_read_field {
-    ($prot:tt bool) => {
-        $prot.read_bool()?
+    ($prot:tt, list $lt:lifetime $element_type:ident) => {
+        $crate::thrift_read_list!($prot, $element_type)
     };
-    ($prot:tt i8) => {
-        $prot.read_i8()?
+    ($prot:tt, list $element_type:ident) => {
+        $crate::thrift_read_list!($prot, $element_type)
     };
-    ($prot:tt i32) => {
-        $prot.read_i32()?
+    ($prot:tt, string $lt:lifetime) => {
+        <&$lt str>::try_from(&mut *$prot)?
     };
-    ($prot:tt i64) => {
-        $prot.read_i64()?
+    ($prot:tt, binary $lt:lifetime) => {
+        <&$lt [u8]>::try_from(&mut *$prot)?
     };
-    ($prot:tt string) => {
-        $prot.read_string()?
+    ($prot:tt, $field_type:ident $lt:lifetime) => {
+        $field_type::try_from(&mut *$prot)?
     };
-    ($prot:tt $field_type:ident) => {
+    ($prot:tt, string) => {
+        String::try_from(&mut *$prot)?
+    };
+    ($prot:tt, binary) => {
+        <Vec<u8>>::try_from(&mut *$prot)?
+    };
+    ($prot:tt, double) => {
+        f64::try_from(&mut *$prot)?
+    };
+    ($prot:tt, $field_type:ident) => {
         $field_type::try_from(&mut *$prot)?
     };
 }
@@ -253,12 +289,14 @@ macro_rules! __thrift_read_field {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_field_type {
+    (binary $lt:lifetime) => { &$lt [u8] };
+    (string $lt:lifetime) => { &$lt str };
+    ($field_type:ident $lt:lifetime) => { $field_type<$lt> };
+    (list $lt:lifetime $element_type:ident) => { Vec< $crate::__thrift_field_type!($element_type $lt) > };
+    (list string) => { Vec<String> };
     (list $element_type:ident) => { Vec< $crate::__thrift_field_type!($element_type) > };
-    (set $element_type:ident) => { Vec< $crate::__thrift_field_type!($element_type) > };
     (binary) => { Vec<u8> };
     (string) => { String };
+    (double) => { f64 };
     ($field_type:ty) => { $field_type };
-    (Box $element_type:ident) => { std::boxed::Box< $crate::field_type!($element_type) > };
-    (Rc $element_type:ident) => { std::rc::Rc< $crate::__thrift_field_type!($element_type) > };
-    (Arc $element_type:ident) => { std::sync::Arc< $crate::__thrift_field_type!($element_type) > };
 }

@@ -95,7 +95,6 @@ mod memory;
 pub(crate) mod reader;
 mod writer;
 
-use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::FileDecryptor,
@@ -123,6 +122,10 @@ use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use crate::{
     basic::BoundaryOrder,
     errors::{ParquetError, Result},
+};
+use crate::{
+    basic::{ColumnOrder, Compression, Encoding, Type},
+    parquet_thrift::{FieldType, ThriftCompactInputProtocol},
 };
 use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
@@ -445,6 +448,39 @@ impl KeyValue {
     }
 }
 
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for KeyValue {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let mut key: Option<&str> = None;
+        let mut value: Option<&str> = None;
+        prot.read_struct_begin()?;
+        loop {
+            let field_ident = prot.read_field_begin()?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = prot.read_string()?;
+                    key = Some(val);
+                }
+                2 => {
+                    let val = prot.read_string()?;
+                    value = Some(val);
+                }
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            }
+        }
+        prot.read_struct_end()?;
+        Ok(Self {
+            key: key.expect("Required field key not present").to_owned(),
+            value: value.map(|v| v.to_owned()),
+        })
+    }
+}
+
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
 
@@ -556,6 +592,45 @@ pub struct SortingColumn {
     /// If true, nulls will come before non-null values, otherwise,
     /// nulls go at the end.
     pub nulls_first: bool,
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for SortingColumn {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let mut column_idx: Option<i32> = None;
+        let mut descending: Option<bool> = None;
+        let mut nulls_first: Option<bool> = None;
+        prot.read_struct_begin()?;
+        loop {
+            let field_ident = prot.read_field_begin()?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = prot.read_i32()?;
+                    column_idx = Some(val);
+                }
+                2 => {
+                    let val = prot.read_bool()?;
+                    descending = Some(val);
+                }
+                3 => {
+                    let val = prot.read_bool()?;
+                    nulls_first = Some(val);
+                }
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+        }
+        prot.read_struct_end()?;
+        Ok(Self {
+            column_idx: column_idx.expect("Required field column_idx not present"),
+            descending: descending.expect("Required field descending not present"),
+            nulls_first: nulls_first.expect("Required field nulls_first not present"),
+        })
+    }
 }
 
 impl From<&crate::format::SortingColumn> for SortingColumn {
