@@ -134,6 +134,11 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Float64 => {
             primitive_conversion!(Float64Type, input, builder);
         }
+        DataType::Null => {
+            for _ in 0..input.len() {
+                builder.append_null();
+            }
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -152,8 +157,8 @@ mod tests {
     use super::*;
     use arrow::array::{
         ArrayRef, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, NullArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use parquet_variant::{Variant, VariantDecimal16};
     use std::sync::Arc;
@@ -439,6 +444,11 @@ mod tests {
                 Some(Variant::Double(f64::MAX)),
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_null() {
+        run_test(Arc::new(NullArray::new(2)), vec![None, None])
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
