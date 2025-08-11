@@ -181,7 +181,7 @@ impl Decoder {
                         self.awaiting_body = false;
                         continue;
                     }
-                    Err(ref e) if is_incomplete_data(e) => return Ok(total_consumed),
+                    Err(ref e) if is_incomplete_data(e) => break,
                     err => return err,
                 };
             }
