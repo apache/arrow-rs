@@ -98,7 +98,7 @@ impl Row {
     ///     println!("column index: {}, column name: {}, column value: {}", idx, name, field);
     /// }
     /// ```
-    pub fn get_column_iter(&self) -> RowColumnIter {
+    pub fn get_column_iter(&self) -> RowColumnIter<'_> {
         RowColumnIter {
             fields: &self.fields,
             curr: 0,

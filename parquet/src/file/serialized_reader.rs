@@ -263,7 +263,7 @@ impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
         )?))
     }
 
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter> {
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>> {
         RowIter::from_file(projection, self)
     }
 }
@@ -334,7 +334,7 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
         self.bloom_filters[i].as_ref()
     }
 
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter> {
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>> {
         RowIter::from_row_group(projection, self)
     }
 }

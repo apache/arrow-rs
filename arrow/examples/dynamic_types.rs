@@ -63,7 +63,7 @@ fn main() -> Result<()> {
     // build a record batch
     let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id), Arc::new(nested)])?;
 
-    print_batches(&[batch.clone()]).unwrap();
+    print_batches(std::slice::from_ref(&batch)).unwrap();
 
     process(&batch);
     Ok(())

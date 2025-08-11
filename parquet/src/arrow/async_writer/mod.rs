@@ -297,7 +297,6 @@ mod tests {
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
     use std::sync::Arc;
-    use tokio::pin;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 
@@ -364,49 +363,6 @@ mod tests {
         async_writer.close().await.unwrap();
 
         assert_eq!(sync_buffer, async_buffer);
-    }
-
-    struct TestAsyncSink {
-        sink: Vec<u8>,
-        min_accept_bytes: usize,
-        expect_total_bytes: usize,
-    }
-
-    impl AsyncWrite for TestAsyncSink {
-        fn poll_write(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-            buf: &[u8],
-        ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
-            let written_bytes = self.sink.len();
-            if written_bytes + buf.len() < self.expect_total_bytes {
-                assert!(buf.len() >= self.min_accept_bytes);
-            } else {
-                assert_eq!(written_bytes + buf.len(), self.expect_total_bytes);
-            }
-
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_write(cx, buf)
-        }
-
-        fn poll_flush(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_flush(cx)
-        }
-
-        fn poll_shutdown(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_shutdown(cx)
-        }
     }
 
     #[tokio::test]

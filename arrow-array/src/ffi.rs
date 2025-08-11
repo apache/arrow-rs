@@ -525,7 +525,7 @@ impl ImportedArrowArray<'_> {
         unsafe { create_buffer(self.owner.clone(), self.array, 0, buffer_len) }
     }
 
-    fn dictionary(&self) -> Result<Option<ImportedArrowArray>> {
+    fn dictionary(&self) -> Result<Option<ImportedArrowArray<'_>>> {
         match (self.array.dictionary(), &self.data_type) {
             (Some(array), DataType::Dictionary(_, value_type)) => Ok(Some(ImportedArrowArray {
                 array,

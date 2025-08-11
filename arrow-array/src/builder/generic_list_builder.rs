@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, OffsetBuffer};
@@ -86,7 +86,7 @@ use std::sync::Arc;
 /// [`LargeListArray`]: crate::array::LargeListArray
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
-    offsets_builder: BufferBuilder<OffsetSize>,
+    offsets_builder: Vec<OffsetSize>,
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     field: Option<FieldRef>,
@@ -108,8 +108,8 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize
     /// Creates a new [`GenericListBuilder`] from a given values array builder
     /// `capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(values_builder: T, capacity: usize) -> Self {
-        let mut offsets_builder = BufferBuilder::<OffsetSize>::new(capacity + 1);
-        offsets_builder.append(OffsetSize::zero());
+        let mut offsets_builder = Vec::with_capacity(capacity + 1);
+        offsets_builder.push(OffsetSize::zero());
         Self {
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(capacity),
@@ -192,7 +192,7 @@ where
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.offsets_builder.append(self.next_offset());
+        self.offsets_builder.push(self.next_offset());
         self.null_buffer_builder.append(is_valid);
     }
 
@@ -266,7 +266,7 @@ where
     /// See [`Self::append_value`] for an example use.
     #[inline]
     pub fn append_null(&mut self) {
-        self.offsets_builder.append(self.next_offset());
+        self.offsets_builder.push(self.next_offset());
         self.null_buffer_builder.append_null();
     }
 
@@ -274,7 +274,8 @@ where
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
         let next_offset = self.next_offset();
-        self.offsets_builder.append_n(n, next_offset);
+        self.offsets_builder
+            .extend(std::iter::repeat_n(next_offset, n));
         self.null_buffer_builder.append_n_nulls(n);
     }
 
@@ -298,10 +299,10 @@ where
         let values = self.values_builder.finish();
         let nulls = self.null_buffer_builder.finish();
 
-        let offsets = self.offsets_builder.finish();
+        let offsets = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
         // Safety: Safe by construction
         let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
-        self.offsets_builder.append(OffsetSize::zero());
+        self.offsets_builder.push(OffsetSize::zero());
 
         let field = match &self.field {
             Some(f) => f.clone(),
