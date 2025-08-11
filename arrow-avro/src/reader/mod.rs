@@ -274,10 +274,9 @@ impl Decoder {
     }
 
     fn apply_pending_schema_if_batch_empty(&mut self) {
-        if self.remaining_capacity != self.batch_size {
-            return;
+        if self.batch_is_empty() {
+            self.apply_pending_schema();
         }
-        self.apply_pending_schema();
     }
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
