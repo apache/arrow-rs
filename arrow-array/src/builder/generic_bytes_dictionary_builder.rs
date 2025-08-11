@@ -604,7 +604,7 @@ mod tests {
     use crate::array::Int8Array;
     use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type, Int8Type, UInt16Type, UInt8Type, Utf8Type};
-    use crate::{ArrowPrimitiveType, BinaryArray, StringArray, StringArrayType};
+    use crate::{ArrowPrimitiveType, BinaryArray, StringArray};
 
     fn test_bytes_dictionary_builder<T>(values: Vec<&T::Native>)
     where

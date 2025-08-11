@@ -487,18 +487,18 @@ fn test_large_dictionary_delta_performance() -> Result<(), ArrowError> {
     // Create a large initial dictionary
     let mut builder1 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
     for i in 0..1000 {
-        builder1.append_value(format!("value_{}", i));
+        builder1.append_value(format!("value_{i}"));
     }
     let dict1 = builder1.finish();
 
     // Create extended dictionary
     let mut builder2 = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
     for i in 0..1000 {
-        builder2.append_value(format!("value_{}", i));
+        builder2.append_value(format!("value_{i}"));
     }
     // Add just a few new values
     for i in 1000..1005 {
-        builder2.append_value(format!("value_{}", i));
+        builder2.append_value(format!("value_{i}"));
     }
     let dict2 = builder2.finish();
 
@@ -542,15 +542,13 @@ fn test_large_dictionary_delta_performance() -> Result<(), ArrowError> {
     let buffer_no_delta_size = buffer_no_delta.len();
 
     // Delta encoding should result in smaller output
-    println!("Delta buffer size: {}", buffer_size);
-    println!("Non-delta buffer size: {}", buffer_no_delta_size);
+    println!("Delta buffer size: {buffer_size}");
+    println!("Non-delta buffer size: {buffer_size}");
 
     // Delta encoding should result in significantly smaller output
     assert!(
         buffer_size < buffer_no_delta_size,
-        "Delta buffer ({}) should be smaller than non-delta buffer ({})",
-        buffer_size,
-        buffer_no_delta_size
+        "Delta buffer ({buffer_size}) should be smaller than non-delta buffer ({buffer_no_delta_size})"
     );
 
     // The delta should save approximately the size of the second dictionary minus the delta

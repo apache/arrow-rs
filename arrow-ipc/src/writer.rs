@@ -853,8 +853,8 @@ impl DictionaryTracker {
     ///
     /// * `Ok(Dictionary::New)` - If the dictionary was not previously written
     /// * `Ok(Dictionary::Replaced)` - If the dictionary was previously written
-    ///    with completely different data, or if the data is a delta of the existing,
-    ///    but with `dict_handling` set to `DictionaryHandling::Resend`
+    ///   with completely different data, or if the data is a delta of the existing,
+    ///   but with `dict_handling` set to `DictionaryHandling::Resend`
     /// * `Ok(Dictionary::Delta)` - If the dictionary was previously written, but
     ///   the new data is a delta of the old and the `dict_handling` is set to
     ///   `DictionaryHandling::Delta`

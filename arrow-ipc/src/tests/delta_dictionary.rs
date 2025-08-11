@@ -297,7 +297,7 @@ fn get_ipc_message_stream(buf: Vec<u8>) -> Vec<IpcMessage> {
         match reader.next_ipc_message() {
             Ok(Some(message)) => results.push(message),
             Ok(None) => break, // End of stream
-            Err(e) => panic!("Error reading IPC message: {:?}", e),
+            Err(e) => panic!("Error reading IPC message: {e:?}"),
         }
     }
 

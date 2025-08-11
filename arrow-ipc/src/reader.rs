@@ -702,10 +702,10 @@ fn read_dictionary_impl(
 ///
 /// # Errors
 /// - If `is_delta` is true and there is no existing dictionary for the given
-/// `dict_id`
+///   `dict_id`
 /// - If `is_delta` is true and the concatenation of the existing and new
-/// dictionary fails. This usually signals a type mismatch between the old and
-/// new values.
+///   dictionary fails. This usually signals a type mismatch between the old and
+///   new values.
 fn update_dictionaries(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
     is_delta: bool,
@@ -1613,8 +1613,7 @@ impl<R: Read> StreamReader<R> {
             }
             x => {
                 return Err(ArrowError::ParseError(format!(
-                    "Unsupported message header type in IPC stream: '{:?}'",
-                    x
+                    "Unsupported message header type in IPC stream: '{x:?}'"
                 )));
             }
         };
