@@ -53,6 +53,7 @@ mod compression;
 #[cfg(test)]
 mod tests;
 
+#[allow(mismatched_lifetime_syntaxes)]
 #[allow(clippy::redundant_closure)]
 #[allow(clippy::needless_lifetimes)]
 #[allow(clippy::extra_unused_lifetimes)]

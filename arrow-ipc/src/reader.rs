@@ -800,7 +800,7 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
 /// Parse an encapsulated message
 ///
 /// <https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format>
-fn parse_message(buf: &[u8]) -> Result<Message::Message, ArrowError> {
+fn parse_message(buf: &[u8]) -> Result<Message::Message<'_>, ArrowError> {
     let buf = match buf[..4] == CONTINUATION_MARKER {
         true => &buf[8..],
         false => &buf[4..],
@@ -1702,7 +1702,7 @@ impl<R: Read> MessageReader<R> {
     ///   read, or if the metadata length is invalid
     /// - `Ok(Some(_))` with the Message and buffer containiner the
     ///   body bytes otherwise.
-    fn maybe_next(&mut self) -> Result<Option<(Message::Message, MutableBuffer)>, ArrowError> {
+    fn maybe_next(&mut self) -> Result<Option<(Message::Message<'_>, MutableBuffer)>, ArrowError> {
         let meta_len = self.read_meta_len()?;
         let Some(meta_len) = meta_len else {
             return Ok(None);
