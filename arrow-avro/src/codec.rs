@@ -45,11 +45,11 @@ pub enum Nullability {
 pub(crate) enum ResolutionInfo {
     /// Indicates that the writer's type should be promoted to the reader's type.
     Promotion(Promotion),
-    /// Indicates that a default value should be used for a field.
+    /// Indicates that a default value should be used for a field. (Implemented in a Follow-up PR)
     DefaultValue(AvroLiteral),
-    /// Provides mapping information for resolving enums.
+    /// Provides mapping information for resolving enums. (Implemented in a Follow-up PR)
     EnumMapping(EnumMapping),
-    /// Provides resolution information for record fields.
+    /// Provides resolution information for record fields. (Implemented in a Follow-up PR)
     Record(ResolvedRecord),
 }
 
@@ -260,9 +260,16 @@ impl AvroField {
         use_utf8view: bool,
         strict_mode: bool,
     ) -> Result<Self, ArrowError> {
-        Err(ArrowError::NotYetImplemented(
-            "Resolving schema from a writer and reader schema is not yet implemented".to_string(),
-        ))
+        let top_name = match reader_schema {
+            Schema::Complex(ComplexType::Record(r)) => r.name.to_string(),
+            _ => "root".to_string(),
+        };
+        let mut resolver = Maker::new(use_utf8view, strict_mode);
+        let data_type = resolver.make_data_type(writer_schema, Some(reader_schema), None)?;
+        Ok(Self {
+            name: top_name,
+            data_type,
+        })
     }
 }
 
@@ -811,8 +818,8 @@ impl<'a> Maker<'a> {
             (
                 Schema::TypeName(TypeName::Primitive(writer_primitive)),
                 Schema::TypeName(TypeName::Primitive(reader_primitive)),
-            )
-            | (
+            ) => self.resolve_primitives(*writer_primitive, *reader_primitive, reader_schema),
+            (
                 Schema::Type(Type {
                     r#type: TypeName::Primitive(writer_primitive),
                     ..
@@ -823,9 +830,26 @@ impl<'a> Maker<'a> {
                 }),
             ) => self.resolve_primitives(*writer_primitive, *reader_primitive, reader_schema),
             (
+                Schema::TypeName(TypeName::Primitive(writer_primitive)),
+                Schema::Type(Type {
+                    r#type: TypeName::Primitive(reader_primitive),
+                    ..
+                }),
+            ) => self.resolve_primitives(*writer_primitive, *reader_primitive, reader_schema),
+            (
+                Schema::Type(Type {
+                    r#type: TypeName::Primitive(writer_primitive),
+                    ..
+                }),
+                Schema::TypeName(TypeName::Primitive(reader_primitive)),
+            ) => self.resolve_primitives(*writer_primitive, *reader_primitive, reader_schema),
+            (
                 Schema::Complex(ComplexType::Record(writer_record)),
                 Schema::Complex(ComplexType::Record(reader_record)),
             ) => self.resolve_records(writer_record, reader_record, namespace),
+            (Schema::Union(writer_variants), Schema::Union(reader_variants)) => {
+                self.resolve_nullable_union(writer_variants, reader_variants, namespace)
+            }
             _ => Err(ArrowError::NotYetImplemented(
                 "Other resolutions not yet implemented".to_string(),
             )),
@@ -861,12 +885,55 @@ impl<'a> Maker<'a> {
         Ok(datatype)
     }
 
+    fn resolve_nullable_union(
+        &mut self,
+        writer_variants: &[Schema<'a>],
+        reader_variants: &[Schema<'a>],
+        namespace: Option<&'a str>,
+    ) -> Result<AvroDataType, ArrowError> {
+        // Only support unions with exactly two branches, one of which is `null` on both sides
+        if writer_variants.len() != 2 || reader_variants.len() != 2 {
+            return Err(ArrowError::NotYetImplemented(
+                "Only 2-branch unions are supported for schema resolution".to_string(),
+            ));
+        }
+        let is_null = |s: &Schema<'a>| {
+            matches!(
+                s,
+                Schema::TypeName(TypeName::Primitive(PrimitiveType::Null))
+            )
+        };
+        let w_null_pos = writer_variants.iter().position(is_null);
+        let r_null_pos = reader_variants.iter().position(is_null);
+        match (w_null_pos, r_null_pos) {
+            (Some(wp), Some(rp)) => {
+                // Extract a non-null branch on each side
+                let w_nonnull = &writer_variants[1 - wp];
+                let r_nonnull = &reader_variants[1 - rp];
+                // Resolve the non-null branch
+                let mut dt = self.make_data_type(w_nonnull, Some(r_nonnull), namespace)?;
+                // Adopt reader union null ordering
+                dt.nullability = Some(match rp {
+                    0 => Nullability::NullFirst,
+                    1 => Nullability::NullSecond,
+                    _ => unreachable!(),
+                });
+                Ok(dt)
+            }
+            _ => Err(ArrowError::NotYetImplemented(
+                "Union resolution requires both writer and reader to be nullable unions"
+                    .to_string(),
+            )),
+        }
+    }
+
     fn resolve_records(
         &mut self,
         writer_record: &Record<'a>,
         reader_record: &Record<'a>,
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
+        // Names must match or be aliased
         let names_match = writer_record.name == reader_record.name
             || reader_record.aliases.contains(&writer_record.name)
             || writer_record.aliases.contains(&reader_record.name);
@@ -876,28 +943,52 @@ impl<'a> Maker<'a> {
                 writer_record.name, reader_record.name
             )));
         }
+        let writer_ns = writer_record.namespace.or(namespace);
+        let reader_ns = reader_record.namespace.or(namespace);
+        // Map writer field name -> index
         let mut writer_index_map =
             HashMap::<&str, usize>::with_capacity(writer_record.fields.len());
         for (idx, write_field) in writer_record.fields.iter().enumerate() {
             writer_index_map.insert(write_field.name, idx);
         }
-        let mut reader_fields = Vec::with_capacity(reader_record.fields.len());
-        let mut writer_schema_to_reader_schema = vec![None; writer_record.fields.len()];
+        // Prepare outputs
+        let mut reader_fields: Vec<AvroField> = Vec::with_capacity(reader_record.fields.len());
+        let mut writer_to_reader: Vec<Option<usize>> = vec![None; writer_record.fields.len()];
+        //let mut skip_fields: Vec<Option<AvroDataType>> = vec![None; writer_record.fields.len()];
+        //let mut default_fields: Vec<usize> = Vec::new();
+        // Build reader fields and mapping
+        for (reader_idx, r_field) in reader_record.fields.iter().enumerate() {
+            if let Some(&writer_idx) = writer_index_map.get(r_field.name) {
+                // Field exists in writer: resolve types (including promotions and union-of-null)
+                let w_schema = &writer_record.fields[writer_idx].r#type;
+                let resolved_dt =
+                    self.make_data_type(w_schema, Some(&r_field.r#type), reader_ns)?;
+                reader_fields.push(AvroField {
+                    name: r_field.name.to_string(),
+                    data_type: resolved_dt,
+                });
+                writer_to_reader[writer_idx] = Some(reader_idx);
+            } else {
+                return Err(ArrowError::NotYetImplemented(
+                    "New fields from reader with default values not yet implemented".to_string(),
+                ));
+            }
+        }
+        // Implement writer-only fields to skip in Follow-up PR here
+        // Build resolved record AvroDataType
         let resolved = AvroDataType::new_with_resolution(
             Codec::Struct(Arc::from(reader_fields)),
-            HashMap::new(),
+            reader_record.attributes.field_metadata(),
             None,
             Some(ResolutionInfo::Record(ResolvedRecord {
-                writer_to_reader: Arc::from(writer_schema_to_reader_schema),
-                default_fields: Arc::from([]),
-                skip_fields: Arc::from([None]),
+                writer_to_reader: Arc::from(writer_to_reader),
+                default_fields: Arc::default(),
+                skip_fields: Arc::default(),
             })),
         );
-        self.resolver.register(
-            writer_record.name,
-            Some(reader_record.name),
-            resolved.clone(),
-        );
+        // Register a resolved record by reader name+namespace for potential named type refs
+        self.resolver
+            .register(reader_record.name, reader_ns, resolved.clone());
         Ok(resolved)
     }
 }
