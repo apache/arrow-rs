@@ -276,6 +276,13 @@ impl ProjectionMask {
         Self { mask: None }
     }
 
+    /// Create a [`ProjectionMask`] which selects no columns
+    pub fn none(len: usize) -> Self {
+        Self {
+            mask: Some(vec![false; len]),
+        }
+    }
+
     /// Create a [`ProjectionMask`] which selects only the specified leaf columns
     ///
     /// Note: repeated or out of order indices will not impact the final mask

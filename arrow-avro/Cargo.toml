@@ -55,8 +55,10 @@ zstd = { version = "0.13", default-features = false, optional = true }
 bzip2 = { version = "0.6.0", optional = true }
 xz = { version = "0.1", default-features = false, optional = true }
 crc = { version = "3.0", optional = true }
-uuid = "1.17"
 strum_macros = "0.27"
+uuid = "1.17"
+indexmap = "2.10"
+
 
 [dev-dependencies]
 arrow-data = { workspace = true }
