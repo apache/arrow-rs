@@ -26,6 +26,7 @@ use crate::basic::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::thrift_struct;
 
 // ----------------------------------------------------------------------
 // Parquet Type definitions
@@ -1426,101 +1427,22 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<crate::format::SchemaEleme
     }
 }
 
-// intermediate struct that only lives long enough to create `TypePtr` schema
-#[derive(Debug)]
+// temporary struct that lives only long enough to create `TypePtr` schema
+thrift_struct!(
 struct SchemaElement<'a> {
-    type_: Option<crate::basic::Type>,
-    type_length: Option<i32>,
-    repetition_type: Option<Repetition>,
-    name: &'a str,
-    num_children: Option<i32>,
-    converted_type: Option<ConvertedType>,
-    scale: Option<i32>,
-    precision: Option<i32>,
-    field_id: Option<i32>,
-    logical_type: Option<LogicalType>,
+  /** Data type for this field. Not set if the current element is a non-leaf node */
+  1: optional PhysicalType type_;
+  2: optional i32 type_length;
+  3: optional Repetition repetition_type;
+  4: required string<'a> name;
+  5: optional i32 num_children;
+  6: optional ConvertedType converted_type;
+  7: optional i32 scale
+  8: optional i32 precision
+  9: optional i32 field_id;
+  10: optional LogicalType logical_type
 }
-
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for SchemaElement<'a> {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        let mut type_: Option<crate::basic::Type> = None;
-        let mut type_length: Option<i32> = None;
-        let mut repetition_type: Option<Repetition> = None;
-        let mut name: Option<&'a str> = None;
-        let mut num_children: Option<i32> = None;
-        let mut converted_type: Option<ConvertedType> = None;
-        let mut scale: Option<i32> = None;
-        let mut precision: Option<i32> = None;
-        let mut field_id: Option<i32> = None;
-        let mut logical_type: Option<LogicalType> = None;
-        prot.read_struct_begin()?;
-        loop {
-            let field_ident = prot.read_field_begin()?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = crate::basic::Type::try_from(&mut *prot)?;
-                    type_ = Some(val);
-                }
-                2 => {
-                    let val = prot.read_i32()?;
-                    type_length = Some(val);
-                }
-                3 => {
-                    let val = Repetition::try_from(&mut *prot)?;
-                    repetition_type = Some(val);
-                }
-                4 => {
-                    let val = prot.read_string()?;
-                    name = Some(val);
-                }
-                5 => {
-                    let val = prot.read_i32()?;
-                    num_children = Some(val);
-                }
-                6 => {
-                    let val = ConvertedType::try_from(&mut *prot)?;
-                    converted_type = Some(val);
-                }
-                7 => {
-                    let val = prot.read_i32()?;
-                    scale = Some(val);
-                }
-                8 => {
-                    let val = prot.read_i32()?;
-                    precision = Some(val);
-                }
-                9 => {
-                    let val = prot.read_i32()?;
-                    field_id = Some(val);
-                }
-                10 => {
-                    let val = LogicalType::try_from(&mut *prot)?;
-                    logical_type = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            };
-        }
-        prot.read_struct_end()?;
-        Ok(Self {
-            type_,
-            type_length,
-            repetition_type,
-            name: name.expect("Required field name not present"),
-            num_children,
-            converted_type,
-            scale,
-            precision,
-            field_id,
-            logical_type,
-        })
-    }
-}
+);
 
 fn next_schema_element<'a>(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<SchemaElement<'a>> {
     SchemaElement::try_from(prot)
