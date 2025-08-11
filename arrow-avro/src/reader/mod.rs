@@ -129,13 +129,12 @@ fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
     })
 }
 
+// NOTE: The Current ` is_incomplete_data ` below is temporary and will be improved prior to public release
 fn is_incomplete_data(err: &ArrowError) -> bool {
     matches!(
         err,
         ArrowError::ParseError(msg)
             if msg.contains("Unexpected EOF")
-            || msg.contains("bad varint")
-            || msg.contains("offset overflow")
     )
 }
 
@@ -279,16 +278,22 @@ impl Decoder {
         }
     }
 
-    /// Produce a `RecordBatch` if at least one row is fully decoded, returning
-    /// `Ok(None)` if no new rows are available.
-    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        if self.remaining_capacity == self.batch_size {
+    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        if self.batch_is_empty() {
             return Ok(None);
         }
         let batch = self.active_decoder.flush()?;
         self.remaining_capacity = self.batch_size;
-        self.apply_pending_schema();
         Ok(Some(batch))
+    }
+
+    /// Produce a `RecordBatch` if at least one row is fully decoded, returning
+    /// `Ok(None)` if no new rows are available.
+    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        // We must flush the active decoder before switching to the pending one.
+        let batch = self.flush_and_reset();
+        self.apply_pending_schema();
+        batch
     }
 
     /// Returns the number of rows that can be added to this decoder before it is full.
@@ -299,6 +304,11 @@ impl Decoder {
     /// Returns true if the decoder has reached its capacity for the current batch.
     pub fn batch_is_full(&self) -> bool {
         self.remaining_capacity == 0
+    }
+
+    /// Returns true if the decoder has not decoded any batches yet.
+    pub fn batch_is_empty(&self) -> bool {
+        self.remaining_capacity == self.batch_size
     }
 
     // Decode either the block count or remaining capacity from `data` (an OCF block payload).
@@ -318,12 +328,7 @@ impl Decoder {
     // Produce a `RecordBatch` if at least one row is fully decoded, returning
     // `Ok(None)` if no new rows are available.
     fn flush_block(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        if self.remaining_capacity == self.batch_size {
-            return Ok(None);
-        }
-        let batch = self.active_decoder.flush()?;
-        self.remaining_capacity = self.batch_size;
-        Ok(Some(batch))
+        self.flush_and_reset()
     }
 }
 
