@@ -199,38 +199,38 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let meta_data = get_footer_bytes(data.clone());
-    c.bench_function("parquet metadata", |b| {
+    c.bench_function("decode parquet metadata", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata(&meta_data).unwrap();
         })
     });
 
-    c.bench_function("decode file metadata", |b| {
+    c.bench_function("decode thrift file metadata", |b| {
         b.iter(|| {
             parquet::thrift::bench_file_metadata(&meta_data);
         })
     });
 
-    c.bench_function("decode new", |b| {
+    c.bench_function("decode parquet metadata new", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_file_metadata(&meta_data).unwrap();
         })
     });
 
     let buf: Bytes = black_box(encoded_meta()).into();
-    c.bench_function("parquet metadata (wide)", |b| {
+    c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata(&buf).unwrap();
         })
     });
 
-    c.bench_function("decode file metadata (wide)", |b| {
+    c.bench_function("decode thrift file metadata (wide)", |b| {
         b.iter(|| {
             parquet::thrift::bench_file_metadata(&buf);
         })
     });
 
-    c.bench_function("decode new (wide)", |b| {
+    c.bench_function("decode parquet metadata new (wide)", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_file_metadata(&buf).unwrap();
         })
