@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::{AvroDataType, Codec, Nullability, Promotion, ResolutionInfo};
+use crate::codec::{AvroDataType, Codec, Nullability};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
@@ -154,14 +154,6 @@ enum Decoder {
     TimeMicros(Vec<i64>),
     TimestampMillis(bool, Vec<i64>),
     TimestampMicros(bool, Vec<i64>),
-    Int32ToInt64(Vec<i64>),
-    Int32ToFloat32(Vec<f32>),
-    Int32ToFloat64(Vec<f64>),
-    Int64ToFloat32(Vec<f32>),
-    Int64ToFloat64(Vec<f64>),
-    Float32ToFloat64(Vec<f64>),
-    BytesToString(OffsetBufferBuilder<i32>, Vec<u8>),
-    StringToBytes(OffsetBufferBuilder<i32>, Vec<u8>),
     Binary(OffsetBufferBuilder<i32>, Vec<u8>),
     /// String data encoded as UTF-8 bytes, mapped to Arrow's StringArray
     String(OffsetBufferBuilder<i32>, Vec<u8>),
@@ -187,68 +179,36 @@ enum Decoder {
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        // Extract just the Promotion (if any) to simplify pattern matching
-        let promotion = match data_type.resolution.as_ref() {
-            Some(ResolutionInfo::Promotion(p)) => Some(p),
-            _ => None,
-        };
-        let decoder = match (data_type.codec(), promotion) {
-            (Codec::Int64, Some(Promotion::IntToLong)) => {
-                Self::Int32ToInt64(Vec::with_capacity(DEFAULT_CAPACITY))
-            }
-            (Codec::Float32, Some(Promotion::IntToFloat)) => {
-                Self::Int32ToFloat32(Vec::with_capacity(DEFAULT_CAPACITY))
-            }
-            (Codec::Float64, Some(Promotion::IntToDouble)) => {
-                Self::Int32ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
-            }
-            (Codec::Float32, Some(Promotion::LongToFloat)) => {
-                Self::Int64ToFloat32(Vec::with_capacity(DEFAULT_CAPACITY))
-            }
-            (Codec::Float64, Some(Promotion::LongToDouble)) => {
-                Self::Int64ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
-            }
-            (Codec::Float64, Some(Promotion::FloatToDouble)) => {
-                Self::Float32ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
-            }
-            (Codec::Utf8, Some(Promotion::BytesToString))
-            | (Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
+        let decoder = match data_type.codec() {
+            Codec::Null => Self::Null(0),
+            Codec::Boolean => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
+            Codec::Int32 => Self::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Int64 => Self::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Float32 => Self::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Float64 => Self::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Binary => Self::Binary(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            (Codec::Binary, Some(Promotion::StringToBytes)) => Self::StringToBytes(
+            Codec::Utf8 => Self::String(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            (Codec::Null, _) => Self::Null(0),
-            (Codec::Boolean, _) => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
-            (Codec::Int32, _) => Self::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::Int64, _) => Self::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::Float32, _) => Self::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::Float64, _) => Self::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::Binary, _) => Self::Binary(
+            Codec::Utf8View => Self::StringView(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            (Codec::Utf8, _) => Self::String(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
-            (Codec::Utf8View, _) => Self::StringView(
-                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
-                Vec::with_capacity(DEFAULT_CAPACITY),
-            ),
-            (Codec::Date32, _) => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::TimeMillis, _) => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::TimeMicros, _) => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::TimestampMillis(is_utc), _) => {
+            Codec::Date32 => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimeMillis => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimeMicros => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::TimestampMillis(is_utc) => {
                 Self::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::TimestampMicros(is_utc), _) => {
+            Codec::TimestampMicros(is_utc) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
-            (Codec::Decimal(precision, scale, size), _) => {
+            Codec::Fixed(sz) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Decimal(precision, scale, size) => {
                 let p = *precision;
                 let s = *scale;
                 let sz = *size;
@@ -287,8 +247,8 @@ impl Decoder {
                     }
                 }
             }
-            (Codec::Interval, _) => Self::Duration(IntervalMonthDayNanoBuilder::new()),
-            (Codec::List(item), _) => {
+            Codec::Interval => Self::Duration(IntervalMonthDayNanoBuilder::new()),
+            Codec::List(item) => {
                 let decoder = Self::try_new(item)?;
                 Self::Array(
                     Arc::new(item.field_with_name("item")),
@@ -296,10 +256,10 @@ impl Decoder {
                     Box::new(decoder),
                 )
             }
-            (Codec::Enum(symbols), _) => {
+            Codec::Enum(symbols) => {
                 Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone())
             }
-            (Codec::Struct(fields), _) => {
+            Codec::Struct(fields) => {
                 let mut arrow_fields = Vec::with_capacity(fields.len());
                 let mut encodings = Vec::with_capacity(fields.len());
                 for avro_field in fields.iter() {
@@ -309,7 +269,7 @@ impl Decoder {
                 }
                 Self::Record(arrow_fields.into(), encodings)
             }
-            (Codec::Map(child), _) => {
+            Codec::Map(child) => {
                 let val_field = child.field_with_name("value").with_nullable(true);
                 let map_field = Arc::new(ArrowField::new(
                     "entries",
@@ -328,7 +288,7 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
-            (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
+            Codec::Uuid => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
@@ -347,20 +307,12 @@ impl Decoder {
             Self::Boolean(b) => b.append(false),
             Self::Int32(v) | Self::Date32(v) | Self::TimeMillis(v) => v.push(0),
             Self::Int64(v)
-            | Self::Int32ToInt64(v)
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
             | Self::TimestampMicros(_, v) => v.push(0),
-            Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
-            Self::Float64(v)
-            | Self::Int32ToFloat64(v)
-            | Self::Int64ToFloat64(v)
-            | Self::Float32ToFloat64(v) => v.push(0.),
-            Self::Binary(offsets, _)
-            | Self::String(offsets, _)
-            | Self::StringView(offsets, _)
-            | Self::BytesToString(offsets, _)
-            | Self::StringToBytes(offsets, _) => {
+            Self::Float32(v) => v.push(0.),
+            Self::Float64(v) => v.push(0.),
+            Self::Binary(offsets, _) | Self::String(offsets, _) | Self::StringView(offsets, _) => {
                 offsets.push_length(0);
             }
             Self::Uuid(v) => {
@@ -401,15 +353,7 @@ impl Decoder {
             | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
-            Self::Int32ToInt64(values) => values.push(buf.get_int()? as i64),
-            Self::Int32ToFloat32(values) => values.push(buf.get_int()? as f32),
-            Self::Int32ToFloat64(values) => values.push(buf.get_int()? as f64),
-            Self::Int64ToFloat32(values) => values.push(buf.get_long()? as f32),
-            Self::Int64ToFloat64(values) => values.push(buf.get_long()? as f64),
-            Self::Float32ToFloat64(values) => values.push(buf.get_float()? as f64),
-            Self::StringToBytes(offsets, values)
-            | Self::BytesToString(offsets, values)
-            | Self::Binary(offsets, values)
+            Self::Binary(offsets, values)
             | Self::String(offsets, values)
             | Self::StringView(offsets, values) => {
                 let data = buf.get_bytes()?;
@@ -520,21 +464,12 @@ impl Decoder {
             ),
             Self::Float32(values) => Arc::new(flush_primitive::<Float32Type>(values, nulls)),
             Self::Float64(values) => Arc::new(flush_primitive::<Float64Type>(values, nulls)),
-            Self::Int32ToInt64(values) => Arc::new(flush_primitive::<Int64Type>(values, nulls)),
-            Self::Int32ToFloat32(values) | Self::Int64ToFloat32(values) => {
-                Arc::new(flush_primitive::<Float32Type>(values, nulls))
-            }
-            Self::Int32ToFloat64(values)
-            | Self::Int64ToFloat64(values)
-            | Self::Float32ToFloat64(values) => {
-                Arc::new(flush_primitive::<Float64Type>(values, nulls))
-            }
-            Self::StringToBytes(offsets, values) | Self::Binary(offsets, values) => {
+            Self::Binary(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Arc::new(BinaryArray::new(offsets, values, nulls))
             }
-            Self::BytesToString(offsets, values) | Self::String(offsets, values) => {
+            Self::String(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Arc::new(StringArray::new(offsets, values, nulls))

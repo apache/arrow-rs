@@ -1029,6 +1029,15 @@ mod tests {
         }))
     }
 
+    fn resolve_promotion(writer: PrimitiveType, reader: PrimitiveType) -> AvroDataType {
+        let writer_schema = Schema::TypeName(TypeName::Primitive(writer));
+        let reader_schema = Schema::TypeName(TypeName::Primitive(reader));
+        let mut maker = Maker::new(false, false);
+        maker
+            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .expect("promotion should resolve")
+    }
+
     #[test]
     fn test_date_logical_type() {
         let schema = create_schema_with_logical_type(PrimitiveType::Int, "date");
@@ -1228,6 +1237,111 @@ mod tests {
             }
             _ => panic!("Expected SchemaError"),
         }
+    }
+
+    #[test]
+    fn test_resolve_int_to_float_promotion() {
+        let result = resolve_promotion(PrimitiveType::Int, PrimitiveType::Float);
+        assert!(matches!(result.codec, Codec::Float32));
+        assert_eq!(
+            result.resolution,
+            Some(ResolutionInfo::Promotion(Promotion::IntToFloat))
+        );
+    }
+
+    #[test]
+    fn test_resolve_int_to_double_promotion() {
+        let result = resolve_promotion(PrimitiveType::Int, PrimitiveType::Double);
+        assert!(matches!(result.codec, Codec::Float64));
+        assert_eq!(
+            result.resolution,
+            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+        );
+    }
+
+    #[test]
+    fn test_resolve_long_to_float_promotion() {
+        let result = resolve_promotion(PrimitiveType::Long, PrimitiveType::Float);
+        assert!(matches!(result.codec, Codec::Float32));
+        assert_eq!(
+            result.resolution,
+            Some(ResolutionInfo::Promotion(Promotion::LongToFloat))
+        );
+    }
+
+    #[test]
+    fn test_resolve_long_to_double_promotion() {
+        let result = resolve_promotion(PrimitiveType::Long, PrimitiveType::Double);
+        assert!(matches!(result.codec, Codec::Float64));
+        assert_eq!(
+            result.resolution,
+            Some(ResolutionInfo::Promotion(Promotion::LongToDouble))
+        );
+    }
+
+    #[test]
+    fn test_resolve_float_to_double_promotion() {
+        let result = resolve_promotion(PrimitiveType::Float, PrimitiveType::Double);
+        assert!(matches!(result.codec, Codec::Float64));
+        assert_eq!(
+            result.resolution,
+            Some(ResolutionInfo::Promotion(Promotion::FloatToDouble))
+        );
+    }
+
+    #[test]
+    fn test_resolve_string_to_bytes_promotion() {
+        let result = resolve_promotion(PrimitiveType::String, PrimitiveType::Bytes);
+        assert!(matches!(result.codec, Codec::Binary));
+        assert_eq!(
+            result.resolution,
+            Some(ResolutionInfo::Promotion(Promotion::StringToBytes))
+        );
+    }
+
+    #[test]
+    fn test_resolve_bytes_to_string_promotion() {
+        let result = resolve_promotion(PrimitiveType::Bytes, PrimitiveType::String);
+        assert!(matches!(result.codec, Codec::Utf8));
+        assert_eq!(
+            result.resolution,
+            Some(ResolutionInfo::Promotion(Promotion::BytesToString))
+        );
+    }
+
+    #[test]
+    fn test_resolve_illegal_promotion_double_to_float_errors() {
+        let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Double));
+        let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::Float));
+        let mut maker = Maker::new(false, false);
+        let result = maker.make_data_type(&writer_schema, Some(&reader_schema), None);
+        assert!(result.is_err());
+        match result {
+            Err(ArrowError::ParseError(msg)) => {
+                assert!(msg.contains("Illegal promotion"));
+            }
+            _ => panic!("Expected ParseError for illegal promotion Double -> Float"),
+        }
+    }
+
+    #[test]
+    fn test_promotion_within_nullable_union_keeps_reader_null_ordering() {
+        let writer = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
+        ]);
+        let reader = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Double)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Null)),
+        ]);
+        let mut maker = Maker::new(false, false);
+        let result = maker.make_data_type(&writer, Some(&reader), None).unwrap();
+        assert!(matches!(result.codec, Codec::Float64));
+        assert_eq!(
+            result.resolution,
+            Some(ResolutionInfo::Promotion(Promotion::IntToDouble))
+        );
+        assert_eq!(result.nullability, Some(Nullability::NullSecond));
     }
 
     #[test]
