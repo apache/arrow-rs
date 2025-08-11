@@ -22,7 +22,7 @@ use std::ops::Add;
 
 use super::{Extend, _MutableArrayData};
 
-pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend {
+pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend<'_> {
     let values = array.buffer::<T>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
@@ -33,7 +33,7 @@ pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend {
     )
 }
 
-pub(super) fn build_extend_with_offset<T>(array: &ArrayData, offset: T) -> Extend
+pub(super) fn build_extend_with_offset<T>(array: &ArrayData, offset: T) -> Extend<'_>
 where
     T: ArrowNativeType + Add<Output = T>,
 {

@@ -153,7 +153,7 @@ pub trait FileReader: Send + Sync {
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter>;
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>>;
 }
 
 /// Parquet row group reader API. With this, user can get metadata information about the
@@ -211,7 +211,7 @@ pub trait RowGroupReader: Send + Sync {
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter>;
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>>;
 }
 
 // ----------------------------------------------------------------------

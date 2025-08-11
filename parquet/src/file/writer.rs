@@ -524,7 +524,7 @@ fn write_bloom_filters<W: Write + Send>(
 ///   more columns are available to write.
 /// - Once done writing a column, close column writer with `close`
 /// - Once all columns have been written, close row group writer with `close`
-///   method. THe close method will return row group metadata and is no-op
+///   method. The close method will return row group metadata and is no-op
 ///   on already closed row group.
 pub struct SerializedRowGroupWriter<'a, W: Write> {
     descr: SchemaDescPtr,
