@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::variant_get::output::OutputBuilder;
-use crate::{VariantArray, VariantArrayBuilder};
+use crate::{primitive_conversion, VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray};
-use arrow::datatypes::Int32Type;
+use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_schema::{ArrowError, DataType};
 use parquet_variant::{Variant, VariantPath};
 use std::sync::Arc;
@@ -93,16 +93,10 @@ impl OutputBuilder for VariantOutputBuilder<'_> {
         let mut array_builder = VariantArrayBuilder::new(variant_array.len());
         match typed_value.data_type() {
             DataType::Int32 => {
-                let primitive_array = typed_value.as_primitive::<Int32Type>();
-                for i in 0..variant_array.len() {
-                    if primitive_array.is_null(i) {
-                        array_builder.append_null();
-                        continue;
-                    }
-
-                    let int_value = primitive_array.value(i);
-                    array_builder.append_variant(Variant::from(int_value));
-                }
+                primitive_conversion!(Int32Type, typed_value, array_builder);
+            }
+            DataType::Int16 => {
+                primitive_conversion!(Int16Type, typed_value, array_builder);
             }
             dt => {
                 // https://github.com/apache/arrow-rs/issues/8087

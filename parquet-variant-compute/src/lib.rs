@@ -38,6 +38,7 @@
 pub mod cast_to_variant;
 mod from_json;
 mod to_json;
+mod type_conversion;
 mod variant_array;
 mod variant_array_builder;
 pub mod variant_get;
