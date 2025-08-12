@@ -536,9 +536,44 @@ mod test {
         for i in 0..variant_array.len() {
             assert!(
                 !variant_array.is_valid(i),
-                "Expected value at index {} to be null",
-                i
+                "Expected value at index {i} to be null"
             );
         }
+    }
+
+    #[test]
+    fn value_field_present_but_all_null_should_be_unshredded() {
+        // This test demonstrates the issue: when a value field exists in schema
+        // but all its values are null, it should remain Unshredded, not AllNull
+        let metadata = BinaryViewArray::from(vec![b"test" as &[u8]; 3]);
+
+        // Create a value field with all null values
+        let value_nulls = NullBuffer::from(vec![false, false, false]); // all null
+        let value_array = BinaryViewArray::from_iter_values(vec![""; 3]);
+        let value_data = value_array
+            .to_data()
+            .into_builder()
+            .nulls(Some(value_nulls))
+            .build()
+            .unwrap();
+        let value = BinaryViewArray::from(value_data);
+
+        let fields = Fields::from(vec![
+            Field::new("metadata", DataType::BinaryView, false),
+            Field::new("value", DataType::BinaryView, true), // Field exists in schema
+        ]);
+        let struct_array = StructArray::new(
+            fields,
+            vec![Arc::new(metadata), Arc::new(value)],
+            None, // struct itself is not null, just the value field is all null
+        );
+
+        let variant_array = VariantArray::try_new(Arc::new(struct_array)).unwrap();
+
+        // This should be Unshredded, not AllNull, because value field exists in schema
+        assert!(matches!(
+            variant_array.shredding_state(),
+            ShreddingState::Unshredded { .. }
+        ));
     }
 }
