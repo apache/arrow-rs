@@ -20,6 +20,29 @@
 // They allow for pasting sections of the Parquet thrift IDL file
 // into a macro to generate rust structures and implementations.
 
+use std::cmp::Ordering;
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct OrderedF64(f64);
+
+impl OrderedF64 {
+    pub fn new(value: f64) -> Self {
+        OrderedF64(value)
+    }
+
+    pub fn into_inner(self) -> f64 {
+        self.0
+    }
+}
+
+impl Eq for OrderedF64 {} // Marker trait, requires PartialEq
+
+impl Ord for OrderedF64 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 /// macro to generate rust enums from a thrift enum definition
@@ -166,6 +189,84 @@ macro_rules! thrift_union_all_empty {
     }
 }
 
+/// macro to generate rust enums for thrift unions where all variants are a mix of unit and tuple types.
+/// this requires modifying the thrift IDL. For variants with empty structs as their type,
+/// delete the typename (i.e. "1: EmptyStruct Var1;" => "1: Var1"). For variants with a non-empty
+/// type, put the typename in parens (e.g" "1: Type Var1;" => "1: (Type) Var1;").
+#[macro_export]
+#[allow(clippy::crate_in_macro_def)]
+macro_rules! thrift_union {
+    ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $( ( $field_type:ident $(< $element_type:ident >)? ) )? $field_name:ident $(;)?)* }) => {
+        $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        #[allow(non_camel_case_types)]
+        #[allow(non_snake_case)]
+        #[allow(missing_docs)]
+        pub enum $identifier {
+            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name $( ( $crate::__thrift_union_type!{$field_type $($element_type)?} ) )?),*
+        }
+
+        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
+            type Error = ParquetError;
+
+            fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+                prot.read_struct_begin()?;
+                let field_ident = prot.read_field_begin()?;
+                if field_ident.field_type == FieldType::Stop {
+                    return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
+                }
+                let ret = match field_ident.id {
+                    $($field_id => {
+                        let val = $crate::__thrift_read_variant!(prot, $field_name $($field_type $($element_type)?)?);
+                        val
+                    })*
+                    _ => {
+                        return Err(general_err!("Unexpected {} {}", stringify!($identifier), field_ident.id));
+                    }
+                };
+                let field_ident = prot.read_field_begin()?;
+                if field_ident.field_type != FieldType::Stop {
+                    return Err(general_err!(
+                        concat!("Received multiple fields for union from remote {}", stringify!($identifier))
+                    ));
+                }
+                prot.read_struct_end()?;
+                Ok(ret)
+            }
+        }
+    }
+}
+
+/* example
+use crate::errors::{ParquetError, Result};
+use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+
+
+/// foothing!
+#[allow(dead_code)]
+pub struct FooThing {
+    i: i32,
+    j: i32,
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for FooThing {
+    type Error = ParquetError;
+    fn try_from(_value: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        Err(nyi_err!("FooThing"))
+    }
+}
+
+thrift_union!(
+/// foobar!
+#[allow(dead_code)]
+union FooBar {
+    1: Foo;
+    2: (i32) Bar;
+    3: (list<FooThing>) FooVec;
+}
+);
+*/
+
 /// macro to generate rust structs from a thrift struct definition
 /// unlike enum and union, this macro will allow for visibility specifier
 /// can also take optional lifetime for struct and elements within it (need e.g.)
@@ -173,7 +274,7 @@ macro_rules! thrift_union_all_empty {
 macro_rules! thrift_struct {
     ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
-        #[derive(Clone, Debug, PartialEq)]
+        #[derive(Clone, Debug, Eq, PartialEq)]
         #[allow(non_camel_case_types)]
         #[allow(non_snake_case)]
         #[allow(missing_docs)]
@@ -279,7 +380,7 @@ macro_rules! __thrift_read_field {
         <Vec<u8>>::try_from(&mut *$prot)?
     };
     ($prot:tt, double) => {
-        f64::try_from(&mut *$prot)?
+        $crate::parquet_macros::OrderedF64::try_from(&mut *$prot)?
     };
     ($prot:tt, $field_type:ident) => {
         $field_type::try_from(&mut *$prot)?
@@ -297,6 +398,28 @@ macro_rules! __thrift_field_type {
     (list $element_type:ident) => { Vec< $crate::__thrift_field_type!($element_type) > };
     (binary) => { Vec<u8> };
     (string) => { String };
-    (double) => { f64 };
+    (double) => { $crate::parquet_macros::OrderedF64 };
     ($field_type:ty) => { $field_type };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_union_type {
+    ($field_type:ident) => { $field_type };
+    (list $field_type:ident) => { Vec<$field_type> };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_read_variant {
+    ($prot:tt, $field_name:ident $field_type:ident) => {
+        Self::$field_name($field_type::try_from(&mut *$prot)?)
+    };
+    ($prot:tt, $field_name:ident list $field_type:ident) => {{
+        let val = $crate::thrift_read_list!($prot, $field_type);
+        Self::$field_name(val)
+    }};
+    ($prot:tt, $field_name:ident) => {
+        Self::$field_name
+    };
 }

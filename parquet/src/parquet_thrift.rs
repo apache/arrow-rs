@@ -20,7 +20,10 @@
 // to not allocate byte arrays or strings.
 #![allow(dead_code)]
 
-use crate::errors::{ParquetError, Result};
+use crate::{
+    errors::{ParquetError, Result},
+    parquet_macros::OrderedF64,
+};
 
 // Thrift compact protocol types for struct fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -451,10 +454,10 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i64 {
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for f64 {
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for OrderedF64 {
     type Error = ParquetError;
     fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        prot.read_double()
+        Ok(OrderedF64::new(prot.read_double()?))
     }
 }
 
