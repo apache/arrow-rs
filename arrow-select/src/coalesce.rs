@@ -1477,21 +1477,22 @@ mod tests {
         let small2 = uint32_batch(5002..5005); // 3 -> 2+3=5 >=4 emit
 
         let schema = Arc::clone(&big.schema());
-        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), 4000).with_exact_size(false);
+        // Use small target (4) so that small1 + small2 will trigger an emit
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), 4).with_exact_size(false);
 
+        // push big: non-strict mode should emit the whole big batch (5000 rows)
         coalescer.push_batch(big).unwrap();
         let out_big = coalescer
             .next_completed_batch()
             .expect("expected big batch");
         assert_eq!(out_big.num_rows(), 5000);
-        assert_eq!(
-            normalize_batch(out_big),
-            normalize_batch(uint32_batch(0..5000))
-        );
+        assert_eq!(normalize_batch(out_big), normalize_batch(uint32_batch(0..5000)));
 
+        // push small1 (2 rows) -> not enough yet
         coalescer.push_batch(small1).unwrap();
         assert!(coalescer.next_completed_batch().is_none());
 
+        // push small2 (3 rows) -> now buffered = 2 + 3 = 5 >= 4, non-strict emits all 5 rows
         coalescer.push_batch(small2).unwrap();
         let out_small = coalescer
             .next_completed_batch()
