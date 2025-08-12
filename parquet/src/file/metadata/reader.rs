@@ -1600,6 +1600,7 @@ fn convert_stats(
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use zstd::zstd_safe::WriteBuf;
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
@@ -1802,6 +1803,27 @@ mod tests {
             reader_result.to_string(),
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
+    }
+
+    #[test]
+    fn test_new_decoder() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let len = file.len();
+
+        // read entire file
+        let bytes = file.get_bytes(0, len as usize).unwrap();
+        let mut footer = [0u8; FOOTER_SIZE];
+        footer.copy_from_slice(bytes.slice(len as usize - FOOTER_SIZE..).as_slice());
+        let tail = ParquetMetaDataReader::decode_footer_tail(&footer).unwrap();
+        let meta_len = tail.metadata_length();
+        let metadata_bytes = bytes.slice(len as usize - FOOTER_SIZE - meta_len..);
+
+        // get ParquetMetaData
+        let m = ParquetMetaDataReader::decode_file_metadata(&metadata_bytes).unwrap();
+        let m2 = ParquetMetaDataReader::decode_metadata(&metadata_bytes).unwrap();
+
+        // check that metadatas are equivalent
+        assert_eq!(m, m2);
     }
 }
 
