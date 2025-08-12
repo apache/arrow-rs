@@ -155,6 +155,9 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Float64 => {
             primitive_conversion!(Float64Type, input, builder);
         }
+        DataType::FixedSizeBinary(_) => {
+            non_generic_conversion!(as_fixed_size_binary, |v| v, input, builder);
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -172,12 +175,36 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BooleanArray, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, BooleanArray, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array,
+        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use parquet_variant::{Variant, VariantDecimal16};
-    use std::sync::Arc;
+    use std::{sync::Arc, vec};
+
+    #[test]
+    fn test_cast_to_variant_fixed_size_binary() {
+        let v1 = vec![1, 2];
+        let v2 = vec![3, 4];
+        let v3 = vec![5, 6];
+
+        let mut builder = FixedSizeBinaryBuilder::new(2);
+        builder.append_value(&v1).unwrap();
+        builder.append_value(&v2).unwrap();
+        builder.append_null();
+        builder.append_value(&v3).unwrap();
+        let array = builder.finish();
+
+        run_test(
+            Arc::new(array),
+            vec![
+                Some(Variant::Binary(&v1)),
+                Some(Variant::Binary(&v2)),
+                None,
+                Some(Variant::Binary(&v3)),
+            ],
+        );
+    }
 
     #[test]
     fn test_cast_to_variant_binary() {
