@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
     Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
@@ -28,7 +30,7 @@ use arrow::temporal_conversions::{
     timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use half::f16;
 use parquet_variant::Variant;
@@ -77,6 +79,74 @@ macro_rules! cast_conversion_nongeneric {
             $builder.append_variant(Variant::from(cast_value));
         }
     }};
+}
+
+fn convert_timestamp(
+    time_unit: &TimeUnit,
+    time_zone: &Option<Arc<str>>,
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) {
+    let native_datetimes: Vec<Option<NaiveDateTime>> = match time_unit {
+        arrow_schema::TimeUnit::Second => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .expect("Array is not TimestampSecondArray");
+
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_s_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Millisecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .expect("Array is not TimestampMillisecondArray");
+
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_ms_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Microsecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .expect("Array is not TimestampMicrosecondArray");
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_us_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Nanosecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .expect("Array is not TimestampNanosecondArray");
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_ns_to_datetime(y).unwrap()))
+                .collect()
+        }
+    };
+
+    for x in native_datetimes {
+        match x {
+            Some(ndt) => {
+                if time_zone.is_none() {
+                    builder.append_variant(ndt.into());
+                } else {
+                    let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&ndt);
+                    builder.append_variant(utc_dt.into());
+                }
+            }
+            None => {
+                builder.append_null();
+            }
+        }
+    }
 }
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
@@ -166,66 +236,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             cast_conversion_nongeneric!(as_fixed_size_binary, |v| v, input, builder);
         }
         DataType::Timestamp(time_unit, time_zone) => {
-            let native_datetimes: Vec<Option<NaiveDateTime>> = match time_unit {
-                arrow_schema::TimeUnit::Second => {
-                    let ts_array = input
-                        .as_any()
-                        .downcast_ref::<TimestampSecondArray>()
-                        .expect("Array is not TimestampSecondArray");
-
-                    ts_array
-                        .iter()
-                        .map(|x| x.map(|y| timestamp_s_to_datetime(y).unwrap()))
-                        .collect()
-                }
-                arrow_schema::TimeUnit::Millisecond => {
-                    let ts_array = input
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .expect("Array is not TimestampMillisecondArray");
-
-                    ts_array
-                        .iter()
-                        .map(|x| x.map(|y| timestamp_ms_to_datetime(y).unwrap()))
-                        .collect()
-                }
-                arrow_schema::TimeUnit::Microsecond => {
-                    let ts_array = input
-                        .as_any()
-                        .downcast_ref::<TimestampMicrosecondArray>()
-                        .expect("Array is not TimestampMicrosecondArray");
-                    ts_array
-                        .iter()
-                        .map(|x| x.map(|y| timestamp_us_to_datetime(y).unwrap()))
-                        .collect()
-                }
-                arrow_schema::TimeUnit::Nanosecond => {
-                    let ts_array = input
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .expect("Array is not TimestampNanosecondArray");
-                    ts_array
-                        .iter()
-                        .map(|x| x.map(|y| timestamp_ns_to_datetime(y).unwrap()))
-                        .collect()
-                }
-            };
-
-            for x in native_datetimes {
-                match x {
-                    Some(ndt) => {
-                        if time_zone.is_none() {
-                            builder.append_variant(ndt.into());
-                        } else {
-                            let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&ndt);
-                            builder.append_variant(utc_dt.into());
-                        }
-                    }
-                    None => {
-                        builder.append_null();
-                    }
-                }
-            }
+            convert_timestamp(time_unit, time_zone, input, &mut builder);
         }
         dt => {
             return Err(ArrowError::CastError(format!(
