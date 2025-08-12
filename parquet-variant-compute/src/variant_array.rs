@@ -188,7 +188,6 @@ impl VariantArray {
                 }
             }
             ShreddingState::AllNull { .. } => Variant::Null,
-            ShreddingState::AllNull { .. } => Variant::Null,
         }
     }
 
@@ -252,8 +251,6 @@ pub enum ShreddingState {
     },
     /// All values are null, only metadata is present
     AllNull { metadata: BinaryViewArray },
-    /// All values are null, only metadata is present
-    AllNull { metadata: BinaryViewArray },
 }
 
 impl ShreddingState {
@@ -275,7 +272,6 @@ impl ShreddingState {
                 typed_value,
             }),
             (metadata, None, None) => Ok(Self::AllNull { metadata }),
-            (metadata, None, None) => Ok(Self::AllNull { metadata }),
         }
     }
 
@@ -285,7 +281,6 @@ impl ShreddingState {
             ShreddingState::Unshredded { metadata, .. } => metadata,
             ShreddingState::Typed { metadata, .. } => metadata,
             ShreddingState::PartiallyShredded { metadata, .. } => metadata,
-            ShreddingState::AllNull { metadata } => metadata,
             ShreddingState::AllNull { metadata } => metadata,
         }
     }
@@ -297,7 +292,6 @@ impl ShreddingState {
             ShreddingState::Typed { .. } => None,
             ShreddingState::PartiallyShredded { value, .. } => Some(value),
             ShreddingState::AllNull { .. } => None,
-            ShreddingState::AllNull { .. } => None,
         }
     }
 
@@ -307,7 +301,6 @@ impl ShreddingState {
             ShreddingState::Unshredded { .. } => None,
             ShreddingState::Typed { typed_value, .. } => Some(typed_value),
             ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
-            ShreddingState::AllNull { .. } => None,
             ShreddingState::AllNull { .. } => None,
         }
     }
@@ -334,9 +327,6 @@ impl ShreddingState {
                 metadata: metadata.slice(offset, length),
                 value: value.slice(offset, length),
                 typed_value: typed_value.slice(offset, length),
-            },
-            ShreddingState::AllNull { metadata } => ShreddingState::AllNull {
-                metadata: metadata.slice(offset, length),
             },
             ShreddingState::AllNull { metadata } => ShreddingState::AllNull {
                 metadata: metadata.slice(offset, length),
@@ -450,17 +440,8 @@ mod test {
 
     #[test]
     fn all_null_missing_value_and_typed_value() {
-    fn all_null_missing_value_and_typed_value() {
         let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
         let array = StructArray::new(fields, vec![make_binary_view_array()], None);
-        // Should succeed and create an AllNull variant when neither value nor typed_value are present
-        let variant_array = VariantArray::try_new(Arc::new(array)).unwrap();
-
-        // Verify the shredding state is AllNull
-        assert!(matches!(
-            variant_array.shredding_state(),
-            ShreddingState::AllNull { .. }
-        ));
         // Should succeed and create an AllNull variant when neither value nor typed_value are present
         let variant_array = VariantArray::try_new(Arc::new(array)).unwrap();
 
