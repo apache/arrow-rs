@@ -1486,7 +1486,10 @@ mod tests {
             .next_completed_batch()
             .expect("expected big batch");
         assert_eq!(out_big.num_rows(), 5000);
-        assert_eq!(normalize_batch(out_big), normalize_batch(uint32_batch(0..5000)));
+        assert_eq!(
+            normalize_batch(out_big),
+            normalize_batch(uint32_batch(0..5000))
+        );
 
         // push small1 (2 rows) -> not enough yet
         coalescer.push_batch(small1).unwrap();
