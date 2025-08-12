@@ -372,17 +372,26 @@ impl ReaderBuilder {
     fn make_record_decoder(
         &self,
         writer_schema: &Schema,
-        reader_schema: Option<&AvroSchema>,
+        reader_schema: Option<&Schema>,
     ) -> Result<RecordDecoder, ArrowError> {
         let mut builder = AvroFieldBuilder::new(writer_schema);
         if let Some(reader_schema) = reader_schema {
-            builder = builder.with_reader_schema(reader_schema.clone());
+            builder = builder.with_reader_schema(reader_schema);
         }
         let root = builder
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
             .build()?;
         RecordDecoder::try_new_with_options(root.data_type(), self.utf8_view)
+    }
+
+    fn make_record_decoder_from_schemas(
+        &self,
+        writer_schema: &Schema,
+        reader_schema: Option<&AvroSchema>,
+    ) -> Result<RecordDecoder, ArrowError> {
+        let reader_schema_raw = reader_schema.map(|s| s.schema()).transpose()?;
+        self.make_record_decoder(writer_schema, reader_schema_raw.as_ref())
     }
 
     fn make_decoder_with_parts(
@@ -418,7 +427,8 @@ impl ReaderBuilder {
                 .ok_or_else(|| {
                     ArrowError::ParseError("No Avro schema present in file header".into())
                 })?;
-            let record_decoder = self.make_record_decoder(&writer_schema, reader_schema)?;
+            let record_decoder =
+                self.make_record_decoder_from_schemas(&writer_schema, reader_schema)?;
             return Ok(self.make_decoder_with_parts(
                 record_decoder,
                 None,
@@ -453,11 +463,12 @@ impl ReaderBuilder {
                 }
             };
             let writer_schema = avro_schema.schema()?;
-            let decoder = self.make_record_decoder(&writer_schema, reader_schema)?;
+            let record_decoder =
+                self.make_record_decoder_from_schemas(&writer_schema, reader_schema)?;
             if fingerprint == start_fingerprint {
-                active_decoder = Some(decoder);
+                active_decoder = Some(record_decoder);
             } else {
-                cache.insert(fingerprint, decoder);
+                cache.insert(fingerprint, record_decoder);
             }
         }
         let active_decoder = active_decoder.ok_or_else(|| {
@@ -662,6 +673,7 @@ mod test {
     use bytes::{Buf, BufMut, Bytes};
     use futures::executor::block_on;
     use futures::{stream, Stream, StreamExt, TryStreamExt};
+    use serde_json::Value;
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
@@ -804,10 +816,10 @@ mod test {
 
     #[test]
     fn test_unknown_fingerprint_is_error() {
-        let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
+        let (store, fp_int, _fp_long, _schema_int, schema_long) = make_two_schema_store();
         let unknown_fp = Fingerprint::Rabin(0xDEAD_BEEF_DEAD_BEEF);
         let prefix = make_prefix(unknown_fp);
-        let mut decoder = make_decoder(&store, fp_int, &schema_int);
+        let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let err = decoder.decode(&prefix).expect_err("decode should error");
         let msg = err.to_string();
         assert!(
@@ -818,8 +830,8 @@ mod test {
 
     #[test]
     fn test_handle_prefix_incomplete_magic() {
-        let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
-        let mut decoder = make_decoder(&store, fp_int, &schema_int);
+        let (store, fp_int, _fp_long, _schema_int, schema_long) = make_two_schema_store();
+        let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let buf = &SINGLE_OBJECT_MAGIC[..1];
         let res = decoder.handle_prefix(buf).unwrap();
         assert_eq!(res, Some(0));
@@ -828,8 +840,8 @@ mod test {
 
     #[test]
     fn test_handle_prefix_magic_mismatch() {
-        let (store, fp_int, _fp_long, schema_int, _schema_long) = make_two_schema_store();
-        let mut decoder = make_decoder(&store, fp_int, &schema_int);
+        let (store, fp_int, _fp_long, _schema_int, schema_long) = make_two_schema_store();
+        let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let buf = [0xFFu8, 0x00u8, 0x01u8];
         let res = decoder.handle_prefix(&buf).unwrap();
         assert!(res.is_none());
@@ -837,8 +849,8 @@ mod test {
 
     #[test]
     fn test_handle_prefix_incomplete_fingerprint() {
-        let (store, fp_int, fp_long, schema_int, _schema_long) = make_two_schema_store();
-        let mut decoder = make_decoder(&store, fp_int, &schema_int);
+        let (store, fp_int, fp_long, _schema_int, schema_long) = make_two_schema_store();
+        let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
         };
@@ -851,8 +863,8 @@ mod test {
 
     #[test]
     fn test_handle_prefix_valid_prefix_switches_schema() {
-        let (store, fp_int, fp_long, schema_int, schema_long) = make_two_schema_store();
-        let mut decoder = make_decoder(&store, fp_int, &schema_int);
+        let (store, fp_int, fp_long, _schema_int, schema_long) = make_two_schema_store();
+        let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let writer_schema_long = schema_long.schema().unwrap();
         let root_long = AvroFieldBuilder::new(&writer_schema_long).build().unwrap();
         let long_decoder =
