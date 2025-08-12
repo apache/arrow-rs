@@ -103,6 +103,12 @@ macro_rules! cast_conversion_nongeneric {
 /// assert!(result.is_null(1)); // note null, not Variant::Null
 /// assert_eq!(result.value(2), Variant::Int64(3));
 /// ```
+/// 
+/// For `DataType::Timestamp`s: if the timestamp has any level of precision
+/// greater than a microsecond, it will be truncated. For example
+/// `1970-01-01T00:00:01.234567890Z`
+/// will be truncated to
+/// `1970-01-01T00:00:01.234567Z`
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     let mut builder = VariantArrayBuilder::new(input.len());
 
@@ -260,55 +266,55 @@ mod tests {
 
     #[test]
     fn test_cast_to_variant_timestamp() {
-        let one_second = 1;
-        let two_second = 2;
-        let three_second = 3;
+        let run_array_tests =
+            |microseconds: i64, array_ntz: Arc<dyn Array>, array_tz: Arc<dyn Array>| {
+                let timestamp = DateTime::from_timestamp_nanos(microseconds * 1000);
+                run_test(
+                    array_tz,
+                    vec![Some(Variant::TimestampMicros(timestamp)), None],
+                );
+                run_test(
+                    array_ntz,
+                    vec![
+                        Some(Variant::TimestampNtzMicros(timestamp.naive_utc())),
+                        None,
+                    ],
+                );
+            };
 
-        let arr = TimestampSecondArray::from(vec![
-            Some(one_second),
-            Some(two_second),
-            None,
-            Some(three_second),
-        ]);
+        let nanosecond = 1234567890;
+        let microsecond = 1234567;
+        let millisecond = 1234;
+        let second = 1;
 
-        run_test(
-            Arc::new(arr.clone()),
-            vec![
-                Some(Variant::TimestampNtzMicros(
-                    DateTime::from_timestamp_millis(one_second * 1000)
-                        .unwrap()
-                        .naive_utc(),
-                )),
-                Some(Variant::TimestampNtzMicros(
-                    DateTime::from_timestamp_millis(two_second * 1000)
-                        .unwrap()
-                        .naive_utc(),
-                )),
-                None,
-                Some(Variant::TimestampNtzMicros(
-                    DateTime::from_timestamp_millis(three_second * 1000)
-                        .unwrap()
-                        .naive_utc(),
-                )),
-            ],
+        let second_array = TimestampSecondArray::from(vec![Some(second), None]);
+        run_array_tests(
+            second * 1000 * 1000,
+            Arc::new(second_array.clone()),
+            Arc::new(second_array.with_timezone("+01:00".to_string())),
         );
 
-        let arr = arr.with_timezone("+01:00".to_string());
-        run_test(
-            Arc::new(arr),
-            vec![
-                Some(Variant::TimestampMicros(
-                    DateTime::from_timestamp_millis(one_second * 1000).unwrap(),
-                )),
-                Some(Variant::TimestampMicros(
-                    DateTime::from_timestamp_millis(two_second * 1000).unwrap(),
-                )),
-                None,
-                Some(Variant::TimestampMicros(
-                    DateTime::from_timestamp_millis(three_second * 1000).unwrap(),
-                )),
-            ],
+        let millisecond_array = TimestampMillisecondArray::from(vec![Some(millisecond), None]);
+        run_array_tests(
+            millisecond * 1000,
+            Arc::new(millisecond_array.clone()),
+            Arc::new(millisecond_array.with_timezone("+01:00".to_string())),
         );
+
+        let microsecond_array = TimestampMicrosecondArray::from(vec![Some(microsecond), None]);
+        run_array_tests(
+            microsecond,
+            Arc::new(microsecond_array.clone()),
+            Arc::new(microsecond_array.with_timezone("+01:00".to_string())),
+        );
+
+        // nanoseconds should get truncated to microseconds
+        let nanosecond_array = TimestampNanosecondArray::from(vec![Some(nanosecond), None]);
+        run_array_tests(
+            microsecond,
+            Arc::new(nanosecond_array.clone()),
+            Arc::new(nanosecond_array.with_timezone("+01:00".to_string())),
+        )
     }
 
     #[test]
