@@ -16,12 +16,21 @@
 // under the License.
 
 use crate::{VariantArray, VariantArrayBuilder};
-use arrow::array::{Array, AsArray};
+use arrow::array::{
+    Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray,
+};
 use arrow::datatypes::{
     BinaryType, BinaryViewType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    Int64Type, Int8Type, LargeBinaryType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
+};
+use arrow::temporal_conversions::{
+    as_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
+    timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use half::f16;
 use parquet_variant::Variant;
 
@@ -151,6 +160,80 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::FixedSizeBinary(_) => {
             cast_conversion_nongeneric!(as_fixed_size_binary, |v| v, input, builder);
         }
+        DataType::Timestamp(time_unit, time_zone) => {
+            let native_datetimes: Vec<Option<NaiveDateTime>> = match time_unit {
+                arrow_schema::TimeUnit::Second => {
+                    let ts_array = input
+                        .as_any()
+                        .downcast_ref::<TimestampSecondArray>()
+                        .expect("Array is not TimestampSecondArray");
+
+                    ts_array
+                        .iter()
+                        .map(|x| match x {
+                            Some(y) => Some(timestamp_s_to_datetime(y).unwrap()),
+                            None => None,
+                        })
+                        .collect()
+                }
+                arrow_schema::TimeUnit::Millisecond => {
+                    let ts_array = input
+                        .as_any()
+                        .downcast_ref::<TimestampMillisecondArray>()
+                        .expect("Array is not TimestampMillisecondArray");
+
+                    ts_array
+                        .iter()
+                        .map(|x| match x {
+                            Some(y) => Some(timestamp_ms_to_datetime(y).unwrap()),
+                            None => None,
+                        })
+                        .collect()
+                }
+                arrow_schema::TimeUnit::Microsecond => {
+                    let ts_array = input
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .expect("Array is not TimestampMicrosecondArray");
+                    ts_array
+                        .iter()
+                        .map(|x| match x {
+                            Some(y) => Some(timestamp_us_to_datetime(y).unwrap()),
+                            None => None,
+                        })
+                        .collect()
+                }
+                arrow_schema::TimeUnit::Nanosecond => {
+                    let ts_array = input
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .expect("Array is not TimestampNanosecondArray");
+                    ts_array
+                        .iter()
+                        .map(|x| match x {
+                            Some(y) => Some(timestamp_ns_to_datetime(y).unwrap()),
+                            None => None,
+                        })
+                        .collect()
+                }
+            };
+
+            for x in native_datetimes {
+                match x {
+                    Some(ndt) => {
+                        if time_zone.is_none() {
+                            builder.append_variant(ndt.into());
+                        } else {
+                            let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&ndt);
+                            builder.append_variant(utc_dt.into());
+                        }
+                    }
+                    None => {
+                        builder.append_null();
+                    }
+                }
+            }
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -174,6 +257,59 @@ mod tests {
     };
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
+
+    #[test]
+    fn test_cast_to_variant_timestamp() {
+        let one_second = 1;
+        let two_second = 2;
+        let three_second = 3;
+
+        let arr = TimestampSecondArray::from(vec![
+            Some(one_second),
+            Some(two_second),
+            None,
+            Some(three_second),
+        ]);
+
+        run_test(
+            Arc::new(arr.clone()),
+            vec![
+                Some(Variant::TimestampNtzMicros(
+                    DateTime::from_timestamp_millis(one_second * 1000)
+                        .unwrap()
+                        .naive_utc(),
+                )),
+                Some(Variant::TimestampNtzMicros(
+                    DateTime::from_timestamp_millis(two_second * 1000)
+                        .unwrap()
+                        .naive_utc(),
+                )),
+                None,
+                Some(Variant::TimestampNtzMicros(
+                    DateTime::from_timestamp_millis(three_second * 1000)
+                        .unwrap()
+                        .naive_utc(),
+                )),
+            ],
+        );
+
+        let arr = arr.with_timezone("+01:00".to_string());
+        run_test(
+            Arc::new(arr),
+            vec![
+                Some(Variant::TimestampMicros(
+                    DateTime::from_timestamp_millis(one_second * 1000).unwrap(),
+                )),
+                Some(Variant::TimestampMicros(
+                    DateTime::from_timestamp_millis(two_second * 1000).unwrap(),
+                )),
+                None,
+                Some(Variant::TimestampMicros(
+                    DateTime::from_timestamp_millis(three_second * 1000).unwrap(),
+                )),
+            ],
+        );
+    }
 
     #[test]
     fn test_cast_to_variant_fixed_size_binary() {
