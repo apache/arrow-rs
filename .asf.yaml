@@ -46,6 +46,9 @@ github:
         strict: true
         # don't require any jobs to pass
         contexts: []
+  pull_requests:
+    # enable updating head branches of pull requests
+    allow_update_branch: true
 
 # publishes the content of the `asf-site` branch to
 # https://arrow.apache.org/rust/
