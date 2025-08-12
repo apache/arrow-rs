@@ -20,7 +20,7 @@ use crate::utils::{
 use crate::ShortString;
 
 use arrow_schema::ArrowError;
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 
 /// The basic type of a [`Variant`] value, encoded in the first two bits of the
 /// header byte.
@@ -63,6 +63,7 @@ pub enum VariantPrimitiveType {
     Float = 14,
     Binary = 15,
     String = 16,
+    Time = 17,
 }
 
 /// Extracts the basic type from a header byte
@@ -104,6 +105,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
             14 => Ok(VariantPrimitiveType::Float),
             15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
+            17 => Ok(VariantPrimitiveType::Time),
             _ => Err(ArrowError::InvalidArgumentError(format!(
                 "unknown primitive type: {value}",
             ))),
@@ -295,6 +297,25 @@ pub(crate) fn decode_timestampntz_micros(data: &[u8]) -> Result<NaiveDateTime, A
         .map(|v| v.naive_utc())
 }
 
+pub(crate) fn decode_time_ntz(data: &[u8]) -> Result<NaiveTime, ArrowError> {
+    let micros_since_epoch = u64::from_le_bytes(array_from_slice(data, 0)?);
+
+    let case_error = ArrowError::CastError(format!(
+        "Could not cast {micros_since_epoch} microseconds into a NaiveTime"
+    ));
+
+    if micros_since_epoch >= 86_400_000_000 {
+        return Err(case_error);
+    }
+
+    let nanos_since_midnight = micros_since_epoch * 1_000;
+    NaiveTime::from_num_seconds_from_midnight_opt(
+        (nanos_since_midnight / 1_000_000_000) as u32,
+        (nanos_since_midnight % 1_000_000_000) as u32,
+    )
+    .ok_or(case_error)
+}
+
 /// Decodes a Binary from the value section of a variant.
 pub(crate) fn decode_binary(data: &[u8]) -> Result<&[u8], ArrowError> {
     let len = u32::from_le_bytes(array_from_slice(data, 0)?) as usize;
@@ -439,6 +460,25 @@ mod tests {
                 .and_hms_milli_opt(16, 34, 56, 780)
                 .unwrap()
         );
+    }
+
+    mod time {
+        use super::*;
+
+        test_decoder_bounds!(
+            test_timentz,
+            [0x53, 0x1f, 0x8e, 0xdf, 0x2, 0, 0, 0],
+            decode_time_ntz,
+            NaiveTime::from_num_seconds_from_midnight_opt(12340, 567891_000).unwrap()
+        );
+
+        #[test]
+        fn test_decode_time_ntz_invalid() {
+            let invalid_second = u64::MAX;
+            let data = invalid_second.to_le_bytes();
+            let result = decode_time_ntz(&data);
+            assert!(matches!(result, Err(ArrowError::CastError(_))));
+        }
     }
 
     #[test]

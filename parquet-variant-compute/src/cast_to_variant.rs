@@ -20,19 +20,15 @@ use std::sync::Arc;
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
     Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
-};
-use arrow::datatypes::{
-    i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
+    TimestampSecondArray};
+use arrow::datatypes::{i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, LargeBinaryType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
 use arrow::temporal_conversions::{
     timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::NaiveTime;
 use half::f16;
 use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
@@ -321,6 +317,75 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Timestamp(time_unit, time_zone) => {
             convert_timestamp(time_unit, time_zone, input, &mut builder);
         }
+        DataType::Time32(unit) => {
+            match *unit {
+                TimeUnit::Second => {
+                    generic_conversion!(
+                        Time32SecondType,
+                        as_primitive,
+                        // nano second are always 0
+                        |v| NaiveTime::from_num_seconds_from_midnight_opt(v as u32, 0u32).unwrap(),
+                        input,
+                        builder
+                    );
+                }
+                TimeUnit::Millisecond => {
+                    generic_conversion!(
+                        Time32MillisecondType,
+                        as_primitive,
+                        |v| NaiveTime::from_num_seconds_from_midnight_opt(
+                            v as u32 / 1000,
+                            (v as u32 % 1000) * 1_000_000
+                        )
+                        .unwrap(),
+                        input,
+                        builder
+                    );
+                }
+                _ => {
+                    return Err(ArrowError::CastError(format!(
+                        "Unsupported Time32 unit: {:?}",
+                        unit
+                    )));
+                }
+            };
+        }
+        DataType::Time64(unit) => {
+            match *unit {
+                TimeUnit::Microsecond => {
+                    generic_conversion!(
+                        Time64MicrosecondType,
+                        as_primitive,
+                        |v| NaiveTime::from_num_seconds_from_midnight_opt(
+                            (v / 1_000_000) as u32,
+                            (v % 1_000_000 * 1_000) as u32
+                        )
+                        .unwrap(),
+                        input,
+                        builder
+                    );
+                }
+                TimeUnit::Nanosecond => {
+                    generic_conversion!(
+                        Time64NanosecondType,
+                        as_primitive,
+                        |v| NaiveTime::from_num_seconds_from_midnight_opt(
+                            (v / 1_000_000_000) as u32,
+                            (v % 1_000_000_000) as u32
+                        )
+                        .unwrap(),
+                        input,
+                        builder
+                    );
+                }
+                _ => {
+                    return Err(ArrowError::CastError(format!(
+                        "Unsupported Time64 unit: {:?}",
+                        unit
+                    )));
+                }
+            };
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -337,17 +402,13 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{
-        ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
-        FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, NullArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-    };
+    use arrow::array::{ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, NullArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
+    use arrow::datatypes::i256;
 
     macro_rules! max_unscaled_value {
         (32, $precision:expr) => {
@@ -1126,6 +1187,82 @@ mod tests {
                 ),
                 Some(Variant::Null),
                 Some(Variant::Null),
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_variant_time() {
+        let array: Time32SecondArray = vec![Some(1), Some(86_399), None].into();
+        let values = Arc::new(array);
+        run_test(
+            values,
+            vec![
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(1, 0).unwrap(),
+                )),
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(86_399, 0).unwrap(),
+                )),
+                None,
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_time32_millisecond_to_variant_time() {
+        let array: Time32MillisecondArray = vec![Some(123_456), Some(456_000), None].into();
+        let values = Arc::new(array);
+        run_test(
+            values,
+            vec![
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(123, 456_000_000).unwrap(),
+                )),
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(456, 0).unwrap(),
+                )),
+                None,
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_time64_micro_to_variant_time() {
+        let array: Time64MicrosecondArray = vec![Some(1), Some(123_456_789), None].into();
+        let values = Arc::new(array);
+        run_test(
+            values,
+            vec![
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(0, 1_000).unwrap(),
+                )),
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(123, 456_789_000).unwrap(),
+                )),
+                None,
+            ],
+        )
+    }
+
+    #[test]
+    fn test_cast_time64_nano_to_variant_time() {
+        let array: Time64NanosecondArray =
+            vec![Some(1), Some(1001), Some(123_456_789_012), None].into();
+        run_test(
+            Arc::new(array),
+            // as we can only present with micro second, so the nano second will round donw to 0
+            vec![
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(0, 0).unwrap(),
+                )),
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(0, 1_000).unwrap(),
+                )),
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(123, 456_789_000).unwrap(),
+                )),
+                None,
             ],
         )
     }

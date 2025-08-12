@@ -18,10 +18,10 @@
 //! Module for converting Variant data to JSON format
 use arrow_schema::ArrowError;
 use base64::{engine::general_purpose, Engine as _};
+use chrono::Timelike;
+use parquet_variant::{Variant, VariantList, VariantObject};
 use serde_json::Value;
 use std::io::Write;
-
-use parquet_variant::{Variant, VariantList, VariantObject};
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -38,6 +38,19 @@ fn format_timestamp_ntz_string(ts: &chrono::NaiveDateTime) -> String {
 
 fn format_binary_base64(bytes: &[u8]) -> String {
     general_purpose::STANDARD.encode(bytes)
+}
+
+fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
+    let base = time.format("%H:%M:%S").to_string();
+    let micros = time.nanosecond() / 1000;
+    match micros {
+        0 => format!("{}.{}", base, 0),
+        _ => {
+            let micros_str = format!("{:06}", micros);
+            let micros_str_trimmed = micros_str.trim_matches('0');
+            format!("{}.{}", base, micros_str_trimmed)
+        }
+    }
 }
 
 ///
@@ -110,6 +123,7 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
         Variant::TimestampNtzMicros(ts) => {
             write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts))?
         }
+        Variant::Time(time) => write!(json_buffer, "\"{}\"", format_time_ntz_str(time))?,
         Variant::Binary(bytes) => {
             // Encode binary as base64 string
             let base64_str = format_binary_base64(bytes);
@@ -348,6 +362,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
         Variant::Date(date) => Ok(Value::String(format_date_string(date))),
         Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
         Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),
+        Variant::Time(time) => Ok(Value::String(format_time_ntz_str(time))),
         Variant::Binary(bytes) => Ok(Value::String(format_binary_base64(bytes))),
         Variant::String(s) => Ok(Value::String(s.to_string())),
         Variant::ShortString(s) => Ok(Value::String(s.to_string())),
@@ -371,7 +386,7 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, NaiveDate, Utc};
+    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use parquet_variant::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
     #[test]
@@ -454,6 +469,20 @@ mod tests {
 
         let json_value = variant_to_json_value(&variant)?;
         assert!(matches!(json_value, Value::String(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_time_to_json() -> Result<(), ArrowError> {
+        let naive_time = NaiveTime::from_num_seconds_from_midnight_opt(12345, 123460708).unwrap();
+        let variant = Variant::Time(naive_time);
+        let json = variant_to_json_string(&variant)?;
+        assert!(json.contains("03:25:45.12346"));
+        assert!(json.starts_with('"') && json.ends_with('"'));
+
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::String(_)));
+        println!("{:?}", json);
         Ok(())
     }
 
