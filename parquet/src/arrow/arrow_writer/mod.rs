@@ -188,6 +188,7 @@ pub struct ArrowWriter<W: Write> {
 
     /// The length of arrays to write to each row group
     max_row_group_size: usize,
+    all_progress: std::collections::BTreeMap<usize, ArrowRowGroupWriter>,
 }
 
 impl<W: Write + Send> std::fmt::Debug for ArrowWriter<W> {
@@ -409,12 +410,13 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Create a new row group writer and return its column writers.
-    pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
+    pub fn get_column_writers(&mut self) -> Result<(usize, Vec<ArrowColumnWriter>)> {
         self.flush()?;
-        let in_progress = self
-            .row_group_writer_factory
-            .create_row_group_writer(self.writer.flushed_row_groups().len())?;
-        Ok(in_progress.writers)
+        let row_group_factory = &self.row_group_writer_factory;
+        let row_group_index = self.writer.flushed_row_groups().len();
+        let in_progress = row_group_factory.create_row_group_writer(row_group_index)?;
+        self.all_progress.insert(row_group_index, in_progress);
+        Ok((row_group_index, self.all_progress.get(&row_group_index).unwrap().writers))
     }
 
     /// Append the given column chunks to the file as a new row group.

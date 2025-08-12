@@ -532,7 +532,7 @@ async fn test_multi_threaded_encrypted_writing() {
     // LOW-LEVEL API: Use low level API to write into a file using multiple threads
 
     // Get column writers
-    let col_writers = writer.get_column_writers().unwrap();
+    let (_row_group_index, col_writers) = writer.get_column_writers().unwrap();
     let num_columns = col_writers.len();
 
     // Create a channel for each column writer to send ArrowLeafColumn data to
