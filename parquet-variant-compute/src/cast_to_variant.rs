@@ -207,7 +207,8 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 as_primitive,
                 |v: i256| {
                     // Since `i128::MAX` is larger than the max value of `VariantDecimal16`,
-                    // we can safely convert `i256` to `i128` first and process it like `VariantDecimal16`
+                    // any `i256` value that cannot be cast to `i128` is unable to be cast to `VariantDecimal16` either.
+                    // Therefore, we can safely convert `i256` to `i128` first and process it like `i128`.
                     if let Some(v) = v.to_i128() {
                         decimal_to_variant_decimal!(v, scale, i128, VariantDecimal16)
                     } else {
@@ -574,18 +575,21 @@ mod tests {
             Arc::new(
                 Decimal32Array::from(vec![
                     Some(i32::MIN),
-                    Some(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)),
+                    Some(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION) - 1), // Overflow value will be cast to Null
+                    Some(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)), // The min of Decimal32 with positive scale that can be cast to VariantDecimal4
                     None,
                     Some(-123),
                     Some(0),
                     Some(123),
-                    Some(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)),
+                    Some(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)), // The max of Decimal32 with positive scale that can be cast to VariantDecimal4
+                    Some(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION) + 1), // Overflow value will be cast to Null
                     Some(i32::MAX),
                 ])
                 .with_precision_and_scale(DECIMAL32_MAX_PRECISION, 3)
                 .unwrap(),
             ),
             vec![
+                Some(Variant::Null),
                 Some(Variant::Null),
                 Some(
                     VariantDecimal4::try_new(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION), 3)
@@ -602,6 +606,7 @@ mod tests {
                         .into(),
                 ),
                 Some(Variant::Null),
+                Some(Variant::Null),
             ],
         )
     }
@@ -612,12 +617,14 @@ mod tests {
             Arc::new(
                 Decimal32Array::from(vec![
                     Some(i32::MIN),
-                    Some(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)),
+                    Some(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION - 3) - 1), // Overflow value will be cast to Null
+                    Some(-max_unscaled_value!(32, DECIMAL32_MAX_PRECISION - 3)), // The min of Decimal32 with scale -3 that can be cast to VariantDecimal4
                     None,
                     Some(-123),
                     Some(0),
                     Some(123),
-                    Some(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION)),
+                    Some(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION - 3)), // The max of Decimal32 with scale -3 that can be cast to VariantDecimal4
+                    Some(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION - 3) + 1), // Overflow value will be cast to Null
                     Some(i32::MAX),
                 ])
                 .with_precision_and_scale(DECIMAL32_MAX_PRECISION, -3)
@@ -626,10 +633,26 @@ mod tests {
             vec![
                 Some(Variant::Null),
                 Some(Variant::Null),
+                Some(
+                    VariantDecimal4::try_new(
+                        -max_unscaled_value!(32, DECIMAL32_MAX_PRECISION - 3) * 1000,
+                        0,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
                 None,
                 Some(VariantDecimal4::try_new(-123_000, 0).unwrap().into()),
                 Some(VariantDecimal4::try_new(0, 0).unwrap().into()),
                 Some(VariantDecimal4::try_new(123_000, 0).unwrap().into()),
+                Some(
+                    VariantDecimal4::try_new(
+                        max_unscaled_value!(32, DECIMAL32_MAX_PRECISION - 3) * 1000,
+                        0,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
                 Some(Variant::Null),
                 Some(Variant::Null),
             ],
@@ -642,18 +665,21 @@ mod tests {
             Arc::new(
                 Decimal64Array::from(vec![
                     Some(i64::MIN),
-                    Some(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)),
+                    Some(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION) - 1), // Overflow value will be cast to Null
+                    Some(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)), // The min of Decimal64 with positive scale that can be cast to VariantDecimal8
                     None,
                     Some(-123),
                     Some(0),
                     Some(123),
-                    Some(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)),
+                    Some(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)), // The max of Decimal64 with positive scale that can be cast to VariantDecimal8
+                    Some(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION) + 1), // Overflow value will be cast to Null
                     Some(i64::MAX),
                 ])
                 .with_precision_and_scale(DECIMAL64_MAX_PRECISION, 3)
                 .unwrap(),
             ),
             vec![
+                Some(Variant::Null),
                 Some(Variant::Null),
                 Some(
                     VariantDecimal8::try_new(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION), 3)
@@ -670,6 +696,7 @@ mod tests {
                         .into(),
                 ),
                 Some(Variant::Null),
+                Some(Variant::Null),
             ],
         )
     }
@@ -680,12 +707,14 @@ mod tests {
             Arc::new(
                 Decimal64Array::from(vec![
                     Some(i64::MIN),
-                    Some(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)),
+                    Some(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION - 3) - 1), // Overflow value will be cast to Null
+                    Some(-max_unscaled_value!(64, DECIMAL64_MAX_PRECISION - 3)), // The min of Decimal64 with scale -3 that can be cast to VariantDecimal8
                     None,
                     Some(-123),
                     Some(0),
                     Some(123),
-                    Some(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION)),
+                    Some(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION - 3)), // The max of Decimal64 with scale -3 that can be cast to VariantDecimal8
+                    Some(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION - 3) + 1), // Overflow value will be cast to Null
                     Some(i64::MAX),
                 ])
                 .with_precision_and_scale(DECIMAL64_MAX_PRECISION, -3)
@@ -694,10 +723,26 @@ mod tests {
             vec![
                 Some(Variant::Null),
                 Some(Variant::Null),
+                Some(
+                    VariantDecimal8::try_new(
+                        -max_unscaled_value!(64, DECIMAL64_MAX_PRECISION - 3) * 1000,
+                        0,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
                 None,
                 Some(VariantDecimal8::try_new(-123_000, 0).unwrap().into()),
                 Some(VariantDecimal8::try_new(0, 0).unwrap().into()),
                 Some(VariantDecimal8::try_new(123_000, 0).unwrap().into()),
+                Some(
+                    VariantDecimal8::try_new(
+                        max_unscaled_value!(64, DECIMAL64_MAX_PRECISION - 3) * 1000,
+                        0,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
                 Some(Variant::Null),
                 Some(Variant::Null),
             ],
@@ -710,18 +755,21 @@ mod tests {
             Arc::new(
                 Decimal128Array::from(vec![
                     Some(i128::MIN),
-                    Some(-max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)),
+                    Some(-max_unscaled_value!(128, DECIMAL128_MAX_PRECISION) - 1), // Overflow value will be cast to Null
+                    Some(-max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)), // The min of Decimal128 with positive scale that can be cast to VariantDecimal16
                     None,
                     Some(-123),
                     Some(0),
                     Some(123),
-                    Some(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)),
+                    Some(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)), // The max of Decimal128 with positive scale that can be cast to VariantDecimal16
+                    Some(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION) + 1), // Overflow value will be cast to Null
                     Some(i128::MAX),
                 ])
                 .with_precision_and_scale(DECIMAL128_MAX_PRECISION, 3)
                 .unwrap(),
             ),
             vec![
+                Some(Variant::Null),
                 Some(Variant::Null),
                 Some(
                     VariantDecimal16::try_new(
@@ -744,6 +792,7 @@ mod tests {
                     .into(),
                 ),
                 Some(Variant::Null),
+                Some(Variant::Null),
             ],
         )
     }
@@ -754,12 +803,14 @@ mod tests {
             Arc::new(
                 Decimal128Array::from(vec![
                     Some(i128::MIN),
-                    Some(-max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)),
+                    Some(-max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3) - 1), // Overflow value will be cast to Null
+                    Some(-max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3)), // The min of Decimal128 with scale -3 that can be cast to VariantDecimal16
                     None,
                     Some(-123),
                     Some(0),
                     Some(123),
-                    Some(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION)),
+                    Some(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3)), // The max of Decimal128 with scale -3 that can be cast to VariantDecimal16
+                    Some(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3) + 1), // Overflow value will be cast to Null
                     Some(i128::MAX),
                 ])
                 .with_precision_and_scale(DECIMAL128_MAX_PRECISION, -3)
@@ -768,10 +819,26 @@ mod tests {
             vec![
                 Some(Variant::Null),
                 Some(Variant::Null),
+                Some(
+                    VariantDecimal16::try_new(
+                        -max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3) * 1000,
+                        0,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
                 None,
                 Some(VariantDecimal16::try_new(-123_000, 0).unwrap().into()),
                 Some(VariantDecimal16::try_new(0, 0).unwrap().into()),
                 Some(VariantDecimal16::try_new(123_000, 0).unwrap().into()),
+                Some(
+                    VariantDecimal16::try_new(
+                        max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3) * 1000,
+                        0,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
                 Some(Variant::Null),
                 Some(Variant::Null),
             ],
@@ -784,10 +851,13 @@ mod tests {
             Arc::new(
                 Decimal256Array::from(vec![
                     Some(i256::MIN),
+                    Some(i256::from_i128(
+                        -max_unscaled_value!(128, DECIMAL128_MAX_PRECISION) - 1,
+                    )), // Overflow value will be cast to Null
                     Some(i256::from_i128(-max_unscaled_value!(
                         128,
                         DECIMAL128_MAX_PRECISION
-                    ))),
+                    ))), // The min of Decimal256 with positive scale that can be cast to VariantDecimal16
                     None,
                     Some(i256::from_i128(-123)),
                     Some(i256::from_i128(0)),
@@ -795,13 +865,17 @@ mod tests {
                     Some(i256::from_i128(max_unscaled_value!(
                         128,
                         DECIMAL128_MAX_PRECISION
-                    ))),
+                    ))), // The max of Decimal256 with positive scale that can be cast to VariantDecimal16
+                    Some(i256::from_i128(
+                        max_unscaled_value!(128, DECIMAL128_MAX_PRECISION) + 1,
+                    )), // Overflow value will be cast to Null
                     Some(i256::MAX),
                 ])
                 .with_precision_and_scale(DECIMAL128_MAX_PRECISION, 3)
                 .unwrap(),
             ),
             vec![
+                Some(Variant::Null),
                 Some(Variant::Null),
                 Some(
                     VariantDecimal16::try_new(
@@ -824,6 +898,7 @@ mod tests {
                     .into(),
                 ),
                 Some(Variant::Null),
+                Some(Variant::Null),
             ],
         )
     }
@@ -834,18 +909,24 @@ mod tests {
             Arc::new(
                 Decimal256Array::from(vec![
                     Some(i256::MIN),
+                    Some(i256::from_i128(
+                        -max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3) - 1,
+                    )), // Overflow value will be cast to Null
                     Some(i256::from_i128(-max_unscaled_value!(
                         128,
-                        DECIMAL128_MAX_PRECISION
-                    ))),
+                        DECIMAL128_MAX_PRECISION - 3
+                    ))), // The min of Decimal256 with scale -3 that can be cast to VariantDecimal16
                     None,
                     Some(i256::from_i128(-123)),
                     Some(i256::from_i128(0)),
                     Some(i256::from_i128(123)),
                     Some(i256::from_i128(max_unscaled_value!(
                         128,
-                        DECIMAL128_MAX_PRECISION
-                    ))),
+                        DECIMAL128_MAX_PRECISION - 3
+                    ))), // The max of Decimal256 with scale -3 that can be cast to VariantDecimal16
+                    Some(i256::from_i128(
+                        max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3) + 1,
+                    )), // Overflow value will be cast to Null
                     Some(i256::MAX),
                 ])
                 .with_precision_and_scale(DECIMAL128_MAX_PRECISION, -3)
@@ -854,10 +935,26 @@ mod tests {
             vec![
                 Some(Variant::Null),
                 Some(Variant::Null),
+                Some(
+                    VariantDecimal16::try_new(
+                        -max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3) * 1000,
+                        0,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
                 None,
                 Some(VariantDecimal16::try_new(-123_000, 0).unwrap().into()),
                 Some(VariantDecimal16::try_new(0, 0).unwrap().into()),
                 Some(VariantDecimal16::try_new(123_000, 0).unwrap().into()),
+                Some(
+                    VariantDecimal16::try_new(
+                        max_unscaled_value!(128, DECIMAL128_MAX_PRECISION - 3) * 1000,
+                        0,
+                    )
+                    .unwrap()
+                    .into(),
+                ),
                 Some(Variant::Null),
                 Some(Variant::Null),
             ],
