@@ -22,11 +22,10 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     BinaryType, BinaryViewType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, LargeBinaryType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    Int64Type, Int8Type, LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow::temporal_conversions::{
-    as_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
+    timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType};
@@ -103,7 +102,7 @@ macro_rules! cast_conversion_nongeneric {
 /// assert!(result.is_null(1)); // note null, not Variant::Null
 /// assert_eq!(result.value(2), Variant::Int64(3));
 /// ```
-/// 
+///
 /// For `DataType::Timestamp`s: if the timestamp has any level of precision
 /// greater than a microsecond, it will be truncated. For example
 /// `1970-01-01T00:00:01.234567890Z`
@@ -176,10 +175,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 
                     ts_array
                         .iter()
-                        .map(|x| match x {
-                            Some(y) => Some(timestamp_s_to_datetime(y).unwrap()),
-                            None => None,
-                        })
+                        .map(|x| x.map(|y| timestamp_s_to_datetime(y).unwrap()))
                         .collect()
                 }
                 arrow_schema::TimeUnit::Millisecond => {
@@ -190,10 +186,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 
                     ts_array
                         .iter()
-                        .map(|x| match x {
-                            Some(y) => Some(timestamp_ms_to_datetime(y).unwrap()),
-                            None => None,
-                        })
+                        .map(|x| x.map(|y| timestamp_ms_to_datetime(y).unwrap()))
                         .collect()
                 }
                 arrow_schema::TimeUnit::Microsecond => {
@@ -203,10 +196,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                         .expect("Array is not TimestampMicrosecondArray");
                     ts_array
                         .iter()
-                        .map(|x| match x {
-                            Some(y) => Some(timestamp_us_to_datetime(y).unwrap()),
-                            None => None,
-                        })
+                        .map(|x| x.map(|y| timestamp_us_to_datetime(y).unwrap()))
                         .collect()
                 }
                 arrow_schema::TimeUnit::Nanosecond => {
@@ -216,10 +206,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                         .expect("Array is not TimestampNanosecondArray");
                     ts_array
                         .iter()
-                        .map(|x| match x {
-                            Some(y) => Some(timestamp_ns_to_datetime(y).unwrap()),
-                            None => None,
-                        })
+                        .map(|x| x.map(|y| timestamp_ns_to_datetime(y).unwrap()))
                         .collect()
                 }
             };
