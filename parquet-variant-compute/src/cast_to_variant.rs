@@ -57,6 +57,20 @@ macro_rules! cast_conversion {
     }};
 }
 
+macro_rules! cast_conversion_nongeneric {
+    ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
+        let array = $input.$method();
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                $builder.append_null();
+                continue;
+            }
+            let cast_value = $cast_fn(array.value(i));
+            $builder.append_variant(Variant::from(cast_value));
+        }
+    }};
+}
+
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
 /// need to convert a specific data type
 ///
@@ -134,6 +148,9 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Float64 => {
             primitive_conversion!(Float64Type, input, builder);
         }
+        DataType::FixedSizeBinary(_) => {
+            cast_conversion_nongeneric!(as_fixed_size_binary, |v| v, input, builder);
+        }
         DataType::Null => {
             for _ in 0..input.len() {
                 builder.append_null();
@@ -156,12 +173,36 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, NullArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array,
+        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        NullArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use parquet_variant::{Variant, VariantDecimal16};
-    use std::sync::Arc;
+    use std::{sync::Arc, vec};
+
+    #[test]
+    fn test_cast_to_variant_fixed_size_binary() {
+        let v1 = vec![1, 2];
+        let v2 = vec![3, 4];
+        let v3 = vec![5, 6];
+
+        let mut builder = FixedSizeBinaryBuilder::new(2);
+        builder.append_value(&v1).unwrap();
+        builder.append_value(&v2).unwrap();
+        builder.append_null();
+        builder.append_value(&v3).unwrap();
+        let array = builder.finish();
+
+        run_test(
+            Arc::new(array),
+            vec![
+                Some(Variant::Binary(&v1)),
+                Some(Variant::Binary(&v2)),
+                None,
+                Some(Variant::Binary(&v3)),
+            ],
+        );
+    }
 
     #[test]
     fn test_cast_to_variant_binary() {
