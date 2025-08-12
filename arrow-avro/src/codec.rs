@@ -17,6 +17,7 @@
 
 use crate::schema::{
     Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, Type, TypeName,
+    AVRO_ENUM_SYMBOLS_METADATA_KEY,
 };
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
@@ -1111,11 +1112,9 @@ mod tests {
     #[test]
     fn test_uuid_type() {
         let mut codec = Codec::Fixed(16);
-
         if let c @ Codec::Fixed(16) = &mut codec {
             *c = Codec::Uuid;
         }
-
         assert!(matches!(codec, Codec::Uuid));
     }
 
