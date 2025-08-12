@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::schema::{Attributes, ComplexType, PrimitiveType, Record, Schema, TypeName};
+use crate::schema::{Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, TypeName};
 use arrow_schema::{
-    ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, SchemaBuilder, SchemaRef,
-    TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -139,6 +139,22 @@ impl AvroField {
     pub fn name(&self) -> &str {
         &self.name
     }
+
+    /// Performs schema resolution between a writer and reader schema.
+    ///
+    /// This is the primary entry point for handling schema evolution. It produces an
+    /// `AvroField` that contains all the necessary information to read data written
+    /// with the `writer` schema as if it were written with the `reader` schema.
+    pub(crate) fn resolve_from_writer_and_reader<'a>(
+        writer_schema: &'a Schema<'a>,
+        reader_schema: &'a Schema<'a>,
+        use_utf8view: bool,
+        strict_mode: bool,
+    ) -> Result<Self, ArrowError> {
+        Err(ArrowError::NotYetImplemented(
+            "Resolving schema from a writer and reader schema is not yet implemented".to_string(),
+        ))
+    }
 }
 
 impl<'a> TryFrom<&Schema<'a>> for AvroField {
@@ -164,19 +180,31 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
 /// Builder for an [`AvroField`]
 #[derive(Debug)]
 pub struct AvroFieldBuilder<'a> {
-    schema: &'a Schema<'a>,
+    writer_schema: &'a Schema<'a>,
+    reader_schema: Option<AvroSchema>,
     use_utf8view: bool,
     strict_mode: bool,
 }
 
 impl<'a> AvroFieldBuilder<'a> {
-    /// Creates a new [`AvroFieldBuilder`]
-    pub fn new(schema: &'a Schema<'a>) -> Self {
+    /// Creates a new [`AvroFieldBuilder`] for a given writer schema.
+    pub fn new(writer_schema: &'a Schema<'a>) -> Self {
         Self {
-            schema,
+            writer_schema,
+            reader_schema: None,
             use_utf8view: false,
             strict_mode: false,
         }
+    }
+
+    /// Sets the reader schema for schema resolution.
+    ///
+    /// If a reader schema is provided, the builder will produce a resolved `AvroField`
+    /// that can handle differences between the writer's and reader's schemas.
+    #[inline]
+    pub fn with_reader_schema(mut self, reader_schema: AvroSchema) -> Self {
+        self.reader_schema = Some(reader_schema);
+        self
     }
 
     /// Enable or disable Utf8View support
@@ -193,11 +221,11 @@ impl<'a> AvroFieldBuilder<'a> {
 
     /// Build an [`AvroField`] from the builder
     pub fn build(self) -> Result<AvroField, ArrowError> {
-        match self.schema {
+        match self.writer_schema {
             Schema::Complex(ComplexType::Record(r)) => {
                 let mut resolver = Resolver::default();
                 let data_type = make_data_type(
-                    self.schema,
+                    self.writer_schema,
                     None,
                     &mut resolver,
                     self.use_utf8view,
@@ -210,11 +238,12 @@ impl<'a> AvroFieldBuilder<'a> {
             }
             _ => Err(ArrowError::ParseError(format!(
                 "Expected a Record schema to build an AvroField, but got {:?}",
-                self.schema
+                self.writer_schema
             ))),
         }
     }
 }
+
 /// An Avro encoding
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#encodings>
@@ -431,7 +460,7 @@ struct Resolver<'a> {
 
 impl<'a> Resolver<'a> {
     fn register(&mut self, name: &'a str, namespace: Option<&'a str>, schema: AvroDataType) {
-        self.map.insert((name, namespace.unwrap_or("")), schema);
+        self.map.insert((namespace.unwrap_or(""), name), schema);
     }
 
     fn resolve(&self, name: &str, namespace: Option<&'a str>) -> Result<AvroDataType, ArrowError> {
@@ -446,7 +475,7 @@ impl<'a> Resolver<'a> {
     }
 }
 
-/// Parses a [`AvroDataType`] from the provided [`Schema`] and the given `name` and `namespace`
+/// Parses a [`AvroDataType`] from the provided `schema` and the given `name` and `namespace`
 ///
 /// `name`: is name used to refer to `schema` in its parent
 /// `namespace`: an optional qualifier used as part of a type hierarchy
@@ -660,11 +689,8 @@ fn make_data_type<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{
-        Attributes, ComplexType, Fixed, PrimitiveType, Record, Schema, Type, TypeName,
-    };
+    use crate::schema::{Attributes, PrimitiveType, Schema, Type, TypeName};
     use serde_json;
-    use std::collections::HashMap;
 
     fn create_schema_with_logical_type(
         primitive_type: PrimitiveType,
@@ -679,21 +705,6 @@ mod tests {
             r#type: TypeName::Primitive(primitive_type),
             attributes,
         })
-    }
-
-    fn create_fixed_schema(size: usize, logical_type: &'static str) -> Schema<'static> {
-        let attributes = Attributes {
-            logical_type: Some(logical_type),
-            additional: Default::default(),
-        };
-
-        Schema::Complex(ComplexType::Fixed(Fixed {
-            name: "fixed_type",
-            namespace: None,
-            aliases: Vec::new(),
-            size,
-            attributes,
-        }))
     }
 
     #[test]
@@ -895,6 +906,164 @@ mod tests {
                 ));
             }
             _ => panic!("Expected SchemaError"),
+        }
+    }
+
+    #[test]
+    fn test_nested_record_type_reuse_without_namespace() {
+        let schema_str = r#"
+        {
+          "type": "record",
+          "name": "Record",
+          "fields": [
+            {
+              "name": "nested",
+              "type": {
+                "type": "record",
+                "name": "Nested",
+                "fields": [
+                  { "name": "nested_int", "type": "int" }
+                ]
+              }
+            },
+            { "name": "nestedRecord", "type": "Nested" },
+            { "name": "nestedArray", "type": { "type": "array", "items": "Nested" } },
+            { "name": "nestedMap", "type": { "type": "map", "values": "Nested" } }
+          ]
+        }
+        "#;
+
+        let schema: Schema = serde_json::from_str(schema_str).unwrap();
+
+        let mut resolver = Resolver::default();
+        let avro_data_type = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
+
+        if let Codec::Struct(fields) = avro_data_type.codec() {
+            assert_eq!(fields.len(), 4);
+
+            // nested
+            assert_eq!(fields[0].name(), "nested");
+            let nested_data_type = fields[0].data_type();
+            if let Codec::Struct(nested_fields) = nested_data_type.codec() {
+                assert_eq!(nested_fields.len(), 1);
+                assert_eq!(nested_fields[0].name(), "nested_int");
+                assert!(matches!(nested_fields[0].data_type().codec(), Codec::Int32));
+            } else {
+                panic!(
+                    "'nested' field is not a struct but {:?}",
+                    nested_data_type.codec()
+                );
+            }
+
+            // nestedRecord
+            assert_eq!(fields[1].name(), "nestedRecord");
+            let nested_record_data_type = fields[1].data_type();
+            assert_eq!(
+                nested_record_data_type.codec().data_type(),
+                nested_data_type.codec().data_type()
+            );
+
+            // nestedArray
+            assert_eq!(fields[2].name(), "nestedArray");
+            if let Codec::List(item_type) = fields[2].data_type().codec() {
+                assert_eq!(
+                    item_type.codec().data_type(),
+                    nested_data_type.codec().data_type()
+                );
+            } else {
+                panic!("'nestedArray' field is not a list");
+            }
+
+            // nestedMap
+            assert_eq!(fields[3].name(), "nestedMap");
+            if let Codec::Map(value_type) = fields[3].data_type().codec() {
+                assert_eq!(
+                    value_type.codec().data_type(),
+                    nested_data_type.codec().data_type()
+                );
+            } else {
+                panic!("'nestedMap' field is not a map");
+            }
+        } else {
+            panic!("Top-level schema is not a struct");
+        }
+    }
+
+    #[test]
+    fn test_nested_enum_type_reuse_with_namespace() {
+        let schema_str = r#"
+        {
+          "type": "record",
+          "name": "Record",
+          "namespace": "record_ns",
+          "fields": [
+            {
+              "name": "status",
+              "type": {
+                "type": "enum",
+                "name": "Status",
+                "namespace": "enum_ns",
+                "symbols": ["ACTIVE", "INACTIVE", "PENDING"]
+              }
+            },
+            { "name": "backupStatus", "type": "enum_ns.Status" },
+            { "name": "statusHistory", "type": { "type": "array", "items": "enum_ns.Status" } },
+            { "name": "statusMap", "type": { "type": "map", "values": "enum_ns.Status" } }
+          ]
+        }
+        "#;
+
+        let schema: Schema = serde_json::from_str(schema_str).unwrap();
+
+        let mut resolver = Resolver::default();
+        let avro_data_type = make_data_type(&schema, None, &mut resolver, false, false).unwrap();
+
+        if let Codec::Struct(fields) = avro_data_type.codec() {
+            assert_eq!(fields.len(), 4);
+
+            // status
+            assert_eq!(fields[0].name(), "status");
+            let status_data_type = fields[0].data_type();
+            if let Codec::Enum(symbols) = status_data_type.codec() {
+                assert_eq!(symbols.as_ref(), &["ACTIVE", "INACTIVE", "PENDING"]);
+            } else {
+                panic!(
+                    "'status' field is not an enum but {:?}",
+                    status_data_type.codec()
+                );
+            }
+
+            // backupStatus
+            assert_eq!(fields[1].name(), "backupStatus");
+            let backup_status_data_type = fields[1].data_type();
+            assert_eq!(
+                backup_status_data_type.codec().data_type(),
+                status_data_type.codec().data_type()
+            );
+
+            // statusHistory
+            assert_eq!(fields[2].name(), "statusHistory");
+            if let Codec::List(item_type) = fields[2].data_type().codec() {
+                assert_eq!(
+                    item_type.codec().data_type(),
+                    status_data_type.codec().data_type()
+                );
+            } else {
+                panic!("'statusHistory' field is not a list");
+            }
+
+            // statusMap
+            assert_eq!(fields[3].name(), "statusMap");
+            if let Codec::Map(value_type) = fields[3].data_type().codec() {
+                assert_eq!(
+                    value_type.codec().data_type(),
+                    status_data_type.codec().data_type()
+                );
+            } else {
+                panic!("'statusMap' field is not a map");
+            }
+        } else {
+            panic!("Top-level schema is not a struct");
         }
     }
 }

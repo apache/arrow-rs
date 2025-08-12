@@ -361,7 +361,7 @@ impl FileDecryptionProperties {
 
     /// Get the encryption key for decrypting a file's footer,
     /// and also column data if uniform encryption is used.
-    pub fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<Vec<u8>>> {
+    pub fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<'_, Vec<u8>>> {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => Ok(Cow::Borrowed(&keys.footer_key)),
             DecryptionKeys::ViaRetriever(retriever) => {
@@ -376,7 +376,7 @@ impl FileDecryptionProperties {
         &self,
         column_name: &str,
         key_metadata: Option<&[u8]>,
-    ) -> Result<Cow<Vec<u8>>> {
+    ) -> Result<Cow<'_, Vec<u8>>> {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => match keys.column_keys.get(column_name) {
                 None => Err(general_err!(

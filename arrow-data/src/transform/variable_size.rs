@@ -41,7 +41,7 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
 
 pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>>(
     array: &ArrayData,
-) -> Extend {
+) -> Extend<'_> {
     let offsets = array.buffer::<T>(0);
     let values = array.buffers()[1].as_slice();
     Box::new(
