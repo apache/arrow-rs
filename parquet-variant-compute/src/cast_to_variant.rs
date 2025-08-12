@@ -1187,22 +1187,9 @@ mod tests {
 
     fn test_cast_to_variant_utf8() {
         // Test with short strings (should become ShortString variants)
-        let short_strings = vec![
-            Some("hello"),
-            Some(""),
-            None,
-            Some("world"),
-            Some("test"),
-        ];
-        let mut string_builder = StringBuilder::new();
-        for s in short_strings.iter() {
-            match s {
-                Some(value) => string_builder.append_value(value),
-                None => string_builder.append_null(),
-            }
-        }
-        let string_array = string_builder.finish();
-        
+        let short_strings = vec![Some("hello"), Some(""), None, Some("world"), Some("test")];
+        let string_array = StringArray::from(short_strings.clone());
+
         run_test(
             Arc::new(string_array),
             vec![
@@ -1216,12 +1203,9 @@ mod tests {
 
         // Test with a long string (should become String variant)
         let long_string = "a".repeat(100); // > 63 bytes, so will be Variant::String
-        let mut string_builder = StringBuilder::new();
-        string_builder.append_value(&long_string);
-        string_builder.append_null();
-        string_builder.append_value("short");
-        let string_array = string_builder.finish();
-        
+        let long_strings = vec![Some(long_string.clone()), None, Some("short".to_string())];
+        let string_array = StringArray::from(long_strings);
+
         run_test(
             Arc::new(string_array),
             vec![
@@ -1235,21 +1219,9 @@ mod tests {
     #[test]
     fn test_cast_to_variant_large_utf8() {
         // Test with short strings (should become ShortString variants)
-        let short_strings = vec![
-            Some("hello"),
-            Some(""),
-            None,
-            Some("world"),
-        ];
-        let mut string_builder = LargeStringBuilder::new();
-        for s in short_strings.iter() {
-            match s {
-                Some(value) => string_builder.append_value(value),
-                None => string_builder.append_null(),
-            }
-        }
-        let string_array = string_builder.finish();
-        
+        let short_strings = vec![Some("hello"), Some(""), None, Some("world")];
+        let string_array = LargeStringArray::from(short_strings.clone());
+
         run_test(
             Arc::new(string_array),
             vec![
@@ -1262,12 +1234,9 @@ mod tests {
 
         // Test with a long string (should become String variant)
         let long_string = "b".repeat(100); // > 63 bytes, so will be Variant::String
-        let mut string_builder = LargeStringBuilder::new();
-        string_builder.append_value(&long_string);
-        string_builder.append_null();
-        string_builder.append_value("short");
-        let string_array = string_builder.finish();
-        
+        let long_strings = vec![Some(long_string.clone()), None, Some("short".to_string())];
+        let string_array = LargeStringArray::from(long_strings);
+
         run_test(
             Arc::new(string_array),
             vec![
@@ -1281,13 +1250,9 @@ mod tests {
     #[test]
     fn test_cast_to_variant_utf8_view() {
         // Test with short strings (should become ShortString variants)
-        let mut builder = StringViewBuilder::new();
-        builder.append_value("hello");
-        builder.append_value("");
-        builder.append_null();
-        builder.append_value("world");
-        let string_view_array = builder.finish();
-        
+        let short_strings = vec![Some("hello"), Some(""), None, Some("world")];
+        let string_view_array = StringViewArray::from(short_strings.clone());
+
         run_test(
             Arc::new(string_view_array),
             vec![
@@ -1300,12 +1265,9 @@ mod tests {
 
         // Test with a long string (should become String variant)
         let long_string = "c".repeat(100); // > 63 bytes, so will be Variant::String
-        let mut builder = StringViewBuilder::new();
-        builder.append_value(&long_string);
-        builder.append_null();
-        builder.append_value("short");
-        let string_view_array = builder.finish();
-        
+        let long_strings = vec![Some(long_string.clone()), None, Some("short".to_string())];
+        let string_view_array = StringViewArray::from(long_strings);
+
         run_test(
             Arc::new(string_view_array),
             vec![
