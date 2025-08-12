@@ -469,7 +469,7 @@ mod tests {
             test_timentz,
             [0x53, 0x1f, 0x8e, 0xdf, 0x2, 0, 0, 0],
             decode_time_ntz,
-            NaiveTime::from_num_seconds_from_midnight_opt(12340, 567891_000).unwrap()
+            NaiveTime::from_num_seconds_from_midnight_opt(12340, 567_891_000).unwrap()
         );
 
         #[test]
