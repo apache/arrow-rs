@@ -749,7 +749,7 @@ impl<'a> Maker<'a> {
                     let symbols_json = serde_json::to_string(&e.symbols).map_err(|e| {
                         ArrowError::ParseError(format!("Failed to serialize enum symbols: {e}"))
                     })?;
-                    metadata.insert("avro.enum.symbols".to_string(), symbols_json);
+                    metadata.insert(AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(), symbols_json);
                     let field = AvroDataType {
                         nullability: None,
                         metadata,
