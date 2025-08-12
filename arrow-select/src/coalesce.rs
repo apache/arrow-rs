@@ -1367,7 +1367,6 @@ mod tests {
         RecordBatch::try_new_with_options(schema, columns, &options).unwrap()
     }
 
-
     // Adding tests for exact_size setting to false
     #[test]
     fn test_non_coalesce_small_batches() {
@@ -1376,8 +1375,7 @@ mod tests {
         let batch2 = uint32_batch(3..5); // 2 rows
 
         let schema = Arc::clone(&batch1.schema());
-        let mut coalescer =
-            BatchCoalescer::new(Arc::clone(&schema), 4).with_exact_size(false);
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), 4).with_exact_size(false);
 
         // push first batch (3 rows) -> not enough
         coalescer.push_batch(batch1).unwrap();
@@ -1385,7 +1383,9 @@ mod tests {
 
         // push second batch (2 rows) -> buffered becomes 5 >= 4, non-strict emits all 5 rows
         coalescer.push_batch(batch2).unwrap();
-        let out = coalescer.next_completed_batch().expect("expected a completed batch");
+        let out = coalescer
+            .next_completed_batch()
+            .expect("expected a completed batch");
         assert_eq!(out.num_rows(), 5);
 
         // check contents equal to concatenation of 0..5
@@ -1400,11 +1400,12 @@ mod tests {
         // one large batch > target: in non-strict mode whole batch should be emitted
         let batch = uint32_batch(0..4096);
         let schema = Arc::clone(&batch.schema());
-        let mut coalescer =
-            BatchCoalescer::new(Arc::clone(&schema), 1000).with_exact_size(false);
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), 1000).with_exact_size(false);
 
         coalescer.push_batch(batch).unwrap();
-        let out = coalescer.next_completed_batch().expect("expected a completed batch");
+        let out = coalescer
+            .next_completed_batch()
+            .expect("expected a completed batch");
         assert_eq!(out.num_rows(), 4096);
 
         // compare to expected
@@ -1439,9 +1440,9 @@ mod tests {
     #[test]
     fn test_non_strict_multiple_emits_over_time() {
         // multiple pushes that each eventually push buffered >= target and emit
-        let b1 = uint32_batch(0..3);  // 3
-        let b2 = uint32_batch(3..5);  // 2 -> 3+2=5 emit (first)
-        let b3 = uint32_batch(5..8);  // 3
+        let b1 = uint32_batch(0..3); // 3
+        let b2 = uint32_batch(3..5); // 2 -> 3+2=5 emit (first)
+        let b3 = uint32_batch(5..8); // 3
         let b4 = uint32_batch(8..10); // 2 -> 3+2=5 emit (second)
 
         let schema = Arc::clone(&b1.schema());
@@ -1451,7 +1452,9 @@ mod tests {
         assert!(coalescer.next_completed_batch().is_none());
 
         coalescer.push_batch(b2).unwrap();
-        let out1 = coalescer.next_completed_batch().expect("expected first batch");
+        let out1 = coalescer
+            .next_completed_batch()
+            .expect("expected first batch");
         assert_eq!(out1.num_rows(), 5);
         assert_eq!(normalize_batch(out1), normalize_batch(uint32_batch(0..5)));
 
@@ -1459,7 +1462,9 @@ mod tests {
         assert!(coalescer.next_completed_batch().is_none());
 
         coalescer.push_batch(b4).unwrap();
-        let out2 = coalescer.next_completed_batch().expect("expected second batch");
+        let out2 = coalescer
+            .next_completed_batch()
+            .expect("expected second batch");
         assert_eq!(out2.num_rows(), 5);
         assert_eq!(normalize_batch(out2), normalize_batch(uint32_batch(5..10)));
     }
@@ -1475,16 +1480,26 @@ mod tests {
         let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), 4000).with_exact_size(false);
 
         coalescer.push_batch(big).unwrap();
-        let out_big = coalescer.next_completed_batch().expect("expected big batch");
+        let out_big = coalescer
+            .next_completed_batch()
+            .expect("expected big batch");
         assert_eq!(out_big.num_rows(), 5000);
-        assert_eq!(normalize_batch(out_big), normalize_batch(uint32_batch(0..5000)));
+        assert_eq!(
+            normalize_batch(out_big),
+            normalize_batch(uint32_batch(0..5000))
+        );
 
         coalescer.push_batch(small1).unwrap();
         assert!(coalescer.next_completed_batch().is_none());
 
         coalescer.push_batch(small2).unwrap();
-        let out_small = coalescer.next_completed_batch().expect("expected small batch");
+        let out_small = coalescer
+            .next_completed_batch()
+            .expect("expected small batch");
         assert_eq!(out_small.num_rows(), 5);
-        assert_eq!(normalize_batch(out_small), normalize_batch(uint32_batch(5000..5005)));
+        assert_eq!(
+            normalize_batch(out_small),
+            normalize_batch(uint32_batch(5000..5005))
+        );
     }
 }
