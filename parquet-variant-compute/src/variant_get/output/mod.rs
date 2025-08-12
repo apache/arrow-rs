@@ -16,6 +16,7 @@
 // under the License.
 
 mod primitive;
+pub(crate) mod struct_output;
 mod variant;
 
 use crate::variant_get::output::primitive::PrimitiveOutputBuilder;
@@ -33,6 +34,7 @@ use arrow_schema::{ArrowError, DataType};
 /// or as a specific type (e.g. Int32Array).
 ///
 /// See [`instantiate_output_builder`] to create an instance of this trait.
+#[allow(unused)]
 pub(crate) trait OutputBuilder {
     /// create output for a shredded variant array
     fn partially_shredded(
@@ -60,6 +62,7 @@ pub(crate) trait OutputBuilder {
     ) -> Result<ArrayRef>;
 }
 
+#[allow(unused)]
 pub(crate) fn instantiate_output_builder<'a>(
     options: GetOptions<'a>,
 ) -> Result<Box<dyn OutputBuilder + 'a>> {
