@@ -441,6 +441,59 @@ impl RowSelection {
     pub fn skipped_row_count(&self) -> usize {
         self.iter().filter(|s| s.skip).map(|s| s.row_count).sum()
     }
+
+    /// Expands the selection to align with batch boundaries.
+    /// This is needed when using cached array readers to ensure that
+    /// the cached data covers full batches.
+    #[cfg(feature = "async")]
+    pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
+        if batch_size == 0 {
+            return self.clone();
+        }
+
+        let mut expanded_ranges = Vec::new();
+        let mut row_offset = 0;
+
+        for selector in &self.selectors {
+            if selector.skip {
+                row_offset += selector.row_count;
+            } else {
+                let start = row_offset;
+                let end = row_offset + selector.row_count;
+
+                // Expand start to batch boundary
+                let expanded_start = (start / batch_size) * batch_size;
+                // Expand end to batch boundary
+                let expanded_end = end.div_ceil(batch_size) * batch_size;
+                let expanded_end = expanded_end.min(total_rows);
+
+                expanded_ranges.push(expanded_start..expanded_end);
+                row_offset += selector.row_count;
+            }
+        }
+
+        // Sort ranges by start position
+        expanded_ranges.sort_by_key(|range| range.start);
+
+        // Merge overlapping or consecutive ranges
+        let mut merged_ranges: Vec<Range<usize>> = Vec::new();
+        for range in expanded_ranges {
+            if let Some(last) = merged_ranges.last_mut() {
+                if range.start <= last.end {
+                    // Overlapping or consecutive - merge them
+                    last.end = last.end.max(range.end);
+                } else {
+                    // No overlap - add new range
+                    merged_ranges.push(range);
+                }
+            } else {
+                // First range
+                merged_ranges.push(range);
+            }
+        }
+
+        Self::from_consecutive_ranges(merged_ranges.into_iter(), total_rows)
+    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {
