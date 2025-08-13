@@ -391,18 +391,10 @@ fn run_parity_test(batches: &[&[&str]]) {
 }
 
 fn dict_to_vec(dict: DictionaryArray<Int32Type>) -> Vec<String> {
-    let values: Vec<String> = dict
-        .values()
-        .as_any()
-        .downcast_ref::<StringArray>()
+    dict.downcast_dict::<StringArray>()
         .unwrap()
-        .iter()
-        .map(|v| v.map(|s| s.to_string()).unwrap_or_default())
-        .collect();
-
-    dict.keys()
-        .iter()
-        .map(|i| values[i.unwrap() as usize].clone())
+        .into_iter()
+        .map(|v| v.unwrap_or_default().to_string())
         .collect()
 }
 
@@ -472,12 +464,9 @@ fn build_batch(
     builder: &mut StringDictionaryBuilder<arrow_array::types::Int32Type>,
 ) -> RecordBatch {
     for &val in vals {
-        if val.is_empty() {
-            builder.append_null();
-        } else {
-            builder.append_value(val);
-        }
+        builder.append_value(val);
     }
+
     let array = builder.finish_preserve_values();
 
     let schema = Arc::new(Schema::new(vec![Field::new(
