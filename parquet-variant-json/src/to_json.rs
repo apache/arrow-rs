@@ -25,15 +25,18 @@ use std::io::Write;
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
-const TIMESTAMP_NTZ_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.6f";
 
 // Helper functions for consistent formatting
 fn format_date_string(date: &chrono::NaiveDate) -> String {
     date.format(DATE_FORMAT).to_string()
 }
 
-fn format_timestamp_ntz_string(ts: &chrono::NaiveDateTime) -> String {
-    ts.format(TIMESTAMP_NTZ_FORMAT).to_string()
+fn format_timestamp_ntz_string(ts: &chrono::NaiveDateTime, precision: usize) -> String {
+    let format_str = format!(
+        "{}",
+        ts.format(&format!("%Y-%m-%dT%H:%M:%S%.{}f", precision))
+    );
+    ts.format(format_str.as_str()).to_string()
 }
 
 fn format_binary_base64(bytes: &[u8]) -> String {
@@ -119,11 +122,19 @@ pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Resul
         Variant::Decimal8(decimal) => write!(json_buffer, "{decimal}")?,
         Variant::Decimal16(decimal) => write!(json_buffer, "{decimal}")?,
         Variant::Date(date) => write!(json_buffer, "\"{}\"", format_date_string(date))?,
-        Variant::TimestampMicros(ts) => write!(json_buffer, "\"{}\"", ts.to_rfc3339())?,
+        Variant::TimestampMicros(ts) | Variant::TimestampNanos(ts) => {
+            write!(json_buffer, "\"{}\"", ts.to_rfc3339())?
+        }
         Variant::TimestampNtzMicros(ts) => {
-            write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts))?
+            write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts, 6))?
+        }
+        Variant::TimestampNtzNanos(ts) => {
+            write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts, 9))?
         }
         Variant::Time(time) => write!(json_buffer, "\"{}\"", format_time_ntz_str(time))?,
+        Variant::Uuid(uuid) => {
+            write!(json_buffer, "\"{uuid}\"")?;
+        }
         Variant::Binary(bytes) => {
             // Encode binary as base64 string
             let base64_str = format_binary_base64(bytes);
@@ -360,12 +371,16 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
             Ok(value)
         }
         Variant::Date(date) => Ok(Value::String(format_date_string(date))),
-        Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
-        Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),
         Variant::Time(time) => Ok(Value::String(format_time_ntz_str(time))),
+        Variant::TimestampMicros(ts) | Variant::TimestampNanos(ts) => {
+            Ok(Value::String(ts.to_rfc3339()))
+        }
+        Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts, 6))),
+        Variant::TimestampNtzNanos(ts) => Ok(Value::String(format_timestamp_ntz_string(ts, 9))),
         Variant::Binary(bytes) => Ok(Value::String(format_binary_base64(bytes))),
         Variant::String(s) => Ok(Value::String(s.to_string())),
         Variant::ShortString(s) => Ok(Value::String(s.to_string())),
+        Variant::Uuid(s) => Ok(Value::String(s.as_hyphenated().to_string())),
         Variant::Object(obj) => {
             let map = obj
                 .iter()
@@ -485,6 +500,34 @@ mod tests {
     }
 
     #[test]
+    fn test_timestamp_nanos_to_json() -> Result<(), ArrowError> {
+        let timestamp = DateTime::parse_from_rfc3339("2023-12-25T10:30:45.123456789Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let variant = Variant::TimestampNanos(timestamp);
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "\"2023-12-25T10:30:45.123456789+00:00\"");
+
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::String(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_ntz_nanos_to_json() -> Result<(), ArrowError> {
+        let naive_timestamp = DateTime::from_timestamp(1703505045, 123456789)
+            .unwrap()
+            .naive_utc();
+        let variant = Variant::TimestampNtzNanos(naive_timestamp);
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "\"2023-12-25T11:50:45.123456789\"");
+
+        let json_value = variant_to_json_value(&variant)?;
+        assert!(matches!(json_value, Value::String(_)));
+        Ok(())
+    }
+
+    #[test]
     fn test_binary_to_json() -> Result<(), ArrowError> {
         let binary_data = b"Hello, World!";
         let variant = Variant::Binary(binary_data);
@@ -530,6 +573,21 @@ mod tests {
 
         let json_value = variant_to_json_value(&variant)?;
         assert_eq!(json_value, Value::String("short".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_uuid_to_json() -> Result<(), ArrowError> {
+        let uuid = uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let variant = Variant::Uuid(uuid);
+        let json = variant_to_json_string(&variant)?;
+        assert_eq!(json, "\"123e4567-e89b-12d3-a456-426614174000\"");
+
+        let json_value = variant_to_json_value(&variant)?;
+        assert_eq!(
+            json_value,
+            Value::String("123e4567-e89b-12d3-a456-426614174000".to_string())
+        );
         Ok(())
     }
 
