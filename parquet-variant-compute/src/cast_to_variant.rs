@@ -58,7 +58,10 @@ macro_rules! generic_conversion {
     }};
 }
 
-macro_rules! cast_conversion_nongeneric {
+/// Convert the input array to a `VariantArray` row by row, using `method`
+/// not requiring a generic type to downcast the generic array to a specific
+/// array type and `cast_fn` to transform each element to a type compatible with Variant
+macro_rules! non_generic_conversion {
     ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
         let array = $input.$method();
         for i in 0..array.len() {
@@ -127,7 +130,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // todo: handle other types like Boolean, Strings, Date, Timestamp, etc.
     match input_type {
         DataType::Boolean => {
-            cast_conversion_nongeneric!(as_boolean, |v| v, input, builder);
+            non_generic_conversion!(as_boolean, |v| v, input, builder);
         }
 
         DataType::Binary => {
@@ -224,7 +227,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::FixedSizeBinary(_) => {
-            cast_conversion_nongeneric!(as_fixed_size_binary, |v| v, input, builder);
+            non_generic_conversion!(as_fixed_size_binary, |v| v, input, builder);
         }
         dt => {
             return Err(ArrowError::CastError(format!(
