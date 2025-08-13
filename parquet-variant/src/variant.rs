@@ -211,7 +211,7 @@ impl Deref for ShortString<'_> {
 /// [metadata]: VariantMetadata#Validation
 /// [object]: VariantObject#Validation
 /// [array]: VariantList#Validation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Variant<'m, 'v> {
     /// Primitive type: Null
     Null,
@@ -1283,6 +1283,59 @@ impl TryFrom<(i128, u8)> for Variant<'_, '_> {
         Ok(Variant::Decimal16(VariantDecimal16::try_new(
             value.0, value.1,
         )?))
+    }
+}
+
+impl std::fmt::Debug for Variant<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Variant::Null => write!(f, "null"),
+            Variant::BooleanTrue => write!(f, "true"),
+            Variant::BooleanFalse => write!(f, "false"),
+            Variant::Int8(v) => write!(f, "{v}"),
+            Variant::Int16(v) => write!(f, "{v}"),
+            Variant::Int32(v) => write!(f, "{v}"),
+            Variant::Int64(v) => write!(f, "{v}"),
+            Variant::Float(v) => write!(f, "{v}"),
+            Variant::Double(v) => write!(f, "{v}"),
+            Variant::Decimal4(d) => write!(f, "{d}"),
+            Variant::Decimal8(d) => write!(f, "{d}"),
+            Variant::Decimal16(d) => write!(f, "{d}"),
+            Variant::Date(d) => write!(f, "\"{}\"", d.format("%Y-%m-%d")),
+            Variant::TimestampMicros(ts) => write!(f, "\"{}\"", ts.to_rfc3339()),
+            Variant::TimestampNtzMicros(ts) => {
+                write!(f, "\"{}\"", ts.format("%Y-%m-%dT%H:%M:%S%.6f"))
+            }
+            Variant::Binary(bytes) => {
+                write!(f, "\"0x")?;
+                for b in *bytes {
+                    write!(f, "{:02x}", b)?;
+                }
+                write!(f, "\"")
+            }
+            Variant::String(s) => write!(f, "{s:?}"),
+            Variant::ShortString(s) => write!(f, "{s:?}"),
+            Variant::Object(obj) => {
+                let mut map = f.debug_map();
+                for res in obj.iter_try() {
+                    match res {
+                        Ok((k, v)) => map.entry(&k, &v),
+                        Err(_) => map.entry(&"<invalid>", &"<invalid>"),
+                    };
+                }
+                map.finish()
+            }
+            Variant::List(arr) => {
+                let mut list = f.debug_list();
+                for res in arr.iter_try() {
+                    match res {
+                        Ok(v) => list.entry(&v),
+                        Err(_) => list.entry(&"<invalid>"),
+                    };
+                }
+                list.finish()
+            }
+        }
     }
 }
 
