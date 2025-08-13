@@ -163,11 +163,7 @@ impl<'a, T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'a, 
         _metadata: &BinaryViewArray,
     ) -> Result<ArrayRef> {
         // For all-null case, create a primitive array with all null values
-        let nulls = NullBuffer::from(vec![false; variant_array.len()]);
-        let values = vec![T::default_value(); variant_array.len()];
-        let array = PrimitiveArray::<T>::new(values.into(), Some(nulls))
-            .with_data_type(self.as_type.data_type().clone());
-        Ok(Arc::new(array))
+        Ok(Arc::new(new_null_array(self.as_type.data_type(), variant_array.len())))
     }
 }
 
