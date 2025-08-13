@@ -20,15 +20,21 @@ use std::sync::Arc;
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
     Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray};
-use arrow::datatypes::{i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, LargeBinaryType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
+    TimestampSecondArray,
+};
+use arrow::datatypes::{
+    i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    LargeBinaryType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
 use arrow::temporal_conversions::{
     timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType, TimeUnit};
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use chrono::NaiveTime;
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use half::f16;
 use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
@@ -402,13 +408,19 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, NullArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
+    use arrow::array::{
+        ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+        FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, NullArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    };
+    use arrow::datatypes::i256;
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
-    use arrow::datatypes::i256;
 
     macro_rules! max_unscaled_value {
         (32, $precision:expr) => {

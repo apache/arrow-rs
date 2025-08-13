@@ -477,12 +477,10 @@ mod tests {
         let naive_time = NaiveTime::from_num_seconds_from_midnight_opt(12345, 123460708).unwrap();
         let variant = Variant::Time(naive_time);
         let json = variant_to_json_string(&variant)?;
-        assert!(json.contains("03:25:45.12346"));
-        assert!(json.starts_with('"') && json.ends_with('"'));
+        assert_eq!("\"03:25:45.12346\"", json);
 
         let json_value = variant_to_json_value(&variant)?;
         assert!(matches!(json_value, Value::String(_)));
-        println!("{:?}", json);
         Ok(())
     }
 
