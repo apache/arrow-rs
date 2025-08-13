@@ -38,53 +38,12 @@ pub struct EncryptionWithColumnKey {
 );
 
 thrift_union!(
+/// ColumnCryptoMetadata for a column chunk
 union ColumnCryptoMetaData {
   1: ENCRYPTION_WITH_FOOTER_KEY
   2: (EncryptionWithColumnKey) ENCRYPTION_WITH_COLUMN_KEY
 }
 );
-
-/// ColumnCryptoMetadata for a column chunk
-/*#[derive(Clone, Debug, PartialEq)]
-pub enum ColumnCryptoMetaData {
-    /// The column is encrypted with the footer key
-    EncryptionWithFooterKey,
-    /// The column is encrypted with a column-specific key
-    EncryptionWithColumnKey(EncryptionWithColumnKey),
-}
-
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnCryptoMetaData {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        prot.read_struct_begin()?;
-
-        let field_ident = prot.read_field_begin()?;
-        if field_ident.field_type == FieldType::Stop {
-            return Err(general_err!("received empty union from remote LogicalType"));
-        }
-        let ret = match field_ident.id {
-            1 => {
-                prot.skip_empty_struct()?;
-                Self::EncryptionWithFooterKey
-            }
-            2 => Self::EncryptionWithColumnKey(EncryptionWithColumnKey::try_from(&mut *prot)?),
-            _ => {
-                return Err(general_err!(
-                    "Unexpected EncryptionWithColumnKey {}",
-                    field_ident.id
-                ));
-            }
-        };
-        let field_ident = prot.read_field_begin()?;
-        if field_ident.field_type != FieldType::Stop {
-            return Err(general_err!(
-                "Received multiple fields for union from remote LogicalType"
-            ));
-        }
-        prot.read_struct_end()?;
-        Ok(ret)
-    }
-}*/
 
 /// Converts Thrift definition into `ColumnCryptoMetadata`.
 pub fn try_from_thrift(

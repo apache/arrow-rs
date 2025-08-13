@@ -419,7 +419,8 @@ macro_rules! __thrift_read_variant {
         let val = $crate::thrift_read_list!($prot, $field_type);
         Self::$field_name(val)
     }};
-    ($prot:tt, $field_name:ident) => {
+    ($prot:tt, $field_name:ident) => {{
+        $prot.skip_empty_struct()?;
         Self::$field_name
-    };
+    }};
 }
