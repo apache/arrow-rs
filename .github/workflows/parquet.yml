@@ -52,7 +52,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -75,7 +75,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -128,13 +128,15 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          target: wasm32-unknown-unknown,wasm32-wasip1
+      - name: Install wasm32 targets
+        run: |
+            rustup target add wasm32-unknown-unknown
+            rustup target add wasm32-wasip1
       - name: Install clang # Needed for zlib compilation
         run: apt-get update && apt-get install -y clang gcc-multilib
       - name: Build wasm32-unknown-unknown
@@ -149,7 +151,7 @@ jobs:
       matrix:
         rust: [ stable ]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -182,7 +184,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy
