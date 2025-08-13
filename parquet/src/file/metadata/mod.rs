@@ -103,7 +103,6 @@ use crate::encryption::{
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
-use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::{
     page_encoding_stats::{self, PageEncodingStats},
     page_index::offset_index::PageLocation,
@@ -129,6 +128,10 @@ use crate::{
 };
 use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
+};
+use crate::{
+    file::page_index::index::{Index, NativeIndex},
+    thrift_struct,
 };
 pub use reader::{FooterTail, ParquetMetaDataReader};
 use std::ops::Range;
@@ -426,14 +429,13 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     }
 }
 
+thrift_struct!(
 /// A key-value pair for [`FileMetaData`].
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyValue {
-    /// The key.
-    pub key: String,
-    /// An optional value.
-    pub value: Option<String>,
+  1: required string key
+  2: optional string value
 }
+);
 
 impl KeyValue {
     /// Create a new key value pair
@@ -445,39 +447,6 @@ impl KeyValue {
             key,
             value: value.into(),
         }
-    }
-}
-
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for KeyValue {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        let mut key: Option<&str> = None;
-        let mut value: Option<&str> = None;
-        prot.read_struct_begin()?;
-        loop {
-            let field_ident = prot.read_field_begin()?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = prot.read_string()?;
-                    key = Some(val);
-                }
-                2 => {
-                    let val = prot.read_string()?;
-                    value = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            }
-        }
-        prot.read_struct_end()?;
-        Ok(Self {
-            key: key.expect("Required field key not present").to_owned(),
-            value: value.map(|v| v.to_owned()),
-        })
     }
 }
 
