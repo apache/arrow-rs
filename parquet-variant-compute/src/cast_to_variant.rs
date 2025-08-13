@@ -19,9 +19,11 @@ use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
     BinaryType, BinaryViewType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    Int64Type, Int8Type, IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano,
+    IntervalMonthDayNanoType, IntervalYearMonthType, LargeBinaryType, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError, DataType, IntervalUnit};
 use half::f16;
 use parquet_variant::Variant;
 
@@ -67,6 +69,22 @@ macro_rules! cast_conversion_nongeneric {
             }
             let cast_value = $cast_fn(array.value(i));
             $builder.append_variant(Variant::from(cast_value));
+        }
+    }};
+}
+
+/// Convert interval arrays to VariantArray by converting interval values to bytes
+macro_rules! interval_conversion {
+    ($t:ty, $bytes_fn:expr, $input:expr, $builder:expr) => {{
+        let array = $input.as_primitive::<$t>();
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                $builder.append_null();
+                continue;
+            }
+            let interval = array.value(i);
+            let bytes = $bytes_fn(interval);
+            $builder.append_variant(Variant::from(bytes.as_slice()));
         }
     }};
 }
@@ -151,6 +169,43 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::FixedSizeBinary(_) => {
             cast_conversion_nongeneric!(as_fixed_size_binary, |v| v, input, builder);
         }
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            primitive_conversion!(IntervalYearMonthType, input, builder);
+        }
+        DataType::Interval(IntervalUnit::DayTime) => {
+            interval_conversion!(
+                IntervalDayTimeType,
+                |interval: IntervalDayTime| {
+                    // Convert IntervalDayTime to bytes representation
+                    let days_bytes = interval.days.to_le_bytes();
+                    let millis_bytes = interval.milliseconds.to_le_bytes();
+                    let mut bytes = Vec::with_capacity(8);
+                    bytes.extend_from_slice(&days_bytes);
+                    bytes.extend_from_slice(&millis_bytes);
+                    bytes
+                },
+                input,
+                builder
+            );
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            interval_conversion!(
+                IntervalMonthDayNanoType,
+                |interval: IntervalMonthDayNano| {
+                    // Convert IntervalMonthDayNano to bytes representation
+                    let months_bytes = interval.months.to_le_bytes();
+                    let days_bytes = interval.days.to_le_bytes();
+                    let nanos_bytes = interval.nanoseconds.to_le_bytes();
+                    let mut bytes = Vec::with_capacity(16);
+                    bytes.extend_from_slice(&months_bytes);
+                    bytes.extend_from_slice(&days_bytes);
+                    bytes.extend_from_slice(&nanos_bytes);
+                    bytes
+                },
+                input,
+                builder
+            );
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -170,8 +225,10 @@ mod tests {
     use arrow::array::{
         ArrayRef, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array,
         GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
+    use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
 
@@ -480,6 +537,111 @@ mod tests {
                 Some(Variant::Double(f64::MAX)),
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_interval_year_month() {
+        run_test(
+            Arc::new(IntervalYearMonthArray::from(vec![
+                Some(0),
+                None,
+                Some(12), // 1 year
+                Some(-6), // -6 months
+                Some(i32::MAX),
+                Some(i32::MIN),
+            ])),
+            vec![
+                Some(Variant::Int32(0)),
+                None,
+                Some(Variant::Int32(12)),
+                Some(Variant::Int32(-6)),
+                Some(Variant::Int32(i32::MAX)),
+                Some(Variant::Int32(i32::MIN)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_interval_day_time() {
+        let intervals = vec![
+            Some(IntervalDayTime::new(0, 0)),
+            None,
+            Some(IntervalDayTime::new(1, 1000)), // 1 day, 1 second
+            Some(IntervalDayTime::new(-5, -500)), // -5 days, -500 ms
+            Some(IntervalDayTime::new(i32::MAX, i32::MAX)),
+            Some(IntervalDayTime::new(i32::MIN, i32::MIN)),
+        ];
+
+        let expected = intervals
+            .iter()
+            .map(|opt_interval| {
+                opt_interval.map(|interval| {
+                    let days_bytes = interval.days.to_le_bytes();
+                    let millis_bytes = interval.milliseconds.to_le_bytes();
+                    let mut bytes = Vec::with_capacity(8);
+                    bytes.extend_from_slice(&days_bytes);
+                    bytes.extend_from_slice(&millis_bytes);
+                    bytes
+                })
+            })
+            .collect();
+
+        run_binary_interval_test(Arc::new(IntervalDayTimeArray::from(intervals)), expected);
+    }
+
+    #[test]
+    fn test_cast_to_variant_interval_month_day_nano() {
+        let intervals = vec![
+            Some(IntervalMonthDayNano::new(0, 0, 0)),
+            None,
+            Some(IntervalMonthDayNano::new(12, 30, 1_000_000_000)), // 1 year, 30 days, 1 second
+            Some(IntervalMonthDayNano::new(-6, -15, -500_000_000)), // -6 months, -15 days, -500 ms
+            Some(IntervalMonthDayNano::new(i32::MAX, i32::MAX, i64::MAX)),
+            Some(IntervalMonthDayNano::new(i32::MIN, i32::MIN, i64::MIN)),
+        ];
+
+        let expected = intervals
+            .iter()
+            .map(|opt_interval| {
+                opt_interval.map(|interval| {
+                    let months_bytes = interval.months.to_le_bytes();
+                    let days_bytes = interval.days.to_le_bytes();
+                    let nanos_bytes = interval.nanoseconds.to_le_bytes();
+                    let mut bytes = Vec::with_capacity(16);
+                    bytes.extend_from_slice(&months_bytes);
+                    bytes.extend_from_slice(&days_bytes);
+                    bytes.extend_from_slice(&nanos_bytes);
+                    bytes
+                })
+            })
+            .collect();
+
+        run_binary_interval_test(
+            Arc::new(IntervalMonthDayNanoArray::from(intervals)),
+            expected,
+        );
+    }
+
+    /// Tests binary variant conversion by comparing against expected byte sequences
+    fn run_binary_interval_test(values: ArrayRef, expected: Vec<Option<Vec<u8>>>) {
+        let variant_array = cast_to_variant(&values).unwrap();
+        assert_eq!(variant_array.len(), expected.len());
+
+        for (i, expected_bytes) in expected.iter().enumerate() {
+            match expected_bytes {
+                Some(bytes) => {
+                    assert!(!variant_array.is_null(i), "Expected non-null at index {i}");
+                    assert_eq!(
+                        variant_array.value(i),
+                        Variant::Binary(bytes),
+                        "Binary mismatch at index {i}"
+                    );
+                }
+                None => {
+                    assert!(variant_array.is_null(i), "Expected null at index {i}");
+                }
+            }
+        }
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
