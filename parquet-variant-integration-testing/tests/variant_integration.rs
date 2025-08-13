@@ -24,10 +24,7 @@
 //! Based on the parquet-testing PR: https://github.com/apache/parquet-testing/pull/90/files
 //! Inspired by the arrow-go implementation: https://github.com/apache/arrow-go/pull/455/files
 
-// These tests require the arrow feature
-#![cfg(feature = "arrow")]
-
-use arrow_array::{Array, StructArray};
+use arrow::array::{Array, StructArray};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::{
     env,
@@ -1218,8 +1215,8 @@ fn find_existing_variant_test_data() -> Result<PathBuf, Box<dyn Error>> {
 
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let candidates = vec![
-        PathBuf::from(&manifest_dir).join("../parquet-testing/variant"),
-        PathBuf::from(&manifest_dir).join("parquet-testing/variant"),
+        PathBuf::from(&manifest_dir).join("../../../parquet-testing/variant"),
+        PathBuf::from(&manifest_dir).join("../../parquet-testing/variant"),
     ];
 
     for candidate in candidates {

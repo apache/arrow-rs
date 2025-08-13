@@ -33,6 +33,7 @@ on:
       - parquet-variant/**
       - parquet-variant-json/**
       - parquet-variant-compute/**
+      - parquet-variant-integration-testing/**
       - .github/**
 
 jobs:
@@ -54,6 +55,8 @@ jobs:
         run: cargo test -p parquet-variant-json
       - name: Test parquet-variant-compute
         run: cargo test -p parquet-variant-compute
+      - name: Test parquet-variant-compute
+        run: cargo test -p parquet-variant-integration-testing
 
   # test compilation
   linux-features:
@@ -91,3 +94,5 @@ jobs:
         run: cargo clippy -p parquet-variant-json --all-targets --all-features -- -D warnings
       - name: Run clippy (parquet-variant-compute)
         run: cargo clippy -p parquet-variant-compute --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant-integration-testing)
+        run: cargo clippy -p parquet-variant-integration-testing --all-targets --all-features -- -D warnings

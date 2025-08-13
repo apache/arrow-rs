@@ -42,6 +42,7 @@ members = [
     "parquet-variant",
     "parquet-variant-compute",
     "parquet-variant-json",
+    "parquet-variant-integration-testing",
     "parquet_derive",
     "parquet_derive_test",
 ]
