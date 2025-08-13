@@ -20,10 +20,9 @@ use crate::VariantArray;
 use arrow::error::Result;
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, BinaryViewArray, NullBufferBuilder,
-    PrimitiveArray,
+    new_null_array, Array, ArrayRef, ArrowPrimitiveType, AsArray, BinaryViewArray,
+    NullBufferBuilder, PrimitiveArray,
 };
-use arrow::buffer::NullBuffer;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::Int32Type;
 use arrow_schema::{ArrowError, FieldRef};
@@ -163,7 +162,10 @@ impl<'a, T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'a, 
         _metadata: &BinaryViewArray,
     ) -> Result<ArrayRef> {
         // For all-null case, create a primitive array with all null values
-        Ok(Arc::new(new_null_array(self.as_type.data_type(), variant_array.len())))
+        Ok(Arc::new(new_null_array(
+            self.as_type.data_type(),
+            variant_array.len(),
+        )))
     }
 }
 
