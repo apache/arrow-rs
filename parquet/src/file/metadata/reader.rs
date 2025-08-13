@@ -1353,6 +1353,10 @@ mod tests {
 #[cfg(all(feature = "async", feature = "arrow", test))]
 mod async_tests {
     use super::*;
+
+    use arrow::{array::Int32Array, datatypes::DataType};
+    use arrow_array::RecordBatch;
+    use arrow_schema::{Field, Schema};
     use bytes::Bytes;
     use futures::future::BoxFuture;
     use futures::FutureExt;
@@ -1361,7 +1365,10 @@ mod async_tests {
     use std::io::{Read, Seek, SeekFrom};
     use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tempfile::NamedTempFile;
 
+    use crate::arrow::ArrowWriter;
+    use crate::file::properties::WriterProperties;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
 
@@ -1698,5 +1705,51 @@ mod async_tests {
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+    }
+
+    fn write_parquet_file(offset_index_disabled: bool) -> Result<NamedTempFile> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let file = NamedTempFile::new().unwrap();
+
+        // Write properties with page index disabled
+        let props = WriterProperties::builder()
+            .set_offset_index_disabled(offset_index_disabled)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file.reopen()?, schema, Some(props))?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        Ok(file)
+    }
+
+    fn read_and_check(file: &File, policy: PageIndexPolicy) -> Result<ParquetMetaData> {
+        let mut reader = ParquetMetaDataReader::new().with_page_index_policy(policy);
+        reader.try_parse(file)?;
+        reader.finish()
+    }
+
+    #[test]
+    fn test_page_index_policy() {
+        // With page index
+        let f = write_parquet_file(false).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Required).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
+
+        // Without page index
+        let f = write_parquet_file(true).unwrap();
+        let res = read_and_check(f.as_file(), PageIndexPolicy::Required);
+        assert!(matches!(
+            res,
+            Err(ParquetError::General(e)) if e == "missing offset index"
+        ));
+        read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
     }
 }
