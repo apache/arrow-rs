@@ -92,7 +92,7 @@ impl Header {
     }
 
     /// Returns the [`Schema`] if any
-    pub fn schema(&self) -> Result<Option<Schema<'_>>, ArrowError> {
+    pub(crate) fn schema(&self) -> Result<Option<Schema<'_>>, ArrowError> {
         self.get(SCHEMA_METADATA_KEY)
             .map(|x| {
                 serde_json::from_slice(x).map_err(|e| {

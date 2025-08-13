@@ -33,8 +33,10 @@ rust-version = { workspace = true }
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
+half = { version = "2.1", default-features = false }
 parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
+chrono = {workspace = true}
 
 [lib]
 name = "parquet_variant_compute"
@@ -49,4 +51,3 @@ arrow = { workspace = true, features = ["test_utils"] }
 [[bench]]
 name = "variant_kernels"
 harness = false
-

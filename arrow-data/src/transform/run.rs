@@ -181,7 +181,7 @@ fn process_extends_batch<T: ArrowNativeType>(
 /// Returns a function that extends the run encoded array.
 ///
 /// It finds the physical indices in the source array that correspond to the logical range to copy, and adjusts the runs to the logical indices of the array to extend. The values are copied from the source array to the destination array verbatim.
-pub fn build_extend(array: &ArrayData) -> Extend {
+pub fn build_extend(array: &ArrayData) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, array_idx: usize, start: usize, len: usize| {
             if len == 0 {

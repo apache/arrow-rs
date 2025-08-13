@@ -1061,7 +1061,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Return the metadata associated with this variant, if any.
     ///
     /// Returns `Some(&VariantMetadata)` for object and list variants,
-    pub fn metadata(&self) -> Option<&'m VariantMetadata> {
+    pub fn metadata(&self) -> Option<&'m VariantMetadata<'_>> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
             | Variant::List(VariantList { metadata, .. }) => Some(metadata),
@@ -1101,7 +1101,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let path = VariantPath::from("foo").join(0);
     /// assert_eq!(variant.get_path(&path).unwrap(), bar);
     /// ```
-    pub fn get_path(&self, path: &VariantPath) -> Option<Variant> {
+    pub fn get_path(&self, path: &VariantPath) -> Option<Variant<'_, '_>> {
         path.iter()
             .try_fold(self.clone(), |output, element| match element {
                 VariantPathElement::Field { name } => output.get_object_field(name),
@@ -1155,7 +1155,7 @@ impl From<u8> for Variant<'_, '_> {
         if let Ok(value) = i8::try_from(value) {
             Variant::Int8(value)
         } else {
-            Variant::Int16(value as i16)
+            Variant::Int16(i16::from(value))
         }
     }
 }
@@ -1166,7 +1166,7 @@ impl From<u16> for Variant<'_, '_> {
         if let Ok(value) = i16::try_from(value) {
             Variant::Int16(value)
         } else {
-            Variant::Int32(value as i32)
+            Variant::Int32(i32::from(value))
         }
     }
 }
@@ -1176,7 +1176,7 @@ impl From<u32> for Variant<'_, '_> {
         if let Ok(value) = i32::try_from(value) {
             Variant::Int32(value)
         } else {
-            Variant::Int64(value as i64)
+            Variant::Int64(i64::from(value))
         }
     }
 }
@@ -1188,7 +1188,7 @@ impl From<u64> for Variant<'_, '_> {
             Variant::Int64(value)
         } else {
             // u64 max is 18446744073709551615, which fits in i128
-            Variant::Decimal16(VariantDecimal16::try_new(value as i128, 0).unwrap())
+            Variant::Decimal16(VariantDecimal16::try_new(i128::from(value), 0).unwrap())
         }
     }
 }
