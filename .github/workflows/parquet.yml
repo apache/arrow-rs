@@ -119,7 +119,9 @@ jobs:
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-rust_backened
       - name: Check compilation --no-default-features --features flate2 --features flate2-zlib-rs
         run: cargo check -p parquet --no-default-features --features flate2 --features flate2-zlib-rs
-        
+      - name: Check compilation --no-default-features --features variant_experimental
+        run: cargo check -p parquet --no-default-features --features variant_experimental
+
 
   # test the parquet crate builds against wasm32 in stable rust
   wasm32-build:

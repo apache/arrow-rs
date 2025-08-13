@@ -104,7 +104,7 @@ parquet = { version = "56.0.0", path = "./parquet", default-features = false }
 # These crates have not yet been released and thus do not use the workspace version
 parquet-variant = { version = "0.1.0", path = "./parquet-variant" }
 parquet-variant-json = { version = "0.1.0", path = "./parquet-variant-json" }
-parquet-variant-compute = { version = "0.1.0", path = "./parquet-variant-json" }
+parquet-variant-compute = { version = "0.1.0", path = "./parquet-variant-compute" }
 
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
 
