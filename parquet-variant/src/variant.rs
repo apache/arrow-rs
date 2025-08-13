@@ -27,7 +27,8 @@ use crate::utils::{first_byte_from_slice, slice_from_slice};
 use std::ops::Deref;
 
 use arrow_schema::ArrowError;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use uuid::Uuid;
 
 mod decimal;
 mod list;
@@ -229,6 +230,10 @@ pub enum Variant<'m, 'v> {
     TimestampMicros(DateTime<Utc>),
     /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=false, MICROS)
     TimestampNtzMicros(NaiveDateTime),
+    /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=true, NANOS)
+    TimestampNanos(DateTime<Utc>),
+    /// Primitive (type_id=1): TIMESTAMP(isAdjustedToUTC=false, NANOS)
+    TimestampNtzNanos(NaiveDateTime),
     /// Primitive (type_id=1): DECIMAL(precision, scale) 32-bits
     Decimal4(VariantDecimal4),
     /// Primitive (type_id=1): DECIMAL(precision, scale) 64-bits
@@ -250,6 +255,8 @@ pub enum Variant<'m, 'v> {
     String(&'v str),
     /// Primitive (type_id=1): TIME(isAdjustedToUTC=false, MICROS)
     Time(NaiveTime),
+    /// Primitive (type_id=1): UUID
+    Uuid(Uuid),
     /// Short String (type_id=2): STRING
     ShortString(ShortString<'v>),
     // need both metadata & value
@@ -381,6 +388,13 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::TimestampNtzMicros => {
                     Variant::TimestampNtzMicros(decoder::decode_timestampntz_micros(value_data)?)
                 }
+                VariantPrimitiveType::TimestampNanos => {
+                    Variant::TimestampNanos(decoder::decode_timestamp_nanos(value_data)?)
+                }
+                VariantPrimitiveType::TimestampNtzNanos => {
+                    Variant::TimestampNtzNanos(decoder::decode_timestampntz_nanos(value_data)?)
+                }
+                VariantPrimitiveType::Uuid => Variant::Uuid(decoder::decode_uuid(value_data)?),
                 VariantPrimitiveType::Binary => {
                     Variant::Binary(decoder::decode_binary(value_data)?)
                 }
@@ -528,11 +542,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap().and_utc();
     /// let v1 = Variant::from(datetime);
     /// assert_eq!(v1.as_datetime_utc(), Some(datetime));
-    ///
-    /// // or a non-UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap();
-    /// let v2 = Variant::from(datetime);
-    /// assert_eq!(v2.as_datetime_utc(), Some(datetime.and_utc()));
+    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap().and_utc();
+    /// let v2 = Variant::from(datetime_nanos);
+    /// assert_eq!(v2.as_datetime_utc(), Some(datetime_nanos));
     ///
     /// // but not from other variants
     /// let v3 = Variant::from("hello!");
@@ -540,8 +552,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_datetime_utc(&self) -> Option<DateTime<Utc>> {
         match *self {
-            Variant::TimestampMicros(d) => Some(d),
-            Variant::TimestampNtzMicros(d) => Some(d.and_utc()),
+            Variant::TimestampMicros(d) | Variant::TimestampNanos(d) => Some(d),
             _ => None,
         }
     }
@@ -563,9 +574,9 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(v1.as_naive_datetime(), Some(datetime));
     ///
     /// // or a UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap().and_utc();
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_nano_opt(12, 34, 56, 123456789).unwrap();
     /// let v2 = Variant::from(datetime);
-    /// assert_eq!(v2.as_naive_datetime(), Some(datetime.naive_utc()));
+    /// assert_eq!(v2.as_naive_datetime(), Some(datetime));
     ///
     /// // but not from other variants
     /// let v3 = Variant::from("hello!");
@@ -573,8 +584,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     pub fn as_naive_datetime(&self) -> Option<NaiveDateTime> {
         match *self {
-            Variant::TimestampNtzMicros(d) => Some(d),
-            Variant::TimestampMicros(d) => Some(d.naive_utc()),
+            Variant::TimestampNtzMicros(d) | Variant::TimestampNtzNanos(d) => Some(d),
             _ => None,
         }
     }
@@ -628,6 +638,31 @@ impl<'m, 'v> Variant<'m, 'v> {
     pub fn as_string(&'v self) -> Option<&'v str> {
         match self {
             Variant::String(s) | Variant::ShortString(ShortString(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `uuid hyphenated string` if possible.
+    ///
+    /// Returns `Some(String)` for UUID variants, `None` for non-UUID variants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract a UUID string from a UUID variant
+    /// let s = uuid::Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+    /// let v1 = Variant::Uuid(s);
+    /// assert_eq!("67e55044-10b1-426f-9247-bb680e5fe0c8", v1.as_uuid_string().unwrap());
+    ///
+    /// //but not from other variants
+    /// let v2 = Variant::from(1234);
+    /// assert_eq!(None, v2.as_uuid_string())
+    /// ```
+    pub fn as_uuid_string(&self) -> Option<String> {
+        match self {
+            Variant::Uuid(u) => Some(u.to_string()),
             _ => None,
         }
     }
@@ -1262,12 +1297,21 @@ impl From<NaiveDate> for Variant<'_, '_> {
 
 impl From<DateTime<Utc>> for Variant<'_, '_> {
     fn from(value: DateTime<Utc>) -> Self {
-        Variant::TimestampMicros(value)
+        if value.nanosecond() % 1000 > 0 {
+            Variant::TimestampNanos(value)
+        } else {
+            Variant::TimestampMicros(value)
+        }
     }
 }
+
 impl From<NaiveDateTime> for Variant<'_, '_> {
     fn from(value: NaiveDateTime) -> Self {
-        Variant::TimestampNtzMicros(value)
+        if value.nanosecond() % 1000 > 0 {
+            Variant::TimestampNtzNanos(value)
+        } else {
+            Variant::TimestampNtzMicros(value)
+        }
     }
 }
 
@@ -1367,10 +1411,13 @@ impl std::fmt::Debug for Variant<'_, '_> {
             Variant::TimestampNtzMicros(ts) => {
                 f.debug_tuple("TimestampNtzMicros").field(ts).finish()
             }
+            Variant::TimestampNanos(ts) => f.debug_tuple("TimestampNanos").field(ts).finish(),
+            Variant::TimestampNtzNanos(ts) => f.debug_tuple("TimestampNtzNanos").field(ts).finish(),
             Variant::Binary(bytes) => write!(f, "Binary({:?})", HexString(bytes)),
             Variant::String(s) => f.debug_tuple("String").field(s).finish(),
             Variant::Time(s) => f.debug_tuple("Time").field(s).finish(),
             Variant::ShortString(s) => f.debug_tuple("ShortString").field(s).finish(),
+            Variant::Uuid(uuid) => f.debug_tuple("Uuid").field(&uuid).finish(),
             Variant::Object(obj) => {
                 let mut map = f.debug_map();
                 for res in obj.iter_try() {
@@ -1476,6 +1523,25 @@ mod tests {
             Variant::TimestampNtzMicros(timestamp_ntz),
         );
 
+        let timestamp_nanos_utc = chrono::NaiveDate::from_ymd_opt(2025, 8, 15)
+            .unwrap()
+            .and_hms_nano_opt(12, 3, 4, 123456789)
+            .unwrap()
+            .and_utc();
+        root_obj.insert(
+            "timestamp_nanos",
+            Variant::TimestampNanos(timestamp_nanos_utc),
+        );
+
+        let timestamp_ntz_nanos = chrono::NaiveDate::from_ymd_opt(2025, 8, 15)
+            .unwrap()
+            .and_hms_nano_opt(12, 3, 4, 123456789)
+            .unwrap();
+        root_obj.insert(
+            "timestamp_ntz_nanos",
+            Variant::TimestampNtzNanos(timestamp_ntz_nanos),
+        );
+
         // Add decimal types
         let decimal4 = VariantDecimal4::try_new(1234i32, 2).unwrap();
         root_obj.insert("decimal4", decimal4);
@@ -1496,6 +1562,10 @@ mod tests {
         root_obj.insert("short_string", "Short string with emoji 🎉");
         let time = NaiveTime::from_hms_micro_opt(1, 2, 3, 4).unwrap();
         root_obj.insert("time", time);
+
+        // Add uuid
+        let uuid = Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+        root_obj.insert("uuid", Variant::Uuid(uuid));
 
         // Add nested object
         let mut nested_obj = root_obj.new_object("nested_object");
@@ -1540,17 +1610,20 @@ mod tests {
         assert!(debug_output.contains("\"date\": Date(2024-12-25)"));
         assert!(debug_output.contains("\"timestamp_micros\": TimestampMicros("));
         assert!(debug_output.contains("\"timestamp_ntz_micros\": TimestampNtzMicros("));
+        assert!(debug_output.contains("\"timestamp_nanos\": TimestampNanos("));
+        assert!(debug_output.contains("\"timestamp_ntz_nanos\": TimestampNtzNanos("));
         assert!(debug_output.contains("\"decimal4\": Decimal4("));
         assert!(debug_output.contains("\"decimal8\": Decimal8("));
         assert!(debug_output.contains("\"decimal16\": Decimal16("));
         assert!(debug_output.contains("\"binary\": Binary(01 02 03 04 de ad be ef)"));
         assert!(debug_output.contains("\"string\": String("));
         assert!(debug_output.contains("\"short_string\": ShortString("));
+        assert!(debug_output.contains("\"uuid\": Uuid(67e55044-10b1-426f-9247-bb680e5fe0c8)"));
         assert!(debug_output.contains("\"time\": Time(01:02:03.000004)"));
         assert!(debug_output.contains("\"nested_object\":"));
         assert!(debug_output.contains("\"mixed_list\":"));
 
-        let expected = r#"{"binary": Binary(01 02 03 04 de ad be ef), "boolean_false": BooleanFalse, "boolean_true": BooleanTrue, "date": Date(2024-12-25), "decimal16": Decimal16(VariantDecimal16 { integer: 123456789012345678901234567890, scale: 4 }), "decimal4": Decimal4(VariantDecimal4 { integer: 1234, scale: 2 }), "decimal8": Decimal8(VariantDecimal8 { integer: 123456789, scale: 3 }), "double": Double(1.23456789), "float": Float(1.234), "int16": Int16(1234), "int32": Int32(123456), "int64": Int64(1234567890123456789), "int8": Int8(42), "mixed_list": [Int32(1), ShortString(ShortString("two")), BooleanTrue, Float(4.0), Null, [ShortString(ShortString("nested")), Int8(10)]], "nested_object": {"inner_key1": ShortString(ShortString("inner_value1")), "inner_key2": Int32(999)}, "null": Null, "short_string": ShortString(ShortString("Short string with emoji 🎉")), "string": String("This is a long string that exceeds the short string limit and contains emoji 🦀"), "time": Time(01:02:03.000004), "timestamp_micros": TimestampMicros(2024-12-25T15:30:45.123Z), "timestamp_ntz_micros": TimestampNtzMicros(2024-12-25T15:30:45.123)}"#;
+        let expected = r#"{"binary": Binary(01 02 03 04 de ad be ef), "boolean_false": BooleanFalse, "boolean_true": BooleanTrue, "date": Date(2024-12-25), "decimal16": Decimal16(VariantDecimal16 { integer: 123456789012345678901234567890, scale: 4 }), "decimal4": Decimal4(VariantDecimal4 { integer: 1234, scale: 2 }), "decimal8": Decimal8(VariantDecimal8 { integer: 123456789, scale: 3 }), "double": Double(1.23456789), "float": Float(1.234), "int16": Int16(1234), "int32": Int32(123456), "int64": Int64(1234567890123456789), "int8": Int8(42), "mixed_list": [Int32(1), ShortString(ShortString("two")), BooleanTrue, Float(4.0), Null, [ShortString(ShortString("nested")), Int8(10)]], "nested_object": {"inner_key1": ShortString(ShortString("inner_value1")), "inner_key2": Int32(999)}, "null": Null, "short_string": ShortString(ShortString("Short string with emoji 🎉")), "string": String("This is a long string that exceeds the short string limit and contains emoji 🦀"), "time": Time(01:02:03.000004), "timestamp_micros": TimestampMicros(2024-12-25T15:30:45.123Z), "timestamp_nanos": TimestampNanos(2025-08-15T12:03:04.123456789Z), "timestamp_ntz_micros": TimestampNtzMicros(2024-12-25T15:30:45.123), "timestamp_ntz_nanos": TimestampNtzNanos(2025-08-15T12:03:04.123456789), "uuid": Uuid(67e55044-10b1-426f-9247-bb680e5fe0c8)}"#;
         assert_eq!(debug_output, expected);
 
         // Test alternate Debug formatter (#?)
@@ -1648,8 +1721,17 @@ mod tests {
     "timestamp_micros": TimestampMicros(
         2024-12-25T15:30:45.123Z,
     ),
+    "timestamp_nanos": TimestampNanos(
+        2025-08-15T12:03:04.123456789Z,
+    ),
     "timestamp_ntz_micros": TimestampNtzMicros(
         2024-12-25T15:30:45.123,
+    ),
+    "timestamp_ntz_nanos": TimestampNtzNanos(
+        2025-08-15T12:03:04.123456789,
+    ),
+    "uuid": Uuid(
+        67e55044-10b1-426f-9247-bb680e5fe0c8,
     ),
 }"#;
         assert_eq!(alt_debug_output, expected);
