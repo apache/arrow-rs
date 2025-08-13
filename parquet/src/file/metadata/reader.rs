@@ -57,7 +57,6 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::CryptoContext;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use crate::thrift_read_list;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
 ///
@@ -1091,18 +1090,18 @@ impl ParquetMetaDataReader {
                 }
                 4 => {
                     // need to get temp struct here and then translate
-                    let val = thrift_read_list!(prot, RowGroup);
+                    let val = Vec::<RowGroup>::try_from(prot)?;
                     row_groups = Some(val);
                 }
                 5 => {
-                    let val = thrift_read_list!(prot, KeyValue);
+                    let val = Vec::<KeyValue>::try_from(prot)?;
                     key_value_metadata = Some(val);
                 }
                 6 => {
                     thrift_read_field!(created_by, prot, string);
                 }
                 7 => {
-                    let val = thrift_read_list!(prot, ColumnOrder);
+                    let val = Vec::<ColumnOrder>::try_from(prot)?;
                     column_orders = Some(val);
                 }
                 _ => {

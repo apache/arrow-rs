@@ -20,10 +20,36 @@
 // to not allocate byte arrays or strings.
 #![allow(dead_code)]
 
-use crate::{
-    errors::{ParquetError, Result},
-    parquet_macros::OrderedF64,
-};
+use std::cmp::Ordering;
+
+use crate::errors::{ParquetError, Result};
+
+// Couldn't implement thrift structs with f64 do to lack of Eq
+// for f64. This is a hacky workaround for now...there are other
+// wrappers out there that should probably be used instead.
+// thrift seems to re-export an impl from ordered-float
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrderedF64(f64);
+
+impl From<OrderedF64> for f64 {
+    fn from(value: OrderedF64) -> Self {
+        value.0
+    }
+}
+
+impl Eq for OrderedF64 {} // Marker trait, requires PartialEq
+
+impl Ord for OrderedF64 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for OrderedF64 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 // Thrift compact protocol types for struct fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -457,7 +483,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i64 {
 impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for OrderedF64 {
     type Error = ParquetError;
     fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        Ok(OrderedF64::new(prot.read_double()?))
+        Ok(OrderedF64(prot.read_double()?))
     }
 }
 
@@ -482,9 +508,21 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for &'a [u8] {
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Vec<u8> {
+impl<'a, T> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Vec<T>
+where
+    T: for<'b> TryFrom<&'b mut ThriftCompactInputProtocol<'a>>,
+    ParquetError: for<'b> From<<T as TryFrom<&'b mut ThriftCompactInputProtocol<'a>>>::Error>,
+{
     type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        Ok(prot.read_bytes()?.to_vec())
+
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self, Self::Error> {
+        let list_ident = prot.read_list_begin()?;
+        let mut res = Vec::with_capacity(list_ident.size as usize);
+        for _ in 0..list_ident.size {
+            let val = T::try_from(prot)?;
+            res.push(val);
+        }
+
+        Ok(res)
     }
 }
