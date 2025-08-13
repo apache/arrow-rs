@@ -47,3 +47,26 @@ pub use variant_array_builder::{VariantArrayBuilder, VariantArrayVariantBuilder}
 
 pub use from_json::batch_json_string_to_variant;
 pub use to_json::batch_variant_to_json_string;
+
+/// Convert the input array to a `VariantArray` row by row, using `method`
+/// to downcast the generic array to a specific array type and `cast_fn`
+/// to transform each element to a type compatible with Variant
+#[macro_export]
+macro_rules! cast_conversion {
+    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, builder => $builder:expr) => {{
+        let array = $input.$method::<$t>();
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                $builder.append_null();
+                continue;
+            }
+            let cast_value = $cast_fn(array.value(i));
+            $builder.append_variant(Variant::from(cast_value));
+        }
+    }};
+    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, index => $index:expr) => {{
+        let array = $input.$method::<$t>();
+        let cast_value = $cast_fn(array.value($index));
+        Variant::from(cast_value)
+    }};
+}

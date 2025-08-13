@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cast_conversion;
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
@@ -27,6 +28,7 @@ use parquet_variant::Variant;
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
+#[macro_export]
 macro_rules! primitive_conversion {
     ($t:ty, $input:expr, $builder:expr) => {{
         let array = $input.as_primitive::<$t>();
@@ -39,23 +41,28 @@ macro_rules! primitive_conversion {
         }
     }};
 }
-
-/// Convert the input array to a `VariantArray` row by row, using `method`
-/// to downcast the generic array to a specific array type and `cast_fn`
-/// to transform each element to a type compatible with Variant
-macro_rules! cast_conversion {
-    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.$method::<$t>();
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
-    }};
-}
+//
+// /// Convert the input array to a `VariantArray` row by row, using `method`
+// /// to downcast the generic array to a specific array type and `cast_fn`
+// /// to transform each element to a type compatible with Variant
+// macro_rules! cast_conversion {
+//     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, builder => $builder:expr) => {{
+//         let array = $input.$method::<$t>();
+//         for i in 0..array.len() {
+//             if array.is_null(i) {
+//                 $builder.append_null();
+//                 continue;
+//             }
+//             let cast_value = $cast_fn(array.value(i));
+//             $builder.append_variant(Variant::from(cast_value));
+//         }
+//     }};
+//     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, index => $index:expr) => {{
+//         let array = $input.$method::<$t>();
+//         let cast_value = $cast_fn(array.value($index));
+//         Variant::from(cast_value)
+//     }};
+// }
 
 macro_rules! cast_conversion_nongeneric {
     ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
@@ -101,13 +108,13 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // todo: handle other types like Boolean, Strings, Date, Timestamp, etc.
     match input_type {
         DataType::Binary => {
-            cast_conversion!(BinaryType, as_bytes, |v| v, input, builder);
+            cast_conversion!(BinaryType, as_bytes, |v| v, input, builder => builder);
         }
         DataType::LargeBinary => {
-            cast_conversion!(LargeBinaryType, as_bytes, |v| v, input, builder);
+            cast_conversion!(LargeBinaryType, as_bytes, |v| v, input, builder => builder);
         }
         DataType::BinaryView => {
-            cast_conversion!(BinaryViewType, as_byte_view, |v| v, input, builder);
+            cast_conversion!(BinaryViewType, as_byte_view, |v| v, input, builder => builder);
         }
         DataType::Int8 => {
             primitive_conversion!(Int8Type, input, builder);
@@ -139,7 +146,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 as_primitive,
                 |v: f16| -> f32 { v.into() },
                 input,
-                builder
+                builder => builder
             );
         }
         DataType::Float32 => {
