@@ -15,29 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: audit
-
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-# trigger for all PRs that touch certain files and changes to main
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    paths:
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-
-jobs:
-  cargo-audit:
-    name: Audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-      - name: Run audit check
-        run: cargo audit
+[toolchain]
+channel = "1.89"
+components = ["rustfmt", "clippy"]
