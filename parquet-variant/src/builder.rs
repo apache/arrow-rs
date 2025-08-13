@@ -1021,6 +1021,28 @@ impl VariantBuilder {
         self
     }
 
+    /// Builder-style API for appending a value to the list and returning self to enable method chaining.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if the variant contains duplicate field names in objects
+    /// when validation is enabled. For a fallible version, use [`ListBuilder::try_with_value`].
+    pub fn with_value<'m, 'd, T: Into<Variant<'m, 'd>>>(mut self, value: T) -> Self {
+        self.append_value(value);
+        self
+    }
+
+    /// Builder-style API for appending a value to the list and returns self for method chaining.
+    ///
+    /// This is the fallible version of [`ListBuilder::with_value`].
+    pub fn try_with_value<'m, 'd, T: Into<Variant<'m, 'd>>>(
+        mut self,
+        value: T,
+    ) -> Result<Self, ArrowError> {
+        self.try_append_value(value)?;
+        Ok(self)
+    }
+
     /// This method reserves capacity for field names in the Variant metadata,
     /// which can improve performance when you know the approximate number of unique field
     /// names that will be used across all objects in the [`Variant`].
@@ -3120,5 +3142,266 @@ mod tests {
         list.finish();
 
         builder.finish()
+    }
+
+    #[test]
+    fn test_append_list_object() {
+        // An infinite counter
+        let mut counter = 0..;
+        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
+        let mut builder = VariantBuilder::new();
+        let skip = 3;
+        {
+            let mut list = builder.new_list();
+            for i in take(4) {
+                let mut object = list.new_object();
+                for i in take(3) {
+                    if i % skip != 0 {
+                        object.insert(&format!("field{i}"), i);
+                    }
+                }
+                if i % skip != 0 {
+                    object.finish().unwrap();
+                }
+            }
+            list.finish();
+        }
+        let (metadata, value) = builder.finish();
+        let v1 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v1: {v1:#?}");
+
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let v2 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v2: {v2:#?}");
+
+        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
+    }
+
+    #[test]
+    fn test_append_object_list() {
+        // An infinite counter
+        let mut counter = 0..;
+        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
+        let mut builder = VariantBuilder::new();
+        let skip = 3;
+        {
+            let mut object = builder.new_object();
+            for i in take(4) {
+                let field_name = format!("field{i}");
+                let mut list = object.new_list(&field_name);
+                for i in take(3) {
+                    if i % skip != 0 {
+                        list.append_value(i);
+                    }
+                }
+                if i % skip != 0 {
+                    list.finish();
+                }
+            }
+            object.finish().unwrap();
+        }
+        let (metadata, value) = builder.finish();
+        let v1 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v1: {v1:#?}");
+
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let v2 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v2: {v2:#?}");
+
+        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
+    }
+
+    #[test]
+    fn test_append_list_list() {
+        // An infinite counter
+        let mut counter = 0..;
+        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
+        let mut builder = VariantBuilder::new();
+        let skip = 5;
+        {
+            let mut list = builder.new_list();
+            for i in take(4) {
+                let mut list = list.new_list();
+                for i in take(3) {
+                    if i % skip != 0 {
+                        list.append_value(i);
+                    }
+                }
+                if i % skip != 0 {
+                    list.finish();
+                }
+            }
+            list.finish();
+        }
+        let (metadata, value) = builder.finish();
+        let v1 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v1: {v1:#?}");
+
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let v2 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v2: {v2:#?}");
+
+        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
+    }
+
+    #[test]
+    fn test_append_object_object() {
+        // An infinite counter
+        let mut counter = 0..;
+        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
+        let mut builder = VariantBuilder::new();
+        let skip = 3;
+        {
+            let mut object = builder.new_object();
+            for i in take(4) {
+                let field_name = format!("field{i}");
+                let mut object = object.new_object(&field_name);
+                for i in take(3) {
+                    if i % skip != 0 {
+                        object.insert(&format!("field{i}"), i);
+                    }
+                }
+                if i % skip != 0 {
+                    object.finish().unwrap();
+                }
+            }
+            object.finish().unwrap();
+        }
+
+        let (metadata, value) = builder.finish();
+        let v1 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v1: {v1:#?}");
+
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let v2 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v2: {v2:#?}");
+
+        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
+    }
+
+    #[test]
+    fn test_append_list_object_list() {
+        // An infinite counter
+        let mut counter = 0..;
+        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
+        let mut builder = VariantBuilder::new();
+        let skip = 7;
+        {
+            let mut list = builder.new_list();
+            for i in take(4) {
+                let mut object = list.new_object();
+                for i in take(4) {
+                    let field_name = format!("field{i}");
+                    let mut list = object.new_list(&field_name);
+                    for i in take(3) {
+                        if i % skip != 0 {
+                            list.append_value(i);
+                        }
+                    }
+                    if i % skip != 0 {
+                        list.finish();
+                    }
+                }
+                if i % skip != 0 {
+                    object.finish().unwrap();
+                }
+            }
+            list.finish();
+        }
+        let (metadata, value) = builder.finish();
+        let v1 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v1: {v1:#?}");
+
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let v2 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v2: {v2:#?}");
+
+        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
+    }
+
+    #[test]
+    fn test_append_object_list_object() {
+        // An infinite counter
+        let mut counter = 0..;
+        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
+        let mut builder = VariantBuilder::new();
+        let skip = 5;
+        {
+            let mut object = builder.new_object();
+            for i in take(4) {
+                let field_name = format!("field{i}");
+                let mut list = object.new_list(&field_name);
+                for i in take(3) {
+                    let mut object = list.new_object();
+                    for i in take(3) {
+                        if i % skip != 0 {
+                            object.insert(&format!("field{i}"), i);
+                        }
+                    }
+                    if i % skip != 0 {
+                        object.finish().unwrap();
+                    }
+                }
+                if i % skip != 0 {
+                    list.finish();
+                }
+            }
+            object.finish().unwrap();
+        }
+        let (metadata, value) = builder.finish();
+        let v1 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v1: {v1:#?}");
+
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let v2 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v2: {v2:#?}");
+
+        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
+    }
+
+    #[test]
+    fn test_append_list_object_list_object() {
+        // An infinite counter
+        let mut counter = 0..;
+        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
+        let mut builder = VariantBuilder::new();
+        let skip = 5;
+        {
+            let mut list = builder.new_list();
+            for i in take(4) {
+                let mut object = list.new_object();
+                for i in take(4) {
+                    let field_name = format!("field{i}");
+                    let mut list = object.new_list(&field_name);
+                    for i in take(3) {
+                        let mut object = list.new_object();
+                        for i in take(3) {
+                            if i % skip != 0 {
+                                object.insert(&format!("field{i}"), i);
+                            }
+                        }
+                        if i % skip != 0 {
+                            object.finish().unwrap();
+                        }
+                    }
+                    if i % skip != 0 {
+                        list.finish();
+                    }
+                }
+                if i % skip != 0 {
+                    object.finish().unwrap();
+                }
+            }
+            list.finish();
+        }
+        let (metadata, value) = builder.finish();
+        let v1 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v1: {v1:#?}");
+
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let v2 = Variant::try_new(&metadata, &value).unwrap();
+        println!("v2: {v2:#?}");
+
+        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
     }
 }
