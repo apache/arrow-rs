@@ -58,6 +58,7 @@ pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
         ShreddingState::Unshredded { metadata, value } => {
             output_builder.unshredded(variant_array, metadata, value)
         }
+        ShreddingState::AllNull { metadata } => output_builder.all_null(variant_array, metadata),
     }
 }
 
@@ -284,6 +285,40 @@ mod test {
         assert_eq!(&result, &expected)
     }
 
+    /// AllNull: extract a value as a VariantArray
+    #[test]
+    fn get_variant_all_null_as_variant() {
+        let array = all_null_variant_array();
+        let options = GetOptions::new();
+        let result = variant_get(&array, options).unwrap();
+
+        // expect the result is a VariantArray
+        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result.len(), 3);
+
+        // All values should be null
+        assert!(!result.is_valid(0));
+        assert!(!result.is_valid(1));
+        assert!(!result.is_valid(2));
+    }
+
+    /// AllNull: extract a value as an Int32Array
+    #[test]
+    fn get_variant_all_null_as_int32() {
+        let array = all_null_variant_array();
+        // specify we want the typed value as Int32
+        let field = Field::new("typed_value", DataType::Int32, true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&array, options).unwrap();
+
+        let expected: ArrayRef = Arc::new(Int32Array::from(vec![
+            Option::<i32>::None,
+            Option::<i32>::None,
+            Option::<i32>::None,
+        ]));
+        assert_eq!(&result, &expected)
+    }
+
     /// Return a VariantArray that represents a perfectly "shredded" variant
     /// for the following example (3 Variant::Int32 values):
     ///
@@ -426,5 +461,43 @@ mod test {
             } = self;
             StructArray::new(Fields::from(fields), arrays, nulls)
         }
+    }
+
+    /// Return a VariantArray that represents an "all null" variant
+    /// for the following example (3 null values):
+    ///
+    /// ```text
+    /// null
+    /// null  
+    /// null
+    /// ```
+    ///
+    /// The schema of the corresponding `StructArray` would look like this:
+    ///
+    /// ```text
+    /// StructArray {
+    ///   metadata: BinaryViewArray,
+    /// }
+    /// ```
+    fn all_null_variant_array() -> ArrayRef {
+        let (metadata, _value) = { parquet_variant::VariantBuilder::new().finish() };
+
+        let nulls = NullBuffer::from(vec![
+            false, // row 0 is null
+            false, // row 1 is null
+            false, // row 2 is null
+        ]);
+
+        // metadata is the same for all rows (though they're all null)
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata))
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(
+            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
+        )
     }
 }
