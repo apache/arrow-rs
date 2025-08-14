@@ -290,6 +290,21 @@ impl BatchCoalescer {
         Ok(())
     }
 
+
+    /// Push a batch directly to the completed batches
+    pub fn flush_buffer_and_push_batch_to_completed(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<(), ArrowError> {
+        // This is a convenience method to push a batch directly to the completed
+        // batches without buffering it.
+        if batch.num_rows() > 0 {
+            self.finish_buffered_batch()?;
+            self.completed.push_back(batch);
+        }
+        Ok(())
+    }
+
     /// Concatenates any buffered batches into a single `RecordBatch` and
     /// clears any output buffers
     ///
