@@ -2950,13 +2950,17 @@ mod tests {
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
+        println!("value: {:#?}", Variant::new(&metadata, &value));
+
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(&metadata[0], "second");
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(&metadata[0], "first");
+        assert_eq!(&metadata[1], "second");
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let obj = variant.as_object().unwrap();
-        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
         assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
     }
 
@@ -3001,13 +3005,17 @@ mod tests {
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
+        println!("value: {:#?}", Variant::new(&metadata, &value));
+
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 1); // the fields of nested_object_builder has been rolled back
-        assert_eq!(&metadata[0], "second");
+        assert_eq!(metadata.len(), 2); // the fields of nested_object_builder has been rolled back
+        assert_eq!(&metadata[0], "first");
+        assert_eq!(&metadata[1], "second");
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let obj = variant.as_object().unwrap();
-        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
         assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
     }
 
