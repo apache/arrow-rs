@@ -689,7 +689,7 @@ impl ParentState<'_> {
             }
             | ParentState::List {
                 metadata_builder, ..
-            } => metadata_builder.metadata_buffer.len(),
+            } => metadata_builder.field_names.len(),
         }
     }
 }
