@@ -41,7 +41,7 @@ macro_rules! primitive_conversion {
 }
 
 /// Convert the input array to a `VariantArray` row by row, using `method`
-/// requiring a generic type to downcast the generic array to a specific 
+/// requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
 macro_rules! generic_conversion {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
@@ -58,7 +58,7 @@ macro_rules! generic_conversion {
 }
 
 /// Convert the input array to a `VariantArray` row by row, using `method`
-/// not requiring a generic type to downcast the generic array to a specific 
+/// not requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
 macro_rules! non_generic_conversion {
     ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
@@ -106,7 +106,6 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Boolean => {
             non_generic_conversion!(as_boolean, |v| v, input, builder);
         }
-
         DataType::Binary => {
             generic_conversion!(BinaryType, as_bytes, |v| v, input, builder);
         }
@@ -155,6 +154,12 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Float64 => {
             primitive_conversion!(Float64Type, input, builder);
         }
+        DataType::List(_) => {
+            generic_conversion!(i32, as_list, |v| v, input, builder);
+        }
+        DataType::LargeList(_) => {
+            generic_conversion!(i64, as_list, |v| v, input, builder);
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -173,12 +178,28 @@ mod tests {
     use super::*;
     use arrow::array::{
         ArrayRef, BooleanArray, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, ListArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
-    use parquet_variant::{Variant, VariantDecimal16};
+    use arrow_schema::Field;
+    use parquet_variant::{Variant, VariantDecimal16, VariantList};
     use std::sync::Arc;
 
+    #[test]
+    fn test_cast_to_variant_list() {
+        run_test(
+            Arc::new(ListArray::from(vec![
+                Some(Field::new_list_field(DataType::Int32, false)),
+                None,
+                Some(Field::new_list_field(DataType::Int32, true)),
+            ])),
+            vec![
+                Some(Variant::List(Variant::from(vec!["foo", "bar", "baz"]))),
+                None,
+                Some(Variant::List(Variant::as_list(&'m self))),
+            ],
+        );
+    }
     #[test]
     fn test_cast_to_variant_binary() {
         // BinaryType
