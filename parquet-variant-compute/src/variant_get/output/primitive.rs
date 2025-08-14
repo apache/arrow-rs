@@ -68,7 +68,7 @@ impl<'a, T: ArrowPrimitiveVariant> PrimitiveOutputBuilder<'a, T> {
     }
 }
 
-impl<'a, T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'a, T> {
+impl<T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'_, T> {
     fn partially_shredded(
         &self,
         variant_array: &VariantArray,
@@ -93,7 +93,8 @@ impl<'a, T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'a, 
 
             // if the typed value is null, decode the variant and extract the value
             if typed_value.is_null(i) {
-                // todo follow path
+                // TODO follow path
+                // https://github.com/apache/arrow-rs/issues/8086
                 let variant = variant_array.value(i);
                 let Some(value) = T::from_variant(&variant) else {
                     if self.cast_options.safe {
@@ -137,6 +138,7 @@ impl<'a, T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'a, 
             Ok(typed_value.clone())
         } else {
             // TODO: try to cast the typed_value to the desired type?
+            // https://github.com/apache/arrow-rs/issues/8086
             Err(ArrowError::NotYetImplemented(format!(
                 "variant_get fully_shredded as {:?} with typed_value={:?} is not implemented yet",
                 self.as_type.data_type(),
@@ -162,5 +164,3 @@ impl ArrowPrimitiveVariant for Int32Type {
         variant.as_int32()
     }
 }
-
-// todo for other primitive types

@@ -251,7 +251,7 @@ mod test {
 
         let err = variant_get(&array, options).unwrap_err();
         // TODO make this error message nicer (not Debug format)
-        assert_eq!(err.to_string(), "Cast error: Failed to extract primitive of type Int32 from variant ShortString(\"n/a\") at path VariantPath([])");
+        assert_eq!(err.to_string(), "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])");
     }
 
     /// Perfect Shredding: extract the typed value as a VariantArray

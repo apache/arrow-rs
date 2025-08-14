@@ -15,14 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::{VariantArray, VariantArrayBuilder};
-use arrow::array::{Array, AsArray};
+use arrow::array::{
+    Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray,
+};
 use arrow::datatypes::{
     i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
     Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow_schema::{ArrowError, DataType};
+use arrow::temporal_conversions::{
+    timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
+    timestamp_us_to_datetime,
+};
+use arrow_schema::{ArrowError, DataType, TimeUnit};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use half::f16;
 use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
@@ -42,9 +52,9 @@ macro_rules! primitive_conversion {
 }
 
 /// Convert the input array to a `VariantArray` row by row, using `method`
-/// to downcast the generic array to a specific array type and `cast_fn`
-/// to transform each element to a type compatible with Variant
-macro_rules! cast_conversion {
+/// requiring a generic type to downcast the generic array to a specific
+/// array type and `cast_fn` to transform each element to a type compatible with Variant
+macro_rules! generic_conversion {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
         let array = $input.$method::<$t>();
         for i in 0..array.len() {
@@ -58,7 +68,10 @@ macro_rules! cast_conversion {
     }};
 }
 
-macro_rules! cast_conversion_nongeneric {
+/// Convert the input array to a `VariantArray` row by row, using `method`
+/// not requiring a generic type to downcast the generic array to a specific
+/// array type and `cast_fn` to transform each element to a type compatible with Variant
+macro_rules! non_generic_conversion {
     ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
         let array = $input.$method();
         for i in 0..array.len() {
@@ -70,6 +83,74 @@ macro_rules! cast_conversion_nongeneric {
             $builder.append_variant(Variant::from(cast_value));
         }
     }};
+}
+
+fn convert_timestamp(
+    time_unit: &TimeUnit,
+    time_zone: &Option<Arc<str>>,
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) {
+    let native_datetimes: Vec<Option<NaiveDateTime>> = match time_unit {
+        arrow_schema::TimeUnit::Second => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .expect("Array is not TimestampSecondArray");
+
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_s_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Millisecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .expect("Array is not TimestampMillisecondArray");
+
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_ms_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Microsecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .expect("Array is not TimestampMicrosecondArray");
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_us_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Nanosecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .expect("Array is not TimestampNanosecondArray");
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_ns_to_datetime(y).unwrap()))
+                .collect()
+        }
+    };
+
+    for x in native_datetimes {
+        match x {
+            Some(ndt) => {
+                if time_zone.is_none() {
+                    builder.append_variant(ndt.into());
+                } else {
+                    let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&ndt);
+                    builder.append_variant(utc_dt.into());
+                }
+            }
+            None => {
+                builder.append_null();
+            }
+        }
+    }
 }
 
 /// Convert a decimal value to a `VariantDecimal`
@@ -97,6 +178,36 @@ macro_rules! decimal_to_variant_decimal {
     };
 }
 
+/// Convert arrays that don't need generic type parameters
+macro_rules! cast_conversion_nongeneric {
+    ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
+        let array = $input.$method();
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                $builder.append_null();
+                continue;
+            }
+            let cast_value = $cast_fn(array.value(i));
+            $builder.append_variant(Variant::from(cast_value));
+        }
+    }};
+}
+
+/// Convert string arrays using the offset size as the type parameter
+macro_rules! cast_conversion_string {
+    ($offset_type:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
+        let array = $input.$method::<$offset_type>();
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                $builder.append_null();
+                continue;
+            }
+            let cast_value = $cast_fn(array.value(i));
+            $builder.append_variant(Variant::from(cast_value));
+        }
+    }};
+}
+
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
 /// need to convert a specific data type
 ///
@@ -120,20 +231,30 @@ macro_rules! decimal_to_variant_decimal {
 /// assert!(result.is_null(1)); // note null, not Variant::Null
 /// assert_eq!(result.value(2), Variant::Int64(3));
 /// ```
+///
+/// For `DataType::Timestamp`s: if the timestamp has any level of precision
+/// greater than a microsecond, it will be truncated. For example
+/// `1970-01-01T00:00:01.234567890Z`
+/// will be truncated to
+/// `1970-01-01T00:00:01.234567Z`
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     let mut builder = VariantArrayBuilder::new(input.len());
 
     let input_type = input.data_type();
-    // todo: handle other types like Boolean, Strings, Date, Timestamp, etc.
+    // todo: handle other types like Boolean, Date, Timestamp, etc.
     match input_type {
+        DataType::Boolean => {
+            non_generic_conversion!(as_boolean, |v| v, input, builder);
+        }
+
         DataType::Binary => {
-            cast_conversion!(BinaryType, as_bytes, |v| v, input, builder);
+            generic_conversion!(BinaryType, as_bytes, |v| v, input, builder);
         }
         DataType::LargeBinary => {
-            cast_conversion!(LargeBinaryType, as_bytes, |v| v, input, builder);
+            generic_conversion!(LargeBinaryType, as_bytes, |v| v, input, builder);
         }
         DataType::BinaryView => {
-            cast_conversion!(BinaryViewType, as_byte_view, |v| v, input, builder);
+            generic_conversion!(BinaryViewType, as_byte_view, |v| v, input, builder);
         }
         DataType::Int8 => {
             primitive_conversion!(Int8Type, input, builder);
@@ -160,7 +281,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             primitive_conversion!(UInt64Type, input, builder);
         }
         DataType::Float16 => {
-            cast_conversion!(
+            generic_conversion!(
                 Float16Type,
                 as_primitive,
                 |v: f16| -> f32 { v.into() },
@@ -175,7 +296,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             primitive_conversion!(Float64Type, input, builder);
         }
         DataType::Decimal32(_, scale) => {
-            cast_conversion!(
+            generic_conversion!(
                 Decimal32Type,
                 as_primitive,
                 |v| decimal_to_variant_decimal!(v, scale, i32, VariantDecimal4),
@@ -184,7 +305,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::Decimal64(_, scale) => {
-            cast_conversion!(
+            generic_conversion!(
                 Decimal64Type,
                 as_primitive,
                 |v| decimal_to_variant_decimal!(v, scale, i64, VariantDecimal8),
@@ -193,7 +314,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::Decimal128(_, scale) => {
-            cast_conversion!(
+            generic_conversion!(
                 Decimal128Type,
                 as_primitive,
                 |v| decimal_to_variant_decimal!(v, scale, i128, VariantDecimal16),
@@ -202,7 +323,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::Decimal256(_, scale) => {
-            cast_conversion!(
+            generic_conversion!(
                 Decimal256Type,
                 as_primitive,
                 |v: i256| {
@@ -220,7 +341,31 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::FixedSizeBinary(_) => {
-            cast_conversion_nongeneric!(as_fixed_size_binary, |v| v, input, builder);
+            non_generic_conversion!(as_fixed_size_binary, |v| v, input, builder);
+        }
+        DataType::Null => {
+            for _ in 0..input.len() {
+                builder.append_null();
+            }
+        }
+        DataType::Timestamp(time_unit, time_zone) => {
+            convert_timestamp(time_unit, time_zone, input, &mut builder);
+        }
+        DataType::Interval(_) => {
+            return Err(ArrowError::InvalidArgumentError(
+                "Casting interval types to Variant is not supported. \
+                 The Variant format does not define interval/duration types."
+                    .to_string(),
+            ));
+        }
+        DataType::Utf8 => {
+            cast_conversion_string!(i32, as_string, |v| v, input, builder);
+        }
+        DataType::LargeUtf8 => {
+            cast_conversion_string!(i64, as_string, |v| v, input, builder);
+        }
+        DataType::Utf8View => {
+            cast_conversion_nongeneric!(as_string_view, |v| v, input, builder);
         }
         dt => {
             return Err(ArrowError::CastError(format!(
@@ -239,10 +384,11 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+        ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        IntervalYearMonthArray, LargeStringArray, NullArray, StringArray, StringViewArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -260,6 +406,59 @@ mod tests {
         (128, $precision:expr) => {
             (u128::pow(10, $precision as u32) - 1) as i128
         };
+    }
+
+    #[test]
+    fn test_cast_to_variant_timestamp() {
+        let run_array_tests =
+            |microseconds: i64, array_ntz: Arc<dyn Array>, array_tz: Arc<dyn Array>| {
+                let timestamp = DateTime::from_timestamp_nanos(microseconds * 1000);
+                run_test(
+                    array_tz,
+                    vec![Some(Variant::TimestampMicros(timestamp)), None],
+                );
+                run_test(
+                    array_ntz,
+                    vec![
+                        Some(Variant::TimestampNtzMicros(timestamp.naive_utc())),
+                        None,
+                    ],
+                );
+            };
+
+        let nanosecond = 1234567890;
+        let microsecond = 1234567;
+        let millisecond = 1234;
+        let second = 1;
+
+        let second_array = TimestampSecondArray::from(vec![Some(second), None]);
+        run_array_tests(
+            second * 1000 * 1000,
+            Arc::new(second_array.clone()),
+            Arc::new(second_array.with_timezone("+01:00".to_string())),
+        );
+
+        let millisecond_array = TimestampMillisecondArray::from(vec![Some(millisecond), None]);
+        run_array_tests(
+            millisecond * 1000,
+            Arc::new(millisecond_array.clone()),
+            Arc::new(millisecond_array.with_timezone("+01:00".to_string())),
+        );
+
+        let microsecond_array = TimestampMicrosecondArray::from(vec![Some(microsecond), None]);
+        run_array_tests(
+            microsecond,
+            Arc::new(microsecond_array.clone()),
+            Arc::new(microsecond_array.with_timezone("+01:00".to_string())),
+        );
+
+        // nanoseconds should get truncated to microseconds
+        let nanosecond_array = TimestampNanosecondArray::from(vec![Some(nanosecond), None]);
+        run_array_tests(
+            microsecond,
+            Arc::new(nanosecond_array.clone()),
+            Arc::new(nanosecond_array.with_timezone("+01:00".to_string())),
+        )
     }
 
     #[test]
@@ -336,6 +535,18 @@ mod tests {
                 Some(Variant::Binary(b"")),
                 None,
                 Some(Variant::Binary(b"world")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_bool() {
+        run_test(
+            Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)])),
+            vec![
+                Some(Variant::BooleanTrue),
+                None,
+                Some(Variant::BooleanFalse),
             ],
         );
     }
@@ -567,6 +778,26 @@ mod tests {
                 Some(Variant::Double(f64::MAX)),
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_interval_error() {
+        let array = IntervalYearMonthArray::from(vec![Some(12), None, Some(-6)]);
+        let result = cast_to_variant(&array);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ArrowError::InvalidArgumentError(msg) => {
+                assert!(msg.contains("Casting interval types to Variant is not supported"));
+                assert!(msg.contains("The Variant format does not define interval/duration types"));
+            }
+            _ => panic!("Expected InvalidArgumentError"),
+        }
+    }
+
+    #[test]
+    fn test_cast_to_variant_null() {
+        run_test(Arc::new(NullArray::new(2)), vec![None, None])
     }
 
     #[test]
@@ -959,6 +1190,100 @@ mod tests {
                 Some(Variant::Null),
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_utf8() {
+        // Test with short strings (should become ShortString variants)
+        let short_strings = vec![Some("hello"), Some(""), None, Some("world"), Some("test")];
+        let string_array = StringArray::from(short_strings.clone());
+
+        run_test(
+            Arc::new(string_array),
+            vec![
+                Some(Variant::from("hello")),
+                Some(Variant::from("")),
+                None,
+                Some(Variant::from("world")),
+                Some(Variant::from("test")),
+            ],
+        );
+
+        // Test with a long string (should become String variant)
+        let long_string = "a".repeat(100); // > 63 bytes, so will be Variant::String
+        let long_strings = vec![Some(long_string.clone()), None, Some("short".to_string())];
+        let string_array = StringArray::from(long_strings);
+
+        run_test(
+            Arc::new(string_array),
+            vec![
+                Some(Variant::from(long_string.as_str())),
+                None,
+                Some(Variant::from("short")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_large_utf8() {
+        // Test with short strings (should become ShortString variants)
+        let short_strings = vec![Some("hello"), Some(""), None, Some("world")];
+        let string_array = LargeStringArray::from(short_strings.clone());
+
+        run_test(
+            Arc::new(string_array),
+            vec![
+                Some(Variant::from("hello")),
+                Some(Variant::from("")),
+                None,
+                Some(Variant::from("world")),
+            ],
+        );
+
+        // Test with a long string (should become String variant)
+        let long_string = "b".repeat(100); // > 63 bytes, so will be Variant::String
+        let long_strings = vec![Some(long_string.clone()), None, Some("short".to_string())];
+        let string_array = LargeStringArray::from(long_strings);
+
+        run_test(
+            Arc::new(string_array),
+            vec![
+                Some(Variant::from(long_string.as_str())),
+                None,
+                Some(Variant::from("short")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_utf8_view() {
+        // Test with short strings (should become ShortString variants)
+        let short_strings = vec![Some("hello"), Some(""), None, Some("world")];
+        let string_view_array = StringViewArray::from(short_strings.clone());
+
+        run_test(
+            Arc::new(string_view_array),
+            vec![
+                Some(Variant::from("hello")),
+                Some(Variant::from("")),
+                None,
+                Some(Variant::from("world")),
+            ],
+        );
+
+        // Test with a long string (should become String variant)
+        let long_string = "c".repeat(100); // > 63 bytes, so will be Variant::String
+        let long_strings = vec![Some(long_string.clone()), None, Some("short".to_string())];
+        let string_view_array = StringViewArray::from(long_strings);
+
+        run_test(
+            Arc::new(string_view_array),
+            vec![
+                Some(Variant::from(long_string.as_str())),
+                None,
+                Some(Variant::from("short")),
+            ],
+        );
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
