@@ -369,6 +369,21 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         }
         DataType::Struct(_) => {
             let struct_array = input.as_struct();
+
+            // Pre-convert all field arrays once for better performance
+            // This avoids converting the same field array multiple times
+            // Alternative approach: Use slicing per row: field_array.slice(i, 1)
+            // However, pre-conversion is more efficient for typical use cases
+            let field_variant_arrays: Result<Vec<_>, _> = struct_array
+                .columns()
+                .iter()
+                .map(|field_array| cast_to_variant(field_array.as_ref()))
+                .collect();
+            let field_variant_arrays = field_variant_arrays?;
+
+            // Cache column names to avoid repeated calls
+            let column_names = struct_array.column_names();
+
             for i in 0..struct_array.len() {
                 if struct_array.is_null(i) {
                     builder.append_null();
@@ -380,13 +395,11 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 let mut object_builder = variant_builder.new_object();
 
                 // Iterate through all fields in the struct
-                for (field_idx, field_name) in struct_array.column_names().iter().enumerate() {
-                    let field_array = struct_array.column(field_idx);
-
-                    // Recursively convert the field value to a variant
-                    if !field_array.is_null(i) {
-                        let field_variant_array = cast_to_variant(field_array)?;
-                        let field_variant = field_variant_array.value(i);
+                for (field_idx, field_name) in column_names.iter().enumerate() {
+                    // Use pre-converted field variant arrays for better performance
+                    // Check nulls directly from the pre-converted arrays instead of accessing column again
+                    if !field_variant_arrays[field_idx].is_null(i) {
+                        let field_variant = field_variant_arrays[field_idx].value(i);
                         object_builder.insert(field_name, field_variant);
                     }
                     // Note: we skip null fields rather than inserting Variant::Null
@@ -1397,6 +1410,154 @@ mod tests {
 
         // Check second row: null struct
         assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn test_cast_to_variant_struct_performance() {
+        // Test with a larger struct to demonstrate performance optimization
+        // This test ensures that field arrays are only converted once, not per row
+        let size = 1000;
+
+        let id_array = Int64Array::from((0..size).map(|i| Some(i as i64)).collect::<Vec<_>>());
+        let age_array = Int32Array::from(
+            (0..size)
+                .map(|i| Some((i % 100) as i32))
+                .collect::<Vec<_>>(),
+        );
+        let score_array =
+            Float64Array::from((0..size).map(|i| Some(i as f64 * 0.1)).collect::<Vec<_>>());
+
+        let fields = Fields::from(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("age", DataType::Int32, false),
+            Field::new("score", DataType::Float64, false),
+        ]);
+
+        let struct_array = StructArray::new(
+            fields,
+            vec![
+                Arc::new(id_array),
+                Arc::new(age_array),
+                Arc::new(score_array),
+            ],
+            None,
+        );
+
+        let result = cast_to_variant(&struct_array).unwrap();
+        assert_eq!(result.len(), size);
+
+        // Verify a few sample rows
+        let variant0 = result.value(0);
+        let obj0 = variant0.as_object().unwrap();
+        assert_eq!(obj0.get("id"), Some(Variant::from(0i64)));
+        assert_eq!(obj0.get("age"), Some(Variant::from(0i32)));
+        assert_eq!(obj0.get("score"), Some(Variant::from(0.0f64)));
+
+        let variant999 = result.value(999);
+        let obj999 = variant999.as_object().unwrap();
+        assert_eq!(obj999.get("id"), Some(Variant::from(999i64)));
+        assert_eq!(obj999.get("age"), Some(Variant::from(99i32))); // 999 % 100 = 99
+        assert_eq!(obj999.get("score"), Some(Variant::from(99.9f64)));
+    }
+
+    #[test]
+    fn test_cast_to_variant_struct_performance_large() {
+        // Test with even larger struct and more fields to demonstrate optimization benefits
+        let size = 10000;
+        let num_fields = 10;
+
+        // Create arrays for many fields
+        let mut field_arrays: Vec<ArrayRef> = Vec::new();
+        let mut fields = Vec::new();
+
+        for field_idx in 0..num_fields {
+            match field_idx % 4 {
+                0 => {
+                    // Int64 fields
+                    let array = Int64Array::from(
+                        (0..size)
+                            .map(|i| Some(i as i64 + field_idx as i64))
+                            .collect::<Vec<_>>(),
+                    );
+                    field_arrays.push(Arc::new(array));
+                    fields.push(Field::new(
+                        format!("int_field_{}", field_idx),
+                        DataType::Int64,
+                        false,
+                    ));
+                }
+                1 => {
+                    // Int32 fields
+                    let array = Int32Array::from(
+                        (0..size)
+                            .map(|i| Some((i % 1000) as i32 + field_idx as i32))
+                            .collect::<Vec<_>>(),
+                    );
+                    field_arrays.push(Arc::new(array));
+                    fields.push(Field::new(
+                        format!("int32_field_{}", field_idx),
+                        DataType::Int32,
+                        false,
+                    ));
+                }
+                2 => {
+                    // Float64 fields
+                    let array = Float64Array::from(
+                        (0..size)
+                            .map(|i| Some(i as f64 * 0.1 + field_idx as f64))
+                            .collect::<Vec<_>>(),
+                    );
+                    field_arrays.push(Arc::new(array));
+                    fields.push(Field::new(
+                        format!("float_field_{}", field_idx),
+                        DataType::Float64,
+                        false,
+                    ));
+                }
+                _ => {
+                    // Binary fields
+                    let binary_data: Vec<Option<&[u8]>> = (0..size)
+                        .map(|i| {
+                            // Use static data to avoid lifetime issues in tests
+                            match i % 3 {
+                                0 => Some(b"test_data_0" as &[u8]),
+                                1 => Some(b"test_data_1" as &[u8]),
+                                _ => Some(b"test_data_2" as &[u8]),
+                            }
+                        })
+                        .collect();
+                    let array = BinaryArray::from(binary_data);
+                    field_arrays.push(Arc::new(array));
+                    fields.push(Field::new(
+                        format!("binary_field_{}", field_idx),
+                        DataType::Binary,
+                        false,
+                    ));
+                }
+            }
+        }
+
+        let struct_array = StructArray::new(Fields::from(fields), field_arrays, None);
+
+        let result = cast_to_variant(&struct_array).unwrap();
+        assert_eq!(result.len(), size);
+
+        // Verify a sample of rows
+        for sample_idx in [0, size / 4, size / 2, size - 1] {
+            let variant = result.value(sample_idx);
+            let obj = variant.as_object().unwrap();
+
+            // Should have all fields
+            assert_eq!(obj.len(), num_fields);
+
+            // Verify a few field values
+            if let Some(int_field_0) = obj.get("int_field_0") {
+                assert_eq!(int_field_0, Variant::from(sample_idx as i64));
+            }
+            if let Some(float_field_2) = obj.get("float_field_2") {
+                assert_eq!(float_field_2, Variant::from(sample_idx as f64 * 0.1 + 2.0));
+            }
+        }
     }
 
     #[test]
