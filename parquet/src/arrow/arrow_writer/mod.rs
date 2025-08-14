@@ -188,7 +188,6 @@ pub struct ArrowWriter<W: Write> {
 
     /// The length of arrays to write to each row group
     max_row_group_size: usize,
-    all_progress: std::collections::BTreeMap<usize, ArrowRowGroupWriter>,
 }
 
 impl<W: Write + Send> std::fmt::Debug for ArrowWriter<W> {
@@ -410,18 +409,25 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Create a new row group writer and return its column writers.
-    pub fn get_column_writers(&mut self) -> Result<(usize, Vec<ArrowColumnWriter>)> {
+    pub fn get_column_writers(&mut self) -> Result<(usize, Vec<ArrowColumnWriter>, SerializedRowGroupWriter<W>)> {
         self.flush()?;
         let row_group_factory = &self.row_group_writer_factory;
         let row_group_index = self.writer.flushed_row_groups().len();
         let in_progress = row_group_factory.create_row_group_writer(row_group_index)?;
-        self.all_progress.insert(row_group_index, in_progress);
-        Ok((row_group_index, self.all_progress.get(&row_group_index).unwrap().writers))
+        let serialized_row_group_writer = self.writer.next_row_group()?;
+        Ok((row_group_index, in_progress.writers, serialized_row_group_writer))
+    }
+
+    /// Returns the ArrowRowGroupWriterFactory used bt this ArrowWriter.
+    pub fn get_row_group_writer_factory(self) -> ArrowRowGroupWriterFactory {
+        self.row_group_writer_factory
     }
 
     /// Append the given column chunks to the file as a new row group.
-    pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
-        let mut row_group_writer = self.writer.next_row_group()?;
+    pub fn append_row_group(
+        chunks: Vec<ArrowColumnChunk>,
+        mut row_group_writer: SerializedRowGroupWriter<W>,
+    ) -> Result<()> {
         for chunk in chunks {
             chunk.append_to_row_group(&mut row_group_writer)?;
         }
@@ -853,7 +859,9 @@ impl ArrowRowGroupWriter {
     }
 }
 
-struct ArrowRowGroupWriterFactory {
+/// ArrowRowGroupWriterFactory can be used for creating new [`ArrowRowGroupWriter`] instances
+/// for each row group in the Parquet file.
+pub struct ArrowRowGroupWriterFactory {
     schema: SchemaDescriptor,
     arrow_schema: SchemaRef,
     props: WriterPropertiesPtr,
@@ -892,7 +900,7 @@ impl ArrowRowGroupWriterFactory {
     }
 
     #[cfg(feature = "encryption")]
-    fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
+    pub fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
         let writers = get_column_writers_with_encryptor(
             &self.schema,
             &self.props,
@@ -907,6 +915,13 @@ impl ArrowRowGroupWriterFactory {
     fn create_row_group_writer(&self, _row_group_index: usize) -> Result<ArrowRowGroupWriter> {
         let writers = get_column_writers(&self.schema, &self.props, &self.arrow_schema)?;
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
+    }
+
+    /// Create a new row group writer and return its column writers.
+    pub fn get_column_writers(&mut self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+        // let row_group_index = self.writer.flushed_row_groups().len();
+        let in_progress = self.create_row_group_writer(row_group_index)?;
+        Ok(in_progress.writers)
     }
 }
 
