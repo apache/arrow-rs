@@ -142,7 +142,7 @@ impl ParquetMetaDataReader {
     /// "[Parquet page index]: Layout to Support Page Skipping".
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    #[deprecated(since = "56.0.0", note = "Use `with_page_index_policy` instead")]
+    #[deprecated(since = "56.1.0", note = "Use `with_page_index_policy` instead")]
     pub fn with_page_indexes(self, val: bool) -> Self {
         let policy = PageIndexPolicy::from(val);
         self.with_column_index_policy(policy)
@@ -152,7 +152,7 @@ impl ParquetMetaDataReader {
     /// Enable or disable reading the Parquet [ColumnIndex] structure.
     ///
     /// [ColumnIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    #[deprecated(since = "56.0.0", note = "Use `with_column_index_policy` instead")]
+    #[deprecated(since = "56.1.0", note = "Use `with_column_index_policy` instead")]
     pub fn with_column_indexes(self, val: bool) -> Self {
         let policy = PageIndexPolicy::from(val);
         self.with_column_index_policy(policy)
@@ -161,7 +161,7 @@ impl ParquetMetaDataReader {
     /// Enable or disable reading the Parquet [OffsetIndex] structure.
     ///
     /// [OffsetIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    #[deprecated(since = "56.0.0", note = "Use `with_offset_index_policy` instead")]
+    #[deprecated(since = "56.1.0", note = "Use `with_offset_index_policy` instead")]
     pub fn with_offset_indexes(self, val: bool) -> Self {
         let policy = PageIndexPolicy::from(val);
         self.with_offset_index_policy(policy)
@@ -1239,6 +1239,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_try_parse() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();
@@ -1623,6 +1624,7 @@ mod async_tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_page_index() {
         let mut file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();

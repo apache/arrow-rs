@@ -191,6 +191,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 
     /// Creates file reader from a Parquet file with read options.
     /// Returns an error if the Parquet file does not exist or is corrupt.
+    #[allow(deprecated)]
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let mut metadata_builder = ParquetMetaDataReader::new()
             .parse_and_finish(&chunk_reader)?
