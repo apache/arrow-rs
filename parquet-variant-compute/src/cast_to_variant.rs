@@ -178,6 +178,21 @@ macro_rules! decimal_to_variant_decimal {
     };
 }
 
+/// Convert string arrays using the offset size as the type parameter
+macro_rules! cast_conversion_string {
+    ($offset_type:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
+        let array = $input.$method::<$offset_type>();
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                $builder.append_null();
+                continue;
+            }
+            let cast_value = $cast_fn(array.value(i));
+            $builder.append_variant(Variant::from(cast_value));
+        }
+    }};
+}
+
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
 /// need to convert a specific data type
 ///
@@ -329,37 +344,13 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             ));
         }
         DataType::Utf8 => {
-            let array = input.as_string::<i32>();
-            for i in 0..array.len() {
-                if array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-                let cast_value = array.value(i);
-                builder.append_variant(Variant::from(cast_value));
-            }
+            cast_conversion_string!(i32, as_string, |v| v, input, builder);
         }
         DataType::LargeUtf8 => {
-            let array = input.as_string::<i64>();
-            for i in 0..array.len() {
-                if array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-                let cast_value = array.value(i);
-                builder.append_variant(Variant::from(cast_value));
-            }
+            cast_conversion_string!(i64, as_string, |v| v, input, builder);
         }
         DataType::Utf8View => {
-            let array = input.as_string_view();
-            for i in 0..array.len() {
-                if array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-                let cast_value = array.value(i);
-                builder.append_variant(Variant::from(cast_value));
-            }
+            cast_conversion_nongeneric!(as_string_view, |v| v, input, builder);
         }
         dt => {
             return Err(ArrowError::CastError(format!(
