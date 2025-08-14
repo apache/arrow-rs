@@ -27,7 +27,7 @@ use crate::utils::{first_byte_from_slice, slice_from_slice};
 use std::ops::Deref;
 
 use arrow_schema::ArrowError;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 
 mod decimal;
 mod list;
@@ -248,6 +248,8 @@ pub enum Variant<'m, 'v> {
     Binary(&'v [u8]),
     /// Primitive (type_id=1): STRING
     String(&'v str),
+    /// Primitive (type_id=1): TIME(isAdjustedToUTC=false, MICROS)
+    Time(NaiveTime),
     /// Short String (type_id=2): STRING
     ShortString(ShortString<'v>),
     // need both metadata & value
@@ -385,6 +387,7 @@ impl<'m, 'v> Variant<'m, 'v> {
                 VariantPrimitiveType::String => {
                     Variant::String(decoder::decode_long_string(value_data)?)
                 }
+                VariantPrimitiveType::Time => Variant::Time(decoder::decode_time_ntz(value_data)?),
             },
             VariantBasicType::ShortString => {
                 Variant::ShortString(decoder::decode_short_string(value_metadata, value_data)?)
@@ -1030,6 +1033,34 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to a `NaiveTime` if possible.
+    ///
+    /// Returns `Some(NaiveTime)` for `Variant::Time`,
+    /// `None` for non-Time variants.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use chrono::NaiveTime;
+    /// use parquet_variant::Variant;
+    ///
+    /// // you can extract a `NaiveTime` from a `Variant::Time`
+    /// let time = NaiveTime::from_hms_micro_opt(1, 2, 3, 4).unwrap();
+    /// let v1 = Variant::from(time);
+    /// assert_eq!(Some(time), v1.as_time_utc());
+    ///
+    /// // but not from other variants.
+    /// let v2 = Variant::from("Hello");
+    /// assert_eq!(None, v2.as_time_utc());
+    /// ```
+    pub fn as_time_utc(&'m self) -> Option<NaiveTime> {
+        if let Variant::Time(time) = self {
+            Some(*time)
+        } else {
+            None
+        }
+    }
+
     /// If this is a list and the requested index is in bounds, retrieves the corresponding
     /// element. Otherwise, returns None.
     ///
@@ -1246,6 +1277,12 @@ impl<'v> From<&'v [u8]> for Variant<'_, 'v> {
     }
 }
 
+impl From<NaiveTime> for Variant<'_, '_> {
+    fn from(value: NaiveTime) -> Self {
+        Variant::Time(value)
+    }
+}
+
 impl<'v> From<&'v str> for Variant<'_, 'v> {
     fn from(value: &'v str) -> Self {
         if value.len() > MAX_SHORT_STRING_BYTES {
@@ -1332,6 +1369,7 @@ impl std::fmt::Debug for Variant<'_, '_> {
             }
             Variant::Binary(bytes) => write!(f, "Binary({:?})", HexString(bytes)),
             Variant::String(s) => f.debug_tuple("String").field(s).finish(),
+            Variant::Time(s) => f.debug_tuple("Time").field(s).finish(),
             Variant::ShortString(s) => f.debug_tuple("ShortString").field(s).finish(),
             Variant::Object(obj) => {
                 let mut map = f.debug_map();
@@ -1456,6 +1494,8 @@ mod tests {
             "This is a long string that exceeds the short string limit and contains emoji 🦀";
         root_obj.insert("string", long_string);
         root_obj.insert("short_string", "Short string with emoji 🎉");
+        let time = NaiveTime::from_hms_micro_opt(1, 2, 3, 4).unwrap();
+        root_obj.insert("time", time);
 
         // Add nested object
         let mut nested_obj = root_obj.new_object("nested_object");
@@ -1506,10 +1546,11 @@ mod tests {
         assert!(debug_output.contains("\"binary\": Binary(01 02 03 04 de ad be ef)"));
         assert!(debug_output.contains("\"string\": String("));
         assert!(debug_output.contains("\"short_string\": ShortString("));
+        assert!(debug_output.contains("\"time\": Time(01:02:03.000004)"));
         assert!(debug_output.contains("\"nested_object\":"));
         assert!(debug_output.contains("\"mixed_list\":"));
 
-        let expected = r#"{"binary": Binary(01 02 03 04 de ad be ef), "boolean_false": BooleanFalse, "boolean_true": BooleanTrue, "date": Date(2024-12-25), "decimal16": Decimal16(VariantDecimal16 { integer: 123456789012345678901234567890, scale: 4 }), "decimal4": Decimal4(VariantDecimal4 { integer: 1234, scale: 2 }), "decimal8": Decimal8(VariantDecimal8 { integer: 123456789, scale: 3 }), "double": Double(1.23456789), "float": Float(1.234), "int16": Int16(1234), "int32": Int32(123456), "int64": Int64(1234567890123456789), "int8": Int8(42), "mixed_list": [Int32(1), ShortString(ShortString("two")), BooleanTrue, Float(4.0), Null, [ShortString(ShortString("nested")), Int8(10)]], "nested_object": {"inner_key1": ShortString(ShortString("inner_value1")), "inner_key2": Int32(999)}, "null": Null, "short_string": ShortString(ShortString("Short string with emoji 🎉")), "string": String("This is a long string that exceeds the short string limit and contains emoji 🦀"), "timestamp_micros": TimestampMicros(2024-12-25T15:30:45.123Z), "timestamp_ntz_micros": TimestampNtzMicros(2024-12-25T15:30:45.123)}"#;
+        let expected = r#"{"binary": Binary(01 02 03 04 de ad be ef), "boolean_false": BooleanFalse, "boolean_true": BooleanTrue, "date": Date(2024-12-25), "decimal16": Decimal16(VariantDecimal16 { integer: 123456789012345678901234567890, scale: 4 }), "decimal4": Decimal4(VariantDecimal4 { integer: 1234, scale: 2 }), "decimal8": Decimal8(VariantDecimal8 { integer: 123456789, scale: 3 }), "double": Double(1.23456789), "float": Float(1.234), "int16": Int16(1234), "int32": Int32(123456), "int64": Int64(1234567890123456789), "int8": Int8(42), "mixed_list": [Int32(1), ShortString(ShortString("two")), BooleanTrue, Float(4.0), Null, [ShortString(ShortString("nested")), Int8(10)]], "nested_object": {"inner_key1": ShortString(ShortString("inner_value1")), "inner_key2": Int32(999)}, "null": Null, "short_string": ShortString(ShortString("Short string with emoji 🎉")), "string": String("This is a long string that exceeds the short string limit and contains emoji 🦀"), "time": Time(01:02:03.000004), "timestamp_micros": TimestampMicros(2024-12-25T15:30:45.123Z), "timestamp_ntz_micros": TimestampNtzMicros(2024-12-25T15:30:45.123)}"#;
         assert_eq!(debug_output, expected);
 
         // Test alternate Debug formatter (#?)
@@ -1600,6 +1641,9 @@ mod tests {
     ),
     "string": String(
         "This is a long string that exceeds the short string limit and contains emoji 🦀",
+    ),
+    "time": Time(
+        01:02:03.000004,
     ),
     "timestamp_micros": TimestampMicros(
         2024-12-25T15:30:45.123Z,
