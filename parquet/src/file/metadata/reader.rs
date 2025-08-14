@@ -1046,7 +1046,7 @@ impl ParquetMetaDataReader {
     /// create meta data from thrift encoded bytes
     pub fn decode_file_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
         let mut prot = ThriftCompactInputProtocol::new(buf);
-        Ok(ParquetMetaData::try_from(&mut prot)?)
+        ParquetMetaData::try_from(&mut prot)
     }
 
     /// Parses column orders from Thrift definition.
