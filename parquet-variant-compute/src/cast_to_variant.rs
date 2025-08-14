@@ -431,17 +431,17 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
-        FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array,
+        Decimal64Array, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array,
+        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
         IntervalYearMonthArray, LargeStringArray, NullArray, StringArray, StringViewArray,
         StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
+    use arrow::buffer::NullBuffer;
+    use arrow_schema::{Field, Fields};
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
-    use arrow::buffer::NullBuffer;
-    use arrow_schema::{Field, Fields};
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
 
