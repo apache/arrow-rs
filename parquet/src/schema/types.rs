@@ -1427,7 +1427,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<crate::format::SchemaEleme
 }
 
 // This is a copy of `from_thrift` above, but rather than `format::SchemaElement` it takes
-// the `SchemaElement` currently defined in this modules.
+// the `file::metadata::thrift_gen::SchemaElement<'a>`.
 
 // convert thrift decoded array of `SchemaElement` into this crate's representation of
 // parquet types
@@ -1479,8 +1479,7 @@ fn schema_from_array_helper<'a>(
 
     let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
 
-    // LogicalType is only present in v2 Parquet files. ConvertedType is always
-    // populated, regardless of the version of the file (v1 or v2).
+    // LogicalType is prefered to ConvertedType, but both may be present.
     let logical_type = element.logical_type.clone();
 
     check_logical_type(&logical_type)?;
