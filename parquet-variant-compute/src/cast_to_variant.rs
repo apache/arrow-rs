@@ -442,9 +442,6 @@ mod tests {
     };
     use arrow::buffer::NullBuffer;
     use arrow_schema::{Field, Fields};
-    use arrow_schema::{
-        DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
-    };
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
 
