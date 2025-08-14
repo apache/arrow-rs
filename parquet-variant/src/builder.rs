@@ -105,6 +105,35 @@ impl From<ValueBuffer> for Vec<u8> {
         value_buffer.0
     }
 }
+/// Macro to generate the match statement for each append_variant, try_append_variant, and
+/// append_variant_bytes -- they each have slightly different handling for object and list handling.
+macro_rules! variant_append_value {
+    ($self:expr, $value:expr, $object_pat:pat => $object_arm:expr, $list_pat:pat => $list_arm:expr) => {
+        match $value {
+            Variant::Null => $self.append_null(),
+            Variant::BooleanTrue => $self.append_bool(true),
+            Variant::BooleanFalse => $self.append_bool(false),
+            Variant::Int8(v) => $self.append_int8(v),
+            Variant::Int16(v) => $self.append_int16(v),
+            Variant::Int32(v) => $self.append_int32(v),
+            Variant::Int64(v) => $self.append_int64(v),
+            Variant::Date(v) => $self.append_date(v),
+            Variant::TimestampMicros(v) => $self.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => $self.append_timestamp_ntz_micros(v),
+            Variant::Decimal4(decimal4) => $self.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => $self.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => $self.append_decimal16(decimal16),
+            Variant::Float(v) => $self.append_float(v),
+            Variant::Double(v) => $self.append_double(v),
+            Variant::Binary(v) => $self.append_binary(v),
+            Variant::String(s) => $self.append_string(s),
+            Variant::ShortString(s) => $self.append_short_string(s),
+            $object_pat => $object_arm,
+            $list_pat => $list_arm,
+        }
+    };
+}
+
 
 impl ValueBuffer {
     fn append_u8(&mut self, term: u8) {
@@ -310,31 +339,15 @@ impl ValueBuffer {
     /// when validation is enabled. For a fallible version, use [`ValueBuffer::try_append_variant`]
     fn append_variant<'m, 'd>(
         &mut self,
-        variant: Variant<'m, 'd>,
+        variant: impl Into<Variant<'m, 'd>>,
         metadata_builder: &mut MetadataBuilder,
     ) {
-        match variant {
-            Variant::Null => self.append_null(),
-            Variant::BooleanTrue => self.append_bool(true),
-            Variant::BooleanFalse => self.append_bool(false),
-            Variant::Int8(v) => self.append_int8(v),
-            Variant::Int16(v) => self.append_int16(v),
-            Variant::Int32(v) => self.append_int32(v),
-            Variant::Int64(v) => self.append_int64(v),
-            Variant::Date(v) => self.append_date(v),
-            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
-            Variant::Float(v) => self.append_float(v),
-            Variant::Double(v) => self.append_double(v),
-            Variant::Binary(v) => self.append_binary(v),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_short_string(s),
+        variant_append_value!(
+            self,
+            variant.into(),
             Variant::Object(obj) => self.append_object(metadata_builder, obj),
-            Variant::List(list) => self.append_list(metadata_builder, list),
-        }
+            Variant::List(list) => self.append_list(metadata_builder, list)
+        );
     }
 
     /// Appends a variant to the buffer
@@ -343,30 +356,31 @@ impl ValueBuffer {
         variant: Variant<'m, 'd>,
         metadata_builder: &mut MetadataBuilder,
     ) -> Result<(), ArrowError> {
-        match variant {
-            Variant::Null => self.append_null(),
-            Variant::BooleanTrue => self.append_bool(true),
-            Variant::BooleanFalse => self.append_bool(false),
-            Variant::Int8(v) => self.append_int8(v),
-            Variant::Int16(v) => self.append_int16(v),
-            Variant::Int32(v) => self.append_int32(v),
-            Variant::Int64(v) => self.append_int64(v),
-            Variant::Date(v) => self.append_date(v),
-            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
-            Variant::Float(v) => self.append_float(v),
-            Variant::Double(v) => self.append_double(v),
-            Variant::Binary(v) => self.append_binary(v),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_short_string(s),
+        variant_append_value!(
+            self,
+            variant,
             Variant::Object(obj) => self.try_append_object(metadata_builder, obj)?,
-            Variant::List(list) => self.try_append_list(metadata_builder, list)?,
-        }
+            Variant::List(list) => self.try_append_list(metadata_builder, list)?
+        );
 
         Ok(())
+    }
+
+    /// Appends a variant to the buffer by copying the underlying byte slice for objects and lists.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy and without touching the metadata builder. For other variant
+    /// types, this falls back to the standard append behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary is already built and correct for
+    /// any objects or lists being appended.
+    fn append_variant_bytes(&mut self, variant: Variant<'_, '_>) {
+        variant_append_value!(
+            self,
+            variant,
+            Variant::Object(obj) => self.append_slice(obj.value),
+            Variant::List(list) => self.append_slice(list.value)
+        );
     }
 
     /// Writes out the header byte for a variant object or list, from the starting position
@@ -1092,6 +1106,18 @@ impl VariantBuilder {
         Ok(())
     }
 
+    /// Appends a variant value to the builder by copying the underlying byte slice for objects and lists.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy and without touching the metadata builder. For other variant
+    /// types, this falls back to the standard append behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary entries are already built and correct for
+    /// any objects or lists being appended.
+    pub fn append_value_bytes<'m, 'd>(&mut self, value: impl Into<Variant<'m, 'd>>) {
+        self.buffer.append_variant_bytes(value.into());
+    }
+
     /// Finish the builder and return the metadata and value buffers.
     pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
         (self.metadata_builder.finish(), self.buffer.into_inner())
@@ -1202,6 +1228,23 @@ impl<'a> ListBuilder<'a> {
         buffer.try_append_variant(value.into(), metadata_builder)?;
 
         Ok(())
+    }
+
+    /// Appends a variant value to this list by copying the underlying byte slice for objects and lists.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy. For other variant types, this falls back to the standard append
+    /// behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary is already built and correct for
+    /// any objects or lists being appended.
+    pub fn append_value_bytes<'m, 'd>(&mut self, value: impl Into<Variant<'m, 'd>>) {
+        let buffer = self.parent_state.buffer();
+
+        let offset = buffer.offset() - self.parent_value_offset_base;
+        self.offsets.push(offset);
+
+        buffer.append_variant_bytes(value.into());
     }
 
     /// Builder-style API for appending a value to the list and returning self to enable method chaining.
@@ -1363,6 +1406,31 @@ impl<'a> ObjectBuilder<'a> {
 
         buffer.try_append_variant(value.into(), metadata_builder)?;
         Ok(())
+    }
+
+    /// Add a field with key and value to the object by copying the underlying byte slice for objects and lists.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy and without touching the metadata builder. For other variant
+    /// types, this falls back to the standard append behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary is already built and correct for
+    /// any objects or lists being appended, but the value's new field name is handled normally.
+    ///
+    /// # Note
+    /// When inserting duplicate keys, the new value overwrites the previous mapping,
+    /// but the old value remains in the buffer, resulting in a larger variant
+    pub fn insert_bytes<'m, 'd>(&mut self, key: &str, value: impl Into<Variant<'m, 'd>>) {
+        let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
+
+        let field_id = metadata_builder.upsert_field_name(key);
+        let field_start = buffer.offset() - self.parent_value_offset_base;
+
+        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
+            self.duplicate_fields.insert(field_id);
+        }
+
+        buffer.append_variant_bytes(value.into());
     }
 
     /// Builder style API for adding a field with key and value to the object
