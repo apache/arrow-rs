@@ -347,8 +347,8 @@ mod tests {
     use arrow::array::{
         ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, NullArray,
-        IntervalYearMonthArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        IntervalYearMonthArray, NullArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -753,6 +753,7 @@ mod tests {
             }
             _ => panic!("Expected InvalidArgumentError"),
         }
+    }
 
     #[test]
     fn test_cast_to_variant_null() {
