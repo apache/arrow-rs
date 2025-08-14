@@ -17,13 +17,14 @@
 
 //! This module contains tests for reading encrypted Parquet files with the async Arrow API
 
+use parquet::format::FileMetaData;
 use crate::encryption_util::{
     read_encrypted_file, verify_column_indexes, verify_encryption_double_test_data,
     verify_encryption_test_data, TestKeyRetriever,
 };
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-use parquet::arrow::arrow_writer::{compute_leaves, ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowWriterOptions};
+use parquet::arrow::arrow_writer::{compute_leaves, ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory, ArrowWriterOptions};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::encryption::decrypt::FileDecryptionProperties;
@@ -36,6 +37,7 @@ use tokio::sync::mpsc::{Sender, Receiver};
 use tokio::task::JoinHandle;
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
+use parquet::file::writer::SerializedRowGroupWriter;
 
 #[tokio::test]
 async fn test_non_uniform_encryption_plaintext_footer() {
@@ -497,8 +499,12 @@ async fn read_and_roundtrip_to_encrypted_file_async(
     verify_encryption_test_file_read_async(&mut file, decryption_properties).await
 }
 
+type ColSender = Sender<ArrowLeafColumn>;
+type ColumnWriterTask = JoinHandle<Result<ArrowColumnWriter, ParquetError>>;
+type RBStreamSerializeResult = Result<(Vec<ArrowColumnChunk>, usize), ParquetError>;
+
 async fn send_arrays_to_column_writers(
-    col_array_channels: &Vec<Sender<ArrowLeafColumn>>,
+    col_array_channels: &Vec<ColSender>,
     rb: &RecordBatch,
     schema: Arc<Schema>,
 ) -> Result<(), ParquetError> {
@@ -515,18 +521,39 @@ async fn send_arrays_to_column_writers(
     Ok(())
 }
 
+/// Spawns a tokio task which joins the parallel column writer tasks,
+/// and finalizes the row group
+fn spawn_rg_join_and_finalize_task(
+    column_writer_tasks: Vec<ColumnWriterTask>,
+    rg_rows: usize,
+) -> JoinHandle<RBStreamSerializeResult> {
+    tokio::task::spawn(async move {
+        let num_cols = column_writer_tasks.len();
+        let mut finalized_rg = Vec::with_capacity(num_cols);
+        for task in column_writer_tasks.into_iter() {
+            let writer = task
+                .await
+                .map_err(|e| ParquetError::General(e.to_string()))??;
+            finalized_rg.push(writer.close()?);
+        }
+        Ok((finalized_rg, rg_rows))
+    })
+}
+
 fn spawn_parquet_parallel_serialization_task(
-    arrow_writer: ArrowWriter<std::fs::File>,
+    mut rgwf: ArrowRowGroupWriterFactory,
     mut data: Receiver<RecordBatch>,
+    serialize_tx: Sender<JoinHandle<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
 ) -> Result<JoinHandle<Result<(), ParquetError>>, ParquetError> {
     let handle = tokio::spawn(async move {
         let max_buffer_rb = 10;
         let max_row_group_rows = 10;
         let mut row_group_index = 0;
-        let mut rgwf = arrow_writer.get_row_group_writer_factory();
+
         let column_writers = rgwf.get_column_writers(row_group_index).unwrap();
 
+        // type ColumnWriterTask = SpawnedTask<Result<(ArrowColumnWriter, MemoryReservation)>>;
         let (mut col_writer_tasks, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(column_writers, max_buffer_rb)?;
 
@@ -560,17 +587,16 @@ fn spawn_parquet_parallel_serialization_task(
                     drop(col_array_channels);
 
                     // TODO
-                    // let finalize_rg_task = spawn_rg_join_and_finalize_task(
-                    //     column_writer_handles,
-                    //     max_row_group_rows,
-                    //     &pool,
-                    // );
-                    //
-                    // // Do not surface error from closed channel (means something
-                    // // else hit an error, and the plan is shutting down).
-                    // if serialize_tx.send(finalize_rg_task).await.is_err() {
-                    //     return Ok(());
-                    // }
+                    let finalize_rg_task = spawn_rg_join_and_finalize_task(
+                        col_writer_tasks,
+                        max_row_group_rows,
+                    );
+
+                    // Do not surface error from closed channel (means something
+                    // else hit an error, and the plan is shutting down).
+                    if serialize_tx.send(finalize_rg_task).await.is_err() {
+                        return Ok(());
+                    }
 
                     current_rg_rows = 0;
                     rb = rb.slice(rows_left, rb.num_rows() - rows_left);
@@ -586,17 +612,16 @@ fn spawn_parquet_parallel_serialization_task(
         drop(col_array_channels);
         // Handle leftover rows as final rowgroup, which may be smaller than max_row_group_rows
         if current_rg_rows > 0 {
-            // let finalize_rg_task = spawn_rg_join_and_finalize_task(
-            //     column_writer_handles,
-            //     current_rg_rows,
-            //     &pool,
-            // );
-            //
-            // // Do not surface error from closed channel (means something
-            // // else hit an error, and the plan is shutting down).
-            // if serialize_tx.send(finalize_rg_task).await.is_err() {
-            //     return Ok(());
-            // }
+            let finalize_rg_task = spawn_rg_join_and_finalize_task(
+                col_writer_tasks,
+                current_rg_rows,
+            );
+
+            // Do not surface error from closed channel (means something
+            // else hit an error, and the plan is shutting down).
+            if serialize_tx.send(finalize_rg_task).await.is_err() {
+                return Ok(());
+            }
         }
 
         Ok(())
@@ -608,7 +633,7 @@ fn spawn_parquet_parallel_serialization_task(
 fn spawn_column_parallel_row_group_writer(
     col_writers: Vec<ArrowColumnWriter>,
     max_buffer_size: usize,
-) -> Result<(Vec<JoinHandle<ArrowColumnChunk>>, Vec<Sender<ArrowLeafColumn>>), ParquetError> {
+) -> Result<(Vec<ColumnWriterTask>, Vec<ColSender>), ParquetError> {
     let num_columns = col_writers.len();
 
     let mut col_writer_tasks = Vec::with_capacity(num_columns);
@@ -618,14 +643,38 @@ fn spawn_column_parallel_row_group_writer(
         col_array_channels.push(send_array);
         let handle = tokio::spawn(async move {
             while let Some(col) = receive_array.recv().await {
-                col_writer.write(&col).unwrap();
+                col_writer.write(&col)?;
             }
-            col_writer.close().unwrap()
+            Ok(col_writer)
         });
         col_writer_tasks.push(handle);
     }
-
     Ok((col_writer_tasks, col_array_channels))
+}
+
+/// Consume RowGroups serialized by other parallel tasks and concatenate them in
+/// to the final parquet file, while flushing finalized bytes to an [ObjectStore]
+async fn concatenate_parallel_row_groups(
+    // mut arrow_row_group_writer_factory: ArrowRowGroupWriterFactory,
+    mut arrow_writer: ArrowWriter<&std::fs::File>,
+    mut serialize_rx: Receiver<JoinHandle<RBStreamSerializeResult>>,
+    mut file: &std::fs::File,
+) -> Result<FileMetaData, ParquetError> {
+    while let Some(task) = serialize_rx.recv().await {
+        let result = task.await;
+        let (serialized_columns, _cnt) =
+            result.map_err(|e| ParquetError::General(e.to_string()))??;
+
+        let mut finalized_rg = Vec::with_capacity(serialized_columns.len());
+        for task in serialized_columns {
+            finalized_rg.push(task);
+            // file.write_all_buf(task.data.as_slice()).await?;
+        }
+        // arrow_row_group_writer_factory.append_row_group(finalized_rg)?;
+    }
+
+    let file_metadata = arrow_writer.finish()?;
+    Ok(file_metadata)
 }
 
 // This test is based on DataFusion's ParquetSink. Motivation is to test
@@ -664,17 +713,36 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
 
     // Create a temporary file to write the encrypted data
     let temp_file = tempfile::tempfile().unwrap();
-    let mut writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props).unwrap();
-    // TODO: use spawn_parquet_parallel_serialization_task
-    // spawn_parquet_parallel_serialization_task(
+    let mut arrow_writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props).unwrap();
+
+    let row_group_writer_factory = arrow_writer.get_row_group_writer_factory();
+
+    let max_rowgroups = 1;
+    let (serialize_tx, serialize_rx) =
+        tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(max_rowgroups);
+
+    let (record_batch_tx, record_batch_rx)  = tokio::sync::mpsc::channel::<RecordBatch>(100);
+
+    let launch_serialization_task = spawn_parquet_parallel_serialization_task(
+        row_group_writer_factory, record_batch_rx, serialize_tx, schema.clone()).unwrap();
+
+    let _ = launch_serialization_task
+        .await
+        .map_err(|e| ParquetError::General(e.to_string()));
 
     // TODO: use concatenate_parallel_row_groups
+    // let file_metadata = concatenate_parallel_row_groups(
+    //     arrow_writer,
+    //     serialize_rx,
+    //     &temp_file,
+    // )
+    //     .await;
 
     // LOW-LEVEL API: Use low level API to write into a file using multiple threads
 
     // Get column writers
-    let (_row_group_index, col_writers, srgw) = writer.get_column_writers().unwrap();
-    let num_columns = col_writers.len();
+    // let (_row_group_index, col_writers, srgw) = arrow_writer.get_column_writers().unwrap();
+    // let num_columns = col_writers.len();
 }
 
 #[tokio::test]
@@ -734,7 +802,7 @@ async fn test_multi_threaded_encrypted_writing() {
     // Wait for all column writers to finish writing
     let mut finalized_rg = Vec::with_capacity(num_columns);
     for task in col_writer_tasks.into_iter() {
-        finalized_rg.push(task.await.unwrap());
+        finalized_rg.push(task.await.unwrap().unwrap().close().unwrap());
     }
 
     // Append the finalized row group to the SerializedFileWriter
