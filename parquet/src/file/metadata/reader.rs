@@ -17,16 +17,18 @@
 
 use std::{io::Read, ops::Range, sync::Arc};
 
-#[cfg(feature = "encryption")]
-use crate::encryption::{
-    decrypt::{FileDecryptionProperties, FileDecryptor},
-    modules::create_footer_aad,
-};
 use crate::{
     basic::ColumnOrder,
-    file::metadata::{thrift_gen::convert_row_groups, FileMetaData, KeyValue},
+    file::metadata::{FileMetaData, KeyValue},
     parquet_thrift::ThriftCompactInputProtocol,
-    schema::types::parquet_schema_from_array,
+};
+#[cfg(feature = "encryption")]
+use crate::{
+    encryption::{
+        decrypt::{CryptoContext, FileDecryptionProperties, FileDecryptor},
+        modules::create_footer_aad,
+    },
+    format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData},
 };
 use bytes::Bytes;
 
@@ -36,16 +38,12 @@ use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
-#[cfg(feature = "encryption")]
-use crate::format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData};
 use crate::schema::types;
 use crate::schema::types::SchemaDescriptor;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
-#[cfg(feature = "encryption")]
-use crate::encryption::decrypt::CryptoContext;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
@@ -1048,58 +1046,7 @@ impl ParquetMetaDataReader {
     /// create meta data from thrift encoded bytes
     pub fn decode_file_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
         let mut prot = ThriftCompactInputProtocol::new(buf);
-
-        let file_meta = super::thrift_gen::FileMetaData::try_from(&mut prot)?;
-
-        let version = file_meta.version;
-        let num_rows = file_meta.num_rows;
-        let row_groups = file_meta.row_groups;
-        let created_by = file_meta.created_by.map(|c| c.to_owned());
-        let key_value_metadata = file_meta.key_value_metadata;
-
-        let val = parquet_schema_from_array(&file_meta.schema)?;
-        let schema_descr = Arc::new(SchemaDescriptor::new(val));
-
-        // need schema_descr to get final RowGroupMetaData
-        let row_groups = convert_row_groups(row_groups, schema_descr.clone())?;
-
-        // need to map read column orders to actual values based on the schema
-        if file_meta
-            .column_orders
-            .as_ref()
-            .is_some_and(|cos| cos.len() != schema_descr.num_columns())
-        {
-            return Err(general_err!("Column order length mismatch"));
-        }
-
-        let column_orders = file_meta.column_orders.map(|cos| {
-            let mut res = Vec::with_capacity(cos.len());
-            for (i, column) in schema_descr.columns().iter().enumerate() {
-                match cos[i] {
-                    ColumnOrder::TYPE_DEFINED_ORDER(_) => {
-                        let sort_order = ColumnOrder::get_sort_order(
-                            column.logical_type(),
-                            column.converted_type(),
-                            column.physical_type(),
-                        );
-                        res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
-                    }
-                    _ => res.push(cos[i]),
-                }
-            }
-            res
-        });
-
-        let fmd = FileMetaData::new(
-            version,
-            num_rows,
-            created_by,
-            key_value_metadata,
-            schema_descr,
-            column_orders,
-        );
-
-        Ok(ParquetMetaData::new(fmd, row_groups))
+        Ok(ParquetMetaData::try_from(&mut prot)?)
     }
 
     /// Parses column orders from Thrift definition.

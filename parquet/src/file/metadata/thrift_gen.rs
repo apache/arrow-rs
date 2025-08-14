@@ -27,33 +27,19 @@ use crate::{
     errors::{ParquetError, Result},
     file::{
         metadata::{
-            ColumnChunkMetaData, KeyValue, LevelHistogram, RowGroupMetaData, SortingColumn,
+            ColumnChunkMetaData, KeyValue, LevelHistogram, ParquetMetaData, RowGroupMetaData,
+            SortingColumn,
         },
         page_encoding_stats::PageEncodingStats,
         statistics::ValueStatistics,
     },
     parquet_thrift::{FieldType, ThriftCompactInputProtocol},
-    schema::types::{ColumnDescriptor, SchemaDescriptor},
+    schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor},
     thrift_struct,
     util::bit_util::FromBytes,
 };
 
-// the following are only used internally so are `pub(crate)`
-thrift_struct!(
-pub(crate) struct FileMetaData<'a> {
-  /** Version of this file **/
-  1: required i32 version
-  2: required list<'a><SchemaElement> schema;
-  3: required i64 num_rows
-  4: required list<'a><RowGroup> row_groups
-  5: optional list<KeyValue> key_value_metadata
-  6: optional string created_by
-  7: optional list<ColumnOrder> column_orders;
-  //8: optional EncryptionAlgorithm encryption_algorithm
-  //9: optional binary footer_signing_key_metadata
-}
-);
-
+// this needs to be visible to the schema conversion code
 thrift_struct!(
 pub(crate) struct SchemaElement<'a> {
   /** Data type for this field. Not set if the current element is a non-leaf node */
@@ -70,8 +56,24 @@ pub(crate) struct SchemaElement<'a> {
 }
 );
 
+// the following are only used internally so are private
 thrift_struct!(
-pub(crate) struct RowGroup<'a> {
+struct FileMetaData<'a> {
+  /** Version of this file **/
+  1: required i32 version
+  2: required list<'a><SchemaElement> schema;
+  3: required i64 num_rows
+  4: required list<'a><RowGroup> row_groups
+  5: optional list<KeyValue> key_value_metadata
+  6: optional string created_by
+  7: optional list<ColumnOrder> column_orders;
+  //8: optional EncryptionAlgorithm encryption_algorithm
+  //9: optional binary footer_signing_key_metadata
+}
+);
+
+thrift_struct!(
+struct RowGroup<'a> {
   1: required list<'a><ColumnChunk> columns
   2: required i64 total_byte_size
   3: required i64 num_rows
@@ -85,7 +87,7 @@ pub(crate) struct RowGroup<'a> {
 
 #[cfg(feature = "encryption")]
 thrift_struct!(
-pub(crate) struct ColumnChunk<'a> {
+struct ColumnChunk<'a> {
   1: optional string<'a> file_path
   2: required i64 file_offset = 0
   3: optional ColumnMetaData<'a> meta_data
@@ -99,7 +101,7 @@ pub(crate) struct ColumnChunk<'a> {
 );
 #[cfg(not(feature = "encryption"))]
 thrift_struct!(
-pub(crate) struct ColumnChunk<'a> {
+struct ColumnChunk<'a> {
   1: optional string file_path
   2: required i64 file_offset = 0
   3: optional ColumnMetaData<'a> meta_data
@@ -112,7 +114,7 @@ pub(crate) struct ColumnChunk<'a> {
 
 type CompressionCodec = Compression;
 thrift_struct!(
-pub(crate) struct ColumnMetaData<'a> {
+struct ColumnMetaData<'a> {
   1: required Type type_
   2: required list<Encoding> encodings
   // we don't expose path_in_schema so skip
@@ -136,7 +138,7 @@ pub(crate) struct ColumnMetaData<'a> {
 );
 
 thrift_struct!(
-pub(crate) struct BoundingBox {
+struct BoundingBox {
   1: required double xmin;
   2: required double xmax;
   3: required double ymin;
@@ -149,7 +151,7 @@ pub(crate) struct BoundingBox {
 );
 
 thrift_struct!(
-pub(crate) struct GeospatialStatistics {
+struct GeospatialStatistics {
   /** A bounding box of geospatial instances */
   1: optional BoundingBox bbox;
   /** Geospatial type codes of all instances, or an empty list if not known */
@@ -158,7 +160,7 @@ pub(crate) struct GeospatialStatistics {
 );
 
 thrift_struct!(
-pub(crate) struct SizeStatistics {
+struct SizeStatistics {
    1: optional i64 unencoded_byte_array_data_bytes;
    2: optional list<i64> repetition_level_histogram;
    3: optional list<i64> definition_level_histogram;
@@ -166,7 +168,7 @@ pub(crate) struct SizeStatistics {
 );
 
 thrift_struct!(
-pub(crate) struct Statistics<'a> {
+struct Statistics<'a> {
    1: optional binary<'a> max;
    2: optional binary<'a> min;
    3: optional i64 null_count;
@@ -179,7 +181,7 @@ pub(crate) struct Statistics<'a> {
 );
 
 // convert collection of thrift RowGroups into RowGroupMetaData
-pub(crate) fn convert_row_groups(
+fn convert_row_groups(
     mut row_groups: Vec<RowGroup>,
     schema_descr: Arc<SchemaDescriptor>,
 ) -> Result<Vec<RowGroupMetaData>> {
@@ -445,4 +447,63 @@ fn convert_stats(
         }
         None => None,
     })
+}
+
+/// Create ParquetMetaData from thrift input. Note that this only decodes the file metadata in
+/// the Parquet footer. Page indexes will need to be added later.
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ParquetMetaData {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        let file_meta = super::thrift_gen::FileMetaData::try_from(prot)?;
+
+        let version = file_meta.version;
+        let num_rows = file_meta.num_rows;
+        let row_groups = file_meta.row_groups;
+        let created_by = file_meta.created_by.map(|c| c.to_owned());
+        let key_value_metadata = file_meta.key_value_metadata;
+
+        let val = parquet_schema_from_array(&file_meta.schema)?;
+        let schema_descr = Arc::new(SchemaDescriptor::new(val));
+
+        // need schema_descr to get final RowGroupMetaData
+        let row_groups = convert_row_groups(row_groups, schema_descr.clone())?;
+
+        // need to map read column orders to actual values based on the schema
+        if file_meta
+            .column_orders
+            .as_ref()
+            .is_some_and(|cos| cos.len() != schema_descr.num_columns())
+        {
+            return Err(general_err!("Column order length mismatch"));
+        }
+
+        let column_orders = file_meta.column_orders.map(|cos| {
+            let mut res = Vec::with_capacity(cos.len());
+            for (i, column) in schema_descr.columns().iter().enumerate() {
+                match cos[i] {
+                    ColumnOrder::TYPE_DEFINED_ORDER(_) => {
+                        let sort_order = ColumnOrder::get_sort_order(
+                            column.logical_type(),
+                            column.converted_type(),
+                            column.physical_type(),
+                        );
+                        res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
+                    }
+                    _ => res.push(cos[i]),
+                }
+            }
+            res
+        });
+
+        let fmd = crate::file::metadata::FileMetaData::new(
+            version,
+            num_rows,
+            created_by,
+            key_value_metadata,
+            schema_descr,
+            column_orders,
+        );
+
+        Ok(ParquetMetaData::new(fmd, row_groups))
+    }
 }
