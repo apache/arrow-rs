@@ -3188,4 +3188,330 @@ mod tests {
 
         builder.finish()
     }
+
+    #[test]
+    fn test_append_variant_bytes_round_trip() {
+        // Create a complex variant with the normal builder
+        let mut builder = VariantBuilder::new();
+        {
+            let mut obj = builder.new_object();
+            obj.insert("name", "Alice");
+            obj.insert("age", 30i32);
+            {
+                let mut scores_list = obj.new_list("scores");
+                scores_list.append_value(95i32);
+                scores_list.append_value(87i32);
+                scores_list.append_value(92i32);
+                scores_list.finish();
+            }
+            {
+                let mut address = obj.new_object("address");
+                address.insert("street", "123 Main St");
+                address.insert("city", "Anytown");
+                address.finish().unwrap();
+            }
+            obj.finish().unwrap();
+        }
+        let (metadata1, value1) = builder.finish();
+        let variant1 = Variant::try_new(&metadata1, &value1).unwrap();
+
+        // Copy using the new bytes API
+        let mut builder2 = VariantBuilder::new();
+        builder2.append_value_bytes(variant1.clone());
+        let (_metadata2, value2) = builder2.finish();
+
+        // The bytes should be identical, we merely copied them across.
+        assert_eq!(value1, value2);
+    }
+
+    #[test]
+    fn test_object_insert_bytes_subset() {
+        // Create an original object, making sure to inject the field names we'll add later.
+        let mut builder = VariantBuilder::new().with_field_names(["new_field", "another_field"]);
+        {
+            let mut obj = builder.new_object();
+            obj.insert("field1", "value1");
+            obj.insert("field2", 42i32);
+            obj.insert("field3", true);
+            obj.insert("field4", "value4");
+            obj.finish().unwrap();
+        }
+        let (metadata, value) = builder.finish();
+        let original_variant = Variant::try_new(&metadata, &value).unwrap();
+        let original_obj = original_variant.as_object().unwrap();
+
+        // Create a new object copying subset of fields interleaved with new ones
+        let mut builder2 = VariantBuilder::new();
+        {
+            let mut obj = builder2.new_object();
+
+            // Copy field1 using bytes API
+            obj.insert_bytes("field1", original_obj.get("field1").unwrap());
+
+            // Add new field
+            obj.insert("new_field", "new_value");
+
+            // Copy field3 using bytes API
+            obj.insert_bytes("field3", original_obj.get("field3").unwrap());
+
+            // Add another new field
+            obj.insert("another_field", 99i32);
+
+            // Copy field2 using bytes API
+            obj.insert_bytes("field2", original_obj.get("field2").unwrap());
+
+            obj.finish().unwrap();
+        }
+        let (metadata2, value2) = builder2.finish();
+        let result_variant = Variant::try_new(&metadata2, &value2).unwrap();
+        let result_obj = result_variant.as_object().unwrap();
+
+        // Verify the object contains expected fields
+        assert_eq!(result_obj.len(), 5);
+        assert_eq!(
+            result_obj.get("field1").unwrap().as_string().unwrap(),
+            "value1"
+        );
+        assert_eq!(result_obj.get("field2").unwrap().as_int32().unwrap(), 42);
+        assert_eq!(
+            result_obj.get("field3").unwrap().as_boolean().unwrap(),
+            true
+        );
+        assert_eq!(
+            result_obj.get("new_field").unwrap().as_string().unwrap(),
+            "new_value"
+        );
+        assert_eq!(
+            result_obj.get("another_field").unwrap().as_int32().unwrap(),
+            99
+        );
+    }
+
+    #[test]
+    fn test_list_append_bytes_subset() {
+        // Create an original list
+        let mut builder = VariantBuilder::new();
+        {
+            let mut list = builder.new_list();
+            list.append_value("item1");
+            list.append_value(42i32);
+            list.append_value(true);
+            list.append_value("item4");
+            list.append_value(1.234f64);
+            list.finish();
+        }
+        let (metadata, value) = builder.finish();
+        let original_variant = Variant::try_new(&metadata, &value).unwrap();
+        let original_list = original_variant.as_list().unwrap();
+
+        // Create a new list copying subset of elements interleaved with new ones
+        let mut builder2 = VariantBuilder::new();
+        {
+            let mut list = builder2.new_list();
+
+            // Copy first element using bytes API
+            list.append_value_bytes(original_list.get(0).unwrap());
+
+            // Add new element
+            list.append_value("new_item");
+
+            // Copy third element using bytes API
+            list.append_value_bytes(original_list.get(2).unwrap());
+
+            // Add another new element
+            list.append_value(99i32);
+
+            // Copy last element using bytes API
+            list.append_value_bytes(original_list.get(4).unwrap());
+
+            list.finish();
+        }
+        let (metadata2, value2) = builder2.finish();
+        let result_variant = Variant::try_new(&metadata2, &value2).unwrap();
+        let result_list = result_variant.as_list().unwrap();
+
+        // Verify the list contains expected elements
+        assert_eq!(result_list.len(), 5);
+        assert_eq!(result_list.get(0).unwrap().as_string().unwrap(), "item1");
+        assert_eq!(result_list.get(1).unwrap().as_string().unwrap(), "new_item");
+        assert_eq!(result_list.get(2).unwrap().as_boolean().unwrap(), true);
+        assert_eq!(result_list.get(3).unwrap().as_int32().unwrap(), 99);
+        assert_eq!(result_list.get(4).unwrap().as_f64().unwrap(), 1.234);
+    }
+
+    #[test]
+    fn test_complex_nested_filtering_injection() {
+        // Create a complex nested structure: object -> list -> objects
+        let mut builder = VariantBuilder::new();
+        {
+            let mut root_obj = builder.new_object();
+            root_obj.insert("metadata", "original");
+
+            {
+                let mut users_list = root_obj.new_list("users");
+
+                // User 1
+                {
+                    let mut user1 = users_list.new_object();
+                    user1.insert("id", 1i32);
+                    user1.insert("name", "Alice");
+                    user1.insert("active", true);
+                    user1.finish().unwrap();
+                }
+
+                // User 2
+                {
+                    let mut user2 = users_list.new_object();
+                    user2.insert("id", 2i32);
+                    user2.insert("name", "Bob");
+                    user2.insert("active", false);
+                    user2.finish().unwrap();
+                }
+
+                // User 3
+                {
+                    let mut user3 = users_list.new_object();
+                    user3.insert("id", 3i32);
+                    user3.insert("name", "Charlie");
+                    user3.insert("active", true);
+                    user3.finish().unwrap();
+                }
+
+                users_list.finish();
+            }
+
+            root_obj.insert("total_count", 3i32);
+            root_obj.finish().unwrap();
+        }
+        let (metadata, value) = builder.finish();
+        let original_variant = Variant::try_new(&metadata, &value).unwrap();
+        let original_obj = original_variant.as_object().unwrap();
+        let original_users = original_obj.get("users").unwrap();
+        let original_users = original_users.as_list().unwrap();
+
+        // Create filtered/modified version: only copy active users and inject new data
+        let mut builder2 = VariantBuilder::new();
+        {
+            let mut root_obj = builder2.new_object();
+
+            // Copy metadata using bytes API
+            root_obj.insert_bytes("metadata", original_obj.get("metadata").unwrap());
+
+            // Add processing timestamp
+            root_obj.insert("processed_at", "2024-01-01T00:00:00Z");
+
+            {
+                let mut filtered_users = root_obj.new_list("active_users");
+
+                // Copy only active users and inject additional data
+                for i in 0..original_users.len() {
+                    let user = original_users.get(i).unwrap();
+                    let user = user.as_object().unwrap();
+                    if user.get("active").unwrap().as_boolean().unwrap() {
+                        {
+                            let mut new_user = filtered_users.new_object();
+
+                            // Copy existing fields using bytes API
+                            new_user.insert_bytes("id", user.get("id").unwrap());
+                            new_user.insert_bytes("name", user.get("name").unwrap());
+
+                            // Inject new computed field
+                            let user_id = user.get("id").unwrap().as_int32().unwrap();
+                            new_user.insert("computed_score", user_id * 10);
+
+                            // Add status transformation (don't copy the 'active' field)
+                            new_user.insert("status", "verified");
+
+                            new_user.finish().unwrap();
+                        }
+                    }
+                }
+
+                // Inject a completely new user
+                {
+                    let mut new_user = filtered_users.new_object();
+                    new_user.insert("id", 999i32);
+                    new_user.insert("name", "System User");
+                    new_user.insert("computed_score", 0i32);
+                    new_user.insert("status", "system");
+                    new_user.finish().unwrap();
+                }
+
+                filtered_users.finish();
+            }
+
+            // Update count
+            root_obj.insert("active_count", 3i32); // 2 active + 1 new
+
+            root_obj.finish().unwrap();
+        }
+        let (metadata2, value2) = builder2.finish();
+        let result_variant = Variant::try_new(&metadata2, &value2).unwrap();
+        let result_obj = result_variant.as_object().unwrap();
+
+        // Verify the filtered/modified structure
+        assert_eq!(
+            result_obj.get("metadata").unwrap().as_string().unwrap(),
+            "original"
+        );
+        assert_eq!(
+            result_obj.get("processed_at").unwrap().as_string().unwrap(),
+            "2024-01-01T00:00:00Z"
+        );
+        assert_eq!(
+            result_obj.get("active_count").unwrap().as_int32().unwrap(),
+            3
+        );
+
+        let active_users = result_obj.get("active_users").unwrap();
+        let active_users = active_users.as_list().unwrap();
+        assert_eq!(active_users.len(), 3);
+
+        // Verify Alice (id=1, was active)
+        let alice = active_users.get(0).unwrap();
+        let alice = alice.as_object().unwrap();
+        assert_eq!(alice.get("id").unwrap().as_int32().unwrap(), 1);
+        assert_eq!(alice.get("name").unwrap().as_string().unwrap(), "Alice");
+        assert_eq!(alice.get("computed_score").unwrap().as_int32().unwrap(), 10);
+        assert_eq!(
+            alice.get("status").unwrap().as_string().unwrap(),
+            "verified"
+        );
+        assert!(alice.get("active").is_none()); // This field was not copied
+
+        // Verify Charlie (id=3, was active) - Bob (id=2) was not active so not included
+        let charlie = active_users.get(1).unwrap();
+        let charlie = charlie.as_object().unwrap();
+        assert_eq!(charlie.get("id").unwrap().as_int32().unwrap(), 3);
+        assert_eq!(charlie.get("name").unwrap().as_string().unwrap(), "Charlie");
+        assert_eq!(
+            charlie.get("computed_score").unwrap().as_int32().unwrap(),
+            30
+        );
+        assert_eq!(
+            charlie.get("status").unwrap().as_string().unwrap(),
+            "verified"
+        );
+
+        // Verify injected system user
+        let system_user = active_users.get(2).unwrap();
+        let system_user = system_user.as_object().unwrap();
+        assert_eq!(system_user.get("id").unwrap().as_int32().unwrap(), 999);
+        assert_eq!(
+            system_user.get("name").unwrap().as_string().unwrap(),
+            "System User"
+        );
+        assert_eq!(
+            system_user
+                .get("computed_score")
+                .unwrap()
+                .as_int32()
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            system_user.get("status").unwrap().as_string().unwrap(),
+            "system"
+        );
+    }
 }
