@@ -23,7 +23,7 @@ use crate::encryption_util::{
 };
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-use parquet::arrow::arrow_writer::{compute_leaves, ArrowLeafColumn, ArrowWriterOptions};
+use parquet::arrow::arrow_writer::{compute_leaves, ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowWriterOptions};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::encryption::decrypt::FileDecryptionProperties;
@@ -32,6 +32,10 @@ use parquet::errors::ParquetError;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use std::sync::Arc;
 use tokio::fs::File;
+use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::task::JoinHandle;
+use arrow_array::RecordBatch;
+use arrow_schema::Schema;
 
 #[tokio::test]
 async fn test_non_uniform_encryption_plaintext_footer() {
@@ -493,6 +497,186 @@ async fn read_and_roundtrip_to_encrypted_file_async(
     verify_encryption_test_file_read_async(&mut file, decryption_properties).await
 }
 
+async fn send_arrays_to_column_writers(
+    col_array_channels: &Vec<Sender<ArrowLeafColumn>>,
+    rb: &RecordBatch,
+    schema: Arc<Schema>,
+) -> Result<(), ParquetError> {
+    // Each leaf column has its own channel, increment next_channel for each leaf column sent.
+    let mut next_channel = 0;
+    for (array, field) in rb.columns().iter().zip(schema.fields()) {
+        for c in compute_leaves(field, array)? {
+            if col_array_channels[next_channel].send(c).await.is_err() {
+                return Ok(());
+            }
+            next_channel += 1;
+        }
+    }
+    Ok(())
+}
+
+fn spawn_parquet_parallel_serialization_task(
+    arrow_writer: ArrowWriter<std::fs::File>,
+    mut data: Receiver<RecordBatch>,
+    schema: Arc<Schema>,
+) -> Result<JoinHandle<Result<(), ParquetError>>, ParquetError> {
+    let handle = tokio::spawn(async move {
+        let max_buffer_rb = 10;
+        let max_row_group_rows = 10;
+        let mut row_group_index = 0;
+        let mut rgwf = arrow_writer.get_row_group_writer_factory();
+        let column_writers = rgwf.get_column_writers(row_group_index).unwrap();
+
+        let (mut col_writer_tasks, mut col_array_channels) =
+            spawn_column_parallel_row_group_writer(column_writers, max_buffer_rb)?;
+
+        let mut current_rg_rows = 0;
+
+        while let Some(mut rb) = data.recv().await {
+            // This loop allows the "else" block to repeatedly split the RecordBatch to handle the case
+            // when max_row_group_rows < execution.batch_size as an alternative to a recursive async
+            // function.
+            loop {
+                if current_rg_rows + rb.num_rows() < max_row_group_rows {
+                    send_arrays_to_column_writers(
+                        &col_array_channels,
+                        &rb,
+                        schema.clone(),
+                    ).await?;
+                    current_rg_rows += rb.num_rows();
+                    break;
+                } else {
+                    let rows_left = max_row_group_rows - current_rg_rows;
+                    let rb_split = rb.slice(0, rows_left);
+                    send_arrays_to_column_writers(
+                        &col_array_channels,
+                        &rb_split,
+                        schema.clone(),
+                    ).await?;
+
+                    // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
+                    // on a separate task, so that we can immediately start on the next RG before waiting
+                    // for the current one to finish.
+                    drop(col_array_channels);
+
+                    // TODO
+                    // let finalize_rg_task = spawn_rg_join_and_finalize_task(
+                    //     column_writer_handles,
+                    //     max_row_group_rows,
+                    //     &pool,
+                    // );
+                    //
+                    // // Do not surface error from closed channel (means something
+                    // // else hit an error, and the plan is shutting down).
+                    // if serialize_tx.send(finalize_rg_task).await.is_err() {
+                    //     return Ok(());
+                    // }
+
+                    current_rg_rows = 0;
+                    rb = rb.slice(rows_left, rb.num_rows() - rows_left);
+
+                    row_group_index += 1;
+                    let column_writers = rgwf.get_column_writers(row_group_index).unwrap();
+                    (col_writer_tasks, col_array_channels) =
+                        spawn_column_parallel_row_group_writer(column_writers, 100).unwrap();
+                }
+            }
+        }
+
+        drop(col_array_channels);
+        // Handle leftover rows as final rowgroup, which may be smaller than max_row_group_rows
+        if current_rg_rows > 0 {
+            // let finalize_rg_task = spawn_rg_join_and_finalize_task(
+            //     column_writer_handles,
+            //     current_rg_rows,
+            //     &pool,
+            // );
+            //
+            // // Do not surface error from closed channel (means something
+            // // else hit an error, and the plan is shutting down).
+            // if serialize_tx.send(finalize_rg_task).await.is_err() {
+            //     return Ok(());
+            // }
+        }
+
+        Ok(())
+    });
+
+    Ok(handle)
+}
+
+fn spawn_column_parallel_row_group_writer(
+    col_writers: Vec<ArrowColumnWriter>,
+    max_buffer_size: usize,
+) -> Result<(Vec<JoinHandle<ArrowColumnChunk>>, Vec<Sender<ArrowLeafColumn>>), ParquetError> {
+    let num_columns = col_writers.len();
+
+    let mut col_writer_tasks = Vec::with_capacity(num_columns);
+    let mut col_array_channels = Vec::with_capacity(num_columns);
+    for mut col_writer in col_writers.into_iter() {
+        let (send_array, mut receive_array) = tokio::sync::mpsc::channel::<ArrowLeafColumn>(max_buffer_size);
+        col_array_channels.push(send_array);
+        let handle = tokio::spawn(async move {
+            while let Some(col) = receive_array.recv().await {
+                col_writer.write(&col).unwrap();
+            }
+            col_writer.close().unwrap()
+        });
+        col_writer_tasks.push(handle);
+    }
+
+    Ok((col_writer_tasks, col_array_channels))
+}
+
+// This test is based on DataFusion's ParquetSink. Motivation is to test
+// concurrent writing of encrypted data over multiple row groups using the low-level API.
+#[tokio::test]
+async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
+    // Read example data and set up encryption/decryption properties
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let file = std::fs::File::open(path).unwrap();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+
+    let (record_batches, metadata) =
+        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
+    let to_write: Vec<_> = record_batches
+        .iter()
+        .flat_map(|rb| rb.columns().to_vec())
+        .collect();
+    let schema = metadata.schema().clone();
+
+    let props = Some(
+        WriterPropertiesBuilder::default()
+            .with_file_encryption_properties(file_encryption_properties)
+            .build(),
+    );
+
+    // Create a temporary file to write the encrypted data
+    let temp_file = tempfile::tempfile().unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props).unwrap();
+    // TODO: use spawn_parquet_parallel_serialization_task
+    // spawn_parquet_parallel_serialization_task(
+
+    // TODO: use concatenate_parallel_row_groups
+
+    // LOW-LEVEL API: Use low level API to write into a file using multiple threads
+
+    // Get column writers
+    let (_row_group_index, col_writers, srgw) = writer.get_column_writers().unwrap();
+    let num_columns = col_writers.len();
+}
+
 #[tokio::test]
 async fn test_multi_threaded_encrypted_writing() {
     // Read example data and set up encryption/decryption properties
@@ -527,28 +711,16 @@ async fn test_multi_threaded_encrypted_writing() {
 
     // Create a temporary file to write the encrypted data
     let temp_file = tempfile::tempfile().unwrap();
-    let mut writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props).unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, schema.clone(), props).unwrap();
 
     // LOW-LEVEL API: Use low level API to write into a file using multiple threads
 
     // Get column writers
-    let (_row_group_index, col_writers) = writer.get_column_writers().unwrap();
+    let (_row_group_index, col_writers, srgw) = writer.get_column_writers().unwrap();
     let num_columns = col_writers.len();
 
-    // Create a channel for each column writer to send ArrowLeafColumn data to
-    let mut col_writer_tasks = Vec::with_capacity(num_columns);
-    let mut col_array_channels = Vec::with_capacity(num_columns);
-    for mut col_writer in col_writers.into_iter() {
-        let (send_array, mut receive_array) = tokio::sync::mpsc::channel::<ArrowLeafColumn>(100);
-        col_array_channels.push(send_array);
-        let handle = tokio::spawn(async move {
-            while let Some(col) = receive_array.recv().await {
-                col_writer.write(&col).unwrap();
-            }
-            col_writer.close().unwrap()
-        });
-        col_writer_tasks.push(handle);
-    }
+    let (col_writer_tasks, mut col_array_channels) =
+        spawn_column_parallel_row_group_writer(col_writers, 100).unwrap();
 
     // Send the ArrowLeafColumn data to the respective column writer channels
     let mut worker_iter = col_array_channels.iter_mut();
@@ -566,7 +738,8 @@ async fn test_multi_threaded_encrypted_writing() {
     }
 
     // Append the finalized row group to the SerializedFileWriter
-    assert!(writer.append_row_group(finalized_rg).is_ok());
+    // assert!(writer.append_row_group(finalized_rg).is_ok());
+    assert!(ArrowWriter::append_row_group(finalized_rg, srgw).is_ok());
 
     // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
 
