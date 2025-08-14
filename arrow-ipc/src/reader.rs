@@ -35,7 +35,9 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, ScalarBuffer};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
+};
 use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
@@ -148,7 +150,9 @@ impl RecordBatchDecoder<'_> {
                     .len(run_array_length)
                     .offset(0)
                     .add_child_data(run_ends.into_data())
-                    .add_child_data(values.into_data());
+                    .add_child_data(values.into_data())
+                    .null_count(run_node.null_count() as usize);
+
                 self.create_array_from_builder(builder)
             }
             // Create dictionary array from RecordBatch
@@ -247,7 +251,7 @@ impl RecordBatchDecoder<'_> {
     ) -> Result<ArrayRef, ArrowError> {
         let length = field_node.length() as usize;
         let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
-        let builder = match data_type {
+        let mut builder = match data_type {
             Utf8 | Binary | LargeBinary | LargeUtf8 => {
                 // read 3 buffers: null buffer (optional), offsets buffer and data buffer
                 ArrayData::builder(data_type.clone())
@@ -268,6 +272,8 @@ impl RecordBatchDecoder<'_> {
             }
             t => unreachable!("Data type {:?} either unsupported or not primitive", t),
         };
+
+        builder = builder.null_count(field_node.null_count() as usize);
 
         self.create_array_from_builder(builder)
     }
@@ -294,7 +300,7 @@ impl RecordBatchDecoder<'_> {
         let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
         let length = field_node.length() as usize;
         let child_data = child_array.into_data();
-        let builder = match data_type {
+        let mut builder = match data_type {
             List(_) | LargeList(_) | Map(_, _) => ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone())
@@ -309,6 +315,8 @@ impl RecordBatchDecoder<'_> {
             _ => unreachable!("Cannot create list or map array from {:?}", data_type),
         };
 
+        builder = builder.null_count(field_node.null_count() as usize);
+
         self.create_array_from_builder(builder)
     }
 
@@ -321,15 +329,38 @@ impl RecordBatchDecoder<'_> {
     ) -> Result<ArrayRef, ArrowError> {
         let null_count = struct_node.null_count() as usize;
         let len = struct_node.length() as usize;
+        let skip_validation = self.skip_validation.get();
 
-        let nulls = (null_count > 0).then(|| BooleanBuffer::new(null_buffer, 0, len).into());
+        let nulls = if null_count > 0 {
+            let validity_buffer = BooleanBuffer::new(null_buffer, 0, len);
+            let null_buffer = if skip_validation {
+                // safety: flag can only be set via unsafe code
+                unsafe { NullBuffer::new_unchecked(validity_buffer, null_count) }
+            } else {
+                let null_buffer = NullBuffer::new(validity_buffer);
+
+                if null_buffer.null_count() != null_count {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "null_count value ({}) doesn't match actual number of nulls in array ({})",
+                        null_count,
+                        null_buffer.null_count()
+                    )));
+                }
+
+                null_buffer
+            };
+
+            Some(null_buffer)
+        } else {
+            None
+        };
         if struct_arrays.is_empty() {
             // `StructArray::from` can't infer the correct row count
             // if we have zero fields
             return Ok(Arc::new(StructArray::new_empty_fields(len, nulls)));
         }
 
-        let struct_array = if self.skip_validation.get() {
+        let struct_array = if skip_validation {
             // safety: flag can only be set via unsafe code
             unsafe { StructArray::new_unchecked(struct_fields.clone(), struct_arrays, nulls) }
         } else {
@@ -354,7 +385,8 @@ impl RecordBatchDecoder<'_> {
                 .len(field_node.length() as usize)
                 .add_buffer(buffers[1].clone())
                 .add_child_data(value_array.into_data())
-                .null_bit_buffer(null_buffer);
+                .null_bit_buffer(null_buffer)
+                .null_count(field_node.null_count() as usize);
             self.create_array_from_builder(builder)
         } else {
             unreachable!("Cannot create dictionary array from {:?}", data_type)
