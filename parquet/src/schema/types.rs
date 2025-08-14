@@ -1491,7 +1491,7 @@ fn schema_from_array_helper<'a>(
 
     // Check for empty schema
     if let (true, None | Some(0)) = (is_root_node, element.num_children) {
-        let builder = Type::group_type_builder(&element.name);
+        let builder = Type::group_type_builder(element.name);
         return Ok((index + 1, Arc::new(builder.build().unwrap())));
     }
 
@@ -1534,7 +1534,7 @@ fn schema_from_array_helper<'a>(
                     .with_id(field_id);
                 Ok((index + 1, Arc::new(builder.build()?)))
             } else {
-                let mut builder = Type::group_type_builder(&elements[index].name)
+                let mut builder = Type::group_type_builder(elements[index].name)
                     .with_converted_type(converted_type)
                     .with_logical_type(logical_type)
                     .with_id(field_id);
@@ -1562,7 +1562,7 @@ fn schema_from_array_helper<'a>(
                 fields.push(child_result.1);
             }
 
-            let mut builder = Type::group_type_builder(&elements[index].name)
+            let mut builder = Type::group_type_builder(elements[index].name)
                 .with_converted_type(converted_type)
                 .with_logical_type(logical_type)
                 .with_fields(fields)
