@@ -321,6 +321,13 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Timestamp(time_unit, time_zone) => {
             convert_timestamp(time_unit, time_zone, input, &mut builder);
         }
+        DataType::Interval(_) => {
+            return Err(ArrowError::InvalidArgumentError(
+                "Casting interval types to Variant is not supported. \
+                 The Variant format does not define interval/duration types."
+                    .to_string(),
+            ));
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -340,8 +347,8 @@ mod tests {
     use arrow::array::{
         ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, NullArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        IntervalYearMonthArray, NullArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -731,6 +738,21 @@ mod tests {
                 Some(Variant::Double(f64::MAX)),
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_interval_error() {
+        let array = IntervalYearMonthArray::from(vec![Some(12), None, Some(-6)]);
+        let result = cast_to_variant(&array);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ArrowError::InvalidArgumentError(msg) => {
+                assert!(msg.contains("Casting interval types to Variant is not supported"));
+                assert!(msg.contains("The Variant format does not define interval/duration types"));
+            }
+            _ => panic!("Expected InvalidArgumentError"),
+        }
     }
 
     #[test]
