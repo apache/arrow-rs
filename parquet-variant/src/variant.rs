@@ -1314,7 +1314,7 @@ impl std::fmt::Debug for Variant<'_, '_> {
                 write!(f, "\"")
             }
             Variant::String(s) => write!(f, "{s:?}"),
-            Variant::ShortString(s) => write!(f, "{s:?}"),
+            Variant::ShortString(s) => write!(f, "{:?}", s.as_ref()),
             Variant::Object(obj) => {
                 let mut map = f.debug_map();
                 for res in obj.iter_try() {
