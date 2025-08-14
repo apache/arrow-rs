@@ -26,6 +26,9 @@ use crate::format::{
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
 use crate::{thrift_struct, thrift_union};
 
+// define this and ColumnCryptoMetadata here so they're only defined when
+// the encryption feature is enabled
+
 thrift_struct!(
 /// Encryption metadata for a column chunk encrypted with a column-specific key
 pub struct EncryptionWithColumnKey {

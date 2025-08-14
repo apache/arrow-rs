@@ -430,6 +430,7 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     }
 }
 
+// TODO: should this move to thrift_gen?
 thrift_struct!(
 /// A key-value pair for [`FileMetaData`].
 pub struct KeyValue {
@@ -552,6 +553,7 @@ impl FileMetaData {
     }
 }
 
+// TODO: should this move to thrift_gen?
 thrift_struct!(
 /// Sort order within a RowGroup of a leaf column
 pub struct SortingColumn {

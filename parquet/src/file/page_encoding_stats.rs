@@ -22,6 +22,7 @@ use crate::errors::{ParquetError, Result};
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
 use crate::thrift_struct;
 
+// TODO: This should probably all be moved to thrift_gen
 thrift_struct!(
 /// PageEncodingStats for a column chunk and data page.
 pub struct PageEncodingStats {
