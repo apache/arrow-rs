@@ -418,7 +418,7 @@ impl<W: Write + Send> ArrowWriter<W> {
         Ok((row_group_index, in_progress.writers, serialized_row_group_writer))
     }
 
-    /// Returns the ArrowRowGroupWriterFactory used bt this ArrowWriter.
+    /// Returns the ArrowRowGroupWriterFactory used by this ArrowWriter.
     pub fn get_row_group_writer_factory(self) -> ArrowRowGroupWriterFactory {
         self.row_group_writer_factory
     }
@@ -434,6 +434,14 @@ impl<W: Write + Send> ArrowWriter<W> {
         row_group_writer.close()?;
         Ok(())
     }
+    // pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
+    //     let mut row_group_writer = self.writer.next_row_group()?;
+    //     for chunk in chunks {
+    //         chunk.append_to_row_group(&mut row_group_writer)?;
+    //     }
+    //     row_group_writer.close()?;
+    //     Ok(())
+    // }
 }
 
 impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
