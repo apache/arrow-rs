@@ -25,8 +25,9 @@
 //! [`Seek`]: std::io::Seek
 
 mod stream;
-
 pub use stream::*;
+
+use arrow_select::concat;
 
 use flatbuffers::{VectorIter, VerifierOptions};
 use std::collections::{HashMap, VecDeque};
@@ -42,7 +43,8 @@ use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
-use crate::{Block, FieldNode, Message, MetadataVersion, CONTINUATION_MARKER};
+use crate::gen::Message::{self};
+use crate::{Block, FieldNode, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Read a buffer based on offset and length
@@ -398,7 +400,8 @@ impl RecordBatchDecoder<'_> {
 /// [`RecordBatch`]
 ///
 /// [IPC RecordBatch]: crate::RecordBatch
-struct RecordBatchDecoder<'a> {
+///
+pub struct RecordBatchDecoder<'a> {
     /// The flatbuffers encoded record batch
     batch: crate::RecordBatch<'a>,
     /// The output schema
@@ -710,12 +713,72 @@ fn read_dictionary_impl(
     require_alignment: bool,
     skip_validation: UnsafeFlag,
 ) -> Result<(), ArrowError> {
-    if batch.isDelta() {
-        return Err(ArrowError::InvalidArgumentError(
-            "delta dictionary batches not supported".to_string(),
-        ));
+    let id = batch.id();
+
+    let dictionary_values = get_dictionary_values(
+        buf,
+        batch,
+        schema,
+        dictionaries_by_id,
+        metadata,
+        require_alignment,
+        skip_validation,
+    )?;
+
+    update_dictionaries(dictionaries_by_id, batch.isDelta(), id, dictionary_values)?;
+
+    Ok(())
+}
+
+/// Updates the `dictionaries_by_id` with the provided dictionary values and id.
+///
+/// # Errors
+/// - If `is_delta` is true and there is no existing dictionary for the given
+///   `dict_id`
+/// - If `is_delta` is true and the concatenation of the existing and new
+///   dictionary fails. This usually signals a type mismatch between the old and
+///   new values.
+fn update_dictionaries(
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    is_delta: bool,
+    dict_id: i64,
+    dict_values: ArrayRef,
+) -> Result<(), ArrowError> {
+    if !is_delta {
+        // We don't currently record the isOrdered field. This could be general
+        // attributes of arrays.
+        // Add (possibly multiple) array refs to the dictionaries array.
+        dictionaries_by_id.insert(dict_id, dict_values.clone());
+        return Ok(());
     }
 
+    let existing = dictionaries_by_id.get(&dict_id).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(format!(
+            "No existing dictionary for delta dictionary with id '{dict_id}'"
+        ))
+    })?;
+
+    let combined = concat::concat(&[existing, &dict_values]).map_err(|e| {
+        ArrowError::InvalidArgumentError(format!("Failed to concat delta dictionary: {e}"))
+    })?;
+
+    dictionaries_by_id.insert(dict_id, combined);
+
+    Ok(())
+}
+
+/// Given a dictionary batch IPC message/body along with the full state of a
+/// stream including schema, dictionary cache, metadata, and other flags, this
+/// function will parse the buffer into an array of dictionary values.
+fn get_dictionary_values(
+    buf: &Buffer,
+    batch: crate::DictionaryBatch,
+    schema: &Schema,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &MetadataVersion,
+    require_alignment: bool,
+    skip_validation: UnsafeFlag,
+) -> Result<ArrayRef, ArrowError> {
     let id = batch.id();
     #[allow(deprecated)]
     let fields_using_this_dictionary = schema.fields_with_dict_id(id);
@@ -751,12 +814,7 @@ fn read_dictionary_impl(
         ArrowError::InvalidArgumentError(format!("dictionary id {id} not found in schema"))
     })?;
 
-    // We don't currently record the isOrdered field. This could be general
-    // attributes of arrays.
-    // Add (possibly multiple) array refs to the dictionaries array.
-    dictionaries_by_id.insert(id, dictionary_values.clone());
-
-    Ok(())
+    Ok(dictionary_values)
 }
 
 /// Read the data for a given block
@@ -774,7 +832,7 @@ fn read_block<R: Read + Seek>(mut reader: R, block: &Block) -> Result<Buffer, Ar
 /// Parse an encapsulated message
 ///
 /// <https://arrow.apache.org/docs/format/Columnar.html#encapsulated-message-format>
-fn parse_message(buf: &[u8]) -> Result<Message<'_>, ArrowError> {
+fn parse_message(buf: &[u8]) -> Result<Message::Message<'_>, ArrowError> {
     let buf = match buf[..4] == CONTINUATION_MARKER {
         true => &buf[8..],
         false => &buf[4..],
@@ -925,7 +983,7 @@ impl FileDecoder {
         self
     }
 
-    fn read_message<'a>(&self, buf: &'a [u8]) -> Result<Message<'a>, ArrowError> {
+    fn read_message<'a>(&self, buf: &'a [u8]) -> Result<Message::Message<'a>, ArrowError> {
         let message = parse_message(buf)?;
 
         // some old test data's footer metadata is not set, so we account for that
@@ -1361,7 +1419,7 @@ impl<R: Read + Seek> RecordBatchReader for FileReader<R> {
 /// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamReader<R> {
     /// Stream reader
-    reader: R,
+    reader: MessageReader<R>,
 
     /// The schema that is read from the stream's first message
     schema: SchemaRef,
@@ -1419,34 +1477,28 @@ impl<R: Read> StreamReader<R> {
     /// An ['Err'](Result::Err) may be returned if the reader does not encounter a schema
     /// as the first message in the stream.
     pub fn try_new(
-        mut reader: R,
+        reader: R,
         projection: Option<Vec<usize>>,
     ) -> Result<StreamReader<R>, ArrowError> {
-        // determine metadata length
-        let mut meta_size: [u8; 4] = [0; 4];
-        reader.read_exact(&mut meta_size)?;
-        let meta_len = {
-            // If a continuation marker is encountered, skip over it and read
-            // the size from the next four bytes.
-            if meta_size == CONTINUATION_MARKER {
-                reader.read_exact(&mut meta_size)?;
-            }
-            i32::from_le_bytes(meta_size)
+        let mut msg_reader = MessageReader::new(reader);
+        let message = msg_reader.maybe_next()?;
+        let Some((message, _)) = message else {
+            return Err(ArrowError::IpcError(
+                "Expected schema message, found empty stream.".to_string(),
+            ));
         };
 
-        let meta_len = usize::try_from(meta_len)
-            .map_err(|_| ArrowError::ParseError(format!("Invalid metadata length: {meta_len}")))?;
-        let mut meta_buffer = vec![0; meta_len];
-        reader.read_exact(&mut meta_buffer)?;
+        if message.header_type() != Message::MessageHeader::Schema {
+            return Err(ArrowError::IpcError(format!(
+                "Expected a schema as the first message in the stream, got: {:?}",
+                message.header_type()
+            )));
+        }
 
-        let message = crate::root_as_message(meta_buffer.as_slice()).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+        let schema = message.header_as_schema().ok_or_else(|| {
+            ArrowError::ParseError("Failed to parse schema from message header".to_string())
         })?;
-        // message header is a Schema, so read it
-        let ipc_schema: crate::Schema = message.header_as_schema().ok_or_else(|| {
-            ArrowError::ParseError("Unable to read IPC message as schema".to_string())
-        })?;
-        let schema = crate::convert::fb_to_schema(ipc_schema);
+        let schema = crate::convert::fb_to_schema(schema);
 
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_id = HashMap::new();
@@ -1458,8 +1510,9 @@ impl<R: Read> StreamReader<R> {
             }
             _ => None,
         };
+
         Ok(Self {
-            reader,
+            reader: msg_reader,
             schema: Arc::new(schema),
             finished: false,
             dictionaries_by_id,
@@ -1491,117 +1544,127 @@ impl<R: Read> StreamReader<R> {
         if self.finished {
             return Ok(None);
         }
-        // determine metadata length
-        let mut meta_size: [u8; 4] = [0; 4];
 
-        match self.reader.read_exact(&mut meta_size) {
-            Ok(()) => (),
-            Err(e) => {
-                return if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    // Handle EOF without the "0xFFFFFFFF 0x00000000"
-                    // valid according to:
-                    // https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
-                    self.finished = true;
-                    Ok(None)
-                } else {
-                    Err(ArrowError::from(e))
-                };
-            }
+        // Read messages until we get a record batch or end of stream
+        loop {
+            let message = self.next_ipc_message()?;
+            let Some(message) = message else {
+                // If the message is None, we have reached the end of the stream.
+                self.finished = true;
+                return Ok(None);
+            };
+
+            match message {
+                IpcMessage::Schema(_) => {
+                    return Err(ArrowError::IpcError(
+                        "Expected a record batch, but found a schema".to_string(),
+                    ));
+                }
+                IpcMessage::RecordBatch(record_batch) => {
+                    return Ok(Some(record_batch));
+                }
+                IpcMessage::DictionaryBatch { .. } => {
+                    continue;
+                }
+            };
         }
+    }
 
-        let meta_len = {
-            // If a continuation marker is encountered, skip over it and read
-            // the size from the next four bytes.
-            if meta_size == CONTINUATION_MARKER {
-                self.reader.read_exact(&mut meta_size)?;
-            }
-            i32::from_le_bytes(meta_size)
+    /// Reads and fully parses the next IPC message from the stream. Whereas
+    /// [`Self::maybe_next`] is a higher level method focused on reading
+    /// `RecordBatch`es, this method returns the individual fully parsed IPC
+    /// messages from the underlying stream.
+    ///
+    /// This is useful primarily for testing reader/writer behaviors as it
+    /// allows a full view into the messages that have been written to a stream.
+    pub(crate) fn next_ipc_message(&mut self) -> Result<Option<IpcMessage>, ArrowError> {
+        let message = self.reader.maybe_next()?;
+        let Some((message, body)) = message else {
+            // If the message is None, we have reached the end of the stream.
+            return Ok(None);
         };
 
-        let meta_len = usize::try_from(meta_len)
-            .map_err(|_| ArrowError::ParseError(format!("Invalid metadata length: {meta_len}")))?;
-
-        if meta_len == 0 {
-            // the stream has ended, mark the reader as finished
-            self.finished = true;
-            return Ok(None);
-        }
-
-        let mut meta_buffer = vec![0; meta_len];
-        self.reader.read_exact(&mut meta_buffer)?;
-
-        let vecs = &meta_buffer.to_vec();
-        let message = crate::root_as_message(vecs).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
-        })?;
-
-        match message.header_type() {
-            crate::MessageHeader::Schema => Err(ArrowError::IpcError(
-                "Not expecting a schema when messages are read".to_string(),
-            )),
-            crate::MessageHeader::RecordBatch => {
+        let ipc_message = match message.header_type() {
+            Message::MessageHeader::Schema => {
+                let schema = message.header_as_schema().ok_or_else(|| {
+                    ArrowError::ParseError("Failed to parse schema from message header".to_string())
+                })?;
+                let arrow_schema = crate::convert::fb_to_schema(schema);
+                IpcMessage::Schema(arrow_schema)
+            }
+            Message::MessageHeader::RecordBatch => {
                 let batch = message.header_as_record_batch().ok_or_else(|| {
                     ArrowError::IpcError("Unable to read IPC message as record batch".to_string())
                 })?;
-                // read the block that makes up the record batch into a buffer
-                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-                self.reader.read_exact(&mut buf)?;
 
-                RecordBatchDecoder::try_new(
-                    &buf.into(),
+                let version = message.version();
+                let schema = self.schema.clone();
+                let record_batch = RecordBatchDecoder::try_new(
+                    &body.into(),
                     batch,
-                    self.schema(),
+                    schema,
                     &self.dictionaries_by_id,
-                    &message.version(),
+                    &version,
                 )?
                 .with_projection(self.projection.as_ref().map(|x| x.0.as_ref()))
                 .with_require_alignment(false)
                 .with_skip_validation(self.skip_validation.clone())
-                .read_record_batch()
-                .map(Some)
+                .read_record_batch()?;
+                IpcMessage::RecordBatch(record_batch)
             }
-            crate::MessageHeader::DictionaryBatch => {
-                let batch = message.header_as_dictionary_batch().ok_or_else(|| {
-                    ArrowError::IpcError(
-                        "Unable to read IPC message as dictionary batch".to_string(),
+            Message::MessageHeader::DictionaryBatch => {
+                let dict = message.header_as_dictionary_batch().ok_or_else(|| {
+                    ArrowError::ParseError(
+                        "Failed to parse dictionary batch from message header".to_string(),
                     )
                 })?;
-                // read the block that makes up the dictionary batch into a buffer
-                let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
-                self.reader.read_exact(&mut buf)?;
 
-                read_dictionary_impl(
-                    &buf.into(),
-                    batch,
+                let version = message.version();
+                let dict_values = get_dictionary_values(
+                    &body.into(),
+                    dict,
                     &self.schema,
                     &mut self.dictionaries_by_id,
-                    &message.version(),
+                    &version,
                     false,
                     self.skip_validation.clone(),
                 )?;
 
-                // read the next message until we encounter a RecordBatch
-                self.maybe_next()
+                update_dictionaries(
+                    &mut self.dictionaries_by_id,
+                    dict.isDelta(),
+                    dict.id(),
+                    dict_values.clone(),
+                )?;
+
+                IpcMessage::DictionaryBatch {
+                    id: dict.id(),
+                    is_delta: (dict.isDelta()),
+                    values: (dict_values),
+                }
             }
-            crate::MessageHeader::NONE => Ok(None),
-            t => Err(ArrowError::InvalidArgumentError(format!(
-                "Reading types other than record batches not yet supported, unable to read {t:?} "
-            ))),
-        }
+            x => {
+                return Err(ArrowError::ParseError(format!(
+                    "Unsupported message header type in IPC stream: '{x:?}'"
+                )));
+            }
+        };
+
+        Ok(Some(ipc_message))
     }
 
     /// Gets a reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_ref(&self) -> &R {
-        &self.reader
+        self.reader.inner()
     }
 
     /// Gets a mutable reference to the underlying reader.
     ///
     /// It is inadvisable to directly read from the underlying reader.
     pub fn get_mut(&mut self) -> &mut R {
-        &mut self.reader
+        self.reader.inner_mut()
     }
 
     /// Specifies if validation should be skipped when reading data (defaults to `false`)
@@ -1626,6 +1689,122 @@ impl<R: Read> Iterator for StreamReader<R> {
 impl<R: Read> RecordBatchReader for StreamReader<R> {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+}
+
+/// Representation of a fully parsed IpcMessage from the underlying stream.
+/// Parsing this kind of message is done by higher level constructs such as
+/// [`StreamReader`], because fully interpreting the messages into a record
+/// batch or dictionary batch requires access to stream state such as schema
+/// and the full dictionary cache.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) enum IpcMessage {
+    Schema(arrow_schema::Schema),
+    RecordBatch(RecordBatch),
+    DictionaryBatch {
+        id: i64,
+        is_delta: bool,
+        values: ArrayRef,
+    },
+}
+
+/// A low-level construct that reads [`Message::Message`]s from a reader while
+/// re-using a buffer for metadata. This is composed into [`StreamReader`].
+struct MessageReader<R> {
+    reader: R,
+    buf: Vec<u8>,
+}
+
+impl<R: Read> MessageReader<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buf: Vec::new(),
+        }
+    }
+
+    /// Reads the entire next message from the underlying reader which includes
+    /// the metadata length, the metadata, and the body.
+    ///
+    /// # Returns
+    /// - `Ok(None)` if the the reader signals the end of stream with EOF on
+    ///   the first read
+    /// - `Err(_)` if the reader returns an error other than on the first
+    ///   read, or if the metadata length is invalid
+    /// - `Ok(Some(_))` with the Message and buffer containiner the
+    ///   body bytes otherwise.
+    fn maybe_next(&mut self) -> Result<Option<(Message::Message<'_>, MutableBuffer)>, ArrowError> {
+        let meta_len = self.read_meta_len()?;
+        let Some(meta_len) = meta_len else {
+            return Ok(None);
+        };
+
+        self.buf.resize(meta_len, 0);
+        self.reader.read_exact(&mut self.buf)?;
+
+        let message = crate::root_as_message(self.buf.as_slice()).map_err(|err| {
+            ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
+        })?;
+
+        let mut buf = MutableBuffer::from_len_zeroed(message.bodyLength() as usize);
+        self.reader.read_exact(&mut buf)?;
+
+        Ok(Some((message, buf)))
+    }
+
+    /// Get a mutable reference to the underlying reader.
+    fn inner_mut(&mut self) -> &mut R {
+        &mut self.reader
+    }
+
+    /// Get an immutable reference to the underlying reader.
+    fn inner(&self) -> &R {
+        &self.reader
+    }
+
+    /// Read the metadata length for the next message from the underlying stream.
+    ///
+    /// # Returns
+    /// - `Ok(None)` if the the reader signals the end of stream with EOF on
+    ///   the first read
+    /// - `Err(_)` if the reader returns an error other than on the first
+    ///   read, or if the metadata length is less than 0.
+    /// - `Ok(Some(_))` with the length otherwise.
+    pub fn read_meta_len(&mut self) -> Result<Option<usize>, ArrowError> {
+        let mut meta_len: [u8; 4] = [0; 4];
+        match self.reader.read_exact(&mut meta_len) {
+            Ok(_) => {}
+            Err(e) => {
+                return if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    // Handle EOF without the "0xFFFFFFFF 0x00000000"
+                    // valid according to:
+                    // https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
+                    Ok(None)
+                } else {
+                    Err(ArrowError::from(e))
+                };
+            }
+        };
+
+        let meta_len = {
+            // If a continuation marker is encountered, skip over it and read
+            // the size from the next four bytes.
+            if meta_len == CONTINUATION_MARKER {
+                self.reader.read_exact(&mut meta_len)?;
+            }
+
+            i32::from_le_bytes(meta_len)
+        };
+
+        if meta_len == 0 {
+            return Ok(None);
+        }
+
+        let meta_len = usize::try_from(meta_len)
+            .map_err(|_| ArrowError::ParseError(format!("Invalid metadata length: {meta_len}")))?;
+
+        Ok(Some(meta_len))
     }
 }
 
@@ -2952,5 +3131,16 @@ mod tests {
         let new_schema = fb_to_schema(ipc_schema);
 
         assert_eq!(schema, new_schema);
+    }
+
+    #[test]
+    fn test_negative_meta_len() {
+        let bytes = i32::to_le_bytes(-1);
+        let mut buf = vec![];
+        buf.extend(CONTINUATION_MARKER);
+        buf.extend(bytes);
+
+        let reader = StreamReader::try_new(Cursor::new(buf), None);
+        assert!(reader.is_err());
     }
 }
