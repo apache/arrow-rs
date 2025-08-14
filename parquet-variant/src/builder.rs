@@ -134,7 +134,6 @@ macro_rules! variant_append_value {
     };
 }
 
-
 impl ValueBuffer {
     fn append_u8(&mut self, term: u8) {
         self.0.push(term);
