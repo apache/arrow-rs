@@ -19,14 +19,13 @@
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
+use crate::file::metadata::thrift_gen::SchemaElement;
 use crate::file::metadata::HeapSize;
 
 use crate::basic::{
     ColumnOrder, ConvertedType, LogicalType, Repetition, SortOrder, TimeUnit, Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
-use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
-use crate::thrift_struct;
 
 // ----------------------------------------------------------------------
 // Parquet Type definitions
@@ -1426,23 +1425,6 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<crate::format::SchemaEleme
         }
     }
 }
-
-// temporary struct that lives only long enough to create `TypePtr` schema
-thrift_struct!(
-pub(crate) struct SchemaElement<'a> {
-  /** Data type for this field. Not set if the current element is a non-leaf node */
-  1: optional PhysicalType type_;
-  2: optional i32 type_length;
-  3: optional Repetition repetition_type;
-  4: required string<'a> name;
-  5: optional i32 num_children;
-  6: optional ConvertedType converted_type;
-  7: optional i32 scale
-  8: optional i32 precision
-  9: optional i32 field_id;
-  10: optional LogicalType logical_type
-}
-);
 
 // This is a copy of `from_thrift` above, but rather than `format::SchemaElement` it takes
 // the `SchemaElement` currently defined in this modules.

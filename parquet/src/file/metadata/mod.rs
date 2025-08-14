@@ -93,6 +93,7 @@
 //! ```
 mod memory;
 pub(crate) mod reader;
+pub(crate) mod thrift_gen;
 mod writer;
 
 #[cfg(feature = "encryption")]
@@ -551,56 +552,20 @@ impl FileMetaData {
     }
 }
 
+thrift_struct!(
 /// Sort order within a RowGroup of a leaf column
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SortingColumn {
-    /// The ordinal position of the column (in this row group) *
-    pub column_idx: i32,
-    /// If true, indicates this column is sorted in descending order. *
-    pub descending: bool,
-    /// If true, nulls will come before non-null values, otherwise,
-    /// nulls go at the end.
-    pub nulls_first: bool,
-}
+  /// The ordinal position of the column (in this row group)
+  1: required i32 column_idx
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for SortingColumn {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        let mut column_idx: Option<i32> = None;
-        let mut descending: Option<bool> = None;
-        let mut nulls_first: Option<bool> = None;
-        prot.read_struct_begin()?;
-        loop {
-            let field_ident = prot.read_field_begin()?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = prot.read_i32()?;
-                    column_idx = Some(val);
-                }
-                2 => {
-                    let val = prot.read_bool()?;
-                    descending = Some(val);
-                }
-                3 => {
-                    let val = prot.read_bool()?;
-                    nulls_first = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            };
-        }
-        prot.read_struct_end()?;
-        Ok(Self {
-            column_idx: column_idx.expect("Required field column_idx not present"),
-            descending: descending.expect("Required field descending not present"),
-            nulls_first: nulls_first.expect("Required field nulls_first not present"),
-        })
-    }
+  /// If true, indicates this column is sorted in descending order.
+  2: required bool descending
+
+  /// If true, nulls will come before non-null values, otherwise,
+  /// nulls go at the end. */
+  3: required bool nulls_first
 }
+);
 
 impl From<&crate::format::SortingColumn> for SortingColumn {
     fn from(value: &crate::format::SortingColumn) -> Self {

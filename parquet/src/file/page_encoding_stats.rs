@@ -31,28 +31,6 @@ pub struct PageEncodingStats {
 }
 );
 
-// TODO: remove when we finally get rid of the format module
-impl TryFrom<crate::format::PageEncodingStats> for PageEncodingStats {
-    type Error = ParquetError;
-    fn try_from(value: crate::format::PageEncodingStats) -> Result<Self> {
-        Ok(Self {
-            page_type: PageType::try_from(value.page_type)?,
-            encoding: Encoding::try_from(value.encoding)?,
-            count: value.count,
-        })
-    }
-}
-
-impl From<PageEncodingStats> for crate::format::PageEncodingStats {
-    fn from(value: PageEncodingStats) -> Self {
-        Self {
-            page_type: crate::format::PageType::from(value.page_type),
-            encoding: crate::format::Encoding::from(value.encoding),
-            count: value.count,
-        }
-    }
-}
-
 /// Converts Thrift definition into `PageEncodingStats`.
 pub fn try_from_thrift(
     thrift_encoding_stats: &crate::format::PageEncodingStats,
