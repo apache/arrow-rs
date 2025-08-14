@@ -1312,7 +1312,7 @@ fn from_thrift_helper(
                 .map(Repetition::try_from)
                 .transpose()?;
 
-            let mut fields = vec![];
+            let mut fields = Vec::with_capacity(n as usize);
             let mut next_index = index + 1;
             for _ in 0..n {
                 let child_result = from_thrift_helper(elements, next_index)?;
@@ -1429,7 +1429,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<crate::format::SchemaEleme
 
 // temporary struct that lives only long enough to create `TypePtr` schema
 thrift_struct!(
-struct SchemaElement<'a> {
+pub(crate) struct SchemaElement<'a> {
   /** Data type for this field. Not set if the current element is a non-leaf node */
   1: optional PhysicalType type_;
   2: optional i32 type_length;
@@ -1444,48 +1444,67 @@ struct SchemaElement<'a> {
 }
 );
 
-fn next_schema_element<'a>(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<SchemaElement<'a>> {
-    SchemaElement::try_from(prot)
-}
+// This is a copy of `from_thrift` above, but rather than `format::SchemaElement` it takes
+// the `SchemaElement` currently defined in this modules.
 
-pub(crate) fn schema_from_thrift_input(prot: &mut ThriftCompactInputProtocol) -> Result<TypePtr> {
-    // need to be at the start of a list<SchemaElement>. read the list header.
-    let list_ident = prot.read_list_begin()?;
-
-    let t = from_thrift_input_helper(prot, 0)?;
-    if t.0 != list_ident.size as usize {
-        return Err(general_err!("Expected exactly one root node"));
+// convert thrift decoded array of `SchemaElement` into this crate's representation of
+// parquet types
+pub(crate) fn parquet_schema_from_array<'a>(elements: &'a [SchemaElement<'a>]) -> Result<TypePtr> {
+    let mut index = 0;
+    let mut schema_nodes = Vec::with_capacity(1); // there should only be one element when done
+    while index < elements.len() {
+        let t = schema_from_array_helper(elements, index)?;
+        index = t.0;
+        schema_nodes.push(t.1);
+    }
+    if schema_nodes.len() != 1 {
+        return Err(general_err!(
+            "Expected exactly one root node, but found {}",
+            schema_nodes.len()
+        ));
     }
 
-    if !t.1.is_group() {
+    if !schema_nodes[0].is_group() {
         return Err(general_err!("Expected root node to be a group type"));
     }
 
-    Ok(t.1)
+    Ok(schema_nodes.remove(0))
 }
 
-fn from_thrift_input_helper(
-    prot: &mut ThriftCompactInputProtocol,
+// recursive helper function for schema conversion
+fn schema_from_array_helper<'a>(
+    elements: &[SchemaElement<'a>],
     index: usize,
 ) -> Result<(usize, TypePtr)> {
     // Whether or not the current node is root (message type).
     // There is only one message type node in the schema tree.
     let is_root_node = index == 0;
-    let element = next_schema_element(prot)?;
+
+    if index >= elements.len() {
+        return Err(general_err!(
+            "Index out of bound, index = {}, len = {}",
+            index,
+            elements.len()
+        ));
+    }
+    let element = &elements[index];
 
     // Check for empty schema
     if let (true, None | Some(0)) = (is_root_node, element.num_children) {
-        let builder = Type::group_type_builder(element.name);
+        let builder = Type::group_type_builder(&element.name);
         return Ok((index + 1, Arc::new(builder.build().unwrap())));
     }
 
     let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
-    let logical_type = element.logical_type;
+
+    // LogicalType is only present in v2 Parquet files. ConvertedType is always
+    // populated, regardless of the version of the file (v1 or v2).
+    let logical_type = element.logical_type.clone();
 
     check_logical_type(&logical_type)?;
 
-    let field_id = element.field_id;
-    match element.num_children {
+    let field_id = elements[index].field_id;
+    match elements[index].num_children {
         // From parquet-format:
         //   The children count is used to construct the nested relationship.
         //   This field is not set when the element is a primitive type
@@ -1493,18 +1512,18 @@ fn from_thrift_input_helper(
         // have to handle this case too.
         None | Some(0) => {
             // primitive type
-            if element.repetition_type.is_none() {
+            if elements[index].repetition_type.is_none() {
                 return Err(general_err!(
                     "Repetition level must be defined for a primitive type"
                 ));
             }
-            let repetition = element.repetition_type.unwrap();
-            if let Some(type_) = element.type_ {
+            let repetition = elements[index].repetition_type.unwrap();
+            if let Some(type_) = elements[index].type_ {
                 let physical_type = type_;
-                let length = element.type_length.unwrap_or(-1);
-                let scale = element.scale.unwrap_or(-1);
-                let precision = element.precision.unwrap_or(-1);
-                let name = element.name;
+                let length = elements[index].type_length.unwrap_or(-1);
+                let scale = elements[index].scale.unwrap_or(-1);
+                let precision = elements[index].precision.unwrap_or(-1);
+                let name = &elements[index].name;
                 let builder = Type::primitive_type_builder(name, physical_type)
                     .with_repetition(repetition)
                     .with_converted_type(converted_type)
@@ -1515,7 +1534,7 @@ fn from_thrift_input_helper(
                     .with_id(field_id);
                 Ok((index + 1, Arc::new(builder.build()?)))
             } else {
-                let mut builder = Type::group_type_builder(element.name)
+                let mut builder = Type::group_type_builder(&elements[index].name)
                     .with_converted_type(converted_type)
                     .with_logical_type(logical_type)
                     .with_id(field_id);
@@ -1533,17 +1552,17 @@ fn from_thrift_input_helper(
             }
         }
         Some(n) => {
-            let repetition = element.repetition_type;
+            let repetition = elements[index].repetition_type;
 
-            let mut fields = vec![];
+            let mut fields = Vec::with_capacity(n as usize);
             let mut next_index = index + 1;
             for _ in 0..n {
-                let child_result = from_thrift_input_helper(prot, next_index)?;
+                let child_result = schema_from_array_helper(elements, next_index)?;
                 next_index = child_result.0;
                 fields.push(child_result.1);
             }
 
-            let mut builder = Type::group_type_builder(element.name)
+            let mut builder = Type::group_type_builder(&elements[index].name)
                 .with_converted_type(converted_type)
                 .with_logical_type(logical_type)
                 .with_fields(fields)

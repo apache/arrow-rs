@@ -31,8 +31,8 @@ use crate::{
         statistics::ValueStatistics,
     },
     parquet_thrift::{FieldType, ThriftCompactInputProtocol},
-    schema::types::{schema_from_thrift_input, ColumnDescriptor},
-    thrift_read_field, thrift_struct,
+    schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaElement},
+    thrift_struct,
     util::bit_util::FromBytes,
 };
 use bytes::Bytes;
@@ -41,7 +41,7 @@ use bytes::Bytes;
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
@@ -1000,7 +1000,7 @@ impl ParquetMetaDataReader {
                 .collect::<Vec<KeyValue>>()
         });
 
-        let file_metadata = FileMetaData::new(
+        let file_metadata = crate::file::metadata::FileMetaData::new(
             t_file_metadata.version,
             t_file_metadata.num_rows,
             t_file_metadata.created_by,
@@ -1043,7 +1043,7 @@ impl ParquetMetaDataReader {
                 .collect::<Vec<KeyValue>>()
         });
 
-        let file_metadata = FileMetaData::new(
+        let file_metadata = crate::file::metadata::FileMetaData::new(
             t_file_metadata.version,
             t_file_metadata.num_rows,
             t_file_metadata.created_by,
@@ -1059,74 +1059,30 @@ impl ParquetMetaDataReader {
     pub fn decode_file_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
         let mut prot = ThriftCompactInputProtocol::new(buf);
 
-        // components of the FileMetaData
-        let mut version: Option<i32> = None;
-        let mut schema_descr: Option<Arc<SchemaDescriptor>> = None;
-        let mut num_rows: Option<i64> = None;
-        let mut row_groups: Option<Vec<RowGroup>> = None;
-        let mut key_value_metadata: Option<Vec<KeyValue>> = None;
-        let mut created_by: Option<String> = None;
-        let mut column_orders: Option<Vec<ColumnOrder>> = None;
+        let file_meta = FileMetaData::try_from(&mut prot)?;
 
-        // begin decoding to intermediates
-        prot.read_struct_begin()?;
-        loop {
-            let field_ident = prot.read_field_begin()?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            let prot = &mut prot;
+        let version = file_meta.version;
+        let num_rows = file_meta.num_rows;
+        let row_groups = file_meta.row_groups;
+        let created_by = file_meta.created_by.map(|c| c.to_owned());
+        let key_value_metadata = file_meta.key_value_metadata;
 
-            match field_ident.id {
-                1 => {
-                    thrift_read_field!(version, prot, i32);
-                }
-                2 => {
-                    let val = schema_from_thrift_input(prot)?;
-                    schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
-                }
-                3 => {
-                    thrift_read_field!(num_rows, prot, i64);
-                }
-                4 => {
-                    // need to get temp struct here and then translate
-                    let val = Vec::<RowGroup>::try_from(prot)?;
-                    row_groups = Some(val);
-                }
-                5 => {
-                    let val = Vec::<KeyValue>::try_from(prot)?;
-                    key_value_metadata = Some(val);
-                }
-                6 => {
-                    thrift_read_field!(created_by, prot, string);
-                }
-                7 => {
-                    let val = Vec::<ColumnOrder>::try_from(prot)?;
-                    column_orders = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            }
-        }
-
-        let version = version.expect("Required field version is missing");
-        let num_rows = num_rows.expect("Required field num_rows is missing");
-        let row_groups = row_groups.expect("Required field row_groups is missing");
-        let schema_descr = schema_descr.expect("Required field schema is missing");
+        let val = parquet_schema_from_array(&file_meta.schema)?;
+        let schema_descr = Arc::new(SchemaDescriptor::new(val));
 
         // need schema_descr to get final RowGroupMetaData
         let row_groups = convert_row_groups(row_groups, schema_descr.clone())?;
 
         // need to map read column orders to actual values based on the schema
-        if column_orders
+        if file_meta
+            .column_orders
             .as_ref()
             .is_some_and(|cos| cos.len() != schema_descr.num_columns())
         {
             return Err(general_err!("Column order length mismatch"));
         }
 
-        let column_orders = column_orders.map(|cos| {
+        let column_orders = file_meta.column_orders.map(|cos| {
             let mut res = Vec::with_capacity(cos.len());
             for (i, column) in schema_descr.columns().iter().enumerate() {
                 match cos[i] {
@@ -1144,7 +1100,7 @@ impl ParquetMetaDataReader {
             res
         });
 
-        let fmd = FileMetaData::new(
+        let fmd = crate::file::metadata::FileMetaData::new(
             version,
             num_rows,
             created_by,
@@ -1219,6 +1175,22 @@ fn get_file_decryptor(
 }
 
 // temp structs used to construct RowGroupMetaData
+// TODO: move these to a separate module
+thrift_struct!(
+struct FileMetaData<'a> {
+  /** Version of this file **/
+  1: required i32 version
+  2: required list<'a><SchemaElement> schema;
+  3: required i64 num_rows
+  4: required list<'a><RowGroup> row_groups
+  5: optional list<KeyValue> key_value_metadata
+  6: optional string created_by
+  7: optional list<ColumnOrder> column_orders;
+  //8: optional EncryptionAlgorithm encryption_algorithm
+  //9: optional binary footer_signing_key_metadata
+}
+);
+
 thrift_struct!(
 struct RowGroup<'a> {
   1: required list<'a><ColumnChunk> columns
