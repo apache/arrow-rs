@@ -211,7 +211,7 @@ impl Deref for ShortString<'_> {
 /// [metadata]: VariantMetadata#Validation
 /// [object]: VariantObject#Validation
 /// [array]: VariantList#Validation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Variant<'m, 'v> {
     /// Primitive type: Null
     Null,
@@ -1286,6 +1286,77 @@ impl TryFrom<(i128, u8)> for Variant<'_, '_> {
     }
 }
 
+// helper to print <invalid> instead of "<invalid>" in debug mode when a VariantObject or VariantList contains invalid values.
+struct InvalidVariant;
+
+impl std::fmt::Debug for InvalidVariant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<invalid>")
+    }
+}
+
+// helper to print binary data in hex format in debug mode, as space-separated hex byte values.
+struct HexString<'a>(&'a [u8]);
+
+impl<'a> std::fmt::Debug for HexString<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some((first, rest)) = self.0.split_first() {
+            write!(f, "{:02x}", first)?;
+            for b in rest {
+                write!(f, " {:02x}", b)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for Variant<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Variant::Null => write!(f, "Null"),
+            Variant::BooleanTrue => write!(f, "BooleanTrue"),
+            Variant::BooleanFalse => write!(f, "BooleanFalse"),
+            Variant::Int8(v) => f.debug_tuple("Int8").field(v).finish(),
+            Variant::Int16(v) => f.debug_tuple("Int16").field(v).finish(),
+            Variant::Int32(v) => f.debug_tuple("Int32").field(v).finish(),
+            Variant::Int64(v) => f.debug_tuple("Int64").field(v).finish(),
+            Variant::Float(v) => f.debug_tuple("Float").field(v).finish(),
+            Variant::Double(v) => f.debug_tuple("Double").field(v).finish(),
+            Variant::Decimal4(d) => f.debug_tuple("Decimal4").field(d).finish(),
+            Variant::Decimal8(d) => f.debug_tuple("Decimal8").field(d).finish(),
+            Variant::Decimal16(d) => f.debug_tuple("Decimal16").field(d).finish(),
+            Variant::Date(d) => f.debug_tuple("Date").field(d).finish(),
+            Variant::TimestampMicros(ts) => f.debug_tuple("TimestampMicros").field(ts).finish(),
+            Variant::TimestampNtzMicros(ts) => {
+                f.debug_tuple("TimestampNtzMicros").field(ts).finish()
+            }
+            Variant::Binary(bytes) => write!(f, "Binary({:?})", HexString(bytes)),
+            Variant::String(s) => f.debug_tuple("String").field(s).finish(),
+            Variant::ShortString(s) => f.debug_tuple("ShortString").field(s).finish(),
+            Variant::Object(obj) => {
+                let mut map = f.debug_map();
+                for res in obj.iter_try() {
+                    match res {
+                        Ok((k, v)) => map.entry(&k, &v),
+                        Err(_) => map.entry(&InvalidVariant, &InvalidVariant),
+                    };
+                }
+                map.finish()
+            }
+            Variant::List(arr) => {
+                let mut list = f.debug_list();
+                for res in arr.iter_try() {
+                    match res {
+                        Ok(v) => list.entry(&v),
+                        Err(_) => list.entry(&InvalidVariant),
+                    };
+                }
+                list.finish()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1325,5 +1396,218 @@ mod tests {
         let decimal16 = VariantDecimal16::try_new(123456789012345678901234567890_i128, 2).unwrap();
         let variant = Variant::from(decimal16);
         assert_eq!(variant.as_decimal16(), Some(decimal16));
+    }
+
+    #[test]
+    fn test_variant_all_subtypes_debug() {
+        use crate::VariantBuilder;
+
+        let mut builder = VariantBuilder::new();
+
+        // Create a root object that contains one of every variant subtype
+        let mut root_obj = builder.new_object();
+
+        // Add primitive types
+        root_obj.insert("null", ());
+        root_obj.insert("boolean_true", true);
+        root_obj.insert("boolean_false", false);
+        root_obj.insert("int8", 42i8);
+        root_obj.insert("int16", 1234i16);
+        root_obj.insert("int32", 123456i32);
+        root_obj.insert("int64", 1234567890123456789i64);
+        root_obj.insert("float", 1.234f32);
+        root_obj.insert("double", 1.23456789f64);
+
+        // Add date and timestamp types
+        let date = chrono::NaiveDate::from_ymd_opt(2024, 12, 25).unwrap();
+        root_obj.insert("date", date);
+
+        let timestamp_utc = chrono::NaiveDate::from_ymd_opt(2024, 12, 25)
+            .unwrap()
+            .and_hms_milli_opt(15, 30, 45, 123)
+            .unwrap()
+            .and_utc();
+        root_obj.insert("timestamp_micros", Variant::TimestampMicros(timestamp_utc));
+
+        let timestamp_ntz = chrono::NaiveDate::from_ymd_opt(2024, 12, 25)
+            .unwrap()
+            .and_hms_milli_opt(15, 30, 45, 123)
+            .unwrap();
+        root_obj.insert(
+            "timestamp_ntz_micros",
+            Variant::TimestampNtzMicros(timestamp_ntz),
+        );
+
+        // Add decimal types
+        let decimal4 = VariantDecimal4::try_new(1234i32, 2).unwrap();
+        root_obj.insert("decimal4", decimal4);
+
+        let decimal8 = VariantDecimal8::try_new(123456789i64, 3).unwrap();
+        root_obj.insert("decimal8", decimal8);
+
+        let decimal16 = VariantDecimal16::try_new(123456789012345678901234567890i128, 4).unwrap();
+        root_obj.insert("decimal16", decimal16);
+
+        // Add binary and string types
+        let binary_data = b"\x01\x02\x03\x04\xde\xad\xbe\xef";
+        root_obj.insert("binary", binary_data.as_slice());
+
+        let long_string =
+            "This is a long string that exceeds the short string limit and contains emoji 🦀";
+        root_obj.insert("string", long_string);
+        root_obj.insert("short_string", "Short string with emoji 🎉");
+
+        // Add nested object
+        let mut nested_obj = root_obj.new_object("nested_object");
+        nested_obj.insert("inner_key1", "inner_value1");
+        nested_obj.insert("inner_key2", 999i32);
+        nested_obj.finish().unwrap();
+
+        // Add list with mixed types
+        let mut mixed_list = root_obj.new_list("mixed_list");
+        mixed_list.append_value(1i32);
+        mixed_list.append_value("two");
+        mixed_list.append_value(true);
+        mixed_list.append_value(4.0f32);
+        mixed_list.append_value(());
+
+        // Add nested list inside the mixed list
+        let mut nested_list = mixed_list.new_list();
+        nested_list.append_value("nested");
+        nested_list.append_value(10i8);
+        nested_list.finish();
+
+        mixed_list.finish();
+
+        root_obj.finish().unwrap();
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+
+        // Test Debug formatter (?)
+        let debug_output = format!("{:?}", variant);
+
+        // Verify that the debug output contains all the expected types
+        assert!(debug_output.contains("\"null\": Null"));
+        assert!(debug_output.contains("\"boolean_true\": BooleanTrue"));
+        assert!(debug_output.contains("\"boolean_false\": BooleanFalse"));
+        assert!(debug_output.contains("\"int8\": Int8(42)"));
+        assert!(debug_output.contains("\"int16\": Int16(1234)"));
+        assert!(debug_output.contains("\"int32\": Int32(123456)"));
+        assert!(debug_output.contains("\"int64\": Int64(1234567890123456789)"));
+        assert!(debug_output.contains("\"float\": Float(1.234)"));
+        assert!(debug_output.contains("\"double\": Double(1.23456789"));
+        assert!(debug_output.contains("\"date\": Date(2024-12-25)"));
+        assert!(debug_output.contains("\"timestamp_micros\": TimestampMicros("));
+        assert!(debug_output.contains("\"timestamp_ntz_micros\": TimestampNtzMicros("));
+        assert!(debug_output.contains("\"decimal4\": Decimal4("));
+        assert!(debug_output.contains("\"decimal8\": Decimal8("));
+        assert!(debug_output.contains("\"decimal16\": Decimal16("));
+        assert!(debug_output.contains("\"binary\": Binary(01 02 03 04 de ad be ef)"));
+        assert!(debug_output.contains("\"string\": String("));
+        assert!(debug_output.contains("\"short_string\": ShortString("));
+        assert!(debug_output.contains("\"nested_object\":"));
+        assert!(debug_output.contains("\"mixed_list\":"));
+
+        let expected = r#"{"binary": Binary(01 02 03 04 de ad be ef), "boolean_false": BooleanFalse, "boolean_true": BooleanTrue, "date": Date(2024-12-25), "decimal16": Decimal16(VariantDecimal16 { integer: 123456789012345678901234567890, scale: 4 }), "decimal4": Decimal4(VariantDecimal4 { integer: 1234, scale: 2 }), "decimal8": Decimal8(VariantDecimal8 { integer: 123456789, scale: 3 }), "double": Double(1.23456789), "float": Float(1.234), "int16": Int16(1234), "int32": Int32(123456), "int64": Int64(1234567890123456789), "int8": Int8(42), "mixed_list": [Int32(1), ShortString(ShortString("two")), BooleanTrue, Float(4.0), Null, [ShortString(ShortString("nested")), Int8(10)]], "nested_object": {"inner_key1": ShortString(ShortString("inner_value1")), "inner_key2": Int32(999)}, "null": Null, "short_string": ShortString(ShortString("Short string with emoji 🎉")), "string": String("This is a long string that exceeds the short string limit and contains emoji 🦀"), "timestamp_micros": TimestampMicros(2024-12-25T15:30:45.123Z), "timestamp_ntz_micros": TimestampNtzMicros(2024-12-25T15:30:45.123)}"#;
+        assert_eq!(debug_output, expected);
+
+        // Test alternate Debug formatter (#?)
+        let alt_debug_output = format!("{:#?}", variant);
+        let expected = r#"{
+    "binary": Binary(01 02 03 04 de ad be ef),
+    "boolean_false": BooleanFalse,
+    "boolean_true": BooleanTrue,
+    "date": Date(
+        2024-12-25,
+    ),
+    "decimal16": Decimal16(
+        VariantDecimal16 {
+            integer: 123456789012345678901234567890,
+            scale: 4,
+        },
+    ),
+    "decimal4": Decimal4(
+        VariantDecimal4 {
+            integer: 1234,
+            scale: 2,
+        },
+    ),
+    "decimal8": Decimal8(
+        VariantDecimal8 {
+            integer: 123456789,
+            scale: 3,
+        },
+    ),
+    "double": Double(
+        1.23456789,
+    ),
+    "float": Float(
+        1.234,
+    ),
+    "int16": Int16(
+        1234,
+    ),
+    "int32": Int32(
+        123456,
+    ),
+    "int64": Int64(
+        1234567890123456789,
+    ),
+    "int8": Int8(
+        42,
+    ),
+    "mixed_list": [
+        Int32(
+            1,
+        ),
+        ShortString(
+            ShortString(
+                "two",
+            ),
+        ),
+        BooleanTrue,
+        Float(
+            4.0,
+        ),
+        Null,
+        [
+            ShortString(
+                ShortString(
+                    "nested",
+                ),
+            ),
+            Int8(
+                10,
+            ),
+        ],
+    ],
+    "nested_object": {
+        "inner_key1": ShortString(
+            ShortString(
+                "inner_value1",
+            ),
+        ),
+        "inner_key2": Int32(
+            999,
+        ),
+    },
+    "null": Null,
+    "short_string": ShortString(
+        ShortString(
+            "Short string with emoji 🎉",
+        ),
+    ),
+    "string": String(
+        "This is a long string that exceeds the short string limit and contains emoji 🦀",
+    ),
+    "timestamp_micros": TimestampMicros(
+        2024-12-25T15:30:45.123Z,
+    ),
+    "timestamp_ntz_micros": TimestampNtzMicros(
+        2024-12-25T15:30:45.123,
+    ),
+}"#;
+        assert_eq!(alt_debug_output, expected);
     }
 }

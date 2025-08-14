@@ -227,6 +227,7 @@ impl VariantArray {
 #[derive(Debug)]
 pub enum ShreddingState {
     // TODO: add missing state where there is neither value nor typed_value
+    // https://github.com/apache/arrow-rs/issues/8088
     // Missing { metadata: BinaryViewArray },
     /// This variant has no typed_value field
     Unshredded {
@@ -342,7 +343,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
         _ => {
             // We shouldn't panic in production code, but this is a
             // placeholder until we implement more types
-            // TODO tickets: XXXX
+            // https://github.com/apache/arrow-rs/issues/8091
             debug_assert!(
                 false,
                 "Unsupported typed_value type: {:?}",

@@ -35,7 +35,7 @@ impl<'a> VariantOutputBuilder<'a> {
     }
 }
 
-impl<'a> OutputBuilder for VariantOutputBuilder<'a> {
+impl OutputBuilder for VariantOutputBuilder<'_> {
     fn partially_shredded(
         &self,
         variant_array: &VariantArray,
@@ -71,6 +71,7 @@ impl<'a> OutputBuilder for VariantOutputBuilder<'a> {
                 }
             }
             dt => {
+                // https://github.com/apache/arrow-rs/issues/8086
                 return Err(ArrowError::NotYetImplemented(format!(
                     "variant_get fully_shredded with typed_value={dt} is not implemented yet",
                 )));
@@ -104,6 +105,7 @@ impl<'a> OutputBuilder for VariantOutputBuilder<'a> {
                 }
             }
             dt => {
+                // https://github.com/apache/arrow-rs/issues/8087
                 return Err(ArrowError::NotYetImplemented(format!(
                     "variant_get fully_shredded with typed_value={dt} is not implemented yet",
                 )));
