@@ -34,7 +34,9 @@ use arrow::temporal_conversions::{
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use half::f16;
-use parquet_variant::{Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use parquet_variant::{
+    Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+};
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
@@ -440,6 +442,9 @@ mod tests {
     };
     use arrow::buffer::NullBuffer;
     use arrow_schema::{Field, Fields};
+    use arrow_schema::{
+        DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    };
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
 
