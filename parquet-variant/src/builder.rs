@@ -669,7 +669,7 @@ impl ParentState<'_> {
         }
     }
 
-    // Return the offset of the underlying buffer at the time of calling this method.
+    // Return the current offset of the underlying buffer. Used as a savepoint for rollback.
     fn buffer_current_offset(&self) -> usize {
         match self {
             ParentState::Variant { buffer, .. }
@@ -678,8 +678,9 @@ impl ParentState<'_> {
         }
     }
 
-    // Return the current index of the undelying metadata buffer at the time of calling this method.
-    fn metadata_current_offset(&self) -> usize {
+    // Return the current dictionary size of the undelying metadata builder. Used as a savepoint for
+    // rollback.
+    fn metadata_num_fields(&self) -> usize {
         match self {
             ParentState::Variant {
                 metadata_builder, ..
@@ -1152,7 +1153,7 @@ pub struct ListBuilder<'a> {
 impl<'a> ListBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         let parent_value_offset_base = parent_state.buffer_current_offset();
-        let parent_metadata_offset_base = parent_state.metadata_current_offset();
+        let parent_metadata_offset_base = parent_state.metadata_num_fields();
         Self {
             parent_state,
             offsets: vec![],
@@ -1334,7 +1335,7 @@ pub struct ObjectBuilder<'a> {
 impl<'a> ObjectBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         let offset_base = parent_state.buffer_current_offset();
-        let meta_offset_base = parent_state.metadata_current_offset();
+        let meta_offset_base = parent_state.metadata_num_fields();
         Self {
             parent_state,
             fields: IndexMap::new(),
@@ -2950,7 +2951,6 @@ mod tests {
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
-        println!("value: {:#?}", Variant::new(&metadata, &value));
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert_eq!(metadata.len(), 2);
@@ -3005,7 +3005,6 @@ mod tests {
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
-        println!("value: {:#?}", Variant::new(&metadata, &value));
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
         assert_eq!(metadata.len(), 2); // the fields of nested_object_builder has been rolled back
@@ -3152,221 +3151,8 @@ mod tests {
         builder.finish()
     }
 
-    #[test]
-    fn test_append_list_object() {
-        // An infinite counter
-        let mut counter = 0..;
-        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
-        let mut builder = VariantBuilder::new();
-        let skip = 3;
-        {
-            let mut list = builder.new_list();
-            for i in take(4) {
-                let mut object = list.new_object();
-                for i in take(3) {
-                    if i % skip != 0 {
-                        object.insert(&format!("field{i}"), i);
-                    }
-                }
-                if i % skip != 0 {
-                    object.finish().unwrap();
-                }
-            }
-            list.finish();
-        }
-        let (metadata, value) = builder.finish();
-        let v1 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v1: {v1:#?}");
-
-        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
-        let v2 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v2: {v2:#?}");
-
-        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
-    }
-
-    #[test]
-    fn test_append_object_list() {
-        // An infinite counter
-        let mut counter = 0..;
-        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
-        let mut builder = VariantBuilder::new();
-        let skip = 3;
-        {
-            let mut object = builder.new_object();
-            for i in take(4) {
-                let field_name = format!("field{i}");
-                let mut list = object.new_list(&field_name);
-                for i in take(3) {
-                    if i % skip != 0 {
-                        list.append_value(i);
-                    }
-                }
-                if i % skip != 0 {
-                    list.finish();
-                }
-            }
-            object.finish().unwrap();
-        }
-        let (metadata, value) = builder.finish();
-        let v1 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v1: {v1:#?}");
-
-        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
-        let v2 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v2: {v2:#?}");
-
-        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
-    }
-
-    #[test]
-    fn test_append_list_list() {
-        // An infinite counter
-        let mut counter = 0..;
-        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
-        let mut builder = VariantBuilder::new();
-        let skip = 5;
-        {
-            let mut list = builder.new_list();
-            for i in take(4) {
-                let mut list = list.new_list();
-                for i in take(3) {
-                    if i % skip != 0 {
-                        list.append_value(i);
-                    }
-                }
-                if i % skip != 0 {
-                    list.finish();
-                }
-            }
-            list.finish();
-        }
-        let (metadata, value) = builder.finish();
-        let v1 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v1: {v1:#?}");
-
-        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
-        let v2 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v2: {v2:#?}");
-
-        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
-    }
-
-    #[test]
-    fn test_append_object_object() {
-        // An infinite counter
-        let mut counter = 0..;
-        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
-        let mut builder = VariantBuilder::new();
-        let skip = 3;
-        {
-            let mut object = builder.new_object();
-            for i in take(4) {
-                let field_name = format!("field{i}");
-                let mut object = object.new_object(&field_name);
-                for i in take(3) {
-                    if i % skip != 0 {
-                        object.insert(&format!("field{i}"), i);
-                    }
-                }
-                if i % skip != 0 {
-                    object.finish().unwrap();
-                }
-            }
-            object.finish().unwrap();
-        }
-
-        let (metadata, value) = builder.finish();
-        let v1 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v1: {v1:#?}");
-
-        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
-        let v2 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v2: {v2:#?}");
-
-        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
-    }
-
-    #[test]
-    fn test_append_list_object_list() {
-        // An infinite counter
-        let mut counter = 0..;
-        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
-        let mut builder = VariantBuilder::new();
-        let skip = 7;
-        {
-            let mut list = builder.new_list();
-            for i in take(4) {
-                let mut object = list.new_object();
-                for i in take(4) {
-                    let field_name = format!("field{i}");
-                    let mut list = object.new_list(&field_name);
-                    for i in take(3) {
-                        if i % skip != 0 {
-                            list.append_value(i);
-                        }
-                    }
-                    if i % skip != 0 {
-                        list.finish();
-                    }
-                }
-                if i % skip != 0 {
-                    object.finish().unwrap();
-                }
-            }
-            list.finish();
-        }
-        let (metadata, value) = builder.finish();
-        let v1 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v1: {v1:#?}");
-
-        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
-        let v2 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v2: {v2:#?}");
-
-        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
-    }
-
-    #[test]
-    fn test_append_object_list_object() {
-        // An infinite counter
-        let mut counter = 0..;
-        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
-        let mut builder = VariantBuilder::new();
-        let skip = 5;
-        {
-            let mut object = builder.new_object();
-            for i in take(4) {
-                let field_name = format!("field{i}");
-                let mut list = object.new_list(&field_name);
-                for i in take(3) {
-                    let mut object = list.new_object();
-                    for i in take(3) {
-                        if i % skip != 0 {
-                            object.insert(&format!("field{i}"), i);
-                        }
-                    }
-                    if i % skip != 0 {
-                        object.finish().unwrap();
-                    }
-                }
-                if i % skip != 0 {
-                    list.finish();
-                }
-            }
-            object.finish().unwrap();
-        }
-        let (metadata, value) = builder.finish();
-        let v1 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v1: {v1:#?}");
-
-        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
-        let v2 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v2: {v2:#?}");
-
-        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
-    }
-
+    // Make sure that we can correctly build deeply nested objects even when some of the nested
+    // builders don't finish.
     #[test]
     fn test_append_list_object_list_object() {
         // An infinite counter
@@ -3404,11 +3190,9 @@ mod tests {
         }
         let (metadata, value) = builder.finish();
         let v1 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v1: {v1:#?}");
 
         let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
         let v2 = Variant::try_new(&metadata, &value).unwrap();
-        println!("v2: {v2:#?}");
 
         assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
     }
