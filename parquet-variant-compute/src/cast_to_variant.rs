@@ -178,6 +178,21 @@ macro_rules! decimal_to_variant_decimal {
     };
 }
 
+/// Convert arrays that don't need generic type parameters
+macro_rules! cast_conversion_nongeneric {
+    ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
+        let array = $input.$method();
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                $builder.append_null();
+                continue;
+            }
+            let cast_value = $cast_fn(array.value(i));
+            $builder.append_variant(Variant::from(cast_value));
+        }
+    }};
+}
+
 /// Convert string arrays using the offset size as the type parameter
 macro_rules! cast_conversion_string {
     ($offset_type:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
@@ -371,8 +386,9 @@ mod tests {
     use arrow::array::{
         ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, LargeStringBuilder, StringBuilder, StringViewBuilder,
-        IntervalYearMonthArray, NullArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        IntervalYearMonthArray, LargeStringArray, NullArray, StringArray, StringViewArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -1176,6 +1192,7 @@ mod tests {
         )
     }
 
+    #[test]
     fn test_cast_to_variant_utf8() {
         // Test with short strings (should become ShortString variants)
         let short_strings = vec![Some("hello"), Some(""), None, Some("world"), Some("test")];
