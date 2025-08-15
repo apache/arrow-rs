@@ -269,6 +269,11 @@ pub fn from_thrift(
                         null_count,
                         old_format,
                     )
+                    // Note: We set nan_count here even though we can't verify if this is Float16.
+                    // The spec says nan_count should only be set for Float16 logical type,
+                    // but from_thrift doesn't have access to logical type information.
+                    // Writers should only set nan_count for Float16, and readers should
+                    // handle this gracefully.
                     .with_nan_count(nan_count)
                     .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
                     .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
