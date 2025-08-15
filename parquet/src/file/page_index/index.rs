@@ -194,6 +194,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
     pub const PHYSICAL_TYPE: Type = T::PHYSICAL_TYPE;
 
     /// Creates a new [`NativeIndex`]
+    #[allow(dead_code)]
     pub(crate) fn try_new(index: crate::format::ColumnIndex) -> Result<Self, ParquetError> {
         let len = index.min_values.len();
 

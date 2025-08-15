@@ -77,6 +77,7 @@ impl OffsetIndexMetaData {
     /// Creates a new [`OffsetIndexMetaData`] from an [`OffsetIndex`].
     ///
     /// [`OffsetIndex`]: crate::format::OffsetIndex
+     #[allow(dead_code)]
     pub(crate) fn try_new(index: crate::format::OffsetIndex) -> Result<Self> {
         let page_locations = index.page_locations.iter().map(|loc| loc.into()).collect();
         Ok(Self {
