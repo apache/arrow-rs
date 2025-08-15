@@ -93,9 +93,9 @@
 //! ```
 mod memory;
 pub(crate) mod reader;
+pub(crate) mod thrift_gen;
 mod writer;
 
-use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::FileDecryptor,
@@ -104,7 +104,6 @@ use crate::encryption::{
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
-use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::{
     page_encoding_stats::{self, PageEncodingStats},
     page_index::offset_index::PageLocation,
@@ -125,7 +124,15 @@ use crate::{
     errors::{ParquetError, Result},
 };
 use crate::{
+    basic::{ColumnOrder, Compression, Encoding, Type},
+    parquet_thrift::{FieldType, ThriftCompactInputProtocol},
+};
+use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
+};
+use crate::{
+    file::page_index::index::{Index, NativeIndex},
+    thrift_struct,
 };
 pub use reader::{FooterTail, ParquetMetaDataReader};
 use std::ops::Range;
@@ -423,14 +430,14 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     }
 }
 
+// TODO: should this move to thrift_gen?
+thrift_struct!(
 /// A key-value pair for [`FileMetaData`].
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyValue {
-    /// The key.
-    pub key: String,
-    /// An optional value.
-    pub value: Option<String>,
+  1: required string key
+  2: optional string value
 }
+);
 
 impl KeyValue {
     /// Create a new key value pair
@@ -546,17 +553,21 @@ impl FileMetaData {
     }
 }
 
+// TODO: should this move to thrift_gen?
+thrift_struct!(
 /// Sort order within a RowGroup of a leaf column
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SortingColumn {
-    /// The ordinal position of the column (in this row group) *
-    pub column_idx: i32,
-    /// If true, indicates this column is sorted in descending order. *
-    pub descending: bool,
-    /// If true, nulls will come before non-null values, otherwise,
-    /// nulls go at the end.
-    pub nulls_first: bool,
+  /// The ordinal position of the column (in this row group)
+  1: required i32 column_idx
+
+  /// If true, indicates this column is sorted in descending order.
+  2: required bool descending
+
+  /// If true, nulls will come before non-null values, otherwise,
+  /// nulls go at the end. */
+  3: required bool nulls_first
 }
+);
 
 impl From<&crate::format::SortingColumn> for SortingColumn {
     fn from(value: &crate::format::SortingColumn) -> Self {
@@ -2203,9 +2214,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2312;
+        let base_expected_size = 2280;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2648;
+        let base_expected_size = 2616;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2233,9 +2244,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2816;
+        let bigger_expected_size = 2784;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3152;
+        let bigger_expected_size = 3120;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

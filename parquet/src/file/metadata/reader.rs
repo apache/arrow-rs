@@ -17,30 +17,33 @@
 
 use std::{io::Read, ops::Range, sync::Arc};
 
-#[cfg(feature = "encryption")]
-use crate::encryption::{
-    decrypt::{FileDecryptionProperties, FileDecryptor},
-    modules::create_footer_aad,
+use crate::{
+    basic::ColumnOrder,
+    file::metadata::{FileMetaData, KeyValue},
+    parquet_thrift::ThriftCompactInputProtocol,
 };
-use crate::{basic::ColumnOrder, file::metadata::KeyValue};
+#[cfg(feature = "encryption")]
+use crate::{
+    encryption::{
+        decrypt::{CryptoContext, FileDecryptionProperties, FileDecryptor},
+        modules::create_footer_aad,
+    },
+    format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData},
+};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
-#[cfg(feature = "encryption")]
-use crate::format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData};
 use crate::schema::types;
 use crate::schema::types::SchemaDescriptor;
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
-#[cfg(feature = "encryption")]
-use crate::encryption::decrypt::CryptoContext;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
@@ -1040,6 +1043,12 @@ impl ParquetMetaDataReader {
         Ok(ParquetMetaData::new(file_metadata, row_groups))
     }
 
+    /// create meta data from thrift encoded bytes
+    pub fn decode_file_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
+        let mut prot = ThriftCompactInputProtocol::new(buf);
+        ParquetMetaData::try_from(&mut prot)
+    }
+
     /// Parses column orders from Thrift definition.
     /// If no column orders are defined, returns `None`.
     fn parse_column_orders(
@@ -1106,6 +1115,7 @@ fn get_file_decryptor(
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use zstd::zstd_safe::WriteBuf;
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
@@ -1308,6 +1318,27 @@ mod tests {
             reader_result.to_string(),
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
+    }
+
+    #[test]
+    fn test_new_decoder() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let len = file.len();
+
+        // read entire file
+        let bytes = file.get_bytes(0, len as usize).unwrap();
+        let mut footer = [0u8; FOOTER_SIZE];
+        footer.copy_from_slice(bytes.slice(len as usize - FOOTER_SIZE..).as_slice());
+        let tail = ParquetMetaDataReader::decode_footer_tail(&footer).unwrap();
+        let meta_len = tail.metadata_length();
+        let metadata_bytes = bytes.slice(len as usize - FOOTER_SIZE - meta_len..);
+
+        // get ParquetMetaData
+        let m = ParquetMetaDataReader::decode_file_metadata(&metadata_bytes).unwrap();
+        let m2 = ParquetMetaDataReader::decode_metadata(&metadata_bytes).unwrap();
+
+        // check that metadatas are equivalent
+        assert_eq!(m, m2);
     }
 }
 

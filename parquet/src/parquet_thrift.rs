@@ -20,7 +20,36 @@
 // to not allocate byte arrays or strings.
 #![allow(dead_code)]
 
+use std::cmp::Ordering;
+
 use crate::errors::{ParquetError, Result};
+
+// Couldn't implement thrift structs with f64 do to lack of Eq
+// for f64. This is a hacky workaround for now...there are other
+// wrappers out there that should probably be used instead.
+// thrift seems to re-export an impl from ordered-float
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrderedF64(f64);
+
+impl From<OrderedF64> for f64 {
+    fn from(value: OrderedF64) -> Self {
+        value.0
+    }
+}
+
+impl Eq for OrderedF64 {} // Marker trait, requires PartialEq
+
+impl Ord for OrderedF64 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for OrderedF64 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 // Thrift compact protocol types for struct fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -350,6 +379,11 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
         }
     }
 
+    fn skip_binary(&mut self) -> Result<()> {
+        let len = self.read_vlq()? as usize;
+        self.skip_bytes(len)
+    }
+
     /// Skip a field with type `field_type` recursively until the default
     /// maximum skip depth is reached.
     pub(crate) fn skip(&mut self, field_type: FieldType) -> Result<()> {
@@ -381,10 +415,7 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
             FieldType::I32 => self.skip_vlq().map(|_| ()),
             FieldType::I64 => self.skip_vlq().map(|_| ()),
             FieldType::Double => self.skip_bytes(8).map(|_| ()),
-            FieldType::Binary => {
-                let len = self.read_vlq()? as usize;
-                self.skip_bytes(len)
-            }
+            FieldType::Binary => self.skip_binary().map(|_| ()),
             FieldType::Struct => {
                 self.read_struct_begin()?;
                 loop {
@@ -412,4 +443,86 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
 
 fn eof_error() -> ParquetError {
     eof_err!("Unexpected EOF")
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for bool {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_bool()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i8 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_i8()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i16 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_i16()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i32 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_i32()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i64 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_i64()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for OrderedF64 {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        Ok(OrderedF64(prot.read_double()?))
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for &'a str {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_string()
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for String {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        Ok(prot.read_string()?.to_owned())
+    }
+}
+
+impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for &'a [u8] {
+    type Error = ParquetError;
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        prot.read_bytes()
+    }
+}
+
+impl<'a, T> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Vec<T>
+where
+    T: for<'b> TryFrom<&'b mut ThriftCompactInputProtocol<'a>>,
+    ParquetError: for<'b> From<<T as TryFrom<&'b mut ThriftCompactInputProtocol<'a>>>::Error>,
+{
+    type Error = ParquetError;
+
+    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self, Self::Error> {
+        let list_ident = prot.read_list_begin()?;
+        let mut res = Vec::with_capacity(list_ident.size as usize);
+        for _ in 0..list_ident.size {
+            let val = T::try_from(prot)?;
+            res.push(val);
+        }
+
+        Ok(res)
+    }
 }

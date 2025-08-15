@@ -18,18 +18,19 @@
 //! Per-page encoding information.
 
 use crate::basic::{Encoding, PageType};
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
+use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::thrift_struct;
 
+// TODO: This should probably all be moved to thrift_gen
+thrift_struct!(
 /// PageEncodingStats for a column chunk and data page.
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageEncodingStats {
-    /// the page type (data/dic/...)
-    pub page_type: PageType,
-    /// encoding of the page
-    pub encoding: Encoding,
-    /// number of pages of this type with this encoding
-    pub count: i32,
+  1: required PageType page_type;
+  2: required Encoding encoding;
+  3: required i32 count;
 }
+);
 
 /// Converts Thrift definition into `PageEncodingStats`.
 pub fn try_from_thrift(

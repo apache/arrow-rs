@@ -17,8 +17,10 @@
 
 //! Contains structs and methods to build Parquet schema and schema descriptors.
 
+use std::vec::IntoIter;
 use std::{collections::HashMap, fmt, sync::Arc};
 
+use crate::file::metadata::thrift_gen::SchemaElement;
 use crate::file::metadata::HeapSize;
 
 use crate::basic::{
@@ -1026,11 +1028,14 @@ impl HeapSize for SchemaDescriptor {
 impl SchemaDescriptor {
     /// Creates new schema descriptor from Parquet schema.
     pub fn new(tp: TypePtr) -> Self {
+        const INIT_SCHEMA_DEPTH: usize = 16;
         assert!(tp.is_group(), "SchemaDescriptor should take a GroupType");
-        let mut leaves = vec![];
-        let mut leaf_to_base = Vec::new();
+        let n_leaves = num_leaves(&tp);
+        let mut leaves = Vec::with_capacity(n_leaves);
+        let mut leaf_to_base = Vec::with_capacity(n_leaves);
+        let mut path = Vec::with_capacity(INIT_SCHEMA_DEPTH);
         for (root_idx, f) in tp.get_fields().iter().enumerate() {
-            let mut path = vec![];
+            path.clear();
             build_tree(f, root_idx, 0, 0, &mut leaves, &mut leaf_to_base, &mut path);
         }
 
@@ -1106,6 +1111,26 @@ impl SchemaDescriptor {
     /// Returns schema name.
     pub fn name(&self) -> &str {
         self.schema.name()
+    }
+}
+
+// do a quick walk of the tree to get proper sizing for SchemaDescriptor arrays
+fn num_leaves(tp: &TypePtr) -> usize {
+    let mut n_leaves = 0usize;
+    for f in tp.get_fields().iter() {
+        count_leaves(f, &mut n_leaves);
+    }
+    n_leaves
+}
+
+fn count_leaves(tp: &TypePtr, n_leaves: &mut usize) {
+    match tp.as_ref() {
+        Type::PrimitiveType { .. } => *n_leaves += 1,
+        Type::GroupType { ref fields, .. } => {
+            for f in fields {
+                count_leaves(f, n_leaves);
+            }
+        }
     }
 }
 
@@ -1287,7 +1312,7 @@ fn from_thrift_helper(
                 .map(Repetition::try_from)
                 .transpose()?;
 
-            let mut fields = vec![];
+            let mut fields = Vec::with_capacity(n as usize);
             let mut next_index = index + 1;
             for _ in 0..n {
                 let child_result = from_thrift_helper(elements, next_index)?;
@@ -1398,6 +1423,151 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<crate::format::SchemaEleme
             for field in fields {
                 to_thrift_helper(field, elements);
             }
+        }
+    }
+}
+
+// This is a copy of `from_thrift` above, but rather than `format::SchemaElement` it takes
+// the `file::metadata::thrift_gen::SchemaElement<'a>`.
+
+// convert thrift decoded array of `SchemaElement` into this crate's representation of
+// parquet types. this function consumes `elements`.
+pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) -> Result<TypePtr> {
+    let mut index = 0;
+    let num_elements = elements.len();
+    let mut schema_nodes = Vec::with_capacity(1); // there should only be one element when done
+
+    // turn into iterator so we can take ownership of elements of the vector
+    let mut elements = elements.into_iter();
+
+    while index < num_elements {
+        let t = schema_from_array_helper(&mut elements, num_elements, index)?;
+        index = t.0;
+        schema_nodes.push(t.1);
+    }
+    if schema_nodes.len() != 1 {
+        return Err(general_err!(
+            "Expected exactly one root node, but found {}",
+            schema_nodes.len()
+        ));
+    }
+
+    if !schema_nodes[0].is_group() {
+        return Err(general_err!("Expected root node to be a group type"));
+    }
+
+    Ok(schema_nodes.remove(0))
+}
+
+// recursive helper function for schema conversion
+fn schema_from_array_helper<'a>(
+    elements: &mut IntoIter<SchemaElement<'a>>,
+    num_elements: usize,
+    index: usize,
+) -> Result<(usize, TypePtr)> {
+    // Whether or not the current node is root (message type).
+    // There is only one message type node in the schema tree.
+    let is_root_node = index == 0;
+
+    if index >= num_elements {
+        return Err(general_err!(
+            "Index out of bound, index = {}, len = {}",
+            index,
+            num_elements
+        ));
+    }
+    let element = elements.next().expect("schema vector should not be empty");
+
+    // Check for empty schema
+    if let (true, None | Some(0)) = (is_root_node, element.num_children) {
+        let builder = Type::group_type_builder(element.name);
+        return Ok((index + 1, Arc::new(builder.build().unwrap())));
+    }
+
+    let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
+
+    // LogicalType is prefered to ConvertedType, but both may be present.
+    let logical_type = element.logical_type;
+
+    check_logical_type(&logical_type)?;
+
+    let field_id = element.field_id;
+    match element.num_children {
+        // From parquet-format:
+        //   The children count is used to construct the nested relationship.
+        //   This field is not set when the element is a primitive type
+        // Sometimes parquet-cpp sets num_children field to 0 for primitive types, so we
+        // have to handle this case too.
+        None | Some(0) => {
+            // primitive type
+            if element.repetition_type.is_none() {
+                return Err(general_err!(
+                    "Repetition level must be defined for a primitive type"
+                ));
+            }
+            let repetition = element.repetition_type.unwrap();
+            if let Some(type_) = element.type_ {
+                let physical_type = type_;
+                let length = element.type_length.unwrap_or(-1);
+                let scale = element.scale.unwrap_or(-1);
+                let precision = element.precision.unwrap_or(-1);
+                let name = element.name;
+                let builder = Type::primitive_type_builder(name, physical_type)
+                    .with_repetition(repetition)
+                    .with_converted_type(converted_type)
+                    .with_logical_type(logical_type)
+                    .with_length(length)
+                    .with_precision(precision)
+                    .with_scale(scale)
+                    .with_id(field_id);
+                Ok((index + 1, Arc::new(builder.build()?)))
+            } else {
+                let mut builder = Type::group_type_builder(element.name)
+                    .with_converted_type(converted_type)
+                    .with_logical_type(logical_type)
+                    .with_id(field_id);
+                if !is_root_node {
+                    // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
+                    // REPEATED for root node.
+                    //
+                    // We only set repetition for group types that are not top-level message
+                    // type. According to parquet-format:
+                    //   Root of the schema does not have a repetition_type.
+                    //   All other types must have one.
+                    builder = builder.with_repetition(repetition);
+                }
+                Ok((index + 1, Arc::new(builder.build().unwrap())))
+            }
+        }
+        Some(n) => {
+            let repetition = element.repetition_type;
+
+            let mut fields = Vec::with_capacity(n as usize);
+            let mut next_index = index + 1;
+            for _ in 0..n {
+                let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
+                next_index = child_result.0;
+                fields.push(child_result.1);
+            }
+
+            let mut builder = Type::group_type_builder(element.name)
+                .with_converted_type(converted_type)
+                .with_logical_type(logical_type)
+                .with_fields(fields)
+                .with_id(field_id);
+            if let Some(rep) = repetition {
+                // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
+                // REPEATED for root node.
+                //
+                // We only set repetition for group types that are not top-level message
+                // type. According to parquet-format:
+                //   Root of the schema does not have a repetition_type.
+                //   All other types must have one.
+                if !is_root_node {
+                    builder = builder.with_repetition(rep);
+                }
+            }
+            Ok((next_index, Arc::new(builder.build().unwrap())))
         }
     }
 }

@@ -25,7 +25,7 @@ use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
-use crate::{thrift_enum, thrift_private_struct, thrift_union_all_empty};
+use crate::{thrift_enum, thrift_struct, thrift_union_all_empty};
 
 use crate::errors::{ParquetError, Result};
 
@@ -210,14 +210,14 @@ union TimeUnit {
 
 // private structs for decoding logical type
 
-thrift_private_struct!(
+thrift_struct!(
 struct DecimalType {
   1: required i32 scale
   2: required i32 precision
 }
 );
 
-thrift_private_struct!(
+thrift_struct!(
 struct TimestampType {
   1: required bool is_adjusted_to_u_t_c
   2: required TimeUnit unit
@@ -227,14 +227,14 @@ struct TimestampType {
 // they are identical
 use TimestampType as TimeType;
 
-thrift_private_struct!(
+thrift_struct!(
 struct IntType {
   1: required i8 bit_width
   2: required bool is_signed
 }
 );
 
-thrift_private_struct!(
+thrift_struct!(
 struct VariantType {
   // The version of the variant specification that the variant was
   // written with.
@@ -242,69 +242,18 @@ struct VariantType {
 }
 );
 
-// TODO need macro for structs that need lifetime annotation
+thrift_struct!(
 struct GeometryType<'a> {
-    crs: Option<&'a str>,
+  1: optional string<'a> crs;
 }
+);
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for GeometryType<'a> {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        let mut crs: Option<&str> = None;
-        prot.read_struct_begin()?;
-        loop {
-            let field_ident = prot.read_field_begin()?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = prot.read_string()?;
-                    crs = Some(val);
-                }
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            };
-        }
-        Ok(Self { crs })
-    }
-}
-
+thrift_struct!(
 struct GeographyType<'a> {
-    crs: Option<&'a str>,
-    algorithm: Option<EdgeInterpolationAlgorithm>,
+  1: optional string<'a> crs;
+  2: optional EdgeInterpolationAlgorithm algorithm;
 }
-
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for GeographyType<'a> {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        let mut crs: Option<&str> = None;
-        let mut algorithm: Option<EdgeInterpolationAlgorithm> = None;
-        prot.read_struct_begin()?;
-        loop {
-            let field_ident = prot.read_field_begin()?;
-            if field_ident.field_type == FieldType::Stop {
-                break;
-            }
-            match field_ident.id {
-                1 => {
-                    let val = prot.read_string()?;
-                    crs = Some(val);
-                }
-                2 => {
-                    let val = EdgeInterpolationAlgorithm::try_from(&mut *prot)?;
-                    algorithm = Some(val);
-                }
-
-                _ => {
-                    prot.skip(field_ident.field_type)?;
-                }
-            };
-        }
-        Ok(Self { crs, algorithm })
-    }
-}
+);
 
 /// Logical types used by version 2.4.0+ of the Parquet format.
 ///
@@ -971,7 +920,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
         }
         let ret = match field_ident.id {
             1 => {
-                // TODO: the sort order needs to be set correctly after parsing.
+                // NOTE: the sort order needs to be set correctly after parsing.
                 prot.skip_empty_struct()?;
                 Self::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
             }

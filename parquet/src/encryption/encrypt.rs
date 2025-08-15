@@ -421,14 +421,14 @@ pub(crate) fn get_column_crypto_metadata(
 ) -> Option<ColumnCryptoMetaData> {
     if properties.column_keys.is_empty() {
         // Uniform encryption
-        Some(ColumnCryptoMetaData::EncryptionWithFooterKey)
+        Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY)
     } else {
         properties
             .column_keys
             .get(&column.path().string())
             .map(|encryption_key| {
                 // Column is encrypted with a column specific key
-                ColumnCryptoMetaData::EncryptionWithColumnKey(EncryptionWithColumnKey {
+                ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(EncryptionWithColumnKey {
                     path_in_schema: column.path().parts().to_vec(),
                     key_metadata: encryption_key.key_metadata.clone(),
                 })
