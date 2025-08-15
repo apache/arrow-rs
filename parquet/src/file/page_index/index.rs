@@ -346,7 +346,10 @@ impl<T: ParquetValueType> NativeIndex<T> {
         let mut indexes: Vec<PageIndex<T>> = Vec::with_capacity(len);
         let mut rep_iter = rep_hists.into_iter();
         let mut def_iter = def_hists.into_iter();
-        for i in 0..len {
+
+        // this used to zip together the other iters, but that was quite a bit
+        // slower than this approach.
+        for (i, null_count) in null_counts.into_iter().enumerate().take(len) {
             let is_null = index.null_pages[i];
             let min = if is_null {
                 None
@@ -362,7 +365,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
             indexes.push(PageIndex {
                 min,
                 max,
-                null_count: null_counts[i],
+                null_count,
                 repetition_level_histogram: rep_iter.next().unwrap_or(None),
                 definition_level_histogram: def_iter.next().unwrap_or(None),
             })
