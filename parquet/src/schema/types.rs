@@ -17,6 +17,7 @@
 
 //! Contains structs and methods to build Parquet schema and schema descriptors.
 
+use std::vec::IntoIter;
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use crate::file::metadata::thrift_gen::SchemaElement;
@@ -1430,12 +1431,17 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<crate::format::SchemaEleme
 // the `file::metadata::thrift_gen::SchemaElement<'a>`.
 
 // convert thrift decoded array of `SchemaElement` into this crate's representation of
-// parquet types
-pub(crate) fn parquet_schema_from_array<'a>(elements: &'a [SchemaElement<'a>]) -> Result<TypePtr> {
+// parquet types. this function consumes `elements`.
+pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) -> Result<TypePtr> {
     let mut index = 0;
+    let num_elements = elements.len();
     let mut schema_nodes = Vec::with_capacity(1); // there should only be one element when done
-    while index < elements.len() {
-        let t = schema_from_array_helper(elements, index)?;
+
+    // turn into iterator so we can take ownership of elements of the vector
+    let mut elements = elements.into_iter();
+
+    while index < num_elements {
+        let t = schema_from_array_helper(&mut elements, num_elements, index)?;
         index = t.0;
         schema_nodes.push(t.1);
     }
@@ -1455,21 +1461,22 @@ pub(crate) fn parquet_schema_from_array<'a>(elements: &'a [SchemaElement<'a>]) -
 
 // recursive helper function for schema conversion
 fn schema_from_array_helper<'a>(
-    elements: &[SchemaElement<'a>],
+    elements: &mut IntoIter<SchemaElement<'a>>,
+    num_elements: usize,
     index: usize,
 ) -> Result<(usize, TypePtr)> {
     // Whether or not the current node is root (message type).
     // There is only one message type node in the schema tree.
     let is_root_node = index == 0;
 
-    if index >= elements.len() {
+    if index >= num_elements {
         return Err(general_err!(
             "Index out of bound, index = {}, len = {}",
             index,
-            elements.len()
+            num_elements
         ));
     }
-    let element = &elements[index];
+    let element = elements.next().expect("schema vector should not be empty");
 
     // Check for empty schema
     if let (true, None | Some(0)) = (is_root_node, element.num_children) {
@@ -1480,12 +1487,12 @@ fn schema_from_array_helper<'a>(
     let converted_type = element.converted_type.unwrap_or(ConvertedType::NONE);
 
     // LogicalType is prefered to ConvertedType, but both may be present.
-    let logical_type = element.logical_type.clone();
+    let logical_type = element.logical_type;
 
     check_logical_type(&logical_type)?;
 
-    let field_id = elements[index].field_id;
-    match elements[index].num_children {
+    let field_id = element.field_id;
+    match element.num_children {
         // From parquet-format:
         //   The children count is used to construct the nested relationship.
         //   This field is not set when the element is a primitive type
@@ -1493,18 +1500,18 @@ fn schema_from_array_helper<'a>(
         // have to handle this case too.
         None | Some(0) => {
             // primitive type
-            if elements[index].repetition_type.is_none() {
+            if element.repetition_type.is_none() {
                 return Err(general_err!(
                     "Repetition level must be defined for a primitive type"
                 ));
             }
-            let repetition = elements[index].repetition_type.unwrap();
-            if let Some(type_) = elements[index].type_ {
+            let repetition = element.repetition_type.unwrap();
+            if let Some(type_) = element.type_ {
                 let physical_type = type_;
-                let length = elements[index].type_length.unwrap_or(-1);
-                let scale = elements[index].scale.unwrap_or(-1);
-                let precision = elements[index].precision.unwrap_or(-1);
-                let name = &elements[index].name;
+                let length = element.type_length.unwrap_or(-1);
+                let scale = element.scale.unwrap_or(-1);
+                let precision = element.precision.unwrap_or(-1);
+                let name = element.name;
                 let builder = Type::primitive_type_builder(name, physical_type)
                     .with_repetition(repetition)
                     .with_converted_type(converted_type)
@@ -1515,7 +1522,7 @@ fn schema_from_array_helper<'a>(
                     .with_id(field_id);
                 Ok((index + 1, Arc::new(builder.build()?)))
             } else {
-                let mut builder = Type::group_type_builder(elements[index].name)
+                let mut builder = Type::group_type_builder(element.name)
                     .with_converted_type(converted_type)
                     .with_logical_type(logical_type)
                     .with_id(field_id);
@@ -1533,17 +1540,17 @@ fn schema_from_array_helper<'a>(
             }
         }
         Some(n) => {
-            let repetition = elements[index].repetition_type;
+            let repetition = element.repetition_type;
 
             let mut fields = Vec::with_capacity(n as usize);
             let mut next_index = index + 1;
             for _ in 0..n {
-                let child_result = schema_from_array_helper(elements, next_index)?;
+                let child_result = schema_from_array_helper(elements, num_elements, next_index)?;
                 next_index = child_result.0;
                 fields.push(child_result.1);
             }
 
-            let mut builder = Type::group_type_builder(elements[index].name)
+            let mut builder = Type::group_type_builder(element.name)
                 .with_converted_type(converted_type)
                 .with_logical_type(logical_type)
                 .with_fields(fields)

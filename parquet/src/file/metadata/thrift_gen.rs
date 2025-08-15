@@ -462,7 +462,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ParquetMetaData {
         let created_by = file_meta.created_by.map(|c| c.to_owned());
         let key_value_metadata = file_meta.key_value_metadata;
 
-        let val = parquet_schema_from_array(&file_meta.schema)?;
+        let val = parquet_schema_from_array(file_meta.schema)?;
         let schema_descr = Arc::new(SchemaDescriptor::new(val));
 
         // need schema_descr to get final RowGroupMetaData
