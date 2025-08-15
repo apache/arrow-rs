@@ -17,14 +17,15 @@
 
 //! Support for reading [`Index`] and [`OffsetIndexMetaData`] from parquet metadata.
 
-use crate::basic::Type;
+use crate::basic::{BoundaryOrder, Type};
 use crate::data_type::Int96;
-use crate::errors::ParquetError;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{Index, NativeIndex};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::thrift_struct;
 use std::ops::Range;
 
 /// Computes the covering range of two optional ranges
@@ -129,25 +130,35 @@ pub fn read_offset_indexes<R: ChunkReader>(
 }
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
-    let mut prot = TCompactSliceInputProtocol::new(data);
-    let offset = crate::format::OffsetIndex::read_from_in_protocol(&mut prot)?;
-    OffsetIndexMetaData::try_new(offset)
+    let mut prot = ThriftCompactInputProtocol::new(data);
+    OffsetIndexMetaData::try_from(&mut prot)
 }
 
-pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
-    let mut prot = TCompactSliceInputProtocol::new(data);
+thrift_struct!(
+pub(crate) struct ColumnIndex<'a> {
+  1: required list<bool> null_pages
+  2: required list<'a><binary> min_values
+  3: required list<'a><binary> max_values
+  4: required BoundaryOrder boundary_order
+  5: optional list<i64> null_counts
+  6: optional list<i64> repetition_level_histograms;
+  7: optional list<i64> definition_level_histograms;
+}
+);
 
-    let index = crate::format::ColumnIndex::read_from_in_protocol(&mut prot)?;
+pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
+    let mut prot = ThriftCompactInputProtocol::new(data);
+    let index = ColumnIndex::try_from(&mut prot)?;
 
     let index = match column_type {
-        Type::BOOLEAN => Index::BOOLEAN(NativeIndex::<bool>::try_new(index)?),
-        Type::INT32 => Index::INT32(NativeIndex::<i32>::try_new(index)?),
-        Type::INT64 => Index::INT64(NativeIndex::<i64>::try_new(index)?),
-        Type::INT96 => Index::INT96(NativeIndex::<Int96>::try_new(index)?),
-        Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new(index)?),
-        Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new(index)?),
-        Type::BYTE_ARRAY => Index::BYTE_ARRAY(NativeIndex::try_new(index)?),
-        Type::FIXED_LEN_BYTE_ARRAY => Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new(index)?),
+        Type::BOOLEAN => Index::BOOLEAN(NativeIndex::<bool>::try_new_local(index)?),
+        Type::INT32 => Index::INT32(NativeIndex::<i32>::try_new_local(index)?),
+        Type::INT64 => Index::INT64(NativeIndex::<i64>::try_new_local(index)?),
+        Type::INT96 => Index::INT96(NativeIndex::<Int96>::try_new_local(index)?),
+        Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new_local(index)?),
+        Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new_local(index)?),
+        Type::BYTE_ARRAY => Index::BYTE_ARRAY(NativeIndex::try_new_local(index)?),
+        Type::FIXED_LEN_BYTE_ARRAY => Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new_local(index)?),
     };
 
     Ok(index)

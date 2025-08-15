@@ -24,6 +24,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::file::metadata::LevelHistogram;
+use crate::file::page_index::index_reader::ColumnIndex;
 use std::fmt::Debug;
 
 /// Typed statistics for one data page
@@ -305,6 +306,76 @@ impl<T: ParquetValueType> NativeIndex<T> {
             repetition_level_histograms,
             definition_level_histograms,
         )
+    }
+
+    /// Creates a new [`NativeIndex`]
+    pub(crate) fn try_new_local(index: ColumnIndex) -> Result<Self, ParquetError> {
+        let len = index.min_values.len();
+
+        let null_counts = index
+            .null_counts
+            .map(|x| x.into_iter().map(Some).collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![None; len]);
+
+        // histograms are a 1D array encoding a 2D num_pages X num_levels matrix.
+        let to_page_histograms = |opt_hist: Option<Vec<i64>>| {
+            if let Some(hist) = opt_hist {
+                // TODO: should we assert (hist.len() % len) == 0?
+                let num_levels = hist.len() / len;
+                let mut res = Vec::with_capacity(len);
+                for i in 0..len {
+                    let page_idx = i * num_levels;
+                    let page_hist = hist[page_idx..page_idx + num_levels].to_vec();
+                    res.push(Some(LevelHistogram::from(page_hist)));
+                }
+                res
+            } else {
+                vec![None; len]
+            }
+        };
+
+        let rep_hists: Vec<Option<LevelHistogram>> =
+            to_page_histograms(index.repetition_level_histograms);
+        let def_hists: Vec<Option<LevelHistogram>> =
+            to_page_histograms(index.definition_level_histograms);
+
+        let indexes = index
+            .min_values
+            .into_iter()
+            .zip(index.max_values.into_iter())
+            .zip(index.null_pages.into_iter())
+            .zip(null_counts.into_iter())
+            .zip(rep_hists.into_iter())
+            .zip(def_hists.into_iter())
+            .map(
+                |(
+                    ((((min, max), is_null), null_count), repetition_level_histogram),
+                    definition_level_histogram,
+                )| {
+                    let (min, max) = if is_null {
+                        (None, None)
+                    } else {
+                        (
+                            Some(T::try_from_le_slice(min)?),
+                            Some(T::try_from_le_slice(max)?),
+                        )
+                    };
+                    Ok(PageIndex {
+                        min,
+                        max,
+                        null_count,
+                        repetition_level_histogram,
+                        definition_level_histogram,
+                    })
+                },
+            )
+            .collect::<Result<Vec<_>, ParquetError>>()?;
+
+        let boundary_order = index.boundary_order;
+        Ok(Self {
+            indexes,
+            boundary_order,
+        })
     }
 }
 
