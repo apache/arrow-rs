@@ -445,7 +445,6 @@ impl RowSelection {
     /// Expands the selection to align with batch boundaries.
     /// This is needed when using cached array readers to ensure that
     /// the cached data covers full batches.
-    #[cfg(feature = "async")]
     pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
         if batch_size == 0 {
             return self.clone();
