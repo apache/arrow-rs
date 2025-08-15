@@ -195,9 +195,10 @@ mod tests {
     use crate::test_util::arrow_test_data;
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
-    use std::fs::{remove_file, File};
+    use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
+    use tempfile::NamedTempFile;
 
     fn make_schema() -> Schema {
         Schema::new(vec![
@@ -218,16 +219,6 @@ mod tests {
 
     fn contains_ascii(haystack: &[u8], needle: &[u8]) -> bool {
         haystack.windows(needle.len()).any(|w| w == needle)
-    }
-
-    fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        p.push(format!("{}_{}_{}.avro", prefix, std::process::id(), nanos));
-        p
     }
 
     #[test]
@@ -315,7 +306,8 @@ mod tests {
             let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
             let original =
                 arrow::compute::concat_batches(&schema, &input_batches).expect("concat input");
-            let out_path = unique_temp_path("arrow_avro_roundtrip");
+            let tmp = NamedTempFile::new().expect("create temp file");
+            let out_path = tmp.into_temp_path();
             let out_file = File::create(&out_path).expect("create temp avro");
             let mut writer = AvroWriter::new(out_file, original.schema().as_ref().clone())?;
             if rel.contains(".snappy.") {
@@ -343,7 +335,6 @@ mod tests {
                 "Round-trip batch mismatch for file: {}",
                 rel
             );
-            let _ = remove_file(&out_path);
         }
         Ok(())
     }
