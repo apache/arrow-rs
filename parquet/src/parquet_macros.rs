@@ -259,6 +259,9 @@ macro_rules! __thrift_result_required_or_optional {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_read_field {
+    ($prot:tt, list $lt:lifetime binary) => {
+        Vec::<&'a [u8]>::try_from(&mut *$prot)?
+    };
     ($prot:tt, list $lt:lifetime $element_type:ident) => {
         Vec::<$element_type>::try_from(&mut *$prot)?
     };
