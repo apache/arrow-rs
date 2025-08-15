@@ -22,7 +22,6 @@ use crate::{
 use arrow_schema::ArrowError;
 use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
-use std::collections::HashSet;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -589,6 +588,7 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// parent, and we cannot "split" a mutable reference across two objects (parent state and the child
 /// builder that uses it). So everything has to be here. Rust layout optimizations should treat the
 /// variants as a union, so that accessing a `buffer` or `metadata_builder` is branch-free.
+#[derive(Debug)]
 enum ParentState<'a> {
     Variant {
         buffer: &'a mut ValueBuffer,
@@ -651,6 +651,7 @@ impl ParentState<'_> {
                 parent_value_offset_base,
                 ..
             } => {
+                // TODO: We currently fail to check for duplicates when using a ParentState!
                 let field_id = metadata_builder.upsert_field_name(field_name);
                 let shifted_start_offset = starting_offset - *parent_value_offset_base;
                 fields.insert(field_id, shifted_start_offset);
@@ -1326,6 +1327,7 @@ impl Drop for ListBuilder<'_> {
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
+#[derive(Debug)]
 pub struct ObjectBuilder<'a> {
     parent_state: ParentState<'a>,
     fields: IndexMap<u32, usize>, // (field_id, offset)
@@ -1338,8 +1340,6 @@ pub struct ObjectBuilder<'a> {
     /// will be truncated in `drop` if `has_been_finished` is false
     has_been_finished: bool,
     validate_unique_fields: bool,
-    /// Set of duplicate fields to report for errors
-    duplicate_fields: HashSet<u32>,
 }
 
 impl<'a> ObjectBuilder<'a> {
@@ -1353,7 +1353,6 @@ impl<'a> ObjectBuilder<'a> {
             has_been_finished: false,
             parent_metadata_offset_base: meta_offset_base,
             validate_unique_fields,
-            duplicate_fields: HashSet::new(),
         }
     }
 
@@ -1391,7 +1390,9 @@ impl<'a> ObjectBuilder<'a> {
         let field_start = buffer.offset() - self.parent_value_offset_base;
 
         if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
-            self.duplicate_fields.insert(field_id);
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Duplicate field: {key}"
+            )));
         }
 
         buffer.try_append_variant(value.into(), metadata_builder)?;
@@ -1462,20 +1463,6 @@ impl<'a> ObjectBuilder<'a> {
     /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) -> Result<(), ArrowError> {
         let metadata_builder = self.parent_state.metadata_builder();
-        if self.validate_unique_fields && !self.duplicate_fields.is_empty() {
-            let mut names = self
-                .duplicate_fields
-                .iter()
-                .map(|id| metadata_builder.field_name(*id as usize))
-                .collect::<Vec<_>>();
-
-            names.sort_unstable();
-
-            let joined = names.join(", ");
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Duplicate field keys detected: [{joined}]",
-            )));
-        }
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
             let field_a_name = metadata_builder.field_name(field_a_id as usize);
@@ -2475,42 +2462,55 @@ mod tests {
         let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
 
         // Root-level object with duplicates
-        let mut root_obj = builder.new_object();
-        root_obj.insert("a", 1);
-        root_obj.insert("b", 2);
-        root_obj.insert("a", 3);
-        root_obj.insert("b", 4);
-
-        let result = root_obj.finish();
+        let result = builder
+            .new_object()
+            .with_field("a", 1)
+            .with_field("b", 2)
+            .try_with_field("a", 3);
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Invalid argument error: Duplicate field keys detected: [a, b]"
+            "Invalid argument error: Duplicate field: a"
         );
 
         // Deeply nested list -> list -> object with duplicate
         let mut outer_list = builder.new_list();
         let mut inner_list = outer_list.new_list();
-        let mut nested_obj = inner_list.new_object();
-        nested_obj.insert("x", 1);
-        nested_obj.insert("x", 2);
-
-        let nested_result = nested_obj.finish();
+        let nested_result = inner_list
+            .new_object()
+            .with_field("x", 1)
+            .try_with_field("x", 2);
         assert_eq!(
             nested_result.unwrap_err().to_string(),
-            "Invalid argument error: Duplicate field keys detected: [x]"
+            "Invalid argument error: Duplicate field: x"
         );
 
         inner_list.finish();
         outer_list.finish();
 
         // Valid object should succeed
+        let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
         let mut list = builder.new_list();
         let mut valid_obj = list.new_object();
         valid_obj.insert("m", 1);
         valid_obj.insert("n", 2);
 
+        // TODO: Duplicate object or list should fail, but currently does not
+        valid_obj.new_list("m").finish();
+        valid_obj.new_object("n").finish().unwrap();
+
         let valid_result = valid_obj.finish();
         assert!(valid_result.is_ok());
+        list.finish();
+        let (m, v) = builder.finish();
+        let obj = Variant::new(&m, &v).get_list_element(0).unwrap();
+        assert!(
+            matches!(obj.get_object_field("m"), Some(Variant::List(_))),
+            "{obj:?}"
+        );
+        assert!(
+            matches!(obj.get_object_field("n"), Some(Variant::Object(_))),
+            "{obj:?}"
+        );
     }
 
     #[test]
