@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::errors::ParquetError;
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::DecodeResult;
 
 /// A push decoder for [`ParquetMetaData`].
@@ -204,14 +204,15 @@ impl ParquetMetaDataPushDecoder {
     /// [`ParquetMetaDataPushDecoder::with_page_indexes`] for more detail.
     ///
     /// See examples on [`ParquetMetaDataPushDecoder`].
-    pub fn try_new(file_len: u64) -> std::result::Result<Self, ParquetError> {
+    pub fn try_new(file_len: u64) -> Result<Self, ParquetError> {
         if file_len < 8 {
             return Err(ParquetError::General(format!(
                 "Parquet files are at least 8 bytes long, but file length is {file_len}"
             )));
         };
 
-        let metadata_reader = ParquetMetaDataReader::new().with_page_indexes(true);
+        let metadata_reader =
+            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Optional);
 
         Ok(Self {
             done: false,
@@ -221,17 +222,19 @@ impl ParquetMetaDataPushDecoder {
     }
 
     /// Enable or disable reading the page index structures described in
-    /// "[Parquet page index]: Layout to Support Page Skipping".
+    /// "[Parquet page index] Layout to Support Page Skipping".
     ///
-    /// Defaults to `true`
+    /// Defaults to [`PageIndexPolicy::Optional`]
     ///
     /// This requires
     /// 1. The Parquet file to have been written with page indexes
     /// 2. Additional data to be pushed into the decoder (as the page indexes are not part of the thrift footer)
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    pub fn with_page_indexes(mut self, val: bool) -> Self {
-        self.metadata_reader = self.metadata_reader.with_page_indexes(val);
+    pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
+        self.metadata_reader = self
+            .metadata_reader
+            .with_page_index_policy(page_index_policy);
         self
     }
 
@@ -435,7 +438,7 @@ mod tests {
         let file_len = TEST_FILE_DATA.len() as u64;
         let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_len)
             .unwrap()
-            .with_page_indexes(false);
+            .with_page_index_policy(PageIndexPolicy::Skip);
         let ranges = expect_needs_data(metadata_decoder.try_decode());
         assert_eq!(ranges.len(), 1);
         assert_eq!(ranges[0], test_file_len() - 8..test_file_len());
