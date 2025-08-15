@@ -88,7 +88,7 @@ use crate::DecodeResult;
 /// requires at least two IO operations to read the metadata - one to read the
 /// footer and then one to read the metadata.
 ///
-/// If the file has a "Page Index" (see [Self::with_page_indexes]), three
+/// If the file has a "Page Index" (see [Self::with_page_index_policy]), three
 /// IO operations are required to read the metadata, as the page index is
 /// not part of the normal metadata footer.
 ///
@@ -201,7 +201,7 @@ impl ParquetMetaDataPushDecoder {
     /// Create a new `ParquetMetaDataPushDecoder` with the given file length.
     ///
     /// By default, this will read page indexes and column indexes. See
-    /// [`ParquetMetaDataPushDecoder::with_page_indexes`] for more detail.
+    /// [`ParquetMetaDataPushDecoder::with_page_index_policy`] for more detail.
     ///
     /// See examples on [`ParquetMetaDataPushDecoder`].
     pub fn try_new(file_len: u64) -> Result<Self, ParquetError> {
