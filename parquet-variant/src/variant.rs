@@ -1278,6 +1278,12 @@ impl From<VariantDecimal16> for Variant<'_, '_> {
     }
 }
 
+impl From<half::f16> for Variant<'_, '_> {
+    fn from(value: half::f16) -> Self {
+        Variant::Float(value.into())
+    }
+}
+
 impl From<f32> for Variant<'_, '_> {
     fn from(value: f32) -> Self {
         Variant::Float(value)
