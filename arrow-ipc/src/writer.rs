@@ -65,6 +65,8 @@ pub struct IpcWriteOptions {
     /// Compression, if desired. Will result in a runtime error
     /// if the corresponding feature is not enabled
     batch_compression_type: Option<crate::CompressionType>,
+    /// How to handle updating dictionaries in IPC messages
+    dictionary_handling: DictionaryHandling,
 }
 
 impl IpcWriteOptions {
@@ -113,6 +115,7 @@ impl IpcWriteOptions {
                 write_legacy_ipc_format,
                 metadata_version,
                 batch_compression_type: None,
+                dictionary_handling: DictionaryHandling::default(),
             }),
             crate::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -125,6 +128,7 @@ impl IpcWriteOptions {
                         write_legacy_ipc_format,
                         metadata_version,
                         batch_compression_type: None,
+                        dictionary_handling: DictionaryHandling::default(),
                     })
                 }
             }
@@ -132,6 +136,12 @@ impl IpcWriteOptions {
                 "Unsupported crate::MetadataVersion {z:?}"
             ))),
         }
+    }
+
+    /// Configure how dictionaries are handled in IPC messages
+    pub fn with_dictionary_handling(mut self, dictionary_handling: DictionaryHandling) -> Self {
+        self.dictionary_handling = dictionary_handling;
+        self
     }
 }
 
@@ -142,6 +152,7 @@ impl Default for IpcWriteOptions {
             write_legacy_ipc_format: false,
             metadata_version: crate::MetadataVersion::V5,
             batch_compression_type: None,
+            dictionary_handling: DictionaryHandling::default(),
         }
     }
 }
@@ -363,21 +374,35 @@ impl IpcDataGenerator {
                     dict_id_seq,
                 )?;
 
-                // It's importnat to only take the dict_id at this point, because the dict ID
+                // It's important to only take the dict_id at this point, because the dict ID
                 // sequence is assigned depth-first, so we need to first encode children and have
                 // them take their assigned dict IDs before we take the dict ID for this field.
                 let dict_id = dict_id_seq.next().ok_or_else(|| {
                     ArrowError::IpcError(format!("no dict id for field {}", field.name()))
                 })?;
 
-                let emit = dictionary_tracker.insert(dict_id, column)?;
-
-                if emit {
-                    encoded_dictionaries.push(self.dictionary_batch_to_bytes(
-                        dict_id,
-                        dict_values,
-                        write_options,
-                    )?);
+                match dictionary_tracker.insert_column(
+                    dict_id,
+                    column,
+                    write_options.dictionary_handling,
+                )? {
+                    DictionaryUpdate::None => {}
+                    DictionaryUpdate::New | DictionaryUpdate::Replaced => {
+                        encoded_dictionaries.push(self.dictionary_batch_to_bytes(
+                            dict_id,
+                            dict_values,
+                            write_options,
+                            false,
+                        )?);
+                    }
+                    DictionaryUpdate::Delta(data) => {
+                        encoded_dictionaries.push(self.dictionary_batch_to_bytes(
+                            dict_id,
+                            &data,
+                            write_options,
+                            true,
+                        )?);
+                    }
                 }
             }
             _ => self._encode_dictionaries(
@@ -519,6 +544,7 @@ impl IpcDataGenerator {
         dict_id: i64,
         array_data: &ArrayData,
         write_options: &IpcWriteOptions,
+        is_delta: bool,
     ) -> Result<EncodedData, ArrowError> {
         let mut fbb = FlatBufferBuilder::new();
 
@@ -587,6 +613,7 @@ impl IpcDataGenerator {
             let mut batch_builder = crate::DictionaryBatchBuilder::new(&mut fbb);
             batch_builder.add_id(dict_id);
             batch_builder.add_data(root);
+            batch_builder.add_isDelta(is_delta);
             batch_builder.finish().as_union_value()
         };
 
@@ -700,6 +727,39 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
     Ok(array_data.into())
 }
 
+/// Controls how dictionaries are handled in Arrow IPC messages
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DictionaryHandling {
+    /// Send the entire dictionary every time it is encountered (default)
+    Resend,
+    /// Send only new dictionary values since the last batch (delta encoding)
+    ///
+    /// When a dictionary is first encountered, the entire dictionary is sent.
+    /// For subsequent batches, only values that are new (not previously sent)
+    /// are transmitted with the `isDelta` flag set to true.
+    Delta,
+}
+
+impl Default for DictionaryHandling {
+    fn default() -> Self {
+        Self::Resend
+    }
+}
+
+/// Describes what kind of update took place after a call to [`DictionaryTracker::insert`].
+#[derive(Debug, Clone)]
+pub enum DictionaryUpdate {
+    /// No dictionary was written, the dictionary was identical to what was already
+    /// in the tracker.
+    None,
+    /// No dictionary was present in the tracker
+    New,
+    /// Dictionary was replaced with the new data
+    Replaced,
+    /// Dictionary was updated, ArrayData is the delta between old and new
+    Delta(ArrayData),
+}
+
 /// Keeps track of dictionaries that have been written, to avoid emitting the same dictionary
 /// multiple times.
 ///
@@ -718,11 +778,6 @@ impl DictionaryTracker {
     /// If `error_on_replacement`
     /// is true, an error will be generated if an update to an
     /// existing dictionary is attempted.
-    ///
-    /// If `preserve_dict_id` is true, the dictionary ID defined in the schema
-    /// is used, otherwise a unique dictionary ID will be assigned by incrementing
-    /// the last seen dictionary ID (or using `0` if no other dictionary IDs have been
-    /// seen)
     pub fn new(error_on_replacement: bool) -> Self {
         #[allow(deprecated)]
         Self {
@@ -760,6 +815,7 @@ impl DictionaryTracker {
     /// * If the tracker has not been configured to error on replacement or this dictionary
     ///   has never been seen before, return `Ok(true)` to indicate that the dictionary was just
     ///   inserted.
+    #[deprecated(since = "56.1.0", note = "Use `insert_column` instead")]
     pub fn insert(&mut self, dict_id: i64, column: &ArrayRef) -> Result<bool, ArrowError> {
         let dict_data = column.to_data();
         let dict_values = &dict_data.child_data()[0];
@@ -788,6 +844,125 @@ impl DictionaryTracker {
         self.written.insert(dict_id, dict_data);
         Ok(true)
     }
+
+    /// Keep track of the dictionary with the given ID and values. The return
+    /// value indicates what, if any, update to the internal map took place
+    /// and how it should be interpreted based on the `dict_handling` parameter.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Dictionary::New)` - If the dictionary was not previously written
+    /// * `Ok(Dictionary::Replaced)` - If the dictionary was previously written
+    ///   with completely different data, or if the data is a delta of the existing,
+    ///   but with `dict_handling` set to `DictionaryHandling::Resend`
+    /// * `Ok(Dictionary::Delta)` - If the dictionary was previously written, but
+    ///   the new data is a delta of the old and the `dict_handling` is set to
+    ///   `DictionaryHandling::Delta`
+    /// * `Err(e)` - If the dictionary was previously written with different data,
+    ///   and `error_on_replacement` is set to `true`.
+    pub fn insert_column(
+        &mut self,
+        dict_id: i64,
+        column: &ArrayRef,
+        dict_handling: DictionaryHandling,
+    ) -> Result<DictionaryUpdate, ArrowError> {
+        let new_data = column.to_data();
+        let new_values = &new_data.child_data()[0];
+
+        // If there is no existing dictionary with this ID, we always insert
+        let Some(old) = self.written.get(&dict_id) else {
+            self.written.insert(dict_id, new_data);
+            return Ok(DictionaryUpdate::New);
+        };
+
+        // Fast path - If the array data points to the same buffer as the
+        // existing then they're the same.
+        let old_values = &old.child_data()[0];
+        if ArrayData::ptr_eq(old_values, new_values) {
+            return Ok(DictionaryUpdate::None);
+        }
+
+        // Slow path - Compare the dictionaries value by value
+        let comparison = compare_dictionaries(old_values, new_values);
+        if matches!(comparison, DictionaryComparison::Equal) {
+            return Ok(DictionaryUpdate::None);
+        }
+
+        const REPLACEMENT_ERROR: &str =
+            "Dictionary replacement detected when writing IPC file format. \
+                 Arrow IPC files only support a single dictionary for a given field \
+                 across all batches.";
+
+        match comparison {
+            DictionaryComparison::NotEqual => {
+                if self.error_on_replacement {
+                    return Err(ArrowError::InvalidArgumentError(
+                        REPLACEMENT_ERROR.to_string(),
+                    ));
+                }
+
+                self.written.insert(dict_id, new_data);
+                Ok(DictionaryUpdate::Replaced)
+            }
+            DictionaryComparison::Delta => match dict_handling {
+                DictionaryHandling::Resend => {
+                    if self.error_on_replacement {
+                        return Err(ArrowError::InvalidArgumentError(
+                            REPLACEMENT_ERROR.to_string(),
+                        ));
+                    }
+
+                    self.written.insert(dict_id, new_data);
+                    Ok(DictionaryUpdate::Replaced)
+                }
+                DictionaryHandling::Delta => {
+                    let delta =
+                        new_values.slice(old_values.len(), new_values.len() - old_values.len());
+                    self.written.insert(dict_id, new_data);
+                    Ok(DictionaryUpdate::Delta(delta))
+                }
+            },
+            DictionaryComparison::Equal => unreachable!("Already checked equal case"),
+        }
+    }
+}
+
+/// Describes how two dictionary arrays compare to each other.
+#[derive(Debug, Clone)]
+enum DictionaryComparison {
+    /// Neither a delta, nor an exact match
+    NotEqual,
+    /// Exact element-wise match
+    Equal,
+    /// The two arrays are dictionary deltas of each other, meaning the first
+    /// is a prefix of the second.
+    Delta,
+}
+
+// Compares two dictionaries and returns a [`DictionaryComparison`].
+fn compare_dictionaries(old: &ArrayData, new: &ArrayData) -> DictionaryComparison {
+    // Check for exact match
+    let existing_len = old.len();
+    let new_len = new.len();
+    if existing_len == new_len {
+        if *old == *new {
+            return DictionaryComparison::Equal;
+        } else {
+            return DictionaryComparison::NotEqual;
+        }
+    }
+
+    // Can't be a delta if the new is shorter than the existing
+    if new_len < existing_len {
+        return DictionaryComparison::NotEqual;
+    }
+
+    // Check for delta
+    if new.slice(0, existing_len) == *old {
+        return DictionaryComparison::Delta;
+    }
+
+    DictionaryComparison::NotEqual
 }
 
 /// Arrow File Writer
@@ -926,6 +1101,7 @@ impl<W: Write> FileWriter<W> {
         }
 
         let (meta, data) = write_message(&mut self.writer, encoded_message, &self.write_options)?;
+
         // add a record block for the footer
         let block = crate::Block::new(
             self.block_offsets as i64,
@@ -1041,7 +1217,7 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 ///
 /// * [`FileWriter`] for writing IPC Files
 ///
-/// # Example
+/// # Example - Basic usage
 /// ```
 /// # use arrow_array::record_batch;
 /// # use arrow_ipc::writer::StreamWriter;
@@ -1054,7 +1230,57 @@ impl<W: Write> RecordBatchWriter for FileWriter<W> {
 /// // When all batches are written, call finish to flush all buffers
 /// writer.finish().unwrap();
 /// ```
+/// # Example - Efficient delta dictionaries
+/// ```
+/// # use arrow_array::record_batch;
+/// # use arrow_ipc::writer::{StreamWriter, IpcWriteOptions};
+/// # use arrow_ipc::writer::DictionaryHandling;
+/// # use arrow_schema::{DataType, Field, Schema, SchemaRef};
+/// # use arrow_array::{
+/// #    builder::StringDictionaryBuilder, types::Int32Type, Array, ArrayRef, DictionaryArray,
+/// #    RecordBatch, StringArray,
+/// # };
+/// # use std::sync::Arc;
 ///
+/// let schema = Arc::new(Schema::new(vec![Field::new(
+///    "col1",
+///    DataType::Dictionary(Box::from(DataType::Int32), Box::from(DataType::Utf8)),
+///    true,
+/// )]));
+///
+/// let mut builder = StringDictionaryBuilder::<arrow_array::types::Int32Type>::new();
+///
+/// // `finish_preserve_values` will keep the dictionary values along with their
+/// // key assignments so that they can be re-used in the next batch.
+/// builder.append("a").unwrap();
+/// builder.append("b").unwrap();
+/// let array1 = builder.finish_preserve_values();
+/// let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(array1) as ArrayRef]).unwrap();
+///
+/// // In this batch, 'a' will have the same dictionary key as 'a' in the previous batch,
+/// // and 'd' will take the next available key.
+/// builder.append("a").unwrap();
+/// builder.append("d").unwrap();
+/// let array2 = builder.finish_preserve_values();
+/// let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(array2) as ArrayRef]).unwrap();
+///
+/// let mut stream = vec![];
+/// // You must set `.with_dictionary_handling(DictionaryHandling::Delta)` to
+/// // enable delta dictionaries in the writer
+/// let options = IpcWriteOptions::default().with_dictionary_handling(DictionaryHandling::Delta);
+/// let mut writer = StreamWriter::try_new(&mut stream, &schema).unwrap();
+///
+/// // When writing the first batch, a dictionary message with 'a' and 'b' will be written
+/// // prior to the record batch.
+/// writer.write(&batch1).unwrap();
+/// // With the second batch only a delta dictionary with 'd' will be written
+/// // prior to the record batch. This is only possible with `finish_preserve_values`.
+/// // Without it, 'a' and 'd' in this batch would have different keys than the
+/// // first batch and so we'd have to send a replacement dictionary with new keys
+/// // for both.
+/// writer.write(&batch2).unwrap();
+/// writer.finish().unwrap();
+/// ```
 /// [IPC Streaming Format]: https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format
 pub struct StreamWriter<W> {
     /// The object to write to

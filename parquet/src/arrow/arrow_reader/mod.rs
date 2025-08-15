@@ -37,14 +37,16 @@ use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::schema::types::SchemaDescriptor;
 
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
 
 mod filter;
+pub mod metrics;
 mod read_plan;
 mod selection;
 pub mod statistics;
@@ -116,6 +118,10 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) limit: Option<usize>,
 
     pub(crate) offset: Option<usize>,
+
+    pub(crate) metrics: ArrowReaderMetrics,
+
+    pub(crate) max_predicate_cache_size: usize,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -132,6 +138,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("selection", &self.selection)
             .field("limit", &self.limit)
             .field("offset", &self.offset)
+            .field("metrics", &self.metrics)
             .finish()
     }
 }
@@ -150,6 +157,8 @@ impl<T> ArrowReaderBuilder<T> {
             selection: None,
             limit: None,
             offset: None,
+            metrics: ArrowReaderMetrics::Disabled,
+            max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
         }
     }
 
@@ -300,6 +309,65 @@ impl<T> ArrowReaderBuilder<T> {
             ..self
         }
     }
+
+    /// Specify metrics collection during reading
+    ///
+    /// To access the metrics, create an [`ArrowReaderMetrics`] and pass a
+    /// clone of the provided metrics to the builder.
+    ///
+    /// For example:
+    ///
+    /// ```rust
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    /// use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+    /// # use parquet::arrow::ArrowWriter;
+    /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
+    /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
+    /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
+    /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
+    /// # writer.write(&batch).unwrap();
+    /// # writer.close().unwrap();
+    /// # let file = Bytes::from(file);
+    /// // Create metrics object to pass into the reader
+    /// let metrics = ArrowReaderMetrics::enabled();
+    /// let reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap()
+    ///   // Configure the builder to use the metrics by passing a clone
+    ///   .with_metrics(metrics.clone())
+    ///   // Build the reader
+    ///   .build().unwrap();
+    /// // .. read data from the reader ..
+    ///
+    /// // check the metrics
+    /// assert!(metrics.records_read_from_inner().is_some());
+    /// ```
+    pub fn with_metrics(self, metrics: ArrowReaderMetrics) -> Self {
+        Self { metrics, ..self }
+    }
+
+    /// Set the maximum size (per row group) of the predicate cache in bytes for
+    /// the async decoder.
+    ///
+    /// Defaults to 100MB (across all columns). Set to `usize::MAX` to use
+    /// unlimited cache size.
+    ///
+    /// This cache is used to store decoded arrays that are used in
+    /// predicate evaluation ([`Self::with_row_filter`]).
+    ///
+    /// This cache is only used for the "async" decoder, [`ParquetRecordBatchStream`]. See
+    /// [this ticket] for more details and alternatives.
+    ///
+    /// [`ParquetRecordBatchStream`]: https://docs.rs/parquet/latest/parquet/arrow/async_reader/struct.ParquetRecordBatchStream.html
+    /// [this ticket]: https://github.com/apache/arrow-rs/issues/8000
+    pub fn with_max_predicate_cache_size(self, max_predicate_cache_size: usize) -> Self {
+        Self {
+            max_predicate_cache_size,
+            ..self
+        }
+    }
 }
 
 /// Options that control how metadata is read for a parquet file
@@ -315,8 +383,8 @@ pub struct ArrowReaderOptions {
     ///
     /// [ARROW_SCHEMA_META_KEY]: crate::arrow::ARROW_SCHEMA_META_KEY
     supplied_schema: Option<SchemaRef>,
-    /// If true, attempt to read `OffsetIndex` and `ColumnIndex`
-    pub(crate) page_index: bool,
+    /// Policy for reading offset and column indexes.
+    pub(crate) page_index_policy: PageIndexPolicy,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
     pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
@@ -418,7 +486,20 @@ impl ArrowReaderOptions {
     /// [`ParquetMetaData::column_index`]: crate::file::metadata::ParquetMetaData::column_index
     /// [`ParquetMetaData::offset_index`]: crate::file::metadata::ParquetMetaData::offset_index
     pub fn with_page_index(self, page_index: bool) -> Self {
-        Self { page_index, ..self }
+        let page_index_policy = PageIndexPolicy::from(page_index);
+
+        Self {
+            page_index_policy,
+            ..self
+        }
+    }
+
+    /// Set the [`PageIndexPolicy`] to determine how page indexes should be read.
+    pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
+        Self {
+            page_index_policy: policy,
+            ..self
+        }
     }
 
     /// Provide the file decryption properties to use when reading encrypted parquet files.
@@ -439,7 +520,7 @@ impl ArrowReaderOptions {
     ///
     /// This can be set via [`with_page_index`][Self::with_page_index].
     pub fn page_index(&self) -> bool {
-        self.page_index
+        self.page_index_policy != PageIndexPolicy::Skip
     }
 
     /// Retrieve the currently set file decryption properties.
@@ -488,7 +569,8 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata = ParquetMetaDataReader::new().with_page_indexes(options.page_index);
+        let metadata =
+            ParquetMetaDataReader::new().with_page_index_policy(options.page_index_policy);
         #[cfg(feature = "encryption")]
         let metadata =
             metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
@@ -771,23 +853,37 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     ///
     /// Note: this will eagerly evaluate any `RowFilter` before returning
     pub fn build(self) -> Result<ParquetRecordBatchReader> {
+        let Self {
+            input,
+            metadata,
+            schema: _,
+            fields,
+            batch_size: _,
+            row_groups,
+            projection,
+            mut filter,
+            selection,
+            limit,
+            offset,
+            metrics,
+            // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
+            max_predicate_cache_size: _,
+        } = self;
+
         // Try to avoid allocate large buffer
         let batch_size = self
             .batch_size
-            .min(self.metadata.file_metadata().num_rows() as usize);
+            .min(metadata.file_metadata().num_rows() as usize);
 
-        let row_groups = self
-            .row_groups
-            .unwrap_or_else(|| (0..self.metadata.num_row_groups()).collect());
+        let row_groups = row_groups.unwrap_or_else(|| (0..metadata.num_row_groups()).collect());
 
         let reader = ReaderRowGroups {
-            reader: Arc::new(self.input.0),
-            metadata: self.metadata,
+            reader: Arc::new(input.0),
+            metadata,
             row_groups,
         };
 
-        let mut filter = self.filter;
-        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(self.selection);
+        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
@@ -797,20 +893,23 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     break;
                 }
 
-                let array_reader = ArrayReaderBuilder::new(&reader)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                let mut cache_projection = predicate.projection().clone();
+                cache_projection.intersect(&projection);
+
+                let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                    .build_array_reader(fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
         }
 
-        let array_reader = ArrayReaderBuilder::new(&reader)
-            .build_array_reader(self.fields.as_deref(), &self.projection)?;
+        let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+            .build_array_reader(fields.as_deref(), &projection)?;
 
         let read_plan = plan_builder
             .limited(reader.num_rows())
-            .with_offset(self.offset)
-            .with_limit(self.limit)
+            .with_offset(offset)
+            .with_limit(limit)
             .build_limited()
             .build();
 
@@ -1005,7 +1104,9 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         selection: Option<RowSelection>,
     ) -> Result<Self> {
-        let array_reader = ArrayReaderBuilder::new(row_groups)
+        // note metrics are not supported in this API
+        let metrics = ArrowReaderMetrics::disabled();
+        let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
             .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
         let read_plan = ReadPlanBuilder::new(batch_size)

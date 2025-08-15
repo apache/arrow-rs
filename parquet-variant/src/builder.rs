@@ -20,6 +20,7 @@ use crate::{
     VariantMetadata, VariantObject,
 };
 use arrow_schema::ArrowError;
+use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashSet;
 
@@ -190,6 +191,13 @@ impl ValueBuffer {
         self.append_slice(&micros.to_le_bytes());
     }
 
+    fn append_time_micros(&mut self, value: chrono::NaiveTime) {
+        self.append_primitive_header(VariantPrimitiveType::Time);
+        let micros_from_midnight = value.num_seconds_from_midnight() as u64 * 1_000_000
+            + value.nanosecond() as u64 / 1_000;
+        self.append_slice(&micros_from_midnight.to_le_bytes());
+    }
+
     fn append_decimal4(&mut self, decimal4: VariantDecimal4) {
         self.append_primitive_header(VariantPrimitiveType::Decimal4);
         self.append_u8(decimal4.scale());
@@ -334,6 +342,7 @@ impl ValueBuffer {
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(obj) => self.append_object(metadata_builder, obj),
             Variant::List(list) => self.append_list(metadata_builder, list),
+            Variant::Time(v) => self.append_time_micros(v),
         }
     }
 
@@ -364,6 +373,7 @@ impl ValueBuffer {
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(obj) => self.try_append_object(metadata_builder, obj)?,
             Variant::List(list) => self.try_append_list(metadata_builder, list)?,
+            Variant::Time(v) => self.append_time_micros(v),
         }
 
         Ok(())

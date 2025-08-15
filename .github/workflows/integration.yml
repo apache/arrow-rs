@@ -88,33 +88,33 @@ jobs:
       - name: Check cmake
         run: which cmake
       - name: Checkout Arrow
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: apache/arrow
           submodules: true
           fetch-depth: 0
       - name: Checkout Arrow Rust
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: rust
           fetch-depth: 0
       - name: Checkout Arrow Go
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: apache/arrow-go
           path: go
       - name: Checkout Arrow Java
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: apache/arrow-java
           path: java
       - name: Checkout Arrow JavaScript
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: apache/arrow-js
           path: js
       - name: Checkout Arrow nanoarrow
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: apache/arrow-nanoarrow
           path: nanoarrow
@@ -133,7 +133,7 @@ jobs:
         # PyArrow 15 was the first version to introduce StringView/BinaryView support
         pyarrow: ["15", "16", "17"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       - name: Setup Rust toolchain

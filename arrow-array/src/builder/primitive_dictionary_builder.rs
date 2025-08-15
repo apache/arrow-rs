@@ -460,6 +460,38 @@ where
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 
+    /// Builds the `DictionaryArray` without resetting the values builder or
+    /// the internal de-duplication map.
+    ///
+    /// The advantage of doing this is that the values will represent the entire
+    /// set of what has been built so-far by this builder and ensures
+    /// consistency in the assignment of keys to values across multiple calls
+    /// to `finish_preserve_values`. This enables ipc writers to efficiently
+    /// emit delta dictionaries.
+    ///
+    /// The downside to this is that building the record requires creating a
+    /// copy of the values, which can become slowly more expensive if the
+    /// dictionary grows.
+    ///
+    /// Additionally, if record batches from multiple different dictionary
+    /// builders for the same column are fed into a single ipc writer, beware
+    /// that entire dictionaries are likely to be re-sent frequently even when
+    /// the majority of the values are not used by the current record batch.
+    pub fn finish_preserve_values(&mut self) -> DictionaryArray<K> {
+        let values = self.values_builder.finish_cloned();
+        let keys = self.keys_builder.finish();
+
+        let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
+
     /// Returns the current dictionary values buffer as a slice
     pub fn values_slice(&self) -> &[V::Native] {
         self.values_builder.values_slice()
@@ -816,5 +848,46 @@ mod tests {
                 "Cast error: Can't cast dictionary keys from source type UInt16 to type UInt8"
             );
         }
+    }
+
+    #[test]
+    fn test_finish_preserve_values() {
+        // Create the first dictionary
+        let mut builder = PrimitiveDictionaryBuilder::<UInt8Type, UInt32Type>::new();
+        builder.append(10).unwrap();
+        builder.append(20).unwrap();
+        let array = builder.finish_preserve_values();
+        assert_eq!(array.keys(), &UInt8Array::from(vec![Some(0), Some(1)]));
+        let values: &[u32] = array
+            .values()
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap()
+            .values();
+        assert_eq!(values, &[10, 20]);
+
+        // Create a new dictionary
+        builder.append(30).unwrap();
+        builder.append(40).unwrap();
+        let array2 = builder.finish_preserve_values();
+
+        // Make sure the keys are assigned after the old ones
+        // and that we have the right values
+        assert_eq!(array2.keys(), &UInt8Array::from(vec![Some(2), Some(3)]));
+        let values = array2
+            .downcast_dict::<UInt32Array>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![Some(30), Some(40)]);
+
+        // Check that we have all of the expected values
+        let all_values: &[u32] = array2
+            .values()
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap()
+            .values();
+        assert_eq!(all_values, &[10, 20, 30, 40]);
     }
 }
