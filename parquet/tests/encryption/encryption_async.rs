@@ -587,7 +587,6 @@ fn spawn_parquet_parallel_serialization_task(
                     // for the current one to finish.
                     drop(col_array_channels);
 
-                    // TODO
                     let finalize_rg_task = spawn_rg_join_and_finalize_task(
                         col_writer_tasks,
                         max_row_group_rows,
@@ -687,23 +686,9 @@ impl Write for SharedBuffer {
 /// Consume RowGroups serialized by other parallel tasks and concatenate them in
 /// to the final parquet file, while flushing finalized bytes to an [ObjectStore]
 async fn concatenate_parallel_row_groups(
-    // mut arrow_row_group_writer_factory: ArrowRowGroupWriterFactory,
-    mut writer: &mut SerializedFileWriter<&std::fs::File>,
-    schema: Arc<Schema>,
-    writer_props: Arc<WriterProperties>,
+    mut parquet_writer: SerializedFileWriter<SharedBuffer>,
     mut serialize_rx: Receiver<JoinHandle<RBStreamSerializeResult>>,
-    mut file: &std::fs::File,
 ) -> Result<FileMetaData, ParquetError> {
-
-    let merged_buff = SharedBuffer::new(0);
-    let schema_desc = ArrowSchemaConverter::new().convert(schema.as_ref())?;
-
-    let mut parquet_writer = SerializedFileWriter::new(
-        merged_buff.clone(),
-        schema_desc.root_schema_ptr(),
-        writer_props,
-    )?;
-
     while let Some(task) = serialize_rx.recv().await {
         let result = task.await;
         let mut rg_out = parquet_writer.next_row_group()?;
@@ -712,16 +697,11 @@ async fn concatenate_parallel_row_groups(
 
         for task in serialized_columns {
             task.append_to_row_group(&mut rg_out)?;
-            let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
-            writer
-                .write_all(buff_to_flush.as_slice())?;
         }
         rg_out.close()?;
     }
-    let file_metadata = parquet_writer.close()?;
-    let final_buff = merged_buff.buffer.try_lock().unwrap();
 
-    writer.write_all(final_buff.as_slice())?;
+    let file_metadata = parquet_writer.close()?;
     Ok(file_metadata)
 }
 
@@ -747,11 +727,15 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
 
     let (record_batches, metadata) =
         read_encrypted_file(&file, decryption_properties.clone()).unwrap();
-    let to_write: Vec<_> = record_batches
-        .iter()
-        .flat_map(|rb| rb.columns().to_vec())
-        .collect();
-    let schema = metadata.schema().clone();
+    let schema = metadata.schema();
+
+    // Create a channel to send RecordBatches to the writer and send row groups
+    let (record_batch_tx, data)  = tokio::sync::mpsc::channel::<RecordBatch>(100);
+    tokio::spawn(async move {
+        for record_batch in record_batches {
+            record_batch_tx.send(record_batch).await.expect("");
+        }
+    });
 
     let props = Some(
         WriterPropertiesBuilder::default()
@@ -764,38 +748,45 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
     let mut arrow_writer = ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props.clone()).unwrap();
 
     let row_group_writer_factory = arrow_writer.get_row_group_writer_factory();
-
     let max_rowgroups = 1;
+
     let (serialize_tx, serialize_rx) =
         tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(max_rowgroups);
 
-    let (record_batch_tx, record_batch_rx)  = tokio::sync::mpsc::channel::<RecordBatch>(100);
-
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
-        row_group_writer_factory, record_batch_rx, serialize_tx, schema.clone()).unwrap();
+        row_group_writer_factory, data, serialize_tx, schema.clone()).unwrap();
 
-    let _ = launch_serialization_task
-        .await
-        .map_err(|e| ParquetError::General(e.to_string()));
-
-
-    // TODO: use concatenate_parallel_row_groups
+    let merged_buff = SharedBuffer::new(1000);
+    let schema_desc = ArrowSchemaConverter::new().convert(schema.as_ref()).unwrap();
+    let parquet_writer = SerializedFileWriter::new(
+        merged_buff.clone(),
+        schema_desc.root_schema_ptr(),
+        Arc::new(props.clone().unwrap()),
+    ).unwrap();
 
     let file_metadata = concatenate_parallel_row_groups(
-        &mut arrow_writer,
-        schema.clone(),
-        Arc::new(props.unwrap().clone()),
+        parquet_writer,
         serialize_rx,
+    ).await.unwrap();
+
+    _ = tokio::spawn(async move { launch_serialization_task.await });
+
+    let mut buff_to_flush = merged_buff.buffer.try_lock().unwrap();
+
+
+    let mut parquet_writer = SerializedFileWriter::new(
         &temp_file,
-    );
+        schema_desc.root_schema_ptr(),
+        Arc::new(props.clone().unwrap()),
+    ).unwrap();
+    _ = parquet_writer.write_all(buff_to_flush.as_slice()).unwrap();
 
-    //     .await;
+    // Check that the file was written correctly
+    let (read_record_batches, read_metadata) =
+        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
 
-    // LOW-LEVEL API: Use low level API to write into a file using multiple threads
-
-    // Get column writers
-    // let (_row_group_index, col_writers, srgw) = arrow_writer.get_column_writers().unwrap();
-    // let num_columns = col_writers.len();
+    assert_eq!(read_metadata.metadata().file_metadata().num_rows(), 100);
+    verify_encryption_double_test_data(read_record_batches, read_metadata.metadata());
 }
 
 #[tokio::test]
