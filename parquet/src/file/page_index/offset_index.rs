@@ -19,21 +19,25 @@
 //!
 //! [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
-use crate::errors::ParquetError;
+use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::{
+    errors::{ParquetError, Result},
+    thrift_struct,
+};
 
+thrift_struct!(
 /// Page location information for [`OffsetIndexMetaData`]
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PageLocation {
-    /// Offset of the page in the file *
-    pub offset: i64,
-    /// Size of the page, including header. Sum of compressed_page_size and header
-    /// length
-    pub compressed_page_size: i32,
-    /// Index within the RowGroup of the first row of the page. When an
-    /// OffsetIndex is present, pages must begin on row boundaries
-    /// (repetition_level = 0).
-    pub first_row_index: i64,
+  /// Offset of the page in the file
+  1: required i64 offset
+  /// Size of the page, including header. Sum of compressed_page_size and header
+  2: required i32 compressed_page_size
+  /// Index within the RowGroup of the first row of the page. When an
+  /// OffsetIndex is present, pages must begin on row boundaries
+  /// (repetition_level = 0).
+  3: required i64 first_row_index
 }
+);
 
 impl From<&crate::format::PageLocation> for PageLocation {
     fn from(value: &crate::format::PageLocation) -> Self {
@@ -55,24 +59,26 @@ impl From<&PageLocation> for crate::format::PageLocation {
     }
 }
 
+thrift_struct!(
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 ///
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-#[derive(Debug, Clone, PartialEq)]
 pub struct OffsetIndexMetaData {
-    /// Vector of [`PageLocation`] objects, one per page in the chunk.
-    pub page_locations: Vec<PageLocation>,
-    /// Optional vector of unencoded page sizes, one per page in the chunk.
-    /// Only defined for BYTE_ARRAY columns.
-    pub unencoded_byte_array_data_bytes: Option<Vec<i64>>,
+  /// Vector of [`PageLocation`] objects, one per page in the chunk.
+  1: required list<PageLocation> page_locations
+  /// Optional vector of unencoded page sizes, one per page in the chunk.
+  /// Only defined for BYTE_ARRAY columns.
+  2: optional list<i64> unencoded_byte_array_data_bytes
 }
+);
 
 impl OffsetIndexMetaData {
     /// Creates a new [`OffsetIndexMetaData`] from an [`OffsetIndex`].
     ///
     /// [`OffsetIndex`]: crate::format::OffsetIndex
-    pub(crate) fn try_new(index: crate::format::OffsetIndex) -> Result<Self, ParquetError> {
+    #[allow(dead_code)]
+    pub(crate) fn try_new(index: crate::format::OffsetIndex) -> Result<Self> {
         let page_locations = index.page_locations.iter().map(|loc| loc.into()).collect();
         Ok(Self {
             page_locations,
@@ -91,8 +97,6 @@ impl OffsetIndexMetaData {
         self.unencoded_byte_array_data_bytes.as_ref()
     }
 
-    // TODO: remove annotation after merge
-    #[allow(dead_code)]
     pub(crate) fn to_thrift(&self) -> crate::format::OffsetIndex {
         let page_locations = self.page_locations.iter().map(|loc| loc.into()).collect();
         crate::format::OffsetIndex::new(

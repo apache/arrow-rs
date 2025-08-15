@@ -24,6 +24,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::file::metadata::LevelHistogram;
+use crate::file::page_index::index_reader::ColumnIndex;
 use std::fmt::Debug;
 
 /// Typed statistics for one data page
@@ -193,6 +194,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
     pub const PHYSICAL_TYPE: Type = T::PHYSICAL_TYPE;
 
     /// Creates a new [`NativeIndex`]
+    #[allow(dead_code)]
     pub(crate) fn try_new(index: crate::format::ColumnIndex) -> Result<Self, ParquetError> {
         let len = index.min_values.len();
 
@@ -305,6 +307,75 @@ impl<T: ParquetValueType> NativeIndex<T> {
             repetition_level_histograms,
             definition_level_histograms,
         )
+    }
+
+    /// Creates a new [`NativeIndex`]
+    pub(crate) fn try_new_local(index: ColumnIndex) -> Result<Self, ParquetError> {
+        let len = index.min_values.len();
+
+        // turn Option<Vec<i64>> into Vec<Option<i64>>
+        let null_counts = index
+            .null_counts
+            .map(|x| x.into_iter().map(Some).collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![None; len]);
+
+        // histograms are a 1D array encoding a 2D num_pages X num_levels matrix.
+        let to_page_histograms = |opt_hist: Option<Vec<i64>>| {
+            if let Some(hist) = opt_hist {
+                // TODO: should we assert (hist.len() % len) == 0?
+                let num_levels = hist.len() / len;
+                let mut res = Vec::with_capacity(len);
+                for i in 0..len {
+                    let page_idx = i * num_levels;
+                    let page_hist = hist[page_idx..page_idx + num_levels].to_vec();
+                    res.push(Some(LevelHistogram::from(page_hist)));
+                }
+                res
+            } else {
+                vec![None; len]
+            }
+        };
+
+        // turn Option<Vec<i64>> into Vec<Option<i64>>
+        let rep_hists: Vec<Option<LevelHistogram>> =
+            to_page_histograms(index.repetition_level_histograms);
+        let def_hists: Vec<Option<LevelHistogram>> =
+            to_page_histograms(index.definition_level_histograms);
+
+        // start assembling Vec<PageIndex>
+        let mut indexes: Vec<PageIndex<T>> = Vec::with_capacity(len);
+        let mut rep_iter = rep_hists.into_iter();
+        let mut def_iter = def_hists.into_iter();
+
+        // this used to zip together the other iters, but that was quite a bit
+        // slower than this approach.
+        for (i, null_count) in null_counts.into_iter().enumerate().take(len) {
+            let is_null = index.null_pages[i];
+            let min = if is_null {
+                None
+            } else {
+                Some(T::try_from_le_slice(index.min_values[i])?)
+            };
+            let max = if is_null {
+                None
+            } else {
+                Some(T::try_from_le_slice(index.max_values[i])?)
+            };
+
+            indexes.push(PageIndex {
+                min,
+                max,
+                null_count,
+                repetition_level_histogram: rep_iter.next().unwrap_or(None),
+                definition_level_histogram: def_iter.next().unwrap_or(None),
+            })
+        }
+
+        let boundary_order = index.boundary_order;
+        Ok(Self {
+            indexes,
+            boundary_order,
+        })
     }
 }
 
