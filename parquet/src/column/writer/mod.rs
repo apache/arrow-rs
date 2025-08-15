@@ -259,6 +259,7 @@ struct ColumnMetrics<T: Default> {
     min_column_value: Option<T>,
     max_column_value: Option<T>,
     num_column_nulls: u64,
+    num_column_nans: Option<u64>,
     column_distinct_count: Option<u64>,
     variable_length_bytes: Option<i64>,
     repetition_level_histogram: Option<LevelHistogram>,
@@ -1003,6 +1004,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         self.column_metrics.num_column_nulls += self.page_metrics.num_page_nulls;
 
+        if let Some(nan_count) = values_data.nan_count {
+            *self.column_metrics.num_column_nans.get_or_insert(0) += nan_count;
+        }
+
         let page_statistics = match (values_data.min_value, values_data.max_value) {
             (Some(min), Some(max)) => {
                 // Update chunk level statistics
@@ -1016,7 +1021,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         None,
                         Some(self.page_metrics.num_page_nulls),
                         false,
-                    ),
+                    )
+                    .with_nan_count(values_data.nan_count),
                 )
             }
             _ => None,
@@ -1190,6 +1196,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 Some(self.column_metrics.num_column_nulls),
                 false,
             )
+            .with_nan_count(self.column_metrics.num_column_nans)
             .with_backwards_compatible_min_max(backwards_compatible_min_max)
             .into();
 
@@ -2649,6 +2656,7 @@ mod tests {
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2665,6 +2673,7 @@ mod tests {
             stats.max_opt().unwrap(),
             &ByteArray::from(f16::ONE + f16::ONE)
         );
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2678,6 +2687,7 @@ mod tests {
         assert!(stats.min_bytes_opt().is_none());
         assert!(stats.max_bytes_opt().is_none());
         assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.nan_count_opt(), Some(2));
     }
 
     #[test]
@@ -2736,24 +2746,26 @@ mod tests {
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
         assert!(stats.is_min_max_backwards_compatible());
-        if let Statistics::Float(stats) = stats {
+        if let Statistics::Float(stats) = &stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
         }
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
     fn test_float_statistics_nan_start() {
         let stats = statistics_roundtrip::<FloatType>(&[f32::NAN, 1.0, 2.0]);
         assert!(stats.is_min_max_backwards_compatible());
-        if let Statistics::Float(stats) = stats {
+        if let Statistics::Float(stats) = &stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Float");
         }
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2763,6 +2775,7 @@ mod tests {
         assert!(stats.max_bytes_opt().is_none());
         assert!(stats.is_min_max_backwards_compatible());
         assert!(matches!(stats, Statistics::Float(_)));
+        assert_eq!(stats.nan_count_opt(), Some(2));
     }
 
     #[test]
@@ -2823,24 +2836,26 @@ mod tests {
     fn test_double_statistics_nan_middle() {
         let stats = statistics_roundtrip::<DoubleType>(&[1.0, f64::NAN, 2.0]);
         assert!(stats.is_min_max_backwards_compatible());
-        if let Statistics::Double(stats) = stats {
+        if let Statistics::Double(stats) = &stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
         }
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
     fn test_double_statistics_nan_start() {
         let stats = statistics_roundtrip::<DoubleType>(&[f64::NAN, 1.0, 2.0]);
         assert!(stats.is_min_max_backwards_compatible());
-        if let Statistics::Double(stats) = stats {
+        if let Statistics::Double(stats) = &stats {
             assert_eq!(stats.min_opt().unwrap(), &1.0);
             assert_eq!(stats.max_opt().unwrap(), &2.0);
         } else {
             panic!("expecting Statistics::Double");
         }
+        assert_eq!(stats.nan_count_opt(), Some(1));
     }
 
     #[test]
@@ -2850,6 +2865,7 @@ mod tests {
         assert!(stats.max_bytes_opt().is_none());
         assert!(matches!(stats, Statistics::Double(_)));
         assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(stats.nan_count_opt(), Some(2));
     }
 
     #[test]
@@ -2904,6 +2920,108 @@ mod tests {
         } else {
             panic!("expecting Statistics::Double");
         }
+    }
+
+    #[test]
+    fn test_float_statistics_infinity_with_nan() {
+        // Test column with Infinity and NaN values
+        let stats =
+            statistics_roundtrip::<FloatType>(&[1.0, f32::INFINITY, f32::NAN, 2.0, f32::NAN]);
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = &stats {
+            assert_eq!(stats.min_opt().unwrap(), &1.0);
+            assert_eq!(stats.max_opt().unwrap(), &f32::INFINITY);
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+        assert_eq!(stats.nan_count_opt(), Some(2));
+    }
+
+    #[test]
+    fn test_float_statistics_neg_infinity_with_nan() {
+        // Test column with -Infinity and NaN values
+        let stats = statistics_roundtrip::<FloatType>(&[
+            f32::NEG_INFINITY,
+            -1.0,
+            f32::NAN,
+            0.0,
+            f32::NAN,
+            1.0,
+        ]);
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = &stats {
+            assert_eq!(stats.min_opt().unwrap(), &f32::NEG_INFINITY);
+            assert_eq!(stats.max_opt().unwrap(), &1.0);
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+        assert_eq!(stats.nan_count_opt(), Some(2));
+    }
+
+    #[test]
+    fn test_float_statistics_both_infinities_with_nan() {
+        // Test column with both +Infinity, -Infinity and NaN values
+        let stats = statistics_roundtrip::<FloatType>(&[
+            f32::NEG_INFINITY,
+            f32::NAN,
+            0.0,
+            f32::INFINITY,
+            f32::NAN,
+        ]);
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Float(stats) = &stats {
+            assert_eq!(stats.min_opt().unwrap(), &f32::NEG_INFINITY);
+            assert_eq!(stats.max_opt().unwrap(), &f32::INFINITY);
+        } else {
+            panic!("expecting Statistics::Float");
+        }
+        assert_eq!(stats.nan_count_opt(), Some(2));
+    }
+
+    #[test]
+    fn test_double_statistics_infinity_with_nan() {
+        // Test with f64 (double) type
+        let stats = statistics_roundtrip::<DoubleType>(&[
+            1.0,
+            f64::INFINITY,
+            f64::NAN,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            2.0,
+        ]);
+        assert!(stats.is_min_max_backwards_compatible());
+        if let Statistics::Double(stats) = &stats {
+            assert_eq!(stats.min_opt().unwrap(), &f64::NEG_INFINITY);
+            assert_eq!(stats.max_opt().unwrap(), &f64::INFINITY);
+        } else {
+            panic!("expecting Statistics::Double");
+        }
+
+        assert_eq!(stats.nan_count_opt(), Some(2));
+    }
+
+    #[test]
+    fn test_float16_statistics_infinity_with_nan() {
+        // Test Float16 with Infinity and NaN
+        let input = [
+            f16::ONE,
+            f16::INFINITY,
+            f16::NAN,
+            f16::NEG_INFINITY,
+            f16::NAN,
+        ]
+        .into_iter()
+        .map(|s| ByteArray::from(s).into())
+        .collect::<Vec<_>>();
+
+        let stats = float16_statistics_roundtrip(&input);
+        assert!(stats.is_min_max_backwards_compatible());
+        assert_eq!(
+            stats.min_opt().unwrap(),
+            &ByteArray::from(f16::NEG_INFINITY)
+        );
+        assert_eq!(stats.max_opt().unwrap(), &ByteArray::from(f16::INFINITY));
+        assert_eq!(stats.nan_count_opt(), Some(2));
     }
 
     #[test]
