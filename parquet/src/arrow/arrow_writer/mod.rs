@@ -173,7 +173,7 @@ mod levels;
 /// ```
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
-    writer: SerializedFileWriter<W>,
+    pub writer: SerializedFileWriter<W>,
 
     /// The in-progress row group if any
     in_progress: Option<ArrowRowGroupWriter>,
