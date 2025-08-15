@@ -108,8 +108,9 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, BinaryViewArray, Int16Array, Int32Array, PrimitiveArray, StringArray,
-        StructArray,
+        Array, ArrayRef, BinaryViewArray, Float16Array, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, StringArray, StructArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
@@ -202,29 +203,95 @@ mod test {
         );
     }
 
-    /// Shredding: extract a value as a VariantArray
-    #[test]
-    fn get_variant_shredded_int32_as_variant() {
-        let array = shredded_int32_variant_array();
-        let options = GetOptions::new();
-        let result = variant_get(&array, options).unwrap();
+    /// Partial Shredding: extract a value as a VariantArray
+    macro_rules! numeric_partially_shredded_test {
+        ($test:ident, $data_fn:ident, $primitive_type:ty) => {
+            #[test]
+            fn $test() {
+                let array = $data_fn();
+                let options = GetOptions::new();
+                let result = variant_get(&array, options).unwrap();
 
-        // expect the result is a VariantArray
-        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
-        assert_eq!(result.len(), 4);
+                // expect the result is a VariantArray
+                let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+                assert_eq!(result.len(), 4);
 
-        // Expect the values are the same as the original values
-        assert_eq!(result.value(0), Variant::Int32(34));
-        assert!(!result.is_valid(1));
-        assert_eq!(result.value(2), Variant::from("n/a"));
-        assert_eq!(result.value(3), Variant::Int32(100));
+                // Expect the values are the same as the original values
+                assert_eq!(
+                    result.value(0),
+                    Variant::from(<$primitive_type>::try_from(34u8).unwrap())
+                );
+                assert!(!result.is_valid(1));
+                assert_eq!(result.value(2), Variant::from("n/a"));
+                assert_eq!(
+                    result.value(3),
+                    Variant::from(<$primitive_type>::try_from(100u8).unwrap())
+                );
+            }
+        };
     }
+
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_int8_as_variant,
+        partially_shredded_int8_variant_array,
+        i8
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_int16_as_variant,
+        partially_shredded_int16_variant_array,
+        i16
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_int32_as_variant,
+        partially_shredded_int32_variant_array,
+        i32
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_int64_as_variant,
+        partially_shredded_int64_variant_array,
+        i64
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_uint8_as_variant,
+        partially_shredded_uint8_variant_array,
+        u8
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_uint16_as_variant,
+        partially_shredded_uint16_variant_array,
+        u16
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_uint32_as_variant,
+        partially_shredded_uint32_variant_array,
+        u32
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_uint64_as_variant,
+        partially_shredded_uint64_variant_array,
+        u64
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_float16_as_variant,
+        partially_shredded_float16_variant_array,
+        half::f16
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_float32_as_variant,
+        partially_shredded_float32_variant_array,
+        f32
+    );
+    numeric_partially_shredded_test!(
+        get_variant_partially_shredded_float64_as_variant,
+        partially_shredded_float64_variant_array,
+        f64
+    );
 
     /// Shredding: extract a value as an Int32Array
     #[test]
     fn get_variant_shredded_int32_as_int32_safe_cast() {
         // Extract the typed value as Int32Array
-        let array = shredded_int32_variant_array();
+        let array = partially_shredded_int32_variant_array();
         // specify we want the typed value as Int32
         let field = Field::new("typed_value", DataType::Int32, true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
@@ -243,7 +310,7 @@ mod test {
     #[test]
     fn get_variant_shredded_int32_as_int32_unsafe_cast() {
         // Extract the typed value as Int32Array
-        let array = shredded_int32_variant_array();
+        let array = partially_shredded_int32_variant_array();
         let field = Field::new("typed_value", DataType::Int32, true);
         let cast_options = CastOptions {
             safe: false, // unsafe cast
@@ -259,29 +326,96 @@ mod test {
     }
 
     /// Perfect Shredding: extract the typed value as a VariantArray
-    #[test]
-    fn get_variant_perfectly_shredded_int32_as_variant() {
-        let array =
-            perfectly_shredded_variant_array(Int32Array::from(vec![Some(1), Some(2), Some(3)]));
-        let options = GetOptions::new();
-        let result = variant_get(&array, options).unwrap();
+    macro_rules! numeric_perfectly_shredded_test {
+        ($test:ident, $data_fn:ident, $primitive_type:ty) => {
+            #[test]
+            fn $test() {
+                let array = $data_fn();
+                let options = GetOptions::new();
+                let result = variant_get(&array, options).unwrap();
 
-        // expect the result is a VariantArray
-        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
-        assert_eq!(result.len(), 3);
+                // expect the result is a VariantArray
+                let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+                assert_eq!(result.len(), 3);
 
-        // Expect the values are the same as the original values
-        assert_eq!(result.value(0), Variant::Int32(1));
-        assert_eq!(result.value(1), Variant::Int32(2));
-        assert_eq!(result.value(2), Variant::Int32(3));
+                // Expect the values are the same as the original values
+                assert_eq!(
+                    result.value(0),
+                    Variant::from(<$primitive_type>::try_from(1u8).unwrap())
+                );
+                assert_eq!(
+                    result.value(1),
+                    Variant::from(<$primitive_type>::try_from(2u8).unwrap())
+                );
+                assert_eq!(
+                    result.value(2),
+                    Variant::from(<$primitive_type>::try_from(3u8).unwrap())
+                );
+            }
+        };
     }
+
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_int8_as_variant,
+        perfectly_shredded_int8_variant_array,
+        i8
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_int16_as_variant,
+        perfectly_shredded_int16_variant_array,
+        i16
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_int32_as_variant,
+        perfectly_shredded_int32_variant_array,
+        i32
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_int64_as_variant,
+        perfectly_shredded_int64_variant_array,
+        i64
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_uint8_as_variant,
+        perfectly_shredded_uint8_variant_array,
+        u8
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_uint16_as_variant,
+        perfectly_shredded_uint16_variant_array,
+        u16
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_uint32_as_variant,
+        perfectly_shredded_uint32_variant_array,
+        u32
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_uint64_as_variant,
+        perfectly_shredded_uint64_variant_array,
+        u64
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_float16_as_variant,
+        perfectly_shredded_float16_variant_array,
+        half::f16
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_float32_as_variant,
+        perfectly_shredded_float32_variant_array,
+        f32
+    );
+    numeric_perfectly_shredded_test!(
+        get_variant_perfectly_shredded_float64_as_variant,
+        perfectly_shredded_float64_variant_array,
+        f64
+    );
 
     /// Shredding: Extract the typed value as Int32Array
     #[test]
     fn get_variant_perfectly_shredded_int32_as_int32() {
         // Extract the typed value as Int32Array
-        let array =
-            perfectly_shredded_variant_array(Int32Array::from(vec![Some(1), Some(2), Some(3)]));
+        let array = perfectly_shredded_int32_variant_array();
         // specify we want the typed value as Int32
         let field = Field::new("typed_value", DataType::Int32, true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
@@ -325,27 +459,9 @@ mod test {
     }
 
     #[test]
-    fn get_variant_perfectly_shredded_int16_as_variant() {
-        let array =
-            perfectly_shredded_variant_array(Int16Array::from(vec![Some(1), Some(2), Some(3)]));
-        let options = GetOptions::new();
-        let result = variant_get(&array, options).unwrap();
-
-        // expect the result is a VariantArray
-        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
-        assert_eq!(result.len(), 3);
-
-        // Expect the values are the same as the original values
-        assert_eq!(result.value(0), Variant::Int16(1));
-        assert_eq!(result.value(1), Variant::Int16(2));
-        assert_eq!(result.value(2), Variant::Int16(3));
-    }
-
-    #[test]
     fn get_variant_perfectly_shredded_int16_as_int16() {
         // Extract the typed value as Int16Array
-        let array =
-            perfectly_shredded_variant_array(Int16Array::from(vec![Some(1), Some(2), Some(3)]));
+        let array = perfectly_shredded_int16_variant_array();
         // specify we want the typed value as Int16
         let field = Field::new("typed_value", DataType::Int16, true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
@@ -365,26 +481,87 @@ mod test {
     ///   typed_value: Int32Array,
     /// }
     /// ```
-    fn perfectly_shredded_variant_array<T>(typed_value: PrimitiveArray<T>) -> ArrayRef
-    where
-        T: arrow::datatypes::ArrowPrimitiveType,
-    {
-        // At the time of writing, the `VariantArrayBuilder` does not support shredding.
-        // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-        let (metadata, _value) = { parquet_variant::VariantBuilder::new().finish() };
+    macro_rules! numeric_perfectly_shredded_variant_array_fn {
+        ($func:ident, $array_type:ident, $primitive_type:ty) => {
+            fn $func() -> ArrayRef {
+                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
+                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
+                let (metadata, _value) = { parquet_variant::VariantBuilder::new().finish() };
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
+                let typed_value = $array_type::from(vec![
+                    Some(<$primitive_type>::try_from(1u8).unwrap()),
+                    Some(<$primitive_type>::try_from(2u8).unwrap()),
+                    Some(<$primitive_type>::try_from(3u8).unwrap()),
+                ]);
 
-        let metadata =
-            BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, typed_value.len()));
+                let struct_array = StructArrayBuilder::new()
+                    .with_field("metadata", Arc::new(metadata))
+                    .with_field("typed_value", Arc::new(typed_value))
+                    .build();
 
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata))
-            .with_field("typed_value", Arc::new(typed_value))
-            .build();
-
-        Arc::new(
-            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
-        )
+                Arc::new(
+                    VariantArray::try_new(Arc::new(struct_array))
+                        .expect("should create variant array"),
+                )
+            }
+        };
     }
+
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_int8_variant_array,
+        Int8Array,
+        i8
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_int16_variant_array,
+        Int16Array,
+        i16
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_int32_variant_array,
+        Int32Array,
+        i32
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_int64_variant_array,
+        Int64Array,
+        i64
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_uint8_variant_array,
+        UInt8Array,
+        u8
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_uint16_variant_array,
+        UInt16Array,
+        u16
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_uint32_variant_array,
+        UInt32Array,
+        u32
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_uint64_variant_array,
+        UInt64Array,
+        u64
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_float16_variant_array,
+        Float16Array,
+        half::f16
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_float32_variant_array,
+        Float32Array,
+        f32
+    );
+    numeric_perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_float64_variant_array,
+        Float64Array,
+        f64
+    );
 
     /// Return a VariantArray that represents a normal "shredded" variant
     /// for the following example
@@ -409,52 +586,113 @@ mod test {
     ///   typed_value: Int32Array,
     /// }
     /// ```
-    fn shredded_int32_variant_array() -> ArrayRef {
-        // At the time of writing, the `VariantArrayBuilder` does not support shredding.
-        // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-        let (metadata, string_value) = {
-            let mut builder = parquet_variant::VariantBuilder::new();
-            builder.append_value("n/a");
-            builder.finish()
+    macro_rules! numeric_partially_shredded_variant_array_fn {
+        ($func:ident, $array_type:ident, $primitive_type:ty) => {
+            fn $func() -> ArrayRef {
+                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
+                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
+                let (metadata, string_value) = {
+                    let mut builder = parquet_variant::VariantBuilder::new();
+                    builder.append_value("n/a");
+                    builder.finish()
+                };
+
+                let nulls = NullBuffer::from(vec![
+                    true,  // row 0 non null
+                    false, // row 1 is null
+                    true,  // row 2 non null
+                    true,  // row 3 non null
+                ]);
+
+                // metadata is the same for all rows
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+
+                // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
+                // about why row1 is an empty but non null, value.
+                let values = BinaryViewArray::from(vec![
+                    None,                // row 0 is shredded, so no value
+                    Some(b"" as &[u8]),  // row 1 is null, so empty value (why?)
+                    Some(&string_value), // copy the string value "N/A"
+                    None,                // row 3 is shredded, so no value
+                ]);
+
+                let typed_value = $array_type::from(vec![
+                    Some(<$primitive_type>::try_from(34u8).unwrap()), // row 0 is shredded, so it has a value
+                    None,                                             // row 1 is null, so no value
+                    None, // row 2 is a string, so no typed value
+                    Some(<$primitive_type>::try_from(100u8).unwrap()), // row 3 is shredded, so it has a value
+                ]);
+
+                let struct_array = StructArrayBuilder::new()
+                    .with_field("metadata", Arc::new(metadata))
+                    .with_field("typed_value", Arc::new(typed_value))
+                    .with_field("value", Arc::new(values))
+                    .with_nulls(nulls)
+                    .build();
+
+                Arc::new(
+                    VariantArray::try_new(Arc::new(struct_array))
+                        .expect("should create variant array"),
+                )
+            }
         };
-
-        let nulls = NullBuffer::from(vec![
-            true,  // row 0 non null
-            false, // row 1 is null
-            true,  // row 2 non null
-            true,  // row 3 non null
-        ]);
-
-        // metadata is the same for all rows
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-
-        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-        // about why row1 is an empty but non null, value.
-        let values = BinaryViewArray::from(vec![
-            None,                // row 0 is shredded, so no value
-            Some(b"" as &[u8]),  // row 1 is null, so empty value (why?)
-            Some(&string_value), // copy the string value "N/A"
-            None,                // row 3 is shredded, so no value
-        ]);
-
-        let typed_value = Int32Array::from(vec![
-            Some(34),  // row 0 is shredded, so it has a value
-            None,      // row 1 is null, so no value
-            None,      // row 2 is a string, so no typed value
-            Some(100), // row 3 is shredded, so it has a value
-        ]);
-
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata))
-            .with_field("typed_value", Arc::new(typed_value))
-            .with_field("value", Arc::new(values))
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(
-            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
-        )
     }
+
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_int8_variant_array,
+        Int8Array,
+        i8
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_int16_variant_array,
+        Int16Array,
+        i16
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_int32_variant_array,
+        Int32Array,
+        i32
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_int64_variant_array,
+        Int64Array,
+        i64
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_uint8_variant_array,
+        UInt8Array,
+        u8
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_uint16_variant_array,
+        UInt16Array,
+        u16
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_uint32_variant_array,
+        UInt32Array,
+        u32
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_uint64_variant_array,
+        UInt64Array,
+        u64
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_float16_variant_array,
+        Float16Array,
+        half::f16
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_float32_variant_array,
+        Float32Array,
+        f32
+    );
+    numeric_partially_shredded_variant_array_fn!(
+        partially_shredded_float64_variant_array,
+        Float64Array,
+        f64
+    );
 
     /// Builds struct arrays from component fields
     ///
@@ -500,7 +738,7 @@ mod test {
     ///
     /// ```text
     /// null
-    /// null  
+    /// null
     /// null
     /// ```
     ///
