@@ -134,7 +134,7 @@ use crate::{
     file::page_index::index::{Index, NativeIndex},
     thrift_struct,
 };
-pub use reader::{FooterTail, ParquetMetaDataReader};
+pub use reader::{FooterTail, PageIndexPolicy, ParquetMetaDataReader};
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
