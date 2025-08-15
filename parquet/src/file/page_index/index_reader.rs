@@ -158,7 +158,9 @@ pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Inde
         Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new_local(index)?),
         Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new_local(index)?),
         Type::BYTE_ARRAY => Index::BYTE_ARRAY(NativeIndex::try_new_local(index)?),
-        Type::FIXED_LEN_BYTE_ARRAY => Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new_local(index)?),
+        Type::FIXED_LEN_BYTE_ARRAY => {
+            Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new_local(index)?)
+        }
     };
 
     Ok(index)

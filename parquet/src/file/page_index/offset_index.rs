@@ -19,8 +19,11 @@
 //!
 //! [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
-use crate::{errors::{ParquetError, Result}, thrift_struct};
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::{
+    errors::{ParquetError, Result},
+    thrift_struct,
+};
 
 thrift_struct!(
 /// Page location information for [`OffsetIndexMetaData`]

@@ -312,6 +312,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
     pub(crate) fn try_new_local(index: ColumnIndex) -> Result<Self, ParquetError> {
         let len = index.min_values.len();
 
+        // turn Option<Vec<i64>> into Vec<Option<i64>>
         let null_counts = index
             .null_counts
             .map(|x| x.into_iter().map(Some).collect::<Vec<_>>())
@@ -334,42 +335,37 @@ impl<T: ParquetValueType> NativeIndex<T> {
             }
         };
 
+        // turn Option<Vec<i64>> into Vec<Option<i64>>
         let rep_hists: Vec<Option<LevelHistogram>> =
             to_page_histograms(index.repetition_level_histograms);
         let def_hists: Vec<Option<LevelHistogram>> =
             to_page_histograms(index.definition_level_histograms);
 
-        let indexes = index
-            .min_values
-            .into_iter()
-            .zip(index.max_values.into_iter())
-            .zip(index.null_pages.into_iter())
-            .zip(null_counts.into_iter())
-            .zip(rep_hists.into_iter())
-            .zip(def_hists.into_iter())
-            .map(
-                |(
-                    ((((min, max), is_null), null_count), repetition_level_histogram),
-                    definition_level_histogram,
-                )| {
-                    let (min, max) = if is_null {
-                        (None, None)
-                    } else {
-                        (
-                            Some(T::try_from_le_slice(min)?),
-                            Some(T::try_from_le_slice(max)?),
-                        )
-                    };
-                    Ok(PageIndex {
-                        min,
-                        max,
-                        null_count,
-                        repetition_level_histogram,
-                        definition_level_histogram,
-                    })
-                },
-            )
-            .collect::<Result<Vec<_>, ParquetError>>()?;
+        // start assembling Vec<PageIndex>
+        let mut indexes: Vec<PageIndex<T>> = Vec::with_capacity(len);
+        let mut rep_iter = rep_hists.into_iter();
+        let mut def_iter = def_hists.into_iter();
+        for i in 0..len {
+            let is_null = index.null_pages[i];
+            let min = if is_null {
+                None
+            } else {
+                Some(T::try_from_le_slice(index.min_values[i])?)
+            };
+            let max = if is_null {
+                None
+            } else {
+                Some(T::try_from_le_slice(index.max_values[i])?)
+            };
+
+            indexes.push(PageIndex {
+                min,
+                max,
+                null_count: null_counts[i],
+                repetition_level_histogram: rep_iter.next().unwrap_or(None),
+                definition_level_histogram: def_iter.next().unwrap_or(None),
+            })
+        }
 
         let boundary_order = index.boundary_order;
         Ok(Self {
