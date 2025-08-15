@@ -22,7 +22,6 @@ use crate::{
 use arrow_schema::ArrowError;
 use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
-use std::collections::HashSet;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -1338,8 +1337,6 @@ pub struct ObjectBuilder<'a> {
     /// will be truncated in `drop` if `has_been_finished` is false
     has_been_finished: bool,
     validate_unique_fields: bool,
-    /// Set of duplicate fields to report for errors
-    duplicate_fields: HashSet<u32>,
 }
 
 impl<'a> ObjectBuilder<'a> {
@@ -1353,7 +1350,6 @@ impl<'a> ObjectBuilder<'a> {
             has_been_finished: false,
             parent_metadata_offset_base: meta_offset_base,
             validate_unique_fields,
-            duplicate_fields: HashSet::new(),
         }
     }
 
@@ -1391,7 +1387,7 @@ impl<'a> ObjectBuilder<'a> {
         let field_start = buffer.offset() - self.parent_value_offset_base;
 
         if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
-            self.duplicate_fields.insert(field_id);
+            return Err(ArrowError::InvalidArgumentError(format!("Duplicate field: {key}")));
         }
 
         buffer.try_append_variant(value.into(), metadata_builder)?;
@@ -1462,20 +1458,6 @@ impl<'a> ObjectBuilder<'a> {
     /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) -> Result<(), ArrowError> {
         let metadata_builder = self.parent_state.metadata_builder();
-        if self.validate_unique_fields && !self.duplicate_fields.is_empty() {
-            let mut names = self
-                .duplicate_fields
-                .iter()
-                .map(|id| metadata_builder.field_name(*id as usize))
-                .collect::<Vec<_>>();
-
-            names.sort_unstable();
-
-            let joined = names.join(", ");
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Duplicate field keys detected: [{joined}]",
-            )));
-        }
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
             let field_a_name = metadata_builder.field_name(field_a_id as usize);
