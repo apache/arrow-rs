@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::basic::SortOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     encrypt::{
@@ -31,7 +32,10 @@ use crate::file::writer::{get_file_magic, TrackedWrite};
 use crate::format::EncryptionAlgorithm;
 #[cfg(feature = "encryption")]
 use crate::format::{AesGcmV1, ColumnCryptoMetaData};
-use crate::format::{ColumnChunk, ColumnIndex, FileMetaData, OffsetIndex, RowGroup};
+use crate::format::{
+    ColumnChunk, ColumnIndex, ColumnOrder, FileMetaData, IEEE754TotalOrder, OffsetIndex, RowGroup,
+    TypeDefinedOrder,
+};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
@@ -53,6 +57,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     created_by: Option<String>,
     object_writer: MetadataObjectWriter,
     writer_version: i32,
+    ieee754_total_order: bool,
 }
 
 impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
@@ -129,12 +134,23 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         }
 
         // We only include ColumnOrder for leaf nodes.
-        // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
-        // for all leaf nodes.
         // Even if the column has an undefined sort order, such as INTERVAL, this
         // is still technically the defined TYPEORDER so it should still be set.
-        let column_orders = (0..self.schema_descr.num_columns())
-            .map(|_| crate::format::ColumnOrder::TYPEORDER(crate::format::TypeDefinedOrder {}))
+        let column_orders: Vec<ColumnOrder> = self
+            .schema_descr
+            .columns()
+            .iter()
+            .map(|c| {
+                match crate::basic::ColumnOrder::get_sort_order(
+                    c.logical_type(),
+                    c.converted_type(),
+                    c.physical_type(),
+                    self.ieee754_total_order,
+                ) {
+                    SortOrder::TOTAL_ORDER => ColumnOrder::IEEE754TOTALORDER(IEEE754TotalOrder {}),
+                    _ => ColumnOrder::TYPEORDER(TypeDefinedOrder {}),
+                }
+            })
             .collect();
         // This field is optional, perhaps in cases where no min/max fields are set
         // in any Statistics or ColumnIndex object in the whole file.
@@ -188,6 +204,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         row_groups: Vec<RowGroup>,
         created_by: Option<String>,
         writer_version: i32,
+        ieee754_total_order: bool,
     ) -> Self {
         Self {
             buf,
@@ -200,6 +217,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             created_by,
             object_writer: Default::default(),
             writer_version,
+            ieee754_total_order,
         }
     }
 
@@ -303,6 +321,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 pub struct ParquetMetaDataWriter<'a, W: Write> {
     buf: TrackedWrite<W>,
     metadata: &'a ParquetMetaData,
+    ieee754_total_order: bool,
 }
 
 impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
@@ -324,7 +343,20 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     ///
     /// See example on the struct level documentation
     pub fn new_with_tracked(buf: TrackedWrite<W>, metadata: &'a ParquetMetaData) -> Self {
-        Self { buf, metadata }
+        Self {
+            buf,
+            metadata,
+            ieee754_total_order: false,
+        }
+    }
+
+    /// Sets whether to use IEEE 754 total order for statistics.
+    ///
+    /// See [`crate::file::properties::WriterPropertiesBuilder::set_ieee754_total_order`] for
+    /// more information.
+    pub fn with_ieee754_total_order(mut self, ieee754_total_order: bool) -> Self {
+        self.ieee754_total_order = ieee754_total_order;
+        self
     }
 
     /// Write the metadata to the buffer
@@ -354,6 +386,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             row_groups,
             created_by,
             file_metadata.version(),
+            self.ieee754_total_order,
         );
         encoder = encoder.with_column_indexes(&column_indexes);
         encoder = encoder.with_offset_indexes(&offset_indexes);
