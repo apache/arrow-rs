@@ -141,6 +141,8 @@ pub fn from_thrift(
             let null_count = Some(null_count as u64);
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // Generic nan count for floating point types
+            let nan_count = stats.nan_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
             let old_format = stats.min_value.is_none() && stats.max_value.is_none();
             // Generic min value as bytes.
@@ -224,19 +226,29 @@ pub fn from_thrift(
                     };
                     Statistics::int96(min, max, distinct_count, null_count, old_format)
                 }
-                Type::FLOAT => Statistics::float(
-                    min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::FLOAT => Statistics::Float(
+                    ValueStatistics::new(
+                        min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count)
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
-                Type::DOUBLE => Statistics::double(
-                    min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::DOUBLE => Statistics::Double(
+                    ValueStatistics::new(
+                        min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_nan_count(nan_count)
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
                 Type::BYTE_ARRAY => Statistics::ByteArray(
                     ValueStatistics::new(
@@ -257,6 +269,7 @@ pub fn from_thrift(
                         null_count,
                         old_format,
                     )
+                    .with_nan_count(nan_count)
                     .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
                     .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
@@ -282,6 +295,11 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         .distinct_count_opt()
         .and_then(|value| i64::try_from(value).ok());
 
+    // record nan count if it can fit in i64
+    let nan_count = stats
+        .nan_count_opt()
+        .and_then(|value| i64::try_from(value).ok());
+
     let mut thrift_stats = TStatistics {
         max: None,
         min: None,
@@ -291,6 +309,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         min_value: None,
         is_max_value_exact: None,
         is_min_value_exact: None,
+        nan_count,
     };
 
     // Get min/max if set.
@@ -432,6 +451,11 @@ impl Statistics {
         statistics_enum_func![self, null_count_opt]
     }
 
+    /// Returns NaN count for floating point types, if known.
+    pub fn nan_count_opt(&self) -> Option<u64> {
+        statistics_enum_func![self, nan_count_opt]
+    }
+
     /// Returns `true` if the min value is set, and is an exact min value.
     pub fn min_is_exact(&self) -> bool {
         statistics_enum_func![self, min_is_exact]
@@ -495,6 +519,8 @@ pub struct ValueStatistics<T> {
     // Distinct count could be omitted in some cases
     distinct_count: Option<u64>,
     null_count: Option<u64>,
+    // NaN count for floating point types
+    nan_count: Option<u64>,
 
     // Whether or not the min or max values are exact, or truncated.
     is_max_value_exact: bool,
@@ -525,6 +551,7 @@ impl<T: ParquetValueType> ValueStatistics<T> {
             max,
             distinct_count,
             null_count,
+            nan_count: None,
             is_min_max_deprecated,
             is_min_max_backwards_compatible: is_min_max_deprecated,
         }
@@ -608,6 +635,16 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     /// Returns null count.
     pub fn null_count_opt(&self) -> Option<u64> {
         self.null_count
+    }
+
+    /// Returns NaN count for floating point types.
+    pub fn nan_count_opt(&self) -> Option<u64> {
+        self.nan_count
+    }
+
+    /// Set the NaN count for floating point types.
+    pub fn with_nan_count(self, nan_count: Option<u64>) -> Self {
+        Self { nan_count, ..self }
     }
 
     /// Returns `true` if statistics were created using old min/max fields.
@@ -711,6 +748,7 @@ mod tests {
             min_value: None,
             is_max_value_exact: None,
             is_min_value_exact: None,
+            nan_count: None,
         };
 
         from_thrift(Type::INT32, Some(thrift_stats)).unwrap();
@@ -1074,5 +1112,113 @@ mod tests {
             null_count,
             is_min_max_deprecated,
         ))
+    }
+
+    #[test]
+    fn test_nan_count_float() {
+        // Test NaN count for f32
+        let stats = Statistics::Float(
+            ValueStatistics::new(Some(1.0_f32), Some(5.0_f32), None, Some(0), false)
+                .with_nan_count(Some(3)),
+        );
+
+        assert_eq!(stats.nan_count_opt(), Some(3));
+
+        // Verify round-trip through thrift
+        let thrift_stats = to_thrift(Some(&stats)).unwrap();
+        assert_eq!(thrift_stats.nan_count, Some(3));
+
+        let round_tripped = from_thrift(Type::FLOAT, Some(thrift_stats))
+            .unwrap()
+            .unwrap();
+        assert_eq!(round_tripped.nan_count_opt(), Some(3));
+    }
+
+    #[test]
+    fn test_nan_count_double() {
+        // Test NaN count for f64
+        let stats = Statistics::Double(
+            ValueStatistics::new(Some(1.0_f64), Some(5.0_f64), None, Some(0), false)
+                .with_nan_count(Some(5)),
+        );
+
+        assert_eq!(stats.nan_count_opt(), Some(5));
+
+        // Verify round-trip through thrift
+        let thrift_stats = to_thrift(Some(&stats)).unwrap();
+        assert_eq!(thrift_stats.nan_count, Some(5));
+
+        let round_tripped = from_thrift(Type::DOUBLE, Some(thrift_stats))
+            .unwrap()
+            .unwrap();
+        assert_eq!(round_tripped.nan_count_opt(), Some(5));
+    }
+
+    #[test]
+    fn test_nan_count_none_for_non_float() {
+        // NaN count should not be set for non-floating point types
+        let stats = Statistics::int32(Some(1), Some(100), None, Some(0), false);
+        assert_eq!(stats.nan_count_opt(), None);
+
+        let thrift_stats = to_thrift(Some(&stats)).unwrap();
+        assert_eq!(thrift_stats.nan_count, None);
+    }
+
+    #[test]
+    fn test_nan_count_backwards_compatible() {
+        // Test that missing nan_count field is handled correctly
+        let thrift_stats = TStatistics {
+            min_value: Some(vec![0, 0, 0, 0]),    // 0.0_f32 in bytes
+            max_value: Some(vec![0, 0, 128, 63]), // 1.0_f32 in bytes
+            null_count: Some(0),
+            distinct_count: None,
+            nan_count: None, // Not set
+            ..Default::default()
+        };
+
+        let stats = from_thrift(Type::FLOAT, Some(thrift_stats))
+            .unwrap()
+            .unwrap();
+
+        // nan_count should be None when not provided
+        assert_eq!(stats.nan_count_opt(), None);
+    }
+
+    #[test]
+    fn test_statistics_with_nan_min_max() {
+        // Test that when there are only NaN values, min/max should be None
+        let stats = Statistics::Float(
+            ValueStatistics::new(
+                None, // No min (all NaN)
+                None, // No max (all NaN)
+                None,
+                Some(0),
+                false,
+            )
+            .with_nan_count(Some(10)), // All values are NaN
+        );
+
+        assert_eq!(stats.min_bytes_opt(), None);
+        assert_eq!(stats.max_bytes_opt(), None);
+        assert_eq!(stats.nan_count_opt(), Some(10));
+
+        // Verify serialization handles this case
+        let thrift_stats = to_thrift(Some(&stats)).unwrap();
+        assert_eq!(thrift_stats.min_value, None);
+        assert_eq!(thrift_stats.max_value, None);
+        assert_eq!(thrift_stats.nan_count, Some(10));
+    }
+
+    #[test]
+    fn test_nan_count_too_large() {
+        // Test that nan_count larger than i64::MAX is not serialized
+        let stats = Statistics::Float(
+            ValueStatistics::new(Some(1.0_f32), Some(2.0_f32), None, Some(0), false)
+                .with_nan_count(Some(u64::MAX)),
+        );
+
+        let thrift_stats = to_thrift(Some(&stats)).unwrap();
+        // u64::MAX can't fit in i64, so it should be None
+        assert_eq!(thrift_stats.nan_count, None);
     }
 }

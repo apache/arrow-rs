@@ -70,6 +70,7 @@ fn encoded_meta() -> Vec<u8> {
         distinct_count: None,
         max_value: Some(vec![rng.random(); 8]),
         min_value: Some(vec![rng.random(); 8]),
+        nan_count: None,
         is_max_value_exact: Some(true),
         is_min_value_exact: Some(true),
     };
