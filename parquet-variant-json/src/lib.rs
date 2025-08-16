@@ -23,6 +23,8 @@
 //!
 //! * See [`json_to_variant`] for converting a JSON string to a Variant.
 //! * See [`variant_to_json`] for converting a Variant to a JSON string.
+//! * See [`JsonToVariant`] trait for extension methods on VariantBuilder.
+//! * See [`VariantToJson`] trait for extension methods on Variants.
 //!
 //! ## 🚧 Work In Progress
 //!
@@ -34,5 +36,5 @@
 mod from_json;
 mod to_json;
 
-pub use from_json::json_to_variant;
-pub use to_json::{variant_to_json, variant_to_json_string, variant_to_json_value};
+pub use from_json::{json_to_variant, JsonToVariant};
+pub use to_json::{variant_to_json, variant_to_json_string, variant_to_json_value, VariantToJson};

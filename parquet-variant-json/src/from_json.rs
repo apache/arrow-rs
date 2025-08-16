@@ -154,6 +154,31 @@ impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
     }
 }
 
+/// Extension trait for creating Variants from JSON
+///
+/// This trait provides a convenient method for VariantBuilder to parse JSON strings.
+///
+/// # Example
+/// ```rust
+/// use parquet_variant::VariantBuilder;
+/// use parquet_variant_json::JsonToVariant;
+///
+/// let mut builder = VariantBuilder::new();
+/// builder.from_json("{\"name\":\"Alice\",\"age\":30}")?;
+/// let (metadata, value) = builder.finish();
+/// # Ok::<(), arrow_schema::ArrowError>(())
+/// ```
+pub trait JsonToVariant {
+    /// Create a Variant from a JSON string
+    fn from_json(&mut self, json: &str) -> Result<(), ArrowError>;
+}
+
+impl<T: VariantBuilderExt> JsonToVariant for T {
+    fn from_json(&mut self, json: &str) -> Result<(), ArrowError> {
+        json_to_variant(json, self)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

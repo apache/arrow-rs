@@ -383,6 +383,46 @@ pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
     }
 }
 
+/// Extension trait for converting Variants to JSON
+///
+/// This trait provides a convenient method for Variant to convert to JSON.
+///
+/// # Example
+/// ```rust
+/// use parquet_variant::Variant;
+/// use parquet_variant_json::VariantToJson;
+///
+/// let variant = Variant::Int32(42);
+/// let mut buffer = Vec::new();
+/// variant.to_json(&mut buffer)?;
+/// assert_eq!(String::from_utf8(buffer)?, "42");
+/// # Ok::<(), arrow_schema::ArrowError>(())
+/// ```
+pub trait VariantToJson {
+    /// Write this variant as JSON to a writer
+    fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError>;
+
+    /// Convert this variant to a JSON string
+    fn to_json_string(&self) -> Result<String, ArrowError>;
+
+    /// Convert this variant to a serde_json::Value
+    fn to_json_value(&self) -> Result<Value, ArrowError>;
+}
+
+impl<'m, 'v> VariantToJson for Variant<'m, 'v> {
+    fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError> {
+        variant_to_json(buffer, self)
+    }
+
+    fn to_json_string(&self) -> Result<String, ArrowError> {
+        variant_to_json_string(self)
+    }
+
+    fn to_json_value(&self) -> Result<Value, ArrowError> {
+        variant_to_json_value(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
