@@ -279,11 +279,15 @@ impl BatchCoalescer {
         // as a separate optimization (TODO).
         // Short-path optimization for large batches
         let batch_size = batch.num_rows();
+        if batch_size == 0 {
+            // If the batch is empty, we can skip processing it
+            return Ok(());
+        }
         if let Some(limit) = self.biggest_coalesce_batch_size {
             if batch_size > limit {
                 // Case 1: No buffered data - always bypass
                 if self.buffered_rows == 0 {
-                    self.flush_buffer_and_push_batch_to_completed(batch)?;
+                    self.push_batch_to_completed(batch)?;
                     self.last_batch_was_large = true;
                     return Ok(());
                 }
@@ -291,7 +295,6 @@ impl BatchCoalescer {
                 // Case 2: Consecutive large batch - bypass if last batch was also large
                 if self.last_batch_was_large {
                     // Flush any remaining buffer first, then bypass the large batch
-                    self.finish_buffered_batch()?;
                     self.flush_buffer_and_push_batch_to_completed(batch)?;
                     self.last_batch_was_large = true;
                     return Ok(());
@@ -300,9 +303,6 @@ impl BatchCoalescer {
         }
 
         let (_schema, arrays, mut num_rows) = batch.into_parts();
-        if num_rows == 0 {
-            return Ok(());
-        }
 
         // setup input rows
         assert_eq!(arrays.len(), self.in_progress_arrays.len());
@@ -350,9 +350,10 @@ impl BatchCoalescer {
             in_progress.set_source(None);
         }
 
-        // Update the large batch tracking
+        // Update the large batch tracking, if buffered_rows exceeds the limit,
+        // we mark it as a large batch.
         if let Some(limit) = self.biggest_coalesce_batch_size {
-            self.last_batch_was_large = batch_size > limit;
+            self.last_batch_was_large = self.buffered_rows > limit;
         } else {
             self.last_batch_was_large = false;
         }
@@ -365,17 +366,22 @@ impl BatchCoalescer {
         self.buffered_rows
     }
 
-    /// Push a batch directly to the completed batches
+    /// Flush buffer and push a batch directly to the completed batches
     fn flush_buffer_and_push_batch_to_completed(
         &mut self,
         batch: RecordBatch,
     ) -> Result<(), ArrowError> {
         // This is a convenience method to push a batch directly to the completed
         // batches without buffering it.
-        if batch.num_rows() > 0 {
-            self.finish_buffered_batch()?;
-            self.completed.push_back(batch);
-        }
+        self.finish_buffered_batch()?;
+        self.completed.push_back(batch);
+        Ok(())
+    }
+
+    /// Push a batch directly to the completed batches
+    fn push_batch_to_completed(&mut self, batch: RecordBatch) -> Result<(), ArrowError> {
+        // This is a convenience method to push a batch directly to the completed
+        self.completed.push_back(batch);
         Ok(())
     }
 
