@@ -1109,7 +1109,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # use parquet_variant::{Variant, VariantBuilder, VariantObject, VariantPath};
     /// # let mut builder = VariantBuilder::new();
     /// # let mut obj = builder.new_object();
-    /// # let mut list = obj.new_list("foo");
+    /// # let mut list = obj.new_list("foo").unwrap();
     /// # list.append_value("bar");
     /// # list.append_value("baz");
     /// # list.finish();
@@ -1498,13 +1498,13 @@ mod tests {
         root_obj.insert("time", time);
 
         // Add nested object
-        let mut nested_obj = root_obj.new_object("nested_object");
+        let mut nested_obj = root_obj.new_object("nested_object").unwrap();
         nested_obj.insert("inner_key1", "inner_value1");
         nested_obj.insert("inner_key2", 999i32);
         nested_obj.finish().unwrap();
 
         // Add list with mixed types
-        let mut mixed_list = root_obj.new_list("mixed_list");
+        let mut mixed_list = root_obj.new_list("mixed_list").unwrap();
         mixed_list.append_value(1i32);
         mixed_list.append_value("two");
         mixed_list.append_value(true);

@@ -107,7 +107,7 @@ fn bench_object_same_schema(c: &mut Criterion) {
                 object_builder.insert("likes_cilantro", rng.random_bool(0.5));
                 object_builder.insert("comments", string_table.next());
 
-                let mut inner_list_builder = object_builder.new_list("dishes");
+                let mut inner_list_builder = object_builder.new_list("dishes").unwrap();
                 inner_list_builder.append_value(string_table.next());
                 inner_list_builder.append_value(string_table.next());
                 inner_list_builder.append_value(string_table.next());
@@ -148,7 +148,7 @@ fn bench_object_list_same_schema(c: &mut Criterion) {
                 object_builder.insert("likes_cilantro", rng.random_bool(0.5));
                 object_builder.insert("comments", string_table.next());
 
-                let mut list_builder = object_builder.new_list("dishes");
+                let mut list_builder = object_builder.new_list("dishes").unwrap();
                 list_builder.append_value(string_table.next());
                 list_builder.append_value(string_table.next());
                 list_builder.append_value(string_table.next());
@@ -183,7 +183,8 @@ fn bench_object_unknown_schema(c: &mut Criterion) {
                     }
 
                     if rng.random_bool(0.5) {
-                        let mut inner_object_builder = object_builder.new_object("rand_object");
+                        let mut inner_object_builder =
+                            object_builder.new_object("rand_object").unwrap();
 
                         for _num_fields in 0..random::<u8>(&mut rng, 0..25) {
                             let key = string_table.next();
@@ -194,7 +195,7 @@ fn bench_object_unknown_schema(c: &mut Criterion) {
                         continue;
                     }
 
-                    let mut inner_list_builder = object_builder.new_list("rand_list");
+                    let mut inner_list_builder = object_builder.new_list("rand_list").unwrap();
 
                     for _num_elements in 0..random::<u8>(&mut rng, 0..25) {
                         inner_list_builder.append_value(string_table.next());
@@ -235,7 +236,8 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
                     }
 
                     if rng.random_bool(0.5) {
-                        let mut inner_object_builder = object_builder.new_object("rand_object");
+                        let mut inner_object_builder =
+                            object_builder.new_object("rand_object").unwrap();
 
                         for _num_fields in 0..random::<u8>(&mut rng, 0..25) {
                             let key = string_table.next();
@@ -246,7 +248,7 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
                         continue;
                     }
 
-                    let mut inner_list_builder = object_builder.new_list("rand_list");
+                    let mut inner_list_builder = object_builder.new_list("rand_list").unwrap();
 
                     for _num_elements in 0..random::<u8>(&mut rng, 0..25) {
                         inner_list_builder.append_value(key);
@@ -308,7 +310,7 @@ fn bench_object_partially_same_schema(c: &mut Criterion) {
                 object_builder.insert("span_name", string_table.next());
 
                 {
-                    let mut inner_object_builder = object_builder.new_object("attributes");
+                    let mut inner_object_builder = object_builder.new_object("attributes").unwrap();
 
                     for _num_fields in 0..random::<u8>(&mut rng, 0..100) {
                         let key = string_table.next();
@@ -370,7 +372,7 @@ fn bench_object_list_partially_same_schema(c: &mut Criterion) {
                 object_builder.insert("span_name", string_table.next());
 
                 {
-                    let mut inner_object_builder = object_builder.new_object("attributes");
+                    let mut inner_object_builder = object_builder.new_object("attributes").unwrap();
 
                     for _num_fields in 0..random::<u8>(&mut rng, 0..100) {
                         let key = string_table.next();
@@ -402,7 +404,7 @@ fn bench_validation_validated_vs_unvalidated(c: &mut Criterion) {
         obj.insert("field2", rng.random::<i32>());
         obj.insert("field3", rng.random::<bool>());
 
-        let mut list = obj.new_list("field4");
+        let mut list = obj.new_list("field4").unwrap();
         for _ in 0..10 {
             list.append_value(rng.random::<i32>());
         }

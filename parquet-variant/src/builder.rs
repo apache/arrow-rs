@@ -292,19 +292,13 @@ impl ValueBuffer {
         &'a mut self,
         metadata_builder: &'a mut MetadataBuilder,
     ) -> ObjectBuilder<'a> {
-        let parent_state = ParentState::Variant {
-            buffer: self,
-            metadata_builder,
-        };
+        let parent_state = ParentState::variant(self, metadata_builder);
         let validate_unique_fields = false;
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
 
     fn new_list<'a>(&'a mut self, metadata_builder: &'a mut MetadataBuilder) -> ListBuilder<'a> {
-        let parent_state = ParentState::Variant {
-            buffer: self,
-            metadata_builder,
-        };
+        let parent_state = ParentState::variant(self, metadata_builder);
         let validate_unique_fields = false;
         ListBuilder::new(parent_state, validate_unique_fields)
     }
@@ -588,72 +582,190 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// parent, and we cannot "split" a mutable reference across two objects (parent state and the child
 /// builder that uses it). So everything has to be here. Rust layout optimizations should treat the
 /// variants as a union, so that accessing a `buffer` or `metadata_builder` is branch-free.
+#[derive(Debug)]
 enum ParentState<'a> {
     Variant {
         buffer: &'a mut ValueBuffer,
+        saved_buffer_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
+        saved_metadata_builder_dict_size: usize,
+        finished: bool,
     },
     List {
         buffer: &'a mut ValueBuffer,
+        saved_buffer_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
-        parent_value_offset_base: usize,
+        saved_metadata_builder_dict_size: usize,
         offsets: &'a mut Vec<usize>,
+        saved_offsets_size: usize,
+        finished: bool,
     },
     Object {
         buffer: &'a mut ValueBuffer,
+        saved_buffer_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
+        saved_metadata_builder_dict_size: usize,
         fields: &'a mut IndexMap<u32, usize>,
-        field_name: &'a str,
-        parent_value_offset_base: usize,
+        saved_fields_size: usize,
+        finished: bool,
     },
 }
 
-impl ParentState<'_> {
-    fn buffer(&mut self) -> &mut ValueBuffer {
-        match self {
-            ParentState::Variant { buffer, .. } => buffer,
-            ParentState::List { buffer, .. } => buffer,
-            ParentState::Object { buffer, .. } => buffer,
+impl<'a> ParentState<'a> {
+    fn variant(buffer: &'a mut ValueBuffer, metadata_builder: &'a mut MetadataBuilder) -> Self {
+        ParentState::Variant {
+            saved_buffer_offset: buffer.offset(),
+            saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
+            buffer,
+            metadata_builder,
+            finished: false,
         }
+    }
+
+    fn list(
+        buffer: &'a mut ValueBuffer,
+        metadata_builder: &'a mut MetadataBuilder,
+        offsets: &'a mut Vec<usize>,
+        saved_parent_buffer_offset: usize,
+    ) -> Self {
+        // The saved_parent_buffer_offset is the buffer size as of when the parent builder was
+        // constructed. The saved_buffer_offset is the buffer size as of now (when a child builder
+        // is created). The variant field_offset entry for this list element is their difference.
+        let saved_buffer_offset = buffer.offset();
+        let saved_offsets_size = offsets.len();
+        offsets.push(saved_buffer_offset - saved_parent_buffer_offset);
+
+        ParentState::List {
+            saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
+            saved_buffer_offset,
+            saved_offsets_size,
+            metadata_builder,
+            buffer,
+            offsets,
+            finished: false,
+        }
+    }
+
+    fn object(
+        buffer: &'a mut ValueBuffer,
+        metadata_builder: &'a mut MetadataBuilder,
+        fields: &'a mut IndexMap<u32, usize>,
+        saved_parent_buffer_offset: usize,
+        field_name: &str,
+        validate_unique_fields: bool,
+    ) -> Result<Self, ArrowError> {
+        // The saved_parent_buffer_offset is the buffer size as of when the parent builder was
+        // constructed. The saved_buffer_offset is the buffer size as of now (when a child builder
+        // is created). The variant field_offset entry for this field is their difference.
+        let saved_buffer_offset = buffer.offset();
+        let saved_fields_size = fields.len();
+        let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
+        let field_id = metadata_builder.upsert_field_name(field_name);
+        let field_start = saved_buffer_offset - saved_parent_buffer_offset;
+        if fields.insert(field_id, field_start).is_some() && validate_unique_fields {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Duplicate field: {field_name}"
+            )));
+        }
+
+        Ok(ParentState::Object {
+            saved_metadata_builder_dict_size,
+            saved_buffer_offset,
+            saved_fields_size,
+            buffer,
+            metadata_builder,
+            fields,
+            finished: false,
+        })
+    }
+
+    fn buffer(&mut self) -> &mut ValueBuffer {
+        self.buffer_and_metadata_builder().0
     }
 
     fn metadata_builder(&mut self) -> &mut MetadataBuilder {
+        self.buffer_and_metadata_builder().1
+    }
+
+    fn saved_buffer_offset(&mut self) -> usize {
         match self {
             ParentState::Variant {
-                metadata_builder, ..
-            } => metadata_builder,
-            ParentState::List {
-                metadata_builder, ..
-            } => metadata_builder,
-            ParentState::Object {
-                metadata_builder, ..
-            } => metadata_builder,
+                saved_buffer_offset,
+                ..
+            }
+            | ParentState::List {
+                saved_buffer_offset,
+                ..
+            }
+            | ParentState::Object {
+                saved_buffer_offset,
+                ..
+            } => *saved_buffer_offset,
         }
     }
 
-    // Performs any parent-specific aspects of finishing, after the child has appended all necessary
-    // bytes to the parent's value buffer. ListBuilder records the new value's starting offset;
-    // ObjectBuilder associates the new value's starting offset with its field id; VariantBuilder
-    // doesn't need anything special.
-    fn finish(&mut self, starting_offset: usize) {
+    fn finished(&mut self) -> &mut bool {
+        match self {
+            ParentState::Variant { finished, .. }
+            | ParentState::List { finished, .. }
+            | ParentState::Object { finished, .. } => finished,
+        }
+    }
+
+    // Mark the insertion as having succeeded.
+    fn finish(&mut self) {
+        *self.finished() = true
+    }
+
+    // Performs any parent-specific aspects of rolling back a builder if an insertion failed.
+    fn rollback(&mut self) {
+        if *self.finished() {
+            return;
+        }
+
+        // All builders need to revert the buffers
+        match self {
+            ParentState::Variant {
+                buffer,
+                saved_buffer_offset,
+                metadata_builder,
+                saved_metadata_builder_dict_size,
+                ..
+            }
+            | ParentState::List {
+                buffer,
+                saved_buffer_offset,
+                metadata_builder,
+                saved_metadata_builder_dict_size,
+                ..
+            }
+            | ParentState::Object {
+                buffer,
+                saved_buffer_offset,
+                metadata_builder,
+                saved_metadata_builder_dict_size,
+                ..
+            } => {
+                buffer.inner_mut().truncate(*saved_buffer_offset);
+                metadata_builder
+                    .field_names
+                    .truncate(*saved_metadata_builder_dict_size);
+            }
+        };
+
+        // List and Object builders need to roll back the starting offset they stored
         match self {
             ParentState::Variant { .. } => (),
             ParentState::List {
                 offsets,
-                parent_value_offset_base,
+                saved_offsets_size,
                 ..
-            } => offsets.push(starting_offset - *parent_value_offset_base),
+            } => offsets.truncate(*saved_offsets_size),
             ParentState::Object {
-                metadata_builder,
                 fields,
-                field_name,
-                parent_value_offset_base,
+                saved_fields_size,
                 ..
-            } => {
-                let field_id = metadata_builder.upsert_field_name(field_name);
-                let shifted_start_offset = starting_offset - *parent_value_offset_base;
-                fields.insert(field_id, shifted_start_offset);
-            }
+            } => fields.truncate(*saved_fields_size),
         }
     }
 
@@ -664,6 +776,7 @@ impl ParentState<'_> {
             ParentState::Variant {
                 buffer,
                 metadata_builder,
+                ..
             }
             | ParentState::List {
                 buffer,
@@ -677,30 +790,12 @@ impl ParentState<'_> {
             } => (buffer, metadata_builder),
         }
     }
+}
 
-    // Return the current offset of the underlying buffer. Used as a savepoint for rollback.
-    fn buffer_current_offset(&self) -> usize {
-        match self {
-            ParentState::Variant { buffer, .. }
-            | ParentState::Object { buffer, .. }
-            | ParentState::List { buffer, .. } => buffer.offset(),
-        }
-    }
-
-    // Return the current dictionary size of the undelying metadata builder. Used as a savepoint for
-    // rollback.
-    fn metadata_num_fields(&self) -> usize {
-        match self {
-            ParentState::Variant {
-                metadata_builder, ..
-            }
-            | ParentState::Object {
-                metadata_builder, ..
-            }
-            | ParentState::List {
-                metadata_builder, ..
-            } => metadata_builder.field_names.len(),
-        }
+/// Automatically rolls back any unfinished `ParentState`.
+impl Drop for ParentState<'_> {
+    fn drop(&mut self) {
+        self.rollback()
     }
 }
 
@@ -929,11 +1024,9 @@ impl ParentState<'_> {
 /// let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
 /// let mut obj = builder.new_object();
 ///
+/// // When validation is enabled, inserting a duplicate field will return an error
 /// obj.insert("a", 1);
-/// obj.insert("a", 2); // duplicate field
-///
-/// // When validation is enabled, finish will return an error
-/// let result = obj.finish(); // returns Err
+/// let result = obj.try_insert("a", 2);
 /// assert!(result.is_err());
 /// ```
 ///
@@ -1067,29 +1160,20 @@ impl VariantBuilder {
         self.metadata_builder.upsert_field_name(field_name);
     }
 
-    // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state(&mut self) -> (ParentState<'_>, bool) {
-        let state = ParentState::Variant {
-            buffer: &mut self.buffer,
-            metadata_builder: &mut self.metadata_builder,
-        };
-        (state, self.validate_unique_fields)
-    }
-
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_list(&mut self) -> ListBuilder<'_> {
-        let (parent_state, validate_unique_fields) = self.parent_state();
-        ListBuilder::new(parent_state, validate_unique_fields)
+        let state = ParentState::variant(&mut self.buffer, &mut self.metadata_builder);
+        ListBuilder::new(state, self.validate_unique_fields)
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_object(&mut self) -> ObjectBuilder<'_> {
-        let (parent_state, validate_unique_fields) = self.parent_state();
-        ObjectBuilder::new(parent_state, validate_unique_fields)
+        let state = ParentState::variant(&mut self.buffer, &mut self.metadata_builder);
+        ObjectBuilder::new(state, self.validate_unique_fields)
     }
 
     /// Append a value to the builder.
@@ -1148,27 +1232,14 @@ impl VariantBuilder {
 pub struct ListBuilder<'a> {
     parent_state: ParentState<'a>,
     offsets: Vec<usize>,
-    /// The starting offset in the parent's buffer where this list starts
-    parent_value_offset_base: usize,
-    /// The starting offset in the parent's metadata buffer where this list starts
-    /// used to truncate the written fields in `drop` if the current list has not been finished
-    parent_metadata_offset_base: usize,
-    /// Whether the list has been finished, the written content of the current list
-    /// will be truncated in `drop` if `has_been_finished` is false
-    has_been_finished: bool,
     validate_unique_fields: bool,
 }
 
 impl<'a> ListBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
-        let parent_value_offset_base = parent_state.buffer_current_offset();
-        let parent_metadata_offset_base = parent_state.metadata_num_fields();
         Self {
             parent_state,
             offsets: vec![],
-            parent_value_offset_base,
-            has_been_finished: false,
-            parent_metadata_offset_base,
             validate_unique_fields,
         }
     }
@@ -1184,14 +1255,14 @@ impl<'a> ListBuilder<'a> {
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
     fn parent_state(&mut self) -> (ParentState<'_>, bool) {
+        let saved_parent_buffer_offset = self.parent_state.saved_buffer_offset();
         let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
-
-        let state = ParentState::List {
+        let state = ParentState::list(
             buffer,
             metadata_builder,
-            parent_value_offset_base: self.parent_value_offset_base,
-            offsets: &mut self.offsets,
-        };
+            &mut self.offsets,
+            saved_parent_buffer_offset,
+        );
         (state, self.validate_unique_fields)
     }
 
@@ -1226,13 +1297,10 @@ impl<'a> ListBuilder<'a> {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
-
-        let offset = buffer.offset() - self.parent_value_offset_base;
-        self.offsets.push(offset);
-
+        let (mut state, _) = self.parent_state();
+        let (buffer, metadata_builder) = state.buffer_and_metadata_builder();
         buffer.try_append_variant(value.into(), metadata_builder)?;
-
+        state.finish();
         Ok(())
     }
 
@@ -1260,18 +1328,17 @@ impl<'a> ListBuilder<'a> {
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) {
+        let starting_offset = self.parent_state.saved_buffer_offset();
         let buffer = self.parent_state.buffer();
 
         let data_size = buffer
             .offset()
-            .checked_sub(self.parent_value_offset_base)
+            .checked_sub(starting_offset)
             .expect("Data size overflowed usize");
 
         let num_elements = self.offsets.len();
         let is_large = num_elements > u8::MAX as usize;
         let offset_size = int_size(data_size);
-
-        let starting_offset = self.parent_value_offset_base;
 
         let num_elements_size = if is_large { 4 } else { 1 }; // is_large: 4 bytes, else 1 byte.
         let num_elements = self.offsets.len();
@@ -1298,57 +1365,25 @@ impl<'a> ListBuilder<'a> {
             .inner_mut()
             .splice(starting_offset..starting_offset, bytes_to_splice);
 
-        self.parent_state.finish(starting_offset);
-        self.has_been_finished = true;
-    }
-}
-
-/// Drop implementation for ListBuilder does nothing
-/// as the `finish` method must be called to finalize the list.
-/// This is to ensure that the list is always finalized before its parent builder
-/// is finalized.
-impl Drop for ListBuilder<'_> {
-    fn drop(&mut self) {
-        if !self.has_been_finished {
-            self.parent_state
-                .buffer()
-                .inner_mut()
-                .truncate(self.parent_value_offset_base);
-            self.parent_state
-                .metadata_builder()
-                .field_names
-                .truncate(self.parent_metadata_offset_base);
-        }
+        self.parent_state.finish();
     }
 }
 
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
+#[derive(Debug)]
 pub struct ObjectBuilder<'a> {
     parent_state: ParentState<'a>,
     fields: IndexMap<u32, usize>, // (field_id, offset)
-    /// The starting offset in the parent's buffer where this object starts
-    parent_value_offset_base: usize,
-    /// The starting offset in the parent's metadata buffer where this object starts
-    /// used to truncate the written fields in `drop` if the current object has not been finished
-    parent_metadata_offset_base: usize,
-    /// Whether the object has been finished, the written content of the current object
-    /// will be truncated in `drop` if `has_been_finished` is false
-    has_been_finished: bool,
     validate_unique_fields: bool,
 }
 
 impl<'a> ObjectBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
-        let offset_base = parent_state.buffer_current_offset();
-        let meta_offset_base = parent_state.metadata_num_fields();
         Self {
             parent_state,
             fields: IndexMap::new(),
-            parent_value_offset_base: offset_base,
-            has_been_finished: false,
-            parent_metadata_offset_base: meta_offset_base,
             validate_unique_fields,
         }
     }
@@ -1381,16 +1416,10 @@ impl<'a> ObjectBuilder<'a> {
         key: &str,
         value: T,
     ) -> Result<(), ArrowError> {
-        let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
-
-        let field_id = metadata_builder.upsert_field_name(key);
-        let field_start = buffer.offset() - self.parent_value_offset_base;
-
-        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
-            return Err(ArrowError::InvalidArgumentError(format!("Duplicate field: {key}")));
-        }
-
+        let (mut state, _) = self.parent_state(key)?;
+        let (buffer, metadata_builder) = state.buffer_and_metadata_builder();
         buffer.try_append_variant(value.into(), metadata_builder)?;
+        state.finish();
         Ok(())
     }
 
@@ -1424,35 +1453,38 @@ impl<'a> ObjectBuilder<'a> {
     }
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state<'b>(&'b mut self, key: &'b str) -> (ParentState<'b>, bool) {
+    fn parent_state<'b>(
+        &'b mut self,
+        field_name: &'b str,
+    ) -> Result<(ParentState<'b>, bool), ArrowError> {
+        let saved_parent_buffer_offset = self.parent_state.saved_buffer_offset();
         let validate_unique_fields = self.validate_unique_fields;
-
         let (buffer, metadata_builder) = self.parent_state.buffer_and_metadata_builder();
-
-        let state = ParentState::Object {
+        let state = ParentState::object(
             buffer,
             metadata_builder,
-            fields: &mut self.fields,
-            field_name: key,
-            parent_value_offset_base: self.parent_value_offset_base,
-        };
-        (state, validate_unique_fields)
+            &mut self.fields,
+            saved_parent_buffer_offset,
+            field_name,
+            validate_unique_fields,
+        )?;
+        Ok((state, validate_unique_fields))
     }
 
     /// Returns an object builder that can be used to append a new (nested) object to this object.
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
-    pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b> {
-        let (parent_state, validate_unique_fields) = self.parent_state(key);
-        ObjectBuilder::new(parent_state, validate_unique_fields)
+    pub fn new_object<'b>(&'b mut self, key: &'b str) -> Result<ObjectBuilder<'b>, ArrowError> {
+        let (parent_state, validate_unique_fields) = self.parent_state(key)?;
+        Ok(ObjectBuilder::new(parent_state, validate_unique_fields))
     }
 
     /// Returns a list builder that can be used to append a new (nested) list to this object.
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
-    pub fn new_list<'b>(&'b mut self, key: &'b str) -> ListBuilder<'b> {
-        let (parent_state, validate_unique_fields) = self.parent_state(key);
-        ListBuilder::new(parent_state, validate_unique_fields)
+    pub fn new_list<'b>(&'b mut self, key: &'b str) -> Result<ListBuilder<'b>, ArrowError> {
+        let (parent_state, validate_unique_fields) = self.parent_state(key)?;
+        Ok(ListBuilder::new(parent_state, validate_unique_fields))
     }
 
     /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
@@ -1468,10 +1500,11 @@ impl<'a> ObjectBuilder<'a> {
         let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
         let id_size = int_size(max_id as usize);
 
-        let parent_buffer = self.parent_state.buffer();
-        let current_offset = parent_buffer.offset();
+        let starting_offset = self.parent_state.saved_buffer_offset();
+        let buffer = self.parent_state.buffer();
+        let current_offset = buffer.offset();
         // Current object starts from `object_start_offset`
-        let data_size = current_offset - self.parent_value_offset_base;
+        let data_size = current_offset - starting_offset;
         let offset_size = int_size(data_size);
 
         let num_fields = self.fields.len();
@@ -1482,11 +1515,8 @@ impl<'a> ObjectBuilder<'a> {
             (num_fields * id_size as usize) + // field IDs
             ((num_fields + 1) * offset_size as usize); // field offsets + data_size
 
-        let starting_offset = self.parent_value_offset_base;
-
         // Shift existing data to make room for the header
-        let buffer = parent_buffer.inner_mut();
-        buffer.splice(
+        buffer.inner_mut().splice(
             starting_offset..starting_offset,
             std::iter::repeat_n(0u8, header_size),
         );
@@ -1497,56 +1527,25 @@ impl<'a> ObjectBuilder<'a> {
         // Write header byte
         let header = object_header(is_large, id_size, offset_size);
 
-        header_pos = self
-            .parent_state
-            .buffer()
-            .append_header_start_from_buf_pos(header_pos, header, is_large, num_fields);
+        header_pos =
+            buffer.append_header_start_from_buf_pos(header_pos, header, is_large, num_fields);
 
-        header_pos = self
-            .parent_state
-            .buffer()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.keys().copied().map(|id| id as usize),
-                None,
-                id_size,
-            );
+        header_pos = buffer.append_offset_array_start_from_buf_pos(
+            header_pos,
+            self.fields.keys().copied().map(|id| id as usize),
+            None,
+            id_size,
+        );
 
-        self.parent_state
-            .buffer()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.values().copied(),
-                Some(data_size),
-                offset_size,
-            );
-        self.parent_state.finish(starting_offset);
+        buffer.append_offset_array_start_from_buf_pos(
+            header_pos,
+            self.fields.values().copied(),
+            Some(data_size),
+            offset_size,
+        );
 
-        // Mark that this object has been finished
-        self.has_been_finished = true;
-
+        self.parent_state.finish();
         Ok(())
-    }
-}
-
-/// Drop implementation for ObjectBuilder does nothing
-/// as the `finish` method must be called to finalize the object.
-/// This is to ensure that the object is always finalized before its parent builder
-/// is finalized.
-impl Drop for ObjectBuilder<'_> {
-    fn drop(&mut self) {
-        // Truncate the buffer if the `finish` method has not been called.
-        if !self.has_been_finished {
-            self.parent_state
-                .buffer()
-                .inner_mut()
-                .truncate(self.parent_value_offset_base);
-
-            self.parent_state
-                .metadata_builder()
-                .field_names
-                .truncate(self.parent_metadata_offset_base);
-        }
     }
 }
 
@@ -1557,9 +1556,9 @@ impl Drop for ObjectBuilder<'_> {
 pub trait VariantBuilderExt {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
-    fn new_list(&mut self) -> ListBuilder<'_>;
+    fn new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
 
-    fn new_object(&mut self) -> ObjectBuilder<'_>;
+    fn new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
 }
 
 impl VariantBuilderExt for ListBuilder<'_> {
@@ -1567,12 +1566,12 @@ impl VariantBuilderExt for ListBuilder<'_> {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.new_list()
+    fn new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        Ok(self.new_list())
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.new_object()
+    fn new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        Ok(self.new_object())
     }
 }
 
@@ -1581,12 +1580,12 @@ impl VariantBuilderExt for VariantBuilder {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.new_list()
+    fn new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        Ok(self.new_list())
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.new_object()
+    fn new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        Ok(self.new_object())
     }
 }
 
@@ -2056,7 +2055,7 @@ mod tests {
         {
             let mut outer_object_builder = builder.new_object();
             {
-                let mut inner_object_builder = outer_object_builder.new_object("c");
+                let mut inner_object_builder = outer_object_builder.new_object("c").unwrap();
                 inner_object_builder.insert("b", "a");
                 let _ = inner_object_builder.finish();
             }
@@ -2096,7 +2095,7 @@ mod tests {
         {
             let mut outer_object_builder = builder.new_object();
             {
-                let mut inner_object_builder = outer_object_builder.new_object("c");
+                let mut inner_object_builder = outer_object_builder.new_object("c").unwrap();
                 inner_object_builder.insert("b", false);
                 inner_object_builder.insert("c", "a");
 
@@ -2139,11 +2138,12 @@ mod tests {
         {
             let mut outer_object_builder = builder.new_object();
             {
-                let mut inner_object_builder = outer_object_builder.new_object("door 1");
+                let mut inner_object_builder = outer_object_builder.new_object("door 1").unwrap();
 
                 // create inner_object_list
                 inner_object_builder
                     .new_list("items")
+                    .unwrap()
                     .with_value("apple")
                     .with_value(false)
                     .finish();
@@ -2205,17 +2205,19 @@ mod tests {
             outer_object_builder.insert("a", false);
 
             {
-                let mut inner_object_builder = outer_object_builder.new_object("c");
+                let mut inner_object_builder = outer_object_builder.new_object("c").unwrap();
                 inner_object_builder.insert("b", "a");
 
                 {
-                    let mut inner_inner_object_builder = inner_object_builder.new_object("c");
+                    let mut inner_inner_object_builder =
+                        inner_object_builder.new_object("c").unwrap();
                     inner_inner_object_builder.insert("aa", "bb");
                     let _ = inner_inner_object_builder.finish();
                 }
 
                 {
-                    let mut inner_inner_object_builder = inner_object_builder.new_object("d");
+                    let mut inner_inner_object_builder =
+                        inner_object_builder.new_object("d").unwrap();
                     inner_inner_object_builder.insert("cc", "dd");
                     let _ = inner_inner_object_builder.finish();
                 }
@@ -2225,10 +2227,10 @@ mod tests {
             outer_object_builder.insert("b", true);
 
             {
-                let mut inner_object_builder = outer_object_builder.new_object("d");
+                let mut inner_object_builder = outer_object_builder.new_object("d").unwrap();
                 inner_object_builder.insert("e", 1);
                 {
-                    let mut inner_list_builder = inner_object_builder.new_list("f");
+                    let mut inner_list_builder = inner_object_builder.new_list("f").unwrap();
                     inner_list_builder.append_value(1);
                     inner_list_builder.append_value(true);
 
@@ -2236,7 +2238,7 @@ mod tests {
                 }
 
                 {
-                    let mut inner_list_builder = inner_object_builder.new_list("g");
+                    let mut inner_list_builder = inner_object_builder.new_list("g").unwrap();
                     inner_list_builder.append_value("tree");
                     inner_list_builder.append_value(false);
 
@@ -2457,29 +2459,26 @@ mod tests {
         let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
 
         // Root-level object with duplicates
-        let mut root_obj = builder.new_object();
-        root_obj.insert("a", 1);
-        root_obj.insert("b", 2);
-        root_obj.insert("a", 3);
-        root_obj.insert("b", 4);
-
-        let result = root_obj.finish();
+        let result = builder
+            .new_object()
+            .with_field("a", 1)
+            .with_field("b", 2)
+            .try_with_field("a", 3);
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Invalid argument error: Duplicate field keys detected: [a, b]"
+            "Invalid argument error: Duplicate field: a"
         );
 
         // Deeply nested list -> list -> object with duplicate
         let mut outer_list = builder.new_list();
         let mut inner_list = outer_list.new_list();
-        let mut nested_obj = inner_list.new_object();
-        nested_obj.insert("x", 1);
-        nested_obj.insert("x", 2);
-
-        let nested_result = nested_obj.finish();
+        let nested_result = inner_list
+            .new_object()
+            .with_field("x", 1)
+            .try_with_field("x", 2);
         assert_eq!(
             nested_result.unwrap_err().to_string(),
-            "Invalid argument error: Duplicate field keys detected: [x]"
+            "Invalid argument error: Duplicate field: x"
         );
 
         inner_list.finish();
@@ -2934,7 +2933,7 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested list builder but never finish it
-        let mut nested_list_builder = object_builder.new_list("nested");
+        let mut nested_list_builder = object_builder.new_list("nested").unwrap();
         nested_list_builder.append_value("hi");
         drop(nested_list_builder);
 
@@ -2963,7 +2962,7 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested list builder and finish it
-        let mut nested_list_builder = object_builder.new_list("nested");
+        let mut nested_list_builder = object_builder.new_list("nested").unwrap();
         nested_list_builder.append_value("hi");
         nested_list_builder.finish();
 
@@ -2988,7 +2987,7 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested object builder but never finish it
-        let mut nested_object_builder = object_builder.new_object("nested");
+        let mut nested_object_builder = object_builder.new_object("nested").unwrap();
         nested_object_builder.insert("name", "unknown");
         drop(nested_object_builder);
 
@@ -3017,7 +3016,7 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested object builder and finish it
-        let mut nested_object_builder = object_builder.new_object("nested");
+        let mut nested_object_builder = object_builder.new_object("nested").unwrap();
         nested_object_builder.insert("name", "unknown");
         nested_object_builder.finish().unwrap();
 
@@ -3084,7 +3083,7 @@ mod tests {
             let mut outer_obj = builder.new_object();
 
             {
-                let mut inner_obj = outer_obj.new_object("b");
+                let mut inner_obj = outer_obj.new_object("b").unwrap();
                 inner_obj.insert("a", "inner_value");
                 inner_obj.finish().unwrap();
             }
@@ -3158,7 +3157,7 @@ mod tests {
                 let mut object = list.new_object();
                 for i in take(4) {
                     let field_name = format!("field{i}");
-                    let mut list = object.new_list(&field_name);
+                    let mut list = object.new_list(&field_name).unwrap();
                     for i in take(3) {
                         let mut object = list.new_object();
                         for i in take(3) {
