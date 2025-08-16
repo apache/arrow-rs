@@ -243,21 +243,15 @@ impl ValueBuffer {
         object_builder.finish().unwrap();
     }
 
-    fn try_append_object(
-        &mut self,
-        metadata_builder: &mut MetadataBuilder,
-        obj: VariantObject,
-    ) -> Result<(), ArrowError> {
-        let mut object_builder = self.new_object(metadata_builder);
+    fn try_append_object(state: ParentState<'_>, obj: VariantObject) -> Result<(), ArrowError> {
+        let mut object_builder = ObjectBuilder::new(state, false);
 
         for res in obj.iter_try() {
             let (field_name, value) = res?;
             object_builder.try_insert(field_name, value)?;
         }
 
-        object_builder.finish()?;
-
-        Ok(())
+        object_builder.finish()
     }
 
     fn append_list(&mut self, metadata_builder: &mut MetadataBuilder, list: VariantList) {
@@ -268,12 +262,8 @@ impl ValueBuffer {
         list_builder.finish();
     }
 
-    fn try_append_list(
-        &mut self,
-        metadata_builder: &mut MetadataBuilder,
-        list: VariantList,
-    ) -> Result<(), ArrowError> {
-        let mut list_builder = self.new_list(metadata_builder);
+    fn try_append_list(state: ParentState<'_>, list: VariantList) -> Result<(), ArrowError> {
+        let mut list_builder = ListBuilder::new(state, false);
         for res in list.iter_try() {
             let value = res?;
             list_builder.try_append_value(value)?;
@@ -340,35 +330,46 @@ impl ValueBuffer {
     }
 
     /// Appends a variant to the buffer
+    #[allow(unused)]
     fn try_append_variant<'m, 'd>(
         &mut self,
         variant: Variant<'m, 'd>,
         metadata_builder: &mut MetadataBuilder,
     ) -> Result<(), ArrowError> {
+        let state = ParentState::variant(self, metadata_builder);
+        Self::try_append_variant_impl(state, variant)
+    }
+
+    fn try_append_variant_impl(
+        mut state: ParentState<'_>,
+        variant: Variant<'_, '_>,
+    ) -> Result<(), ArrowError> {
+        let buffer = state.buffer();
         match variant {
-            Variant::Null => self.append_null(),
-            Variant::BooleanTrue => self.append_bool(true),
-            Variant::BooleanFalse => self.append_bool(false),
-            Variant::Int8(v) => self.append_int8(v),
-            Variant::Int16(v) => self.append_int16(v),
-            Variant::Int32(v) => self.append_int32(v),
-            Variant::Int64(v) => self.append_int64(v),
-            Variant::Date(v) => self.append_date(v),
-            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
-            Variant::Float(v) => self.append_float(v),
-            Variant::Double(v) => self.append_double(v),
-            Variant::Binary(v) => self.append_binary(v),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_short_string(s),
-            Variant::Object(obj) => self.try_append_object(metadata_builder, obj)?,
-            Variant::List(list) => self.try_append_list(metadata_builder, list)?,
-            Variant::Time(v) => self.append_time_micros(v),
+            Variant::Null => buffer.append_null(),
+            Variant::BooleanTrue => buffer.append_bool(true),
+            Variant::BooleanFalse => buffer.append_bool(false),
+            Variant::Int8(v) => buffer.append_int8(v),
+            Variant::Int16(v) => buffer.append_int16(v),
+            Variant::Int32(v) => buffer.append_int32(v),
+            Variant::Int64(v) => buffer.append_int64(v),
+            Variant::Date(v) => buffer.append_date(v),
+            Variant::Time(v) => buffer.append_time_micros(v),
+            Variant::TimestampMicros(v) => buffer.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => buffer.append_timestamp_ntz_micros(v),
+            Variant::Decimal4(decimal4) => buffer.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => buffer.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => buffer.append_decimal16(decimal16),
+            Variant::Float(v) => buffer.append_float(v),
+            Variant::Double(v) => buffer.append_double(v),
+            Variant::Binary(v) => buffer.append_binary(v),
+            Variant::String(s) => buffer.append_string(s),
+            Variant::ShortString(s) => buffer.append_short_string(s),
+            Variant::Object(obj) => return Self::try_append_object(state, obj),
+            Variant::List(list) => return Self::try_append_list(state, list),
         }
 
+        state.finish();
         Ok(())
     }
 
@@ -1201,11 +1202,8 @@ impl VariantBuilder {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        let variant = value.into();
-        self.buffer
-            .try_append_variant(variant, &mut self.metadata_builder)?;
-
-        Ok(())
+        let state = ParentState::variant(&mut self.buffer, &mut self.metadata_builder);
+        ValueBuffer::try_append_variant_impl(state, value.into())
     }
 
     /// Finish the builder and return the metadata and value buffers.
@@ -1297,11 +1295,8 @@ impl<'a> ListBuilder<'a> {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        let (mut state, _) = self.parent_state();
-        let (buffer, metadata_builder) = state.buffer_and_metadata_builder();
-        buffer.try_append_variant(value.into(), metadata_builder)?;
-        state.finish();
-        Ok(())
+        let (state, _) = self.parent_state();
+        ValueBuffer::try_append_variant_impl(state, value.into())
     }
 
     /// Builder-style API for appending a value to the list and returning self to enable method chaining.
@@ -1416,11 +1411,8 @@ impl<'a> ObjectBuilder<'a> {
         key: &str,
         value: T,
     ) -> Result<(), ArrowError> {
-        let (mut state, _) = self.parent_state(key)?;
-        let (buffer, metadata_builder) = state.buffer_and_metadata_builder();
-        buffer.try_append_variant(value.into(), metadata_builder)?;
-        state.finish();
-        Ok(())
+        let (state, _) = self.parent_state(key)?;
+        ValueBuffer::try_append_variant_impl(state, value.into())
     }
 
     /// Builder style API for adding a field with key and value to the object
