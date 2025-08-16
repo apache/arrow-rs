@@ -467,6 +467,7 @@ mod test {
     use super::ProjectionMask;
 
     #[test]
+    #[allow(deprecated)]
     // Reproducer for https://github.com/apache/arrow-rs/issues/6464
     fn test_metadata_read_write_partial_offset() {
         let parquet_bytes = create_parquet_file();
@@ -514,6 +515,7 @@ mod test {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_metadata_read_write_roundtrip_page_index() {
         let parquet_bytes = create_parquet_file();
 
