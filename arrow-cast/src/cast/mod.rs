@@ -130,7 +130,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | FixedSizeList(_, _)
             | Struct(_)
             | Map(_, _)
-            | Dictionary(_, _),
+            | Dictionary(_, _)
+            | RunEndEncoded(_, _),
         ) => true,
         // Dictionary/List conditions should be put in front of others
         (Dictionary(_, from_value_type), Dictionary(_, to_value_type)) => {
@@ -167,6 +168,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                     can_cast_types(from_key.data_type(), to_key.data_type()) && can_cast_types(from_value.data_type(), to_value.data_type()),
                 _ => false
             },
+        // TODO: RunEndEncoded here?
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
         (Decimal256(_, _), Decimal256(_, _)) => true,
@@ -781,6 +783,7 @@ pub fn cast_with_options(
                 "Casting from type {from_type:?} to dictionary type {to_type:?} not supported",
             ))),
         },
+        // TODO: RunEndEncoded here?
         (List(_), List(to)) => cast_list_values::<i32>(array, to, cast_options),
         (LargeList(_), LargeList(to)) => cast_list_values::<i64>(array, to, cast_options),
         (List(_), LargeList(list_to)) => cast_list::<i32, i64>(array, list_to, cast_options),
