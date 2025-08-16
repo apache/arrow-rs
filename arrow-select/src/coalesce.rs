@@ -329,7 +329,7 @@ impl BatchCoalescer {
     }
 
     /// Push a batch directly to the completed batches
-    pub fn flush_buffer_and_push_batch_to_completed(
+    fn flush_buffer_and_push_batch_to_completed(
         &mut self,
         batch: RecordBatch,
     ) -> Result<(), ArrowError> {
