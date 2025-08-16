@@ -186,7 +186,7 @@ impl BatchCoalescer {
     }
 
     /// Get the current biggest coalesce batch size limit
-    pub fn get_biggest_coalesce_batch_size(&self) -> Option<usize> {
+    pub fn biggest_coalesce_batch_size(&self) -> Option<usize> {
         self.biggest_coalesce_batch_size
     }
 
