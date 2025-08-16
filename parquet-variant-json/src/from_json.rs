@@ -42,25 +42,23 @@ use serde_json::{Number, Value};
 ///
 /// ```rust
 /// # use parquet_variant::VariantBuilder;
-/// # use parquet_variant_json::{
-/// #   json_to_variant, variant_to_json_string, variant_to_json, variant_to_json_value
-/// # };
+/// # use parquet_variant_json::{JsonToVariant, VariantToJson};
 ///
 /// let mut variant_builder = VariantBuilder::new();
 /// let person_string = "{\"name\":\"Alice\", \"age\":30, ".to_string()
 /// + "\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
 /// + "\"additional_info\": null}";
-/// json_to_variant(&person_string, &mut variant_builder)?;
+/// variant_builder.from_json(&person_string)?;
 ///
 /// let (metadata, value) = variant_builder.finish();
 ///
 /// let variant = parquet_variant::Variant::try_new(&metadata, &value)?;
 ///
-/// let json_result = variant_to_json_string(&variant)?;
-/// let json_value = variant_to_json_value(&variant)?;
+/// let json_result = variant.to_json_string()?;
+/// let json_value = variant.to_json_value()?;
 ///
 /// let mut buffer = Vec::new();
-/// variant_to_json(&mut buffer, &variant)?;
+/// variant.to_json(&mut buffer)?;
 /// let buffer_result = String::from_utf8(buffer)?;
 /// assert_eq!(json_result, "{\"additional_info\":null,\"age\":30,".to_string() +
 /// "\"email\":\"alice@example.com\",\"is_active\":true,\"name\":\"Alice\",\"score\":95.7}");
@@ -182,7 +180,7 @@ impl<T: VariantBuilderExt> JsonToVariant for T {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::variant_to_json_string;
+    use crate::VariantToJson;
     use arrow_schema::ArrowError;
     use parquet_variant::{
         ShortString, Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
@@ -196,7 +194,7 @@ mod test {
     impl JsonToVariantTest<'_> {
         fn run(self) -> Result<(), ArrowError> {
             let mut variant_builder = VariantBuilder::new();
-            json_to_variant(self.json, &mut variant_builder)?;
+            variant_builder.from_json(self.json)?;
             let (metadata, value) = variant_builder.finish();
             let variant = Variant::try_new(&metadata, &value)?;
             assert_eq!(variant, self.expected);
@@ -647,10 +645,10 @@ mod test {
         );
         // Manually verify raw JSON value size
         let mut variant_builder = VariantBuilder::new();
-        json_to_variant(&json, &mut variant_builder)?;
+        variant_builder.from_json(&json)?;
         let (metadata, value) = variant_builder.finish();
         let v = Variant::try_new(&metadata, &value)?;
-        let output_string = variant_to_json_string(&v)?;
+        let output_string = v.to_json_string()?;
         assert_eq!(output_string, json);
         // Verify metadata size = 1 + 2 + 2 * 497 + 3 * 496
         assert_eq!(metadata.len(), 2485);
@@ -688,10 +686,10 @@ mod test {
     fn test_json_to_variant_unicode() -> Result<(), ArrowError> {
         let json = "{\"爱\":\"अ\",\"a\":1}";
         let mut variant_builder = VariantBuilder::new();
-        json_to_variant(json, &mut variant_builder)?;
+        variant_builder.from_json(json)?;
         let (metadata, value) = variant_builder.finish();
         let v = Variant::try_new(&metadata, &value)?;
-        let output_string = variant_to_json_string(&v)?;
+        let output_string = v.to_json_string()?;
         assert_eq!(output_string, "{\"a\":1,\"爱\":\"अ\"}");
         let mut variant_builder = VariantBuilder::new();
         let mut object_builder = variant_builder.new_object();

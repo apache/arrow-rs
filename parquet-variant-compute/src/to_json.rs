@@ -23,7 +23,7 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use arrow_schema::ArrowError;
 use parquet_variant::Variant;
-use parquet_variant_json::variant_to_json;
+use parquet_variant_json::VariantToJson;
 
 /// Transform a batch of Variant represented as STRUCT<metadata: BINARY, value: BINARY> to a batch
 /// of JSON strings where nulls are preserved. The JSON strings in the input must be valid.
@@ -83,7 +83,7 @@ pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, Arr
             let value = value_array.value(i);
             let variant = Variant::new(metadata, value);
             let start_len = json_buffer.len();
-            variant_to_json(&mut json_buffer, &variant)?;
+            variant.to_json(&mut json_buffer)?;
             let written = (json_buffer.len() - start_len) as i32;
             current_offset += written;
             offsets.push(current_offset);

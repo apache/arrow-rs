@@ -21,7 +21,7 @@
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow_schema::ArrowError;
-use parquet_variant_json::json_to_variant;
+use parquet_variant_json::JsonToVariant;
 
 /// Parse a batch of JSON strings into a batch of Variants represented as
 /// STRUCT<metadata: BINARY, value: BINARY> where nulls are preserved. The JSON strings in the input
@@ -42,7 +42,7 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, Ar
         } else {
             let mut vb = variant_array_builder.variant_builder();
             // parse JSON directly to the variant builder
-            json_to_variant(input_string_array.value(i), &mut vb)?;
+            vb.from_json(input_string_array.value(i))?;
             vb.finish()
         }
     }
