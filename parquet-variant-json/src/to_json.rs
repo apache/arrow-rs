@@ -104,7 +104,7 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
 /// assert_eq!(br#"{"first_name":"Jiaying","last_name":"Li"}"#, writer.as_slice());
 /// # Ok::<(), ArrowError>(())
 /// ```
-pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Result<(), ArrowError> {
+fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Result<(), ArrowError> {
     match variant {
         Variant::Null => write!(json_buffer, "null")?,
         Variant::BooleanTrue => write!(json_buffer, "true")?,
@@ -256,7 +256,7 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 /// assert_eq!(r#"{"first_name":"Jiaying","last_name":"Li"}"#, json);
 /// # Ok::<(), ArrowError>(())
 /// ```
-pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
+fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
     let mut buffer = Vec::new();
     variant.to_json(&mut buffer)?;
     String::from_utf8(buffer)
@@ -290,7 +290,7 @@ pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
 /// assert_eq!(json_value, Value::String("hello".to_string()));
 /// # Ok::<(), ArrowError>(())
 /// ```
-pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
+fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
     match variant {
         Variant::Null => Ok(Value::Null),
         Variant::BooleanTrue => Ok(Value::Bool(true)),

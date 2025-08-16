@@ -26,7 +26,7 @@ use parquet_variant_json::JsonToVariant;
 /// Parse a batch of JSON strings into a batch of Variants represented as
 /// STRUCT<metadata: BINARY, value: BINARY> where nulls are preserved. The JSON strings in the input
 /// must be valid.
-pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, ArrowError> {
+pub fn json_to_variant(input: &ArrayRef) -> Result<VariantArray, ArrowError> {
     let input_string_array = match input.as_any().downcast_ref::<StringArray>() {
         Some(string_array) => Ok(string_array),
         None => Err(ArrowError::CastError(
@@ -51,7 +51,7 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, Ar
 
 #[cfg(test)]
 mod test {
-    use crate::batch_json_string_to_variant;
+    use crate::json_to_variant;
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow_schema::ArrowError;
     use parquet_variant::{Variant, VariantBuilder};
@@ -67,7 +67,7 @@ mod test {
             None,
         ]);
         let array_ref: ArrayRef = Arc::new(input);
-        let variant_array = batch_json_string_to_variant(&array_ref).unwrap();
+        let variant_array = json_to_variant(&array_ref).unwrap();
 
         let metadata_array = variant_array.metadata_field();
         let value_array = variant_array.value_field().expect("value field");

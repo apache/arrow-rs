@@ -27,7 +27,7 @@ use parquet_variant_json::VariantToJson;
 
 /// Transform a batch of Variant represented as STRUCT<metadata: BINARY, value: BINARY> to a batch
 /// of JSON strings where nulls are preserved. The JSON strings in the input must be valid.
-pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, ArrowError> {
+pub fn variant_to_json(input: &ArrayRef) -> Result<StringArray, ArrowError> {
     let struct_array = input
         .as_any()
         .downcast_ref::<StructArray>()
@@ -104,7 +104,7 @@ pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, Arr
 
 #[cfg(test)]
 mod test {
-    use crate::batch_variant_to_json_string;
+    use crate::variant_to_json;
     use arrow::array::{Array, ArrayRef, BinaryBuilder, BooleanBufferBuilder, StructArray};
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::DataType;
@@ -161,7 +161,7 @@ mod test {
 
         let input = Arc::new(struct_array) as ArrayRef;
 
-        let result = batch_variant_to_json_string(&input).unwrap();
+        let result = variant_to_json(&input).unwrap();
 
         // Expected output: ["0", null, "{\"a\":32}", "null", null]
         let expected = vec![Some("0"), None, Some("{\"a\":32}"), Some("null"), None];
