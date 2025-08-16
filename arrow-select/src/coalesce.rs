@@ -147,6 +147,8 @@ pub struct BatchCoalescer {
     /// input batch is smaller than this size.
     /// Default is `None`, meaning no limit.
     biggest_coalesce_batch_size: Option<usize>,
+    /// Flag to track if the last batch was large
+    last_batch_was_large: bool,
 }
 
 impl BatchCoalescer {
@@ -172,6 +174,7 @@ impl BatchCoalescer {
             completed: VecDeque::with_capacity(1),
             buffered_rows: 0,
             biggest_coalesce_batch_size: None,
+            last_batch_was_large: false,
         }
     }
 
@@ -274,10 +277,25 @@ impl BatchCoalescer {
         // (delay flush + coalesce in-progress batches into target-sized outputs). That
         // requires accessing / checking the "sorted" flag at a lower level and is left
         // as a separate optimization (TODO).
+        // Short-path optimization for large batches
+        let batch_size = batch.num_rows();
         if let Some(limit) = self.biggest_coalesce_batch_size {
-            if self.buffered_rows == 0 && batch.num_rows() > limit {
-                self.flush_buffer_and_push_batch_to_completed(batch)?;
-                return Ok(());
+            if batch_size > limit {
+                // Case 1: No buffered data - always bypass
+                if self.buffered_rows == 0 {
+                    self.flush_buffer_and_push_batch_to_completed(batch)?;
+                    self.last_batch_was_large = true;
+                    return Ok(());
+                }
+
+                // Case 2: Consecutive large batch - bypass if last batch was also large
+                if self.last_batch_was_large {
+                    // Flush any remaining buffer first, then bypass the large batch
+                    self.finish_buffered_batch()?;
+                    self.flush_buffer_and_push_batch_to_completed(batch)?;
+                    self.last_batch_was_large = true;
+                    return Ok(());
+                }
             }
         }
 
@@ -330,6 +348,13 @@ impl BatchCoalescer {
         // clear in progress sources (to allow the memory to be freed)
         for in_progress in self.in_progress_arrays.iter_mut() {
             in_progress.set_source(None);
+        }
+
+        // Update the large batch tracking
+        if let Some(limit) = self.biggest_coalesce_batch_size {
+            self.last_batch_was_large = batch_size > limit;
+        } else {
+            self.last_batch_was_large = false;
         }
 
         Ok(())
@@ -1385,7 +1410,6 @@ mod tests {
         let array = Int32Array::from_iter_values(0..num_rows as i32);
         RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap()
     }
-
     #[test]
     fn test_biggest_coalesce_batch_size_none_default() {
         // Test that default behavior (None) coalesces all batches
@@ -1496,43 +1520,51 @@ mod tests {
     }
 
     #[test]
-    fn test_biggest_coalesce_batch_size_mixed_batches() {
-        // Test mixing large (bypass) and small (coalesce) batches
+    fn test_biggest_coalesce_batch_size_first_large_then_consecutive_bypass() {
+        // Test the new consecutive large batch bypass behavior
+        // Pattern: small batches -> first large batch (coalesced) -> consecutive large batches (bypass)
         let mut coalescer = BatchCoalescer::new(
             Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
             100,
         );
-        coalescer.set_biggest_coalesce_batch_size(Some(300));
+        coalescer.set_biggest_coalesce_batch_size(Some(200));
 
         let small_batch = create_test_batch(50);
-        let large_batch = create_test_batch(400);
 
-        // Push small batch first
-        coalescer.push_batch(small_batch.clone()).unwrap();
+        // Push small batch first to create buffered data
+        coalescer.push_batch(small_batch).unwrap();
         assert_eq!(coalescer.get_buffered_rows(), 50);
         assert!(!coalescer.has_completed_batch());
 
-        // Push large batch - since buffered_rows > 0, large batch will NOT bypass
-        // Instead, it will be processed normally through the coalescing logic
-        coalescer.push_batch(large_batch).unwrap();
+        // Push first large batch - should go through normal coalescing due to buffered data
+        let large_batch1 = create_test_batch(250);
+        coalescer.push_batch(large_batch1).unwrap();
 
-        // The coalescing logic will:
-        // 1. Fill the current buffer to target_batch_size (100), completing one batch
-        // 2. Create additional complete batches of target_batch_size (100)
-        // 3. Leave remainder in buffer
-        // Total rows: 50 (buffered) + 400 (new) = 450 rows
-        // Output: 4 complete batches of 100 rows each, 50 rows remain buffered
-
+        // 50 + 250 = 300 -> 3 complete batches of 100, 0 rows buffered
         let mut completed_batches = vec![];
         while let Some(batch) = coalescer.next_completed_batch() {
             completed_batches.push(batch);
         }
+        assert_eq!(completed_batches.len(), 3);
+        assert_eq!(coalescer.get_buffered_rows(), 0);
 
-        assert_eq!(completed_batches.len(), 4);
-        for batch in &completed_batches {
-            assert_eq!(batch.num_rows(), 100);
-        }
-        assert_eq!(coalescer.get_buffered_rows(), 50);
+        // Now push consecutive large batches - they should bypass
+        let large_batch2 = create_test_batch(300);
+        let large_batch3 = create_test_batch(400);
+
+        // Push second large batch - should bypass since it's consecutive and buffer is empty
+        coalescer.push_batch(large_batch2).unwrap();
+        assert!(coalescer.has_completed_batch());
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 300); // bypassed with original size
+        assert_eq!(coalescer.get_buffered_rows(), 0);
+
+        // Push third large batch - should also bypass
+        coalescer.push_batch(large_batch3).unwrap();
+        assert!(coalescer.has_completed_batch());
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 400); // bypassed with original size
+        assert_eq!(coalescer.get_buffered_rows(), 0);
     }
 
     #[test]
@@ -1554,8 +1586,7 @@ mod tests {
 
     #[test]
     fn test_biggest_coalesce_batch_size_with_buffered_data_no_bypass() {
-        // Test that when there is buffered data, large batches do NOT bypass
-        // This test verifies the new constraint: buffered_rows == 0
+        // Test that when there is buffered data, large batches do NOT bypass (unless consecutive)
         let mut coalescer = BatchCoalescer::new(
             Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
             100,
@@ -1629,7 +1660,7 @@ mod tests {
         coalescer.push_batch(small_batch).unwrap();
         assert_eq!(coalescer.get_buffered_rows(), 50);
 
-        // Push the same large batch again - should NOT bypass this time
+        // Push the same large batch again - should NOT bypass this time (not consecutive)
         coalescer.push_batch(large_batch).unwrap();
 
         // Should process through normal coalescing: 50 + 300 = 350 rows
@@ -1647,77 +1678,52 @@ mod tests {
     }
 
     #[test]
-    fn test_biggest_coalesce_batch_size_consecutive_large_batches() {
-        // Test Case 2: consecutive large batches bypass when buffer becomes empty
-        // Pattern: small batches -> large batch (coalesced) -> consecutive large batches (bypass)
+    fn test_biggest_coalesce_batch_size_consecutive_large_batches_scenario() {
+        // Test your exact scenario: 20, 20, 30, 700, 600, 700, 900, 700, 600
         let mut coalescer = BatchCoalescer::new(
             Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
-            100,
+            1000,
         );
-        coalescer.set_biggest_coalesce_batch_size(Some(200));
+        coalescer.set_biggest_coalesce_batch_size(Some(500));
 
-        // Start with small batches that don't fill the buffer completely
-        let small1 = create_test_batch(20);
-        let small2 = create_test_batch(20);
-        let small3 = create_test_batch(30);
+        // Push small batches first
+        coalescer.push_batch(create_test_batch(20)).unwrap();
+        coalescer.push_batch(create_test_batch(20)).unwrap();
+        coalescer.push_batch(create_test_batch(30)).unwrap();
 
-        coalescer.push_batch(small1).unwrap();
-        coalescer.push_batch(small2).unwrap();
-        coalescer.push_batch(small3).unwrap();
-
-        // Now we have 70 rows buffered
         assert_eq!(coalescer.get_buffered_rows(), 70);
         assert!(!coalescer.has_completed_batch());
 
-        // Push first large batch - should go through normal coalescing (not bypass due to buffered data)
-        let large_batch1 = create_test_batch(250);
-        coalescer.push_batch(large_batch1).unwrap();
+        // Push first large batch (700) - should coalesce due to buffered data
+        coalescer.push_batch(create_test_batch(700)).unwrap();
 
-        // This should create completed batches and leave the buffer empty or nearly empty
-        // 70 + 250 = 320 total rows -> 3 complete batches of 100, 20 rows buffered
-        let mut completed_batches = vec![];
+        // 70 + 700 = 770 rows, not enough for 1000, so all stay buffered
+        assert_eq!(coalescer.get_buffered_rows(), 770);
+        assert!(!coalescer.has_completed_batch());
+
+        // Push second large batch (600) - should bypass since previous was large
+        coalescer.push_batch(create_test_batch(600)).unwrap();
+
+        // Should flush buffer (770 rows) and bypass the 600
+        let mut outputs = vec![];
         while let Some(batch) = coalescer.next_completed_batch() {
-            completed_batches.push(batch);
+            outputs.push(batch);
         }
+        assert_eq!(outputs.len(), 2); // one flushed buffer batch (770) + one bypassed (600)
+        assert_eq!(outputs[0].num_rows(), 770);
+        assert_eq!(outputs[1].num_rows(), 600);
+        assert_eq!(coalescer.get_buffered_rows(), 0);
 
-        assert_eq!(completed_batches.len(), 3);
-        assert_eq!(coalescer.get_buffered_rows(), 20);
+        // Push remaining large batches - should all bypass
+        let remaining_batches = [700, 900, 700, 600];
+        for &size in &remaining_batches {
+            coalescer.push_batch(create_test_batch(size)).unwrap();
 
-        // Now push consecutive large batches - they should bypass because each time
-        // the buffer has few rows and gets emptied
-        let large_batch2 = create_test_batch(300);
-        let large_batch3 = create_test_batch(400);
-        let large_batch4 = create_test_batch(350);
-
-        // Push second large batch
-        coalescer.push_batch(large_batch2.clone()).unwrap();
-        // 20 + 300 = 320 -> 3 complete batches of 100, 20 rows buffered
-        completed_batches.clear();
-        while let Some(batch) = coalescer.next_completed_batch() {
-            completed_batches.push(batch);
+            assert!(coalescer.has_completed_batch());
+            let output = coalescer.next_completed_batch().unwrap();
+            assert_eq!(output.num_rows(), size);
+            assert_eq!(coalescer.get_buffered_rows(), 0);
         }
-        assert_eq!(completed_batches.len(), 3);
-        assert_eq!(coalescer.get_buffered_rows(), 20);
-
-        // Push third large batch
-        coalescer.push_batch(large_batch3.clone()).unwrap();
-        // 20 + 400 = 420 -> 4 complete batches of 100, 20 rows buffered
-        completed_batches.clear();
-        while let Some(batch) = coalescer.next_completed_batch() {
-            completed_batches.push(batch);
-        }
-        assert_eq!(completed_batches.len(), 4);
-        assert_eq!(coalescer.get_buffered_rows(), 20);
-
-        // Push fourth large batch
-        coalescer.push_batch(large_batch4.clone()).unwrap();
-        // 20 + 350 = 370 -> 3 complete batches of 100, 70 rows buffered
-        completed_batches.clear();
-        while let Some(batch) = coalescer.next_completed_batch() {
-            completed_batches.push(batch);
-        }
-        assert_eq!(completed_batches.len(), 3);
-        assert_eq!(coalescer.get_buffered_rows(), 70);
     }
 
     #[test]
@@ -1790,5 +1796,43 @@ mod tests {
         assert_eq!(all_outputs[1].num_rows(), 400);
         assert_eq!(all_outputs[2].num_rows(), 350);
         assert_eq!(all_outputs[3].num_rows(), 500);
+    }
+
+    #[test]
+    fn test_biggest_coalesce_batch_size_reset_consecutive_on_small_batch() {
+        // Test that small batches reset the consecutive large batch tracking
+        let mut coalescer = BatchCoalescer::new(
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
+            100,
+        );
+        coalescer.set_biggest_coalesce_batch_size(Some(200));
+
+        // Push first large batch - should bypass (no buffered data)
+        coalescer.push_batch(create_test_batch(300)).unwrap();
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 300);
+
+        // Push second large batch - should bypass (consecutive)
+        coalescer.push_batch(create_test_batch(400)).unwrap();
+        let output = coalescer.next_completed_batch().unwrap();
+        assert_eq!(output.num_rows(), 400);
+
+        // Push small batch - resets consecutive tracking
+        coalescer.push_batch(create_test_batch(50)).unwrap();
+        assert_eq!(coalescer.get_buffered_rows(), 50);
+
+        // Push large batch again - should NOT bypass due to buffered data
+        coalescer.push_batch(create_test_batch(350)).unwrap();
+
+        // Should coalesce: 50 + 350 = 400 -> 4 complete batches of 100
+        let mut outputs = vec![];
+        while let Some(batch) = coalescer.next_completed_batch() {
+            outputs.push(batch);
+        }
+        assert_eq!(outputs.len(), 4);
+        for batch in outputs {
+            assert_eq!(batch.num_rows(), 100);
+        }
+        assert_eq!(coalescer.get_buffered_rows(), 0);
     }
 }

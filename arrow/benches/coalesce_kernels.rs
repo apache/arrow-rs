@@ -232,7 +232,8 @@ fn filter_streams(
 ) {
     let schema = data_stream.schema();
     let batch_size = data_stream.batch_size();
-    let mut coalescer = BatchCoalescer::new(Arc::clone(schema), batch_size);
+    let mut coalescer = BatchCoalescer::new(Arc::clone(schema), batch_size)
+        .with_biggest_coalesce_batch_size(Some(batch_size / 2));
 
     while num_output_batches > 0 {
         let filter = filter_stream.next_filter();
