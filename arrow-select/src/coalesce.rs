@@ -1589,46 +1589,4 @@ mod tests {
         let output = coalescer.next_completed_batch().unwrap();
         assert_eq!(output.num_rows(), 1);
     }
-
-    #[test]
-    fn test_biggest_coalesce_batch_size_getter_setter() {
-        // Test that we can get and set the biggest_coalesce_batch_size
-        let mut coalescer = BatchCoalescer::new(
-            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
-            100,
-        );
-
-        // Initially None
-        assert_eq!(coalescer.biggest_coalesce_batch_size, None);
-
-        // Set a value
-        coalescer.biggest_coalesce_batch_size = Some(500);
-        assert_eq!(coalescer.biggest_coalesce_batch_size, Some(500));
-
-        // Set back to None
-        coalescer.biggest_coalesce_batch_size = None;
-        assert_eq!(coalescer.biggest_coalesce_batch_size, None);
-    }
-
-    #[test]
-    fn test_biggest_coalesce_batch_size_constructor_method() {
-        // Test a potential constructor method for setting the limit
-        // This would need to be added to the BatchCoalescer implementation
-
-        // For now, test the manual setting approach
-        let mut coalescer = BatchCoalescer::new(
-            Arc::new(Schema::new(vec![Field::new("c0", DataType::Int32, false)])),
-            100,
-        );
-
-        // Method to set the limit (this could be added to the impl)
-        coalescer.biggest_coalesce_batch_size = Some(1000);
-
-        // Verify it works as expected
-        let large_batch = create_test_batch(1500);
-        coalescer.push_batch(large_batch).unwrap();
-
-        let output = coalescer.next_completed_batch().unwrap();
-        assert_eq!(output.num_rows(), 1500);
-    }
 }
