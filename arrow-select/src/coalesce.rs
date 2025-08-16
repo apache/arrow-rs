@@ -1470,12 +1470,12 @@ mod tests {
 
         // Should be coalesced (not bypass) since it's equal, not greater
         let mut output_count = 0;
-        while let Some(_) = coalescer.next_completed_batch() {
+        while coalescer.next_completed_batch().is_some() {
             output_count += 1;
         }
 
         coalescer.finish_buffered_batch().unwrap();
-        while let Some(_) = coalescer.next_completed_batch() {
+        while coalescer.next_completed_batch().is_some() {
             output_count += 1;
         }
 
