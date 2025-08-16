@@ -109,6 +109,12 @@ impl<'a> From<usize> for VariantPath<'a> {
     }
 }
 
+impl<'a> From<&[VariantPathElement<'a>]> for VariantPath<'a> {
+    fn from(elements: &[VariantPathElement<'a>]) -> Self {
+        VariantPath::new(elements.to_vec())
+    }
+}
+
 /// Create from iter
 impl<'a> FromIterator<VariantPathElement<'a>> for VariantPath<'a> {
     fn from_iter<T: IntoIterator<Item = VariantPathElement<'a>>>(iter: T) -> Self {
