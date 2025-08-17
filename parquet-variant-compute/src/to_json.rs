@@ -113,7 +113,7 @@ mod test {
     use std::sync::Arc;
 
     #[test]
-    fn test_batch_variant_to_json_string() {
+    fn test_variant_to_json() {
         let mut metadata_builder = BinaryBuilder::new();
         let mut value_builder = BinaryBuilder::new();
 

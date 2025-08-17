@@ -58,7 +58,7 @@ mod test {
     use std::sync::Arc;
 
     #[test]
-    fn test_batch_json_string_to_variant() -> Result<(), ArrowError> {
+    fn test_json_to_variant() -> Result<(), ArrowError> {
         let input = StringArray::from(vec![
             Some("1"),
             None,
