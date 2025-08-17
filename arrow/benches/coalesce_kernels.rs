@@ -76,7 +76,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         Field::new("float_val2", DataType::Float64, true),
         // TODO model other dictionary types here (FixedSizeBinary for example)
     ]));
-    
+
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
         // Selectivity: 0.1%, 1%, 10%, 80%
