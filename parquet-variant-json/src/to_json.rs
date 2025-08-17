@@ -23,6 +23,304 @@ use parquet_variant::{Variant, VariantList, VariantObject};
 use serde_json::Value;
 use std::io::Write;
 
+/// Extension trait for converting Variants to JSON
+pub trait VariantToJson {
+    ///
+    /// This function writes JSON directly to any type that implements [`Write`],
+    /// making it efficient for streaming or when you want to control the output destination.
+    ///
+    /// See [`VariantToJson::to_json_string`] for a convenience function that returns a
+    /// JSON string.
+    ///
+    /// # Arguments
+    ///
+    /// * `writer` - Writer to output JSON to
+    /// * `variant` - The Variant value to convert
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if successful
+    /// * `Err` with error details if conversion fails
+    ///
+    /// # Examples
+    ///
+    ///
+    /// ```rust
+    /// # use parquet_variant::{Variant};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use arrow_schema::ArrowError;
+    /// let variant = Variant::from("Hello, World!");
+    /// let mut buffer = Vec::new();
+    /// variant.to_json(&mut buffer)?;
+    /// assert_eq!(String::from_utf8(buffer).unwrap(), "\"Hello, World!\"");
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    ///
+    /// # Example: Create a [`Variant::Object`] and convert to JSON
+    /// ```rust
+    /// # use parquet_variant::{Variant, VariantBuilder};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use arrow_schema::ArrowError;
+    /// let mut builder = VariantBuilder::new();
+    /// // Create an object builder that will write fields to the object
+    /// let mut object_builder = builder.new_object();
+    /// object_builder.insert("first_name", "Jiaying");
+    /// object_builder.insert("last_name", "Li");
+    /// object_builder.finish();
+    /// // Finish the builder to get the metadata and value
+    /// let (metadata, value) = builder.finish();
+    /// // Create the Variant and convert to JSON
+    /// let variant = Variant::try_new(&metadata, &value)?;
+    /// let mut writer = Vec::new();
+    /// variant.to_json(&mut writer)?;
+    /// assert_eq!(br#"{"first_name":"Jiaying","last_name":"Li"}"#, writer.as_slice());
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError>;
+
+    /// Convert [`Variant`] to JSON [`String`]
+    ///
+    /// This is a convenience function that converts a Variant to a JSON string.
+    /// This is the same as calling [`VariantToJson::to_json`] with a [`Vec`].
+    /// It's the simplest way to get a JSON representation when you just need a String result.
+    ///
+    /// # Arguments
+    ///
+    /// * `variant` - The Variant value to convert
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` containing the JSON representation
+    /// * `Err` with error details if conversion fails
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use parquet_variant::{Variant};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use arrow_schema::ArrowError;
+    /// let variant = Variant::Int32(42);
+    /// let json = variant.to_json_string()?;
+    /// assert_eq!(json, "42");
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    ///
+    /// # Example: Create a [`Variant::Object`] and convert to JSON
+    ///
+    /// This example shows how to create an object with two fields and convert it to JSON:
+    /// ```json
+    /// {
+    ///   "first_name": "Jiaying",
+    ///   "last_name": "Li"
+    /// }
+    /// ```
+    ///
+    /// ```rust
+    /// # use parquet_variant::{Variant, VariantBuilder};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use arrow_schema::ArrowError;
+    /// let mut builder = VariantBuilder::new();
+    /// // Create an object builder that will write fields to the object
+    /// let mut object_builder = builder.new_object();
+    /// object_builder.insert("first_name", "Jiaying");
+    /// object_builder.insert("last_name", "Li");
+    /// object_builder.finish();
+    /// // Finish the builder to get the metadata and value
+    /// let (metadata, value) = builder.finish();
+    /// // Create the Variant and convert to JSON
+    /// let variant = Variant::try_new(&metadata, &value)?;
+    /// let json = variant.to_json_string()?;
+    /// assert_eq!(r#"{"first_name":"Jiaying","last_name":"Li"}"#, json);
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    fn to_json_string(&self) -> Result<String, ArrowError>;
+
+    /// Convert [`Variant`] to [`serde_json::Value`]
+    ///
+    /// This function converts a Variant to a [`serde_json::Value`], which is useful
+    /// when you need to work with the JSON data programmatically or integrate with
+    /// other serde-based JSON processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `variant` - The Variant value to convert
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Value)` containing the JSON value
+    /// * `Err` with error details if conversion fails
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use parquet_variant::{Variant};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use serde_json::Value;
+    /// # use arrow_schema::ArrowError;
+    /// let variant = Variant::from("hello");
+    /// let json_value = variant.to_json_value()?;
+    /// assert_eq!(json_value, Value::String("hello".to_string()));
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    fn to_json_value(&self) -> Result<Value, ArrowError>;
+}
+
+impl<'m, 'v> VariantToJson for Variant<'m, 'v> {
+    fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError> {
+        match self {
+            Variant::Null => write!(buffer, "null")?,
+            Variant::BooleanTrue => write!(buffer, "true")?,
+            Variant::BooleanFalse => write!(buffer, "false")?,
+            Variant::Int8(i) => write!(buffer, "{i}")?,
+            Variant::Int16(i) => write!(buffer, "{i}")?,
+            Variant::Int32(i) => write!(buffer, "{i}")?,
+            Variant::Int64(i) => write!(buffer, "{i}")?,
+            Variant::Float(f) => write!(buffer, "{f}")?,
+            Variant::Double(f) => write!(buffer, "{f}")?,
+            Variant::Decimal4(decimal) => write!(buffer, "{decimal}")?,
+            Variant::Decimal8(decimal) => write!(buffer, "{decimal}")?,
+            Variant::Decimal16(decimal) => write!(buffer, "{decimal}")?,
+            Variant::Date(date) => write!(buffer, "\"{}\"", format_date_string(date))?,
+            Variant::TimestampMicros(ts) => write!(buffer, "\"{}\"", ts.to_rfc3339())?,
+            Variant::TimestampNtzMicros(ts) => {
+                write!(buffer, "\"{}\"", format_timestamp_ntz_string(ts))?
+            }
+            Variant::Time(time) => write!(buffer, "\"{}\"", format_time_ntz_str(time))?,
+            Variant::Binary(bytes) => {
+                // Encode binary as base64 string
+                let base64_str = format_binary_base64(bytes);
+                let json_str = serde_json::to_string(&base64_str).map_err(|e| {
+                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+                })?;
+                write!(buffer, "{json_str}")?
+            }
+            Variant::String(s) => {
+                // Use serde_json to properly escape the string
+                let json_str = serde_json::to_string(s).map_err(|e| {
+                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+                })?;
+                write!(buffer, "{json_str}")?
+            }
+            Variant::ShortString(s) => {
+                // Use serde_json to properly escape the string
+                let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
+                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+                })?;
+                write!(buffer, "{json_str}")?
+            }
+            Variant::Object(obj) => {
+                convert_object_to_json(buffer, obj)?;
+            }
+            Variant::List(arr) => {
+                convert_array_to_json(buffer, arr)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn to_json_string(&self) -> Result<String, ArrowError> {
+        let mut buffer = Vec::new();
+        self.to_json(&mut buffer)?;
+        String::from_utf8(buffer)
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("UTF-8 conversion error: {e}")))
+    }
+
+    fn to_json_value(&self) -> Result<Value, ArrowError> {
+        match self {
+            Variant::Null => Ok(Value::Null),
+            Variant::BooleanTrue => Ok(Value::Bool(true)),
+            Variant::BooleanFalse => Ok(Value::Bool(false)),
+            Variant::Int8(i) => Ok(Value::Number((*i).into())),
+            Variant::Int16(i) => Ok(Value::Number((*i).into())),
+            Variant::Int32(i) => Ok(Value::Number((*i).into())),
+            Variant::Int64(i) => Ok(Value::Number((*i).into())),
+            Variant::Float(f) => serde_json::Number::from_f64((*f).into())
+                .map(Value::Number)
+                .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid float value".to_string())),
+            Variant::Double(f) => serde_json::Number::from_f64(*f)
+                .map(Value::Number)
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError("Invalid double value".to_string())
+                }),
+            Variant::Decimal4(decimal4) => {
+                let scale = decimal4.scale();
+                let integer = decimal4.integer();
+
+                let integer = if scale == 0 {
+                    integer
+                } else {
+                    let divisor = 10_i32.pow(scale as u32);
+                    if integer % divisor != 0 {
+                        // fall back to floating point
+                        return Ok(Value::from(integer as f64 / divisor as f64));
+                    }
+                    integer / divisor
+                };
+                Ok(Value::from(integer))
+            }
+            Variant::Decimal8(decimal8) => {
+                let scale = decimal8.scale();
+                let integer = decimal8.integer();
+
+                let integer = if scale == 0 {
+                    integer
+                } else {
+                    let divisor = 10_i64.pow(scale as u32);
+                    if integer % divisor != 0 {
+                        // fall back to floating point
+                        return Ok(Value::from(integer as f64 / divisor as f64));
+                    }
+                    integer / divisor
+                };
+                Ok(Value::from(integer))
+            }
+            Variant::Decimal16(decimal16) => {
+                let scale = decimal16.scale();
+                let integer = decimal16.integer();
+
+                let integer = if scale == 0 {
+                    integer
+                } else {
+                    let divisor = 10_i128.pow(scale as u32);
+                    if integer % divisor != 0 {
+                        // fall back to floating point
+                        return Ok(Value::from(integer as f64 / divisor as f64));
+                    }
+                    integer / divisor
+                };
+                // i128 has higher precision than any 64-bit type. Try a lossless narrowing cast to
+                // i64 or u64 first, falling back to a lossy narrowing cast to f64 if necessary.
+                let value = i64::try_from(integer)
+                    .map(Value::from)
+                    .or_else(|_| u64::try_from(integer).map(Value::from))
+                    .unwrap_or_else(|_| Value::from(integer as f64));
+                Ok(value)
+            }
+            Variant::Date(date) => Ok(Value::String(format_date_string(date))),
+            Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
+            Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),
+            Variant::Time(time) => Ok(Value::String(format_time_ntz_str(time))),
+            Variant::Binary(bytes) => Ok(Value::String(format_binary_base64(bytes))),
+            Variant::String(s) => Ok(Value::String(s.to_string())),
+            Variant::ShortString(s) => Ok(Value::String(s.to_string())),
+            Variant::Object(obj) => {
+                let map = obj
+                    .iter()
+                    .map(|(k, v)| v.to_json_value().map(|json_val| (k.to_string(), json_val)))
+                    .collect::<Result<_, _>>()?;
+                Ok(Value::Object(map))
+            }
+            Variant::List(arr) => {
+                let vec = arr
+                    .iter()
+                    .map(|element| element.to_json_value())
+                    .collect::<Result<_, _>>()?;
+                Ok(Value::Array(vec))
+            }
+        }
+    }
+}
+
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
 const TIMESTAMP_NTZ_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.6f";
@@ -51,109 +349,6 @@ fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
             format!("{}.{}", base, micros_str_trimmed)
         }
     }
-}
-
-///
-/// This function writes JSON directly to any type that implements [`Write`],
-/// making it efficient for streaming or when you want to control the output destination.
-///
-/// See [`variant_to_json_string`] for a convenience function that returns a
-/// JSON string.
-///
-/// # Arguments
-///
-/// * `writer` - Writer to output JSON to
-/// * `variant` - The Variant value to convert
-///
-/// # Returns
-///
-/// * `Ok(())` if successful
-/// * `Err` with error details if conversion fails
-///
-/// # Examples
-///
-///
-/// ```rust
-/// # use parquet_variant::{Variant};
-/// # use parquet_variant_json::VariantToJson;
-/// # use arrow_schema::ArrowError;
-/// let variant = Variant::from("Hello, World!");
-/// let mut buffer = Vec::new();
-/// variant.to_json(&mut buffer)?;
-/// assert_eq!(String::from_utf8(buffer).unwrap(), "\"Hello, World!\"");
-/// # Ok::<(), ArrowError>(())
-/// ```
-///
-/// # Example: Create a [`Variant::Object`] and convert to JSON
-/// ```rust
-/// # use parquet_variant::{Variant, VariantBuilder};
-/// # use parquet_variant_json::VariantToJson;
-/// # use arrow_schema::ArrowError;
-/// let mut builder = VariantBuilder::new();
-/// // Create an object builder that will write fields to the object
-/// let mut object_builder = builder.new_object();
-/// object_builder.insert("first_name", "Jiaying");
-/// object_builder.insert("last_name", "Li");
-/// object_builder.finish();
-/// // Finish the builder to get the metadata and value
-/// let (metadata, value) = builder.finish();
-/// // Create the Variant and convert to JSON
-/// let variant = Variant::try_new(&metadata, &value)?;
-/// let mut writer = Vec::new();
-/// variant.to_json(&mut writer)?;
-/// assert_eq!(br#"{"first_name":"Jiaying","last_name":"Li"}"#, writer.as_slice());
-/// # Ok::<(), ArrowError>(())
-/// ```
-fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Result<(), ArrowError> {
-    match variant {
-        Variant::Null => write!(json_buffer, "null")?,
-        Variant::BooleanTrue => write!(json_buffer, "true")?,
-        Variant::BooleanFalse => write!(json_buffer, "false")?,
-        Variant::Int8(i) => write!(json_buffer, "{i}")?,
-        Variant::Int16(i) => write!(json_buffer, "{i}")?,
-        Variant::Int32(i) => write!(json_buffer, "{i}")?,
-        Variant::Int64(i) => write!(json_buffer, "{i}")?,
-        Variant::Float(f) => write!(json_buffer, "{f}")?,
-        Variant::Double(f) => write!(json_buffer, "{f}")?,
-        Variant::Decimal4(decimal) => write!(json_buffer, "{decimal}")?,
-        Variant::Decimal8(decimal) => write!(json_buffer, "{decimal}")?,
-        Variant::Decimal16(decimal) => write!(json_buffer, "{decimal}")?,
-        Variant::Date(date) => write!(json_buffer, "\"{}\"", format_date_string(date))?,
-        Variant::TimestampMicros(ts) => write!(json_buffer, "\"{}\"", ts.to_rfc3339())?,
-        Variant::TimestampNtzMicros(ts) => {
-            write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts))?
-        }
-        Variant::Time(time) => write!(json_buffer, "\"{}\"", format_time_ntz_str(time))?,
-        Variant::Binary(bytes) => {
-            // Encode binary as base64 string
-            let base64_str = format_binary_base64(bytes);
-            let json_str = serde_json::to_string(&base64_str).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-            })?;
-            write!(json_buffer, "{json_str}")?
-        }
-        Variant::String(s) => {
-            // Use serde_json to properly escape the string
-            let json_str = serde_json::to_string(s).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-            })?;
-            write!(json_buffer, "{json_str}")?
-        }
-        Variant::ShortString(s) => {
-            // Use serde_json to properly escape the string
-            let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-            })?;
-            write!(json_buffer, "{json_str}")?
-        }
-        Variant::Object(obj) => {
-            convert_object_to_json(json_buffer, obj)?;
-        }
-        Variant::List(arr) => {
-            convert_array_to_json(json_buffer, arr)?;
-        }
-    }
-    Ok(())
 }
 
 /// Convert object fields to JSON
@@ -199,228 +394,6 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 
     write!(buffer, "]")?;
     Ok(())
-}
-
-/// Convert [`Variant`] to JSON [`String`]
-///
-/// This is a convenience function that converts a Variant to a JSON string.
-/// This is the same as calling [`variant_to_json`] with a [`Vec`].
-/// It's the simplest way to get a JSON representation when you just need a String result.
-///
-/// # Arguments
-///
-/// * `variant` - The Variant value to convert
-///
-/// # Returns
-///
-/// * `Ok(String)` containing the JSON representation
-/// * `Err` with error details if conversion fails
-///
-/// # Examples
-///
-/// ```rust
-/// # use parquet_variant::{Variant};
-/// # use parquet_variant_json::VariantToJson;
-/// # use arrow_schema::ArrowError;
-/// let variant = Variant::Int32(42);
-/// let json = variant.to_json_string()?;
-/// assert_eq!(json, "42");
-/// # Ok::<(), ArrowError>(())
-/// ```
-///
-/// # Example: Create a [`Variant::Object`] and convert to JSON
-///
-/// This example shows how to create an object with two fields and convert it to JSON:
-/// ```json
-/// {
-///   "first_name": "Jiaying",
-///   "last_name": "Li"
-/// }
-/// ```
-///
-/// ```rust
-/// # use parquet_variant::{Variant, VariantBuilder};
-/// # use parquet_variant_json::VariantToJson;
-/// # use arrow_schema::ArrowError;
-/// let mut builder = VariantBuilder::new();
-/// // Create an object builder that will write fields to the object
-/// let mut object_builder = builder.new_object();
-/// object_builder.insert("first_name", "Jiaying");
-/// object_builder.insert("last_name", "Li");
-/// object_builder.finish();
-/// // Finish the builder to get the metadata and value
-/// let (metadata, value) = builder.finish();
-/// // Create the Variant and convert to JSON
-/// let variant = Variant::try_new(&metadata, &value)?;
-/// let json = variant.to_json_string()?;
-/// assert_eq!(r#"{"first_name":"Jiaying","last_name":"Li"}"#, json);
-/// # Ok::<(), ArrowError>(())
-/// ```
-fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
-    let mut buffer = Vec::new();
-    variant.to_json(&mut buffer)?;
-    String::from_utf8(buffer)
-        .map_err(|e| ArrowError::InvalidArgumentError(format!("UTF-8 conversion error: {e}")))
-}
-
-/// Convert [`Variant`] to [`serde_json::Value`]
-///
-/// This function converts a Variant to a [`serde_json::Value`], which is useful
-/// when you need to work with the JSON data programmatically or integrate with
-/// other serde-based JSON processing.
-///
-/// # Arguments
-///
-/// * `variant` - The Variant value to convert
-///
-/// # Returns
-///
-/// * `Ok(Value)` containing the JSON value
-/// * `Err` with error details if conversion fails
-///
-/// # Examples
-///
-/// ```rust
-/// # use parquet_variant::{Variant};
-/// # use parquet_variant_json::VariantToJson;
-/// # use serde_json::Value;
-/// # use arrow_schema::ArrowError;
-/// let variant = Variant::from("hello");
-/// let json_value = variant.to_json_value()?;
-/// assert_eq!(json_value, Value::String("hello".to_string()));
-/// # Ok::<(), ArrowError>(())
-/// ```
-fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
-    match variant {
-        Variant::Null => Ok(Value::Null),
-        Variant::BooleanTrue => Ok(Value::Bool(true)),
-        Variant::BooleanFalse => Ok(Value::Bool(false)),
-        Variant::Int8(i) => Ok(Value::Number((*i).into())),
-        Variant::Int16(i) => Ok(Value::Number((*i).into())),
-        Variant::Int32(i) => Ok(Value::Number((*i).into())),
-        Variant::Int64(i) => Ok(Value::Number((*i).into())),
-        Variant::Float(f) => serde_json::Number::from_f64((*f).into())
-            .map(Value::Number)
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid float value".to_string())),
-        Variant::Double(f) => serde_json::Number::from_f64(*f)
-            .map(Value::Number)
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string())),
-        Variant::Decimal4(decimal4) => {
-            let scale = decimal4.scale();
-            let integer = decimal4.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i32.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            Ok(Value::from(integer))
-        }
-        Variant::Decimal8(decimal8) => {
-            let scale = decimal8.scale();
-            let integer = decimal8.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i64.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            Ok(Value::from(integer))
-        }
-        Variant::Decimal16(decimal16) => {
-            let scale = decimal16.scale();
-            let integer = decimal16.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i128.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            // i128 has higher precision than any 64-bit type. Try a lossless narrowing cast to
-            // i64 or u64 first, falling back to a lossy narrowing cast to f64 if necessary.
-            let value = i64::try_from(integer)
-                .map(Value::from)
-                .or_else(|_| u64::try_from(integer).map(Value::from))
-                .unwrap_or_else(|_| Value::from(integer as f64));
-            Ok(value)
-        }
-        Variant::Date(date) => Ok(Value::String(format_date_string(date))),
-        Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
-        Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),
-        Variant::Time(time) => Ok(Value::String(format_time_ntz_str(time))),
-        Variant::Binary(bytes) => Ok(Value::String(format_binary_base64(bytes))),
-        Variant::String(s) => Ok(Value::String(s.to_string())),
-        Variant::ShortString(s) => Ok(Value::String(s.to_string())),
-        Variant::Object(obj) => {
-            let map = obj
-                .iter()
-                .map(|(k, v)| v.to_json_value().map(|json_val| (k.to_string(), json_val)))
-                .collect::<Result<_, _>>()?;
-            Ok(Value::Object(map))
-        }
-        Variant::List(arr) => {
-            let vec = arr
-                .iter()
-                .map(|element| element.to_json_value())
-                .collect::<Result<_, _>>()?;
-            Ok(Value::Array(vec))
-        }
-    }
-}
-
-/// Extension trait for converting Variants to JSON
-///
-/// This trait provides a convenient method for Variant to convert to JSON.
-///
-/// # Example
-/// ```rust
-/// use parquet_variant::Variant;
-/// use parquet_variant_json::VariantToJson;
-///
-/// let variant = Variant::Int32(42);
-/// let mut buffer = Vec::new();
-/// variant.to_json(&mut buffer)?;
-/// assert_eq!(String::from_utf8(buffer)?, "42");
-/// # Ok::<(), arrow_schema::ArrowError>(())
-/// ```
-pub trait VariantToJson {
-    /// Write this variant as JSON to a writer
-    fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError>;
-
-    /// Convert this variant to a JSON string
-    fn to_json_string(&self) -> Result<String, ArrowError>;
-
-    /// Convert this variant to a serde_json::Value
-    fn to_json_value(&self) -> Result<Value, ArrowError>;
-}
-
-impl<'m, 'v> VariantToJson for Variant<'m, 'v> {
-    fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError> {
-        variant_to_json(buffer, self)
-    }
-
-    fn to_json_string(&self) -> Result<String, ArrowError> {
-        variant_to_json_string(self)
-    }
-
-    fn to_json_value(&self) -> Result<Value, ArrowError> {
-        variant_to_json_value(self)
-    }
 }
 
 #[cfg(test)]
