@@ -29,9 +29,6 @@ use serde_json::{Number, Value};
 ///
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
-/// * `variant_builder` - Object of type `VariantBuilder` used to build the variant from the JSON
-///   string
-///
 ///
 /// # Returns
 ///
@@ -66,17 +63,19 @@ use serde_json::{Number, Value};
 /// assert_eq!(json_result, serde_json::to_string(&json_value)?);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-fn json_to_variant(json: &str, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-    let json: Value = serde_json::from_str(json)
-        .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
-
-    build_json(&json, builder)?;
-    Ok(())
+pub trait JsonToVariant {
+    /// Create a Variant from a JSON string
+    fn with_json(&mut self, json: &str) -> Result<(), ArrowError>;
 }
 
-fn build_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-    append_json(json, builder)?;
-    Ok(())
+impl<T: VariantBuilderExt> JsonToVariant for T {
+    fn with_json(&mut self, json: &str) -> Result<(), ArrowError> {
+        let json: Value = serde_json::from_str(json)
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
+
+        append_json(&json, self)?;
+        Ok(())
+    }
 }
 
 fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError> {
@@ -149,31 +148,6 @@ impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
 
     fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.builder.new_object(self.key)
-    }
-}
-
-/// Extension trait for creating Variants from JSON
-///
-/// This trait provides a convenient method for VariantBuilder to parse JSON strings.
-///
-/// # Example
-/// ```rust
-/// use parquet_variant::VariantBuilder;
-/// use parquet_variant_json::JsonToVariant;
-///
-/// let mut builder = VariantBuilder::new();
-/// builder.with_json("{\"name\":\"Alice\",\"age\":30}")?;
-/// let (metadata, value) = builder.finish();
-/// # Ok::<(), arrow_schema::ArrowError>(())
-/// ```
-pub trait JsonToVariant {
-    /// Create a Variant from a JSON string
-    fn with_json(&mut self, json: &str) -> Result<(), ArrowError>;
-}
-
-impl<T: VariantBuilderExt> JsonToVariant for T {
-    fn with_json(&mut self, json: &str) -> Result<(), ArrowError> {
-        json_to_variant(json, self)
     }
 }
 
