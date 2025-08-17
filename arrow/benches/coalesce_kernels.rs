@@ -76,13 +76,7 @@ fn add_all_filter_benchmarks(c: &mut Criterion) {
         Field::new("float_val2", DataType::Float64, true),
         // TODO model other dictionary types here (FixedSizeBinary for example)
     ]));
-
-    // Test both optimization modes: with and without biggest_coalesce_batch_size
-    let optimization_modes = [
-        ("default", None),                   // No optimization
-        ("optimized", Some(batch_size / 2)), // With optimization
-    ];
-
+    
     // Null density: 0, 10%
     for null_density in [0.0, 0.1] {
         // Selectivity: 0.1%, 1%, 10%, 80%
