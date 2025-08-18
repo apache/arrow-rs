@@ -17,15 +17,12 @@
 
 use std::sync::Arc;
 
-use crate::{VariantArray, VariantArrayBuilder};
+use crate::{variant_array, VariantArray, VariantArrayBuilder};
 use arrow::array::{
-    Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
+    Array, AsArray, Datum, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray
 };
 use arrow::datatypes::{
-    i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    i256, BinaryType, BinaryViewType, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, LargeBinaryType, UInt16Type, UInt32Type, UInt64Type, UInt8Type
 };
 use arrow::temporal_conversions::{
     timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
@@ -34,7 +31,7 @@ use arrow::temporal_conversions::{
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use half::f16;
-use parquet_variant::{Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+use parquet_variant::{Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantList};
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
@@ -216,7 +213,6 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Boolean => {
             non_generic_conversion!(as_boolean, |v| v, input, builder);
         }
-
         DataType::Binary => {
             generic_conversion!(BinaryType, as_bytes, |v| v, input, builder);
         }
@@ -329,10 +325,42 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             ));
         }
         DataType::List(_) => {
-            generic_conversion!(i32, as_list, |v| v, input, builder);
+            let list_array = input.as_list::<i32>();
+
+            // let iterators = list_array.iter().map(|inner_list| cast_to_variant(inner_list.as_ref()))
+
+            for i in 0..list_array.len() {
+                if list_array.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+                // Building a VariantList to convert it to a Variant::List
+                let mut variant_builder = VariantBuilder::new();
+                let mut list_builder = variant_builder.new_list();
+                let inner_list = list_array.value(i).into_data();
+                let variant =  Variant::from(inner_list);
+                for j in inner_list. { // <- `std::sync::Arc<dyn arrow::array::Array>` is not an iterator
+                    list_builder.append_value(j);
+                }
+
+                list_builder.finish();
+
+                let (metadata, value) = variant_builder.finish();
+                let variant = Variant::new(&metadata, &value);
+                let variant_inner_list = variant.as_list();
+                let variant_list = match variant_inner_list {
+                    Some(value) => Variant::List(*value),
+                    None => {
+                        builder.append_null();
+                        continue;
+                    } 
+                };
+
+                builder.append_variant(variant_list);
+            }
         }
         DataType::LargeList(_) => {
-            generic_conversion!(i64, as_list, |v| v, input, builder);
+            // generic_conversion!(i64, as_list, |v| Variant::List(v), input, builder);
         }
         dt => {
             return Err(ArrowError::CastError(format!(
@@ -352,7 +380,7 @@ mod tests {
     use super::*;
     use arrow::array::{
         ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
-        FixedSizeBinaryBuilder, BooleanArray, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
+        FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
         GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
         IntervalYearMonthArray, NullArray, ListArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
@@ -454,16 +482,34 @@ mod tests {
 
     #[test]
     fn test_cast_to_variant_list() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+        .len(8)
+        .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5]))
+        .build()
+        .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[0, 1, 2], [], [3, 4, 5]]
+        let value_offsets = Buffer::from_slice_ref([0, 3, 3, 6]);
+
+        // Construct a list array from the above two
+        let list_data_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(3)
+            .add_buffer(value_offsets.clone())
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        let list_array = ListArray::from(list_data);
+
         run_test(
-            Arc::new(ListArray::from(vec![
-                Some(Field::new_list_field(DataType::Int32, false)),
-                None,
-                Some(Field::new_list_field(DataType::Int32, true)),
-            ])),
+            Arc::new(list_array),
             vec![
-                Some(Variant::List(Variant::from(vec!["foo", "bar", "baz"]))),
+                Some(),
                 None,
-                Some(Variant::List(Variant::as_list(&'m self))),
+                Some(),
             ],
         );
     }
