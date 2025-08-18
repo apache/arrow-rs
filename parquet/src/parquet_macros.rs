@@ -35,6 +35,7 @@ macro_rules! thrift_enum {
 
         impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
             type Error = ParquetError;
+            #[allow(deprecated)]
             fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
                 let val = prot.read_i32()?;
                 match val {
@@ -54,6 +55,7 @@ macro_rules! thrift_enum {
         impl TryFrom<crate::format::$identifier> for $identifier {
             type Error = ParquetError;
 
+            #[allow(deprecated)]
             fn try_from(value: crate::format::$identifier) -> Result<Self> {
                 Ok(match value {
                     $(crate::format::$identifier::$field_name => Self::$field_name,)*
@@ -63,6 +65,7 @@ macro_rules! thrift_enum {
         }
 
         impl From<$identifier> for crate::format::$identifier {
+            #[allow(deprecated)]
             fn from(value: $identifier) -> Self {
                 match value {
                     $($identifier::$field_name => Self::$field_name,)*
