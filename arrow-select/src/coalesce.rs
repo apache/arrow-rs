@@ -142,10 +142,7 @@ pub struct BatchCoalescer {
     buffered_rows: usize,
     /// Completed batches
     completed: VecDeque<RecordBatch>,
-    /// Biggest coalesce batch size, this is used by user to determine the
-    /// maximum size of the coalesce batch, we can skip the coalesce if the
-    /// input batch is smaller than this size.
-    /// Default is `None`, meaning no limit.
+    /// Biggest coalesce batch size. See [`Self::with_biggest_coalesce_batch_size`]
     biggest_coalesce_batch_size: Option<usize>,
 }
 
@@ -175,22 +172,33 @@ impl BatchCoalescer {
         }
     }
 
-    /// Set the biggest coalesce batch size limit
+    /// Set the coalesce batch size limit (default `None`)
     ///
-    /// If set to Some(limit), batches larger than this limit will bypass
-    /// coalescing and be passed through directly. If None, all batches
-    /// will be coalesced according to the target_batch_size.
+    /// This limit determine when batches should bypass coalescing. Intuitively,
+    /// batches that are already large are costly to coalesce and are efficient
+    /// enough to process directly without coalescing.
+    ///
+    /// If `Some(limit)`, batches larger than this limit will bypass coalescing
+    /// when there is no buffered data, or when the previously buffered data
+    /// already exceeds this limit.
+    ///
+    /// If `None`, all batches will be coalesced according to the
+    /// target_batch_size.
     pub fn with_biggest_coalesce_batch_size(mut self, limit: Option<usize>) -> Self {
         self.biggest_coalesce_batch_size = limit;
         self
     }
 
     /// Get the current biggest coalesce batch size limit
+    ///
+    /// See [`Self::with_biggest_coalesce_batch_size`] for details
     pub fn biggest_coalesce_batch_size(&self) -> Option<usize> {
         self.biggest_coalesce_batch_size
     }
 
     /// Set the biggest coalesce batch size limit
+    ///
+    /// See [`Self::with_biggest_coalesce_batch_size`] for details
     pub fn set_biggest_coalesce_batch_size(&mut self, limit: Option<usize>) {
         self.biggest_coalesce_batch_size = limit;
     }
