@@ -316,6 +316,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
 
     /// Returns the element at index `i` without bounds checking
     ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     ///
     /// Caller is responsible for ensuring that the index is within the bounds

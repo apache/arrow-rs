@@ -159,8 +159,14 @@ impl FixedSizeBinaryArray {
     }
 
     /// Returns the element at index `i` as a byte slice.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
-    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    ///
+    /// Caller is responsible for ensuring that the index is within the bounds
+    /// of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
         let offset = i + self.offset();
         let pos = self.value_offset_at(offset);
