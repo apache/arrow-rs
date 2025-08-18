@@ -17,7 +17,7 @@
 
 use std::{io::Read, ops::Range, sync::Arc};
 
-use crate::basic::ColumnOrder;
+use crate::basic::{ColumnOrder, SortOrder};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::{FileDecryptionProperties, FileDecryptor},
@@ -1105,6 +1105,9 @@ impl ParquetMetaDataReader {
                                 column.physical_type(),
                             );
                             res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
+                        }
+                        TColumnOrder::IEEE754TOTALORDER(_) => {
+                            res.push(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED));
                         }
                     }
                 }

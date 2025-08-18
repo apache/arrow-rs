@@ -1522,6 +1522,7 @@ pub struct ColumnIndexBuilder {
     min_values: Vec<Vec<u8>>,
     max_values: Vec<Vec<u8>>,
     null_counts: Vec<i64>,
+    nan_counts: Vec<Option<i64>>,
     boundary_order: BoundaryOrder,
     /// contains the concatenation of the histograms of all pages
     repetition_level_histograms: Option<Vec<i64>>,
@@ -1551,6 +1552,7 @@ impl ColumnIndexBuilder {
             min_values: Vec::new(),
             max_values: Vec::new(),
             null_counts: Vec::new(),
+            nan_counts: Vec::new(),
             boundary_order: BoundaryOrder::UNORDERED,
             repetition_level_histograms: None,
             definition_level_histograms: None,
@@ -1559,17 +1561,24 @@ impl ColumnIndexBuilder {
     }
 
     /// Append statistics for the next page
+    ///
+    /// For floating-point columns (FLOAT, DOUBLE, or FLOAT16), `nan_count` must always
+    /// be `Some(n)`, even if n is 0. For non-floating-point columns, `nan_count` must
+    /// always be `None`. This requirement ensures correct serialization according to
+    /// the Parquet specification.
     pub fn append(
         &mut self,
         null_page: bool,
         min_value: Vec<u8>,
         max_value: Vec<u8>,
         null_count: i64,
+        nan_count: Option<i64>,
     ) {
         self.null_pages.push(null_page);
         self.min_values.push(min_value);
         self.max_values.push(max_value);
         self.null_counts.push(null_count);
+        self.nan_counts.push(nan_count);
     }
 
     /// Append the given page-level histograms to the [`ColumnIndex`] histograms.
@@ -1613,6 +1622,34 @@ impl ColumnIndexBuilder {
     ///
     /// Note: callers should check [`Self::valid`] before calling this method
     pub fn build_to_thrift(self) -> ColumnIndex {
+        // Parquet spec requires nan_counts to be either present for all pages or absent entirely.
+        // Callers must ensure consistency:
+        // - For floating-point columns: all pages must have Some(n)
+        // - For non-floating-point columns: all pages must have None
+        let nan_counts = if !self.nan_counts.is_empty() {
+            let has_some = self.nan_counts.iter().any(|x| x.is_some());
+            let has_none = self.nan_counts.iter().any(|x| x.is_none());
+
+            if has_some && !has_none {
+                Some(self.nan_counts.into_iter().map(|x| x.unwrap()).collect())
+            } else if !has_some && has_none {
+                None
+            } else {
+                debug_assert!(
+                    false,
+                    "Mixed Some/None in nan_counts - caller should provide consistent values"
+                );
+                Some(
+                    self.nan_counts
+                        .into_iter()
+                        .map(|x| x.unwrap_or(0))
+                        .collect(),
+                )
+            }
+        } else {
+            None
+        };
+
         ColumnIndex::new(
             self.null_pages,
             self.min_values,
@@ -1621,6 +1658,7 @@ impl ColumnIndexBuilder {
             self.null_counts,
             self.repetition_level_histograms,
             self.definition_level_histograms,
+            nan_counts,
         )
     }
 }
@@ -1975,7 +2013,7 @@ mod tests {
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
         let mut column_index = ColumnIndexBuilder::new();
-        column_index.append(false, vec![1u8], vec![2u8, 3u8], 4);
+        column_index.append(false, vec![1u8], vec![2u8, 3u8], 4, None);
         let column_index = column_index.build_to_thrift();
         let native_index = NativeIndex::<bool>::try_new(column_index).unwrap();
 
@@ -1998,9 +2036,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2880;
+        let bigger_expected_size = 2944;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3216;
+        let bigger_expected_size = 3280;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

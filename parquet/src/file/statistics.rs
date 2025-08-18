@@ -1226,4 +1226,30 @@ mod tests {
         // u64::MAX can't fit in i64, so it should be None
         assert_eq!(thrift_stats.nan_count, None);
     }
+
+    #[test]
+    fn test_nan_counts_in_column_index() {
+        // Test that nan_counts are properly collected in page index
+        use crate::file::metadata::ColumnIndexBuilder;
+
+        // Test for floating-point column - all pages must have Some(n)
+        let mut float_builder = ColumnIndexBuilder::new();
+        float_builder.append(false, vec![0u8; 4], vec![255u8; 4], 0, Some(5));
+        float_builder.append(false, vec![0u8; 4], vec![255u8; 4], 2, Some(3));
+        float_builder.append(false, vec![0u8; 4], vec![255u8; 4], 0, Some(0));  // No NaN but still Some(0)
+        
+        let float_column_index = float_builder.build_to_thrift();
+        // Verify nan_counts field is properly set for float column
+        assert_eq!(float_column_index.nan_counts, Some(vec![5, 3, 0]));
+        
+        // Test for non-floating-point column - all pages must have None
+        let mut int_builder = ColumnIndexBuilder::new();
+        int_builder.append(false, vec![0u8; 4], vec![255u8; 4], 0, None);
+        int_builder.append(false, vec![0u8; 4], vec![255u8; 4], 2, None);
+        int_builder.append(false, vec![0u8; 4], vec![255u8; 4], 0, None);
+        
+        let int_column_index = int_builder.build_to_thrift();
+        // Verify nan_counts field is None for non-float column
+        assert_eq!(int_column_index.nan_counts, None);
+    }
 }
