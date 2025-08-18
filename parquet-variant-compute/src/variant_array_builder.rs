@@ -275,28 +275,6 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     }
 }
 
-impl Drop for VariantArrayVariantBuilder<'_> {
-    /// If the builder was not finished, roll back any changes made to the
-    /// underlying buffers (by truncating them)
-    fn drop(&mut self) {
-        if self.finished {
-            return;
-        }
-
-        // if the object was not finished, need to rollback any changes by
-        // truncating the buffers to the original offsets
-        let metadata_offset = self.metadata_offset;
-        let value_offset = self.value_offset;
-
-        let metadata_builder = &mut self.array_builder.metadata_builder;
-        let value_builder = &mut self.array_builder.value_builder;
-
-        // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost)
-        assert!(metadata_offset <= metadata_builder.offset(), "metadata length decreased unexpectedly");
-        assert!(value_offset <= value_builder.offset(), "value length decreased unexpectedly");
-    }
-}
-
 fn binary_view_array_from_buffers(
     buffer: Vec<u8>,
     mut offsets: Vec<usize>,
