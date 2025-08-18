@@ -278,10 +278,10 @@ impl<'a> VariantArrayVariantBuilder<'a> {
         // offsets and lengths into the parent array builder.
         self.array_builder
             .metadata_offsets
-            .push(metadata_buffer.len());
+            .push(metadata_offset);
         self.array_builder
             .value_offsets
-            .push(value_buffer.len());
+            .push(value_offset);
         self.array_builder.nulls.append_non_null();
         // put the buffers back into the array builder
         self.array_builder.metadata_buffer = metadata_buffer;
@@ -329,19 +329,19 @@ impl Drop for VariantArrayVariantBuilder<'_> {
 
 fn binary_view_array_from_buffers(
     buffer: Vec<u8>,
-    offsets: Vec<usize>,
+    mut offsets: Vec<usize>,
 ) -> BinaryViewArray {
     let mut builder = BinaryViewBuilder::with_capacity(offsets.len());
+    offsets.push(buffer.len());
     let block = builder.append_block(buffer.into());
     // TODO this can be much faster if it creates the views directly during append
-    let mut start = 0;
-    for end in offsets {
-        let end = u32::try_from(end).expect("offset should fit in u32");
+    for i in 1..offsets.len() {
+        let start = u32::try_from(offsets[i-1]).expect("offset should fit in u32");
+        let end = u32::try_from(offsets[i]).expect("offset should fit in u32");
         let length = end - start;
         builder
             .try_append_view(block, start, length)
             .expect("Failed to append view");
-        start = end;
     }
     builder.finish()
 }
