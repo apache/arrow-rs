@@ -94,18 +94,6 @@ impl ValueBuilder {
     }
 }
 
-impl From<Vec<u8>> for ValueBuilder {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
-    }
-}
-
-impl From<ValueBuilder> for Vec<u8> {
-    fn from(value_buffer: ValueBuilder) -> Self {
-        value_buffer.0
-    }
-}
-
 impl ValueBuilder {
     fn append_u8(&mut self, term: u8) {
         self.0.push(term);
@@ -120,7 +108,7 @@ impl ValueBuilder {
     }
 
     pub fn into_inner(self) -> Vec<u8> {
-        self.into()
+        self.0
     }
 
     fn inner_mut(&mut self) -> &mut Vec<u8> {
@@ -446,16 +434,6 @@ pub struct MetadataBuilder {
 
     /// Output buffer. Metadata is written to the end of this buffer
     metadata_buffer: Vec<u8>,
-}
-
-/// Create a new MetadataBuilder that will write to the specified metadata buffer
-impl From<Vec<u8>> for MetadataBuilder {
-    fn from(metadata_buffer: Vec<u8>) -> Self {
-        Self {
-            metadata_buffer,
-            ..Default::default()
-        }
-    }
 }
 
 impl MetadataBuilder {
@@ -980,40 +958,6 @@ impl Drop for ParentState<'_> {
 /// );
 ///
 /// ```
-/// # Example: Reusing Buffers
-///
-/// You can use the [`VariantBuilder`] to write into existing buffers (for
-/// example to write multiple variants back to back in the same buffer)
-///
-/// ```
-/// // we will write two variants back to back
-/// use parquet_variant::{Variant, VariantBuilder};
-/// // Append 12345
-/// let mut builder = VariantBuilder::new();
-/// builder.append_value(12345);
-/// let (metadata, value) = builder.finish();
-/// // remember where the first variant ends
-/// let (first_meta_offset, first_meta_len) = (0, metadata.len());
-/// let (first_value_offset, first_value_len) = (0, value.len());
-///
-/// // now, append a second variant to the same buffers
-/// let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-/// builder.append_value("Foo");
-/// let (metadata, value) = builder.finish();
-///
-/// // The variants can be referenced in their appropriate location
-/// let variant1 = Variant::new(
-///   &metadata[first_meta_offset..first_meta_len],
-///   &value[first_value_offset..first_value_len]
-///  );
-/// assert_eq!(variant1, Variant::Int32(12345));
-///
-/// let variant2 = Variant::new(
-///   &metadata[first_meta_len..],
-///   &value[first_value_len..]
-///  );
-/// assert_eq!(variant2, Variant::from("Foo"));
-/// ```
 ///
 /// # Example: Unique Field Validation
 ///
@@ -1079,7 +1023,7 @@ pub struct VariantBuilder {
 impl VariantBuilder {
     /// Create a new VariantBuilder with new underlying buffer
     pub fn new() -> Self {
-        Self::new_with_buffers(Vec::new(), Vec::new())
+        Self::default()
     }
 
     /// Create a new VariantBuilder with pre-existing [`VariantMetadata`].
@@ -1087,16 +1031,6 @@ impl VariantBuilder {
         self.metadata_builder.extend(metadata.iter());
 
         self
-    }
-
-    /// Create a new VariantBuilder that will write the metadata and values to
-    /// the specified buffers.
-    pub fn new_with_buffers(metadata_buffer: Vec<u8>, value_buffer: Vec<u8>) -> Self {
-        Self {
-            buffer: ValueBuilder::from(value_buffer),
-            metadata_builder: MetadataBuilder::from(metadata_buffer),
-            validate_unique_fields: false,
-        }
     }
 
     /// Enables validation of unique field keys in nested objects.
@@ -2721,81 +2655,6 @@ mod tests {
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
         let metadata = MetadataBuilder::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
-    }
-
-    /// Test reusing buffers with nested objects
-    #[test]
-    fn test_with_existing_buffers_nested() {
-        let mut builder = VariantBuilder::new();
-        append_test_list(&mut builder);
-        let (m1, v1) = builder.finish();
-        let variant1 = Variant::new(&m1, &v1);
-
-        let mut builder = VariantBuilder::new();
-        append_test_object(&mut builder);
-        let (m2, v2) = builder.finish();
-        let variant2 = Variant::new(&m2, &v2);
-
-        let mut builder = VariantBuilder::new();
-        builder.append_value("This is a string");
-        let (m3, v3) = builder.finish();
-        let variant3 = Variant::new(&m3, &v3);
-
-        // Now, append those three variants to the a new buffer that is reused
-        let mut builder = VariantBuilder::new();
-        append_test_list(&mut builder);
-        let (metadata, value) = builder.finish();
-        let (meta1_offset, meta1_end) = (0, metadata.len());
-        let (value1_offset, value1_end) = (0, value.len());
-
-        // reuse same buffer
-        let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-        append_test_object(&mut builder);
-        let (metadata, value) = builder.finish();
-        let (meta2_offset, meta2_end) = (meta1_end, metadata.len());
-        let (value2_offset, value2_end) = (value1_end, value.len());
-
-        // Append a string
-        let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-        builder.append_value("This is a string");
-        let (metadata, value) = builder.finish();
-        let (meta3_offset, meta3_end) = (meta2_end, metadata.len());
-        let (value3_offset, value3_end) = (value2_end, value.len());
-
-        // verify we can read the variants back correctly
-        let roundtrip1 = Variant::new(
-            &metadata[meta1_offset..meta1_end],
-            &value[value1_offset..value1_end],
-        );
-        assert_eq!(roundtrip1, variant1,);
-
-        let roundtrip2 = Variant::new(
-            &metadata[meta2_offset..meta2_end],
-            &value[value2_offset..value2_end],
-        );
-        assert_eq!(roundtrip2, variant2,);
-
-        let roundtrip3 = Variant::new(
-            &metadata[meta3_offset..meta3_end],
-            &value[value3_offset..value3_end],
-        );
-        assert_eq!(roundtrip3, variant3);
-    }
-
-    /// append a simple List variant
-    fn append_test_list(builder: &mut VariantBuilder) {
-        builder
-            .new_list()
-            .with_value(1234)
-            .with_value("a string value")
-            .finish();
-    }
-
-    /// append an object variant
-    fn append_test_object(builder: &mut VariantBuilder) {
-        let mut obj = builder.new_object();
-        obj.insert("a", true);
-        obj.finish().unwrap();
     }
 
     #[test]

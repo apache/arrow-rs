@@ -275,6 +275,11 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     }
 }
 
+// Make it harder for people to accidentally forget to `finish` the builder.
+impl Drop for VariantArrayVariantBuilder<'_> {
+    fn drop(&mut self) {}
+}
+
 fn binary_view_array_from_buffers(
     buffer: Vec<u8>,
     mut offsets: Vec<usize>,
