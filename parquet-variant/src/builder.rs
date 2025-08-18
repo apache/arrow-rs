@@ -23,6 +23,8 @@ use arrow_schema::ArrowError;
 use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
 
+use std::collections::HashMap;
+
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
@@ -395,13 +397,76 @@ impl ValueBuilder {
     }
 }
 
+pub trait MetadataBuilder: std::fmt::Debug {
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError>;
+    fn field_name(&self, field_id: usize) -> &str;
+    fn num_field_names(&self) -> usize;
+    fn truncate_field_names(&mut self, new_size: usize);
+}
+
+impl MetadataBuilder for MetadataBuilderXX {
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        Ok(self.upsert_field_name(field_name))
+    }
+    fn field_name(&self, field_id: usize) -> &str {
+        self.field_name(field_id)
+    }
+    fn num_field_names(&self) -> usize {
+        self.num_field_names()
+    }
+    fn truncate_field_names(&mut self, new_size: usize) {
+        self.field_names.truncate(new_size)
+    }
+}
+
+#[derive(Debug)]
+pub struct ReadOnlyMetadataBuilder<'m> {
+    metadata: VariantMetadata<'m>,
+    known_field_names: HashMap<&'m str, usize>,
+}
+
+impl<'m> ReadOnlyMetadataBuilder<'m> {
+    pub fn new(metadata: VariantMetadata<'m>) -> Self {
+        Self {
+            metadata,
+            known_field_names: HashMap::new(),
+        }
+    }
+}
+
+impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        if let Some(field_id) = self.known_field_names.get(field_name) {
+            return Ok(*field_id as u32);
+        }
+
+        // TODO: Be (a lot) smarter here!
+        let Some(field_id) = self.metadata.iter().position(|name| name == field_name) else {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Field name '{field_name}' not found in metadata",
+            )));
+        };
+        self.known_field_names.insert(self.metadata.get_infallible(field_id), field_id);
+        Ok(field_id as u32)
+    }
+    fn field_name(&self, field_id: usize) -> &str {
+        &self.metadata[field_id]
+    }
+    fn num_field_names(&self) -> usize {
+        self.metadata.len()
+    }
+    fn truncate_field_names(&mut self, new_size: usize) {
+        debug_assert_eq!(self.metadata.len(), new_size);
+    }
+}
+
 /// Builder for constructing metadata for [`Variant`] values.
 ///
 /// This is used internally by the [`VariantBuilder`] to construct the metadata
 ///
 /// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
 #[derive(Default, Debug)]
-pub struct MetadataBuilder {
+pub struct MetadataBuilderXX {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 
@@ -412,7 +477,7 @@ pub struct MetadataBuilder {
     metadata_buffer: Vec<u8>,
 }
 
-impl MetadataBuilder {
+impl MetadataBuilderXX {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
@@ -503,7 +568,7 @@ impl MetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
+impl<S: AsRef<str>> FromIterator<S> for MetadataBuilderXX {
     fn from_iter<T: IntoIterator<Item = S>>(iter: T) -> Self {
         let mut this = Self::default();
         this.extend(iter);
@@ -512,7 +577,7 @@ impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
+impl<S: AsRef<str>> Extend<S> for MetadataBuilderXX {
     fn extend<T: IntoIterator<Item = S>>(&mut self, iter: T) {
         let iter = iter.into_iter();
         let (min, _) = iter.size_hint();
@@ -542,14 +607,14 @@ pub enum ParentState<'a> {
     Variant {
         buffer: &'a mut ValueBuilder,
         saved_buffer_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         finished: bool,
     },
     List {
         buffer: &'a mut ValueBuilder,
         saved_buffer_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         offsets: &'a mut Vec<usize>,
         saved_offsets_size: usize,
@@ -558,7 +623,7 @@ pub enum ParentState<'a> {
     Object {
         buffer: &'a mut ValueBuilder,
         saved_buffer_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         fields: &'a mut IndexMap<u32, usize>,
         saved_fields_size: usize,
@@ -569,7 +634,7 @@ pub enum ParentState<'a> {
 impl<'a> ParentState<'a> {
     pub fn variant(
         buffer: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
     ) -> Self {
         ParentState::Variant {
             saved_buffer_offset: buffer.offset(),
@@ -582,7 +647,7 @@ impl<'a> ParentState<'a> {
 
     pub fn list(
         buffer: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         offsets: &'a mut Vec<usize>,
         saved_parent_buffer_offset: usize,
     ) -> Self {
@@ -606,7 +671,7 @@ impl<'a> ParentState<'a> {
 
     pub fn object(
         buffer: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
         saved_parent_buffer_offset: usize,
         field_name: &str,
@@ -618,7 +683,7 @@ impl<'a> ParentState<'a> {
         let saved_buffer_offset = buffer.offset();
         let saved_fields_size = fields.len();
         let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
-        let field_id = metadata_builder.upsert_field_name(field_name);
+        let field_id = metadata_builder.try_upsert_field_name(field_name)?;
         let field_start = saved_buffer_offset - saved_parent_buffer_offset;
         if fields.insert(field_id, field_start).is_some() && validate_unique_fields {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -641,7 +706,7 @@ impl<'a> ParentState<'a> {
         self.buffer_and_metadata_builder().0
     }
 
-    fn metadata_builder(&mut self) -> &mut MetadataBuilder {
+    fn metadata_builder(&mut self) -> &mut dyn MetadataBuilder {
         self.buffer_and_metadata_builder().1
     }
 
@@ -705,9 +770,7 @@ impl<'a> ParentState<'a> {
                 ..
             } => {
                 buffer.inner_mut().truncate(*saved_buffer_offset);
-                metadata_builder
-                    .field_names
-                    .truncate(*saved_metadata_builder_dict_size);
+                metadata_builder.truncate_field_names(*saved_metadata_builder_dict_size);
             }
         };
 
@@ -729,7 +792,7 @@ impl<'a> ParentState<'a> {
 
     /// Return mutable references to the buffer and metadata builder that this
     /// parent state is using.
-    fn buffer_and_metadata_builder(&mut self) -> (&mut ValueBuilder, &mut MetadataBuilder) {
+    fn buffer_and_metadata_builder(&mut self) -> (&mut ValueBuilder, &mut dyn MetadataBuilder) {
         match self {
             ParentState::Variant {
                 buffer,
@@ -745,7 +808,7 @@ impl<'a> ParentState<'a> {
                 buffer,
                 metadata_builder,
                 ..
-            } => (buffer, metadata_builder),
+            } => (buffer, *metadata_builder),
         }
     }
 }
@@ -995,7 +1058,7 @@ impl Drop for ParentState<'_> {
 #[derive(Default, Debug)]
 pub struct VariantBuilder {
     value_builder: ValueBuilder,
-    metadata_builder: MetadataBuilder,
+    metadata_builder: MetadataBuilderXX,
     validate_unique_fields: bool,
 }
 
@@ -2557,28 +2620,28 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_from_iter() {
-        let metadata = MetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
+        let metadata = MetadataBuilderXX::from_iter(vec!["apple", "banana", "cherry"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "apple");
         assert_eq!(metadata.field_name(1), "banana");
         assert_eq!(metadata.field_name(2), "cherry");
         assert!(metadata.is_sorted);
 
-        let metadata = MetadataBuilder::from_iter(["zebra", "apple", "banana"]);
+        let metadata = MetadataBuilderXX::from_iter(["zebra", "apple", "banana"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "zebra");
         assert_eq!(metadata.field_name(1), "apple");
         assert_eq!(metadata.field_name(2), "banana");
         assert!(!metadata.is_sorted);
 
-        let metadata = MetadataBuilder::from_iter(Vec::<&str>::new());
+        let metadata = MetadataBuilderXX::from_iter(Vec::<&str>::new());
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
     }
 
     #[test]
     fn test_metadata_builder_extend() {
-        let mut metadata = MetadataBuilder::default();
+        let mut metadata = MetadataBuilderXX::default();
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
 
@@ -2603,7 +2666,7 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_extend_sort_order() {
-        let mut metadata = MetadataBuilder::default();
+        let mut metadata = MetadataBuilderXX::default();
 
         metadata.extend(["middle"]);
         assert!(metadata.is_sorted);
@@ -2619,17 +2682,17 @@ mod tests {
     #[test]
     fn test_metadata_builder_from_iter_with_string_types() {
         // &str
-        let metadata = MetadataBuilder::from_iter(["a", "b", "c"]);
+        let metadata = MetadataBuilderXX::from_iter(["a", "b", "c"]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // string
         let metadata =
-            MetadataBuilder::from_iter(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+            MetadataBuilderXX::from_iter(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // mixed types (anything that implements AsRef<str>)
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
-        let metadata = MetadataBuilder::from_iter(field_names);
+        let metadata = MetadataBuilderXX::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
     }
 

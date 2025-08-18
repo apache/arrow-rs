@@ -331,6 +331,11 @@ impl<'m> VariantMetadata<'m> {
         self.iter_try()
             .map(|result| result.expect("Invalid metadata dictionary entry"))
     }
+
+    /// Same as `Index::index`, but with the correct lifetime.
+    pub(crate) fn get_infallible(&self, i: usize) -> &'m str {
+        self.get(i).expect("Invalid metadata dictionary entry")
+    }
 }
 
 /// Retrieves the ith dictionary entry, panicking if the index is out of bounds. Accessing
@@ -341,7 +346,7 @@ impl std::ops::Index<usize> for VariantMetadata<'_> {
     type Output = str;
 
     fn index(&self, i: usize) -> &str {
-        self.get(i).expect("Invalid metadata dictionary entry")
+        self.get_infallible(i)
     }
 }
 

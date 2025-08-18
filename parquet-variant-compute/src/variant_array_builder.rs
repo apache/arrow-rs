@@ -21,7 +21,7 @@ use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{
-    ListBuilder, MetadataBuilder, ObjectBuilder, ParentState, ValueBuilder, Variant,
+    ListBuilder, MetadataBuilderXX, ObjectBuilder, ParentState, ValueBuilder, Variant,
     VariantBuilderExt,
 };
 use std::sync::Arc;
@@ -76,7 +76,7 @@ pub struct VariantArrayBuilder {
     /// Nulls
     nulls: NullBufferBuilder,
     /// buffer for all the metadata
-    metadata_builder: MetadataBuilder,
+    metadata_builder: MetadataBuilderXX,
     /// (offset, len) pairs for locations of metadata in the buffer
     metadata_offsets: Vec<usize>,
     /// buffer for values
