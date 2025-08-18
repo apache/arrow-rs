@@ -30,7 +30,7 @@ macro_rules! thrift_enum {
         #[allow(non_camel_case_types)]
         #[allow(missing_docs)]
         pub enum $identifier {
-            $($field_name = $field_value,)*
+            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name = $field_value,)*
         }
 
         impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
