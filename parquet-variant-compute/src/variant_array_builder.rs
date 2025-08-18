@@ -48,7 +48,6 @@ use std::sync::Arc;
 /// // append an object to the builder
 /// let mut vb = builder.variant_builder();
 /// vb.new_object()
-///   .unwrap()
 ///   .with_field("foo", "bar")
 ///   .finish()
 ///   .unwrap();
@@ -174,7 +173,6 @@ impl VariantArrayBuilder {
     /// let mut variant_builder = array_builder.variant_builder();
     /// variant_builder
     ///     .new_object()
-    ///     .unwrap()
     ///     .with_field("my_field", 42i64)
     ///     .finish()
     ///     .unwrap();
@@ -224,11 +222,11 @@ impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
         self.variant_builder.append_value(value);
     }
 
-    fn new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
         Ok(self.variant_builder.new_list())
     }
 
-    fn new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
         Ok(self.variant_builder.new_object())
     }
 }
@@ -401,7 +399,6 @@ mod test {
         let mut sub_builder = builder.variant_builder();
         sub_builder
             .new_object()
-            .unwrap()
             .with_field("foo", "bar")
             .finish()
             .unwrap();
@@ -411,7 +408,6 @@ mod test {
         let mut sub_builder = builder.variant_builder();
         sub_builder
             .new_list()
-            .unwrap()
             .with_value(Variant::from(1i32))
             .with_value(Variant::from(2i32))
             .finish();
@@ -441,7 +437,6 @@ mod test {
         let mut sub_builder = builder.variant_builder();
         sub_builder
             .new_object()
-            .unwrap()
             .with_field("foo", 1i32)
             .finish()
             .unwrap();
@@ -451,7 +446,6 @@ mod test {
         let mut sub_builder = builder.variant_builder();
         sub_builder
             .new_object()
-            .unwrap()
             .with_field("bar", 2i32)
             .finish()
             .unwrap();
@@ -461,7 +455,6 @@ mod test {
         let mut sub_builder = builder.variant_builder();
         sub_builder
             .new_object()
-            .unwrap()
             .with_field("baz", 3i32)
             .finish()
             .unwrap();

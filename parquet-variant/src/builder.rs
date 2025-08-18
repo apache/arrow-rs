@@ -89,6 +89,7 @@ struct ValueBuffer(Vec<u8>);
 
 impl ValueBuffer {
     /// Construct a ValueBuffer that will write to a new underlying `Vec`
+    #[allow(unused)]
     fn new() -> Self {
         Default::default()
     }
@@ -705,7 +706,7 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn finished(&mut self) -> &mut bool {
+    fn is_finished(&mut self) -> &mut bool {
         match self {
             ParentState::Variant { finished, .. }
             | ParentState::List { finished, .. }
@@ -715,12 +716,12 @@ impl<'a> ParentState<'a> {
 
     // Mark the insertion as having succeeded.
     fn finish(&mut self) {
-        *self.finished() = true
+        *self.is_finished() = true
     }
 
     // Performs any parent-specific aspects of rolling back a builder if an insertion failed.
     fn rollback(&mut self) {
-        if *self.finished() {
+        if *self.is_finished() {
             return;
         }
 
@@ -1079,11 +1080,7 @@ pub struct VariantBuilder {
 impl VariantBuilder {
     /// Create a new VariantBuilder with new underlying buffer
     pub fn new() -> Self {
-        Self {
-            buffer: ValueBuffer::new(),
-            metadata_builder: MetadataBuilder::default(),
-            validate_unique_fields: false,
-        }
+        Self::new_with_buffers(Vec::new(), Vec::new())
     }
 
     /// Create a new VariantBuilder with pre-existing [`VariantMetadata`].
@@ -1465,16 +1462,34 @@ impl<'a> ObjectBuilder<'a> {
 
     /// Returns an object builder that can be used to append a new (nested) object to this object.
     ///
+    /// Panics if the requested key cannot be inserted (e.g. because it is a duplicate).
+    ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
-    pub fn new_object<'b>(&'b mut self, key: &'b str) -> Result<ObjectBuilder<'b>, ArrowError> {
+    pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b> {
+        self.try_new_object(key).unwrap()
+    }
+
+    /// Returns an object builder that can be used to append a new (nested) object to this object.
+    ///
+    /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
+    pub fn try_new_object<'b>(&'b mut self, key: &'b str) -> Result<ObjectBuilder<'b>, ArrowError> {
         let (parent_state, validate_unique_fields) = self.parent_state(key)?;
         Ok(ObjectBuilder::new(parent_state, validate_unique_fields))
     }
 
     /// Returns a list builder that can be used to append a new (nested) list to this object.
     ///
+    /// Panics if the requested key cannot be inserted (e.g. because it is a duplicate).
+    ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
-    pub fn new_list<'b>(&'b mut self, key: &'b str) -> Result<ListBuilder<'b>, ArrowError> {
+    pub fn new_list<'b>(&'b mut self, key: &'b str) -> ListBuilder<'b> {
+        self.try_new_list(key).unwrap()
+    }
+
+    /// Returns a list builder that can be used to append a new (nested) list to this object.
+    ///
+    /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
+    pub fn try_new_list<'b>(&'b mut self, key: &'b str) -> Result<ListBuilder<'b>, ArrowError> {
         let (parent_state, validate_unique_fields) = self.parent_state(key)?;
         Ok(ListBuilder::new(parent_state, validate_unique_fields))
     }
@@ -1548,9 +1563,17 @@ impl<'a> ObjectBuilder<'a> {
 pub trait VariantBuilderExt {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
-    fn new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
+    fn new_list(&mut self) -> ListBuilder<'_> {
+        self.try_new_list().unwrap()
+    }
 
-    fn new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
+    fn new_object(&mut self) -> ObjectBuilder<'_> {
+        self.try_new_object().unwrap()
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
 }
 
 impl VariantBuilderExt for ListBuilder<'_> {
@@ -1558,11 +1581,11 @@ impl VariantBuilderExt for ListBuilder<'_> {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
         Ok(self.new_list())
     }
 
-    fn new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
         Ok(self.new_object())
     }
 }
@@ -1572,11 +1595,11 @@ impl VariantBuilderExt for VariantBuilder {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
         Ok(self.new_list())
     }
 
-    fn new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
         Ok(self.new_object())
     }
 }
@@ -2047,7 +2070,7 @@ mod tests {
         {
             let mut outer_object_builder = builder.new_object();
             {
-                let mut inner_object_builder = outer_object_builder.new_object("c").unwrap();
+                let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
                 let _ = inner_object_builder.finish();
             }
@@ -2087,7 +2110,7 @@ mod tests {
         {
             let mut outer_object_builder = builder.new_object();
             {
-                let mut inner_object_builder = outer_object_builder.new_object("c").unwrap();
+                let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", false);
                 inner_object_builder.insert("c", "a");
 
@@ -2130,12 +2153,11 @@ mod tests {
         {
             let mut outer_object_builder = builder.new_object();
             {
-                let mut inner_object_builder = outer_object_builder.new_object("door 1").unwrap();
+                let mut inner_object_builder = outer_object_builder.new_object("door 1");
 
                 // create inner_object_list
                 inner_object_builder
                     .new_list("items")
-                    .unwrap()
                     .with_value("apple")
                     .with_value(false)
                     .finish();
@@ -2197,19 +2219,17 @@ mod tests {
             outer_object_builder.insert("a", false);
 
             {
-                let mut inner_object_builder = outer_object_builder.new_object("c").unwrap();
+                let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
 
                 {
-                    let mut inner_inner_object_builder =
-                        inner_object_builder.new_object("c").unwrap();
+                    let mut inner_inner_object_builder = inner_object_builder.new_object("c");
                     inner_inner_object_builder.insert("aa", "bb");
                     let _ = inner_inner_object_builder.finish();
                 }
 
                 {
-                    let mut inner_inner_object_builder =
-                        inner_object_builder.new_object("d").unwrap();
+                    let mut inner_inner_object_builder = inner_object_builder.new_object("d");
                     inner_inner_object_builder.insert("cc", "dd");
                     let _ = inner_inner_object_builder.finish();
                 }
@@ -2219,10 +2239,10 @@ mod tests {
             outer_object_builder.insert("b", true);
 
             {
-                let mut inner_object_builder = outer_object_builder.new_object("d").unwrap();
+                let mut inner_object_builder = outer_object_builder.new_object("d");
                 inner_object_builder.insert("e", 1);
                 {
-                    let mut inner_list_builder = inner_object_builder.new_list("f").unwrap();
+                    let mut inner_list_builder = inner_object_builder.new_list("f");
                     inner_list_builder.append_value(1);
                     inner_list_builder.append_value(true);
 
@@ -2230,7 +2250,7 @@ mod tests {
                 }
 
                 {
-                    let mut inner_list_builder = inner_object_builder.new_list("g").unwrap();
+                    let mut inner_list_builder = inner_object_builder.new_list("g");
                     inner_list_builder.append_value("tree");
                     inner_list_builder.append_value(false);
 
@@ -2925,7 +2945,7 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested list builder but never finish it
-        let mut nested_list_builder = object_builder.new_list("nested").unwrap();
+        let mut nested_list_builder = object_builder.new_list("nested");
         nested_list_builder.append_value("hi");
         drop(nested_list_builder);
 
@@ -2954,7 +2974,7 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested list builder and finish it
-        let mut nested_list_builder = object_builder.new_list("nested").unwrap();
+        let mut nested_list_builder = object_builder.new_list("nested");
         nested_list_builder.append_value("hi");
         nested_list_builder.finish();
 
@@ -2979,7 +2999,7 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested object builder but never finish it
-        let mut nested_object_builder = object_builder.new_object("nested").unwrap();
+        let mut nested_object_builder = object_builder.new_object("nested");
         nested_object_builder.insert("name", "unknown");
         drop(nested_object_builder);
 
@@ -3008,7 +3028,7 @@ mod tests {
         object_builder.insert("first", 1i8);
 
         // Create a nested object builder and finish it
-        let mut nested_object_builder = object_builder.new_object("nested").unwrap();
+        let mut nested_object_builder = object_builder.new_object("nested");
         nested_object_builder.insert("name", "unknown");
         nested_object_builder.finish().unwrap();
 
@@ -3075,7 +3095,7 @@ mod tests {
             let mut outer_obj = builder.new_object();
 
             {
-                let mut inner_obj = outer_obj.new_object("b").unwrap();
+                let mut inner_obj = outer_obj.new_object("b");
                 inner_obj.insert("a", "inner_value");
                 inner_obj.finish().unwrap();
             }
@@ -3149,7 +3169,7 @@ mod tests {
                 let mut object = list.new_object();
                 for i in take(4) {
                     let field_name = format!("field{i}");
-                    let mut list = object.new_list(&field_name).unwrap();
+                    let mut list = object.new_list(&field_name);
                     for i in take(3) {
                         let mut object = list.new_object();
                         for i in take(3) {

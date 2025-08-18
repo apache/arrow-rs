@@ -839,7 +839,7 @@ mod tests {
         let mut o = b.new_object();
 
         o.insert("a", ());
-        let mut inner_o = o.new_object("b").unwrap();
+        let mut inner_o = o.new_object("b");
         inner_o.insert("a", 3.3);
         inner_o.finish().unwrap();
         o.finish().unwrap();

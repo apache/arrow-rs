@@ -114,14 +114,14 @@ fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(),
         }
         Value::String(s) => builder.append_value(s.as_str()),
         Value::Array(arr) => {
-            let mut list_builder = builder.new_list()?;
+            let mut list_builder = builder.try_new_list()?;
             for val in arr {
                 append_json(val, &mut list_builder)?;
             }
             list_builder.finish();
         }
         Value::Object(obj) => {
-            let mut obj_builder = builder.new_object()?;
+            let mut obj_builder = builder.try_new_object()?;
             for (key, value) in obj.iter() {
                 let mut field_builder = ObjectFieldBuilder {
                     key,
@@ -145,12 +145,12 @@ impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
         self.builder.insert(self.key, value);
     }
 
-    fn new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
-        self.builder.new_list(self.key)
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        self.builder.try_new_list(self.key)
     }
 
-    fn new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
-        self.builder.new_object(self.key)
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        self.builder.try_new_object(self.key)
     }
 }
 
@@ -570,18 +570,16 @@ mod test {
     fn test_json_to_variant_object_complex() -> Result<(), ArrowError> {
         let mut variant_builder = VariantBuilder::new();
         let mut object_builder = variant_builder.new_object();
-        object_builder
-            .new_list("booleans")?
-            .with_value(Variant::BooleanTrue)
-            .with_value(Variant::BooleanFalse)
-            .finish();
+        let mut inner_list_builder = object_builder.new_list("booleans");
+        inner_list_builder.append_value(Variant::BooleanTrue);
+        inner_list_builder.append_value(Variant::BooleanFalse);
+        inner_list_builder.finish();
         object_builder.insert("null", Variant::Null);
-        object_builder
-            .new_list("numbers")?
-            .with_value(Variant::Int8(4))
-            .with_value(Variant::Double(-3e0))
-            .with_value(Variant::Double(1001e-3))
-            .finish();
+        let mut inner_list_builder = object_builder.new_list("numbers");
+        inner_list_builder.append_value(Variant::Int8(4));
+        inner_list_builder.append_value(Variant::Double(-3e0));
+        inner_list_builder.append_value(Variant::Double(1001e-3));
+        inner_list_builder.finish();
         object_builder.finish().unwrap();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -640,9 +638,9 @@ mod test {
         let mut variant_builder = VariantBuilder::new();
         let mut object_builder = variant_builder.new_object();
         keys.iter().for_each(|key| {
-            let mut inner_object_builder = object_builder.new_object(key).unwrap();
+            let mut inner_object_builder = object_builder.new_object(key);
             inner_keys.iter().for_each(|inner_key| {
-                let mut list_builder = inner_object_builder.new_list(inner_key).unwrap();
+                let mut list_builder = inner_object_builder.new_list(inner_key);
                 for i in 0..=127 {
                     list_builder.append_value(Variant::Int8(i));
                 }
