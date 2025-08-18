@@ -774,12 +774,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         page_variable_length_bytes: Option<i64>,
     ) {
         // Determine if this is a floating-point column
-        let is_float_column = matches!(
-            self.descr.physical_type(),
-            Type::FLOAT | Type::DOUBLE
-        ) || (self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY
-            && self.descr.logical_type() == Some(LogicalType::Float16));
-        
+        let is_float_column = matches!(self.descr.physical_type(), Type::FLOAT | Type::DOUBLE)
+            || (self.descr.physical_type() == Type::FIXED_LEN_BYTE_ARRAY
+                && self.descr.logical_type() == Some(LogicalType::Float16));
+
         // update the column index
         let null_page =
             (self.page_metrics.num_buffered_rows as u64) == self.page_metrics.num_page_nulls;
@@ -793,7 +791,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             } else {
                 None
             };
-            
+
             self.column_index_builder.append(
                 null_page,
                 vec![],
@@ -840,7 +838,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     } else {
                         None
                     };
-                    
+
                     if self.can_truncate_value() {
                         self.column_index_builder.append(
                             null_page,
@@ -1433,7 +1431,7 @@ fn update_stat<T: ParquetValueType, F>(
 fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
     use crate::util::ieee754;
     use std::cmp::Ordering;
-    
+
     match T::PHYSICAL_TYPE {
         Type::FLOAT => {
             // Use IEEE 754 total order for float comparisons
@@ -1526,7 +1524,7 @@ fn compare_greater_unsigned_int<T: ParquetValueType>(a: &T, b: &T) -> bool {
 fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
     use crate::util::ieee754;
     use std::cmp::Ordering;
-    
+
     let a = f16::from_le_bytes(a.try_into().unwrap());
     let b = f16::from_le_bytes(b.try_into().unwrap());
     ieee754::compare_f16(a, b) == Ordering::Greater
@@ -2687,11 +2685,11 @@ mod tests {
         let pos_one = 1.0_f32;
         let pos_inf = f32::INFINITY;
         let pos_nan = f32::from_bits(0x7fc00000);
-        
+
         let values = vec![
-            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero
+            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
         ];
-        
+
         let stats = statistics_roundtrip::<FloatType>(&values);
         if let Statistics::Float(stats) = stats {
             // With IEEE 754 total order, min should be -NaN, max should be +NaN
@@ -2715,11 +2713,11 @@ mod tests {
         let pos_one = 1.0_f64;
         let pos_inf = f64::INFINITY;
         let pos_nan = f64::from_bits(0x7ff8000000000000);
-        
+
         let values = vec![
-            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero
+            pos_nan, neg_zero, pos_inf, neg_one, neg_nan, pos_one, neg_inf, pos_zero,
         ];
-        
+
         let stats = statistics_roundtrip::<DoubleType>(&values);
         if let Statistics::Double(stats) = stats {
             // With IEEE 754 total order, and NaN filtering
@@ -2735,7 +2733,7 @@ mod tests {
     fn test_ieee754_total_order_zeros() {
         // Test that -0.0 and +0.0 are handled correctly
         let values = vec![-0.0_f32, 0.0_f32, -0.0_f32, 0.0_f32];
-        
+
         let stats = statistics_roundtrip::<FloatType>(&values);
         if let Statistics::Float(stats) = stats {
             // With IEEE 754 total order, -0.0 < +0.0

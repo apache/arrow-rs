@@ -81,54 +81,6 @@ pub fn compare_f16(a: f16, b: f16) -> Ordering {
     total_order_f16(a).cmp(&total_order_f16(b))
 }
 
-/// Returns the minimum of two f32 values using IEEE 754 total order.
-pub fn min_f32(a: f32, b: f32) -> f32 {
-    match compare_f32(a, b) {
-        Ordering::Less | Ordering::Equal => a,
-        Ordering::Greater => b,
-    }
-}
-
-/// Returns the maximum of two f32 values using IEEE 754 total order.
-pub fn max_f32(a: f32, b: f32) -> f32 {
-    match compare_f32(a, b) {
-        Ordering::Greater | Ordering::Equal => a,
-        Ordering::Less => b,
-    }
-}
-
-/// Returns the minimum of two f64 values using IEEE 754 total order.
-pub fn min_f64(a: f64, b: f64) -> f64 {
-    match compare_f64(a, b) {
-        Ordering::Less | Ordering::Equal => a,
-        Ordering::Greater => b,
-    }
-}
-
-/// Returns the maximum of two f64 values using IEEE 754 total order.
-pub fn max_f64(a: f64, b: f64) -> f64 {
-    match compare_f64(a, b) {
-        Ordering::Greater | Ordering::Equal => a,
-        Ordering::Less => b,
-    }
-}
-
-/// Returns the minimum of two f16 values using IEEE 754 total order.
-pub fn min_f16(a: f16, b: f16) -> f16 {
-    match compare_f16(a, b) {
-        Ordering::Less | Ordering::Equal => a,
-        Ordering::Greater => b,
-    }
-}
-
-/// Returns the maximum of two f16 values using IEEE 754 total order.
-pub fn max_f16(a: f16, b: f16) -> f16 {
-    match compare_f16(a, b) {
-        Ordering::Greater | Ordering::Equal => a,
-        Ordering::Less => b,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,27 +146,5 @@ mod tests {
         assert!(compare_f16(pos_zero, pos_one) == Ordering::Less);
         assert!(compare_f16(pos_one, pos_inf) == Ordering::Less);
         assert!(compare_f16(pos_inf, pos_nan) == Ordering::Less);
-    }
-
-    #[test]
-    fn test_min_max_with_nan() {
-        // Test that NaN is handled correctly in min/max
-        let nan = f32::NAN;
-        let one = 1.0_f32;
-
-        // In total order, -NaN is less than any finite value
-        // and +NaN is greater than any finite value
-        assert!(min_f32(nan, one).is_nan() || min_f32(nan, one) == one);
-        assert!(max_f32(nan, one).is_nan() || max_f32(nan, one) == one);
-    }
-
-    #[test]
-    fn test_min_max_with_zeros() {
-        let neg_zero = -0.0_f32;
-        let pos_zero = 0.0_f32;
-
-        // -0.0 < +0.0 in total order
-        assert_eq!(min_f32(neg_zero, pos_zero).to_bits(), neg_zero.to_bits());
-        assert_eq!(max_f32(neg_zero, pos_zero).to_bits(), pos_zero.to_bits());
     }
 }
