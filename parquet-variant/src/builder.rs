@@ -221,8 +221,8 @@ impl ValueBuilder {
         self.append_slice(value.as_bytes());
     }
 
-    fn append_object(&mut self, metadata_builder: &mut MetadataBuilder, obj: VariantObject) {
-        let mut object_builder = self.new_object(metadata_builder);
+    fn append_object(state: ParentState<'_>, obj: VariantObject) {
+        let mut object_builder = ObjectBuilder::new(state, false);
 
         for (field_name, value) in obj.iter() {
             object_builder.insert(field_name, value);
@@ -242,8 +242,8 @@ impl ValueBuilder {
         object_builder.finish()
     }
 
-    fn append_list(&mut self, metadata_builder: &mut MetadataBuilder, list: VariantList) {
-        let mut list_builder = self.new_list(metadata_builder);
+    fn append_list(state: ParentState<'_>, list: VariantList) {
+        let mut list_builder = ListBuilder::new(state, false);
         for value in list.iter() {
             list_builder.append_value(value);
         }
@@ -266,69 +266,48 @@ impl ValueBuilder {
         self.0.len()
     }
 
-    fn new_object<'a>(
-        &'a mut self,
-        metadata_builder: &'a mut MetadataBuilder,
-    ) -> ObjectBuilder<'a> {
-        let parent_state = ParentState::variant(self, metadata_builder);
-        let validate_unique_fields = false;
-        ObjectBuilder::new(parent_state, validate_unique_fields)
-    }
-
-    fn new_list<'a>(&'a mut self, metadata_builder: &'a mut MetadataBuilder) -> ListBuilder<'a> {
-        let parent_state = ParentState::variant(self, metadata_builder);
-        let validate_unique_fields = false;
-        ListBuilder::new(parent_state, validate_unique_fields)
-    }
-
-    /// Appends a variant to the buffer.
+    /// Appends a variant to the provided [`ParentState`] instance.
     ///
     /// # Panics
     ///
     /// This method will panic if the variant contains duplicate field names in objects
-    /// when validation is enabled. For a fallible version, use [`ValueBuffer::try_append_variant`]
-    fn append_variant<'m, 'd>(
-        &mut self,
-        variant: Variant<'m, 'd>,
-        metadata_builder: &mut MetadataBuilder,
+    /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
+    fn append_variant(
+        mut state: ParentState<'_>,
+        variant: Variant<'_, '_>,
     ) {
+        let buffer = state.buffer();
         match variant {
-            Variant::Null => self.append_null(),
-            Variant::BooleanTrue => self.append_bool(true),
-            Variant::BooleanFalse => self.append_bool(false),
-            Variant::Int8(v) => self.append_int8(v),
-            Variant::Int16(v) => self.append_int16(v),
-            Variant::Int32(v) => self.append_int32(v),
-            Variant::Int64(v) => self.append_int64(v),
-            Variant::Date(v) => self.append_date(v),
-            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
-            Variant::Float(v) => self.append_float(v),
-            Variant::Double(v) => self.append_double(v),
-            Variant::Binary(v) => self.append_binary(v),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_short_string(s),
-            Variant::Object(obj) => self.append_object(metadata_builder, obj),
-            Variant::List(list) => self.append_list(metadata_builder, list),
-            Variant::Time(v) => self.append_time_micros(v),
+            Variant::Null => buffer.append_null(),
+            Variant::BooleanTrue => buffer.append_bool(true),
+            Variant::BooleanFalse => buffer.append_bool(false),
+            Variant::Int8(v) => buffer.append_int8(v),
+            Variant::Int16(v) => buffer.append_int16(v),
+            Variant::Int32(v) => buffer.append_int32(v),
+            Variant::Int64(v) => buffer.append_int64(v),
+            Variant::Date(v) => buffer.append_date(v),
+            Variant::Time(v) => buffer.append_time_micros(v),
+            Variant::TimestampMicros(v) => buffer.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => buffer.append_timestamp_ntz_micros(v),
+            Variant::Decimal4(decimal4) => buffer.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => buffer.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => buffer.append_decimal16(decimal16),
+            Variant::Float(v) => buffer.append_float(v),
+            Variant::Double(v) => buffer.append_double(v),
+            Variant::Binary(v) => buffer.append_binary(v),
+            Variant::String(s) => buffer.append_string(s),
+            Variant::ShortString(s) => buffer.append_short_string(s),
+            Variant::Object(obj) => return Self::append_object(state, obj),
+            Variant::List(list) => return Self::append_list(state, list),
         }
+        state.finish();
     }
 
-    /// Appends a variant to the buffer
-    #[allow(unused)]
-    fn try_append_variant<'m, 'd>(
-        &mut self,
-        variant: Variant<'m, 'd>,
-        metadata_builder: &mut MetadataBuilder,
-    ) -> Result<(), ArrowError> {
-        let state = ParentState::variant(self, metadata_builder);
-        Self::try_append_variant_impl(state, variant)
-    }
-
-    pub fn try_append_variant_impl(
+    /// Tries to append a variant to the provided [`ParentState`] instance.
+    ///
+    /// The attempt fails if the variant contains duplicate field names in objects when validation
+    /// is enabled.
+    pub fn try_append_variant(
         mut state: ParentState<'_>,
         variant: Variant<'_, '_>,
     ) -> Result<(), ArrowError> {
@@ -1015,7 +994,7 @@ impl Drop for ParentState<'_> {
 /// ```
 #[derive(Default, Debug)]
 pub struct VariantBuilder {
-    buffer: ValueBuilder,
+    value_builder: ValueBuilder,
     metadata_builder: MetadataBuilder,
     validate_unique_fields: bool,
 }
@@ -1029,7 +1008,6 @@ impl VariantBuilder {
     /// Create a new VariantBuilder with pre-existing [`VariantMetadata`].
     pub fn with_metadata(mut self, metadata: VariantMetadata) -> Self {
         self.metadata_builder.extend(metadata.iter());
-
         self
     }
 
@@ -1051,7 +1029,6 @@ impl VariantBuilder {
     /// reading [`Variant`]s.
     pub fn with_field_names<'a>(mut self, field_names: impl Iterator<Item = &'a str>) -> Self {
         self.metadata_builder.extend(field_names);
-
         self
     }
 
@@ -1095,7 +1072,7 @@ impl VariantBuilder {
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_list(&mut self) -> ListBuilder<'_> {
-        let state = ParentState::variant(&mut self.buffer, &mut self.metadata_builder);
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ListBuilder::new(state, self.validate_unique_fields)
     }
 
@@ -1103,7 +1080,7 @@ impl VariantBuilder {
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_object(&mut self) -> ObjectBuilder<'_> {
-        let state = ParentState::variant(&mut self.buffer, &mut self.metadata_builder);
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ObjectBuilder::new(state, self.validate_unique_fields)
     }
 
@@ -1122,9 +1099,8 @@ impl VariantBuilder {
     /// builder.append_value(42i8);
     /// ```
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        let variant = value.into();
-        self.buffer
-            .append_variant(variant, &mut self.metadata_builder);
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ValueBuilder::append_variant(state, value.into())
     }
 
     /// Append a value to the builder.
@@ -1132,8 +1108,8 @@ impl VariantBuilder {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        let state = ParentState::variant(&mut self.buffer, &mut self.metadata_builder);
-        ValueBuilder::try_append_variant_impl(state, value.into())
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Finish the builder and return the metadata and value buffers.
@@ -1150,7 +1126,7 @@ impl VariantBuilder {
     pub fn into_buffers(self) -> (Vec<u8>, Vec<u8>) {
         (
             self.metadata_builder.into_inner(),
-            self.buffer.into_inner(),
+            self.value_builder.into_inner(),
         )
     }
 }
@@ -1227,7 +1203,7 @@ impl<'a> ListBuilder<'a> {
         value: T,
     ) -> Result<(), ArrowError> {
         let (state, _) = self.parent_state();
-        ValueBuilder::try_append_variant_impl(state, value.into())
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Builder-style API for appending a value to the list and returning self to enable method chaining.
@@ -1343,7 +1319,7 @@ impl<'a> ObjectBuilder<'a> {
         value: T,
     ) -> Result<(), ArrowError> {
         let (state, _) = self.parent_state(key)?;
-        ValueBuilder::try_append_variant_impl(state, value.into())
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Builder style API for adding a field with key and value to the object

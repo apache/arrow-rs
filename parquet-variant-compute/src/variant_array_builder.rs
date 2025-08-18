@@ -208,7 +208,7 @@ pub struct VariantArrayVariantBuilder<'a> {
 
 impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        ValueBuilder::try_append_variant_impl(self.parent_state(), value.into()).unwrap()
+        ValueBuilder::try_append_variant(self.parent_state(), value.into()).unwrap()
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
