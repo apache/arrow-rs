@@ -75,11 +75,11 @@ pub struct VariantArrayBuilder {
     /// buffer for all the metadata
     metadata_buffer: Vec<u8>,
     /// (offset, len) pairs for locations of metadata in the buffer
-    metadata_locations: Vec<(usize, usize)>,
+    metadata_offsets: Vec<usize>,
     /// buffer for values
     value_buffer: Vec<u8>,
     /// (offset, len) pairs for locations of values in the buffer
-    value_locations: Vec<(usize, usize)>,
+    value_offsets: Vec<usize>,
     /// The fields of the final `StructArray`
     ///
     /// TODO: 1) Add extension type metadata
@@ -96,9 +96,9 @@ impl VariantArrayBuilder {
         Self {
             nulls: NullBufferBuilder::new(row_capacity),
             metadata_buffer: Vec::new(), // todo allocation capacity
-            metadata_locations: Vec::with_capacity(row_capacity),
+            metadata_offsets: Vec::with_capacity(row_capacity),
             value_buffer: Vec::new(),
-            value_locations: Vec::with_capacity(row_capacity),
+            value_offsets: Vec::with_capacity(row_capacity),
             fields: Fields::from(vec![metadata_field, value_field]),
         }
     }
@@ -108,15 +108,15 @@ impl VariantArrayBuilder {
         let Self {
             mut nulls,
             metadata_buffer,
-            metadata_locations,
+            metadata_offsets,
             value_buffer,
-            value_locations,
+            value_offsets,
             fields,
         } = self;
 
-        let metadata_array = binary_view_array_from_buffers(metadata_buffer, metadata_locations);
+        let metadata_array = binary_view_array_from_buffers(metadata_buffer, metadata_offsets);
 
-        let value_array = binary_view_array_from_buffers(value_buffer, value_locations);
+        let value_array = binary_view_array_from_buffers(value_buffer, value_offsets);
 
         // The build the final struct array
         let inner = StructArray::new(
@@ -136,13 +136,8 @@ impl VariantArrayBuilder {
     pub fn append_null(&mut self) {
         self.nulls.append_null();
         // The subfields are expected to be non-nullable according to the parquet variant spec.
-        let metadata_offset = self.metadata_buffer.len();
-        let metadata_length = 0;
-        self.metadata_locations
-            .push((metadata_offset, metadata_length));
-        let value_offset = self.value_buffer.len();
-        let value_length = 0;
-        self.value_locations.push((value_offset, value_length));
+        self.metadata_offsets.push(self.metadata_buffer.len());
+        self.value_offsets.push(self.value_buffer.len());
     }
 
     /// Append the [`Variant`] to the builder as the next row
@@ -276,23 +271,17 @@ impl<'a> VariantArrayVariantBuilder<'a> {
         let (metadata_buffer, value_buffer) = std::mem::take(&mut self.variant_builder).finish();
 
         // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost)
-        let metadata_len = metadata_buffer
-            .len()
-            .checked_sub(metadata_offset)
-            .expect("metadata length decreased unexpectedly");
-        let value_len = value_buffer
-            .len()
-            .checked_sub(value_offset)
-            .expect("value length decreased unexpectedly");
+        assert!(metadata_offset <= metadata_buffer.len(), "metadata length decreased unexpectedly");
+        assert!(value_offset <= value_buffer.len(), "value length decreased unexpectedly");
 
         // commit the changes by putting the
         // offsets and lengths into the parent array builder.
         self.array_builder
-            .metadata_locations
-            .push((metadata_offset, metadata_len));
+            .metadata_offsets
+            .push(metadata_buffer.len());
         self.array_builder
-            .value_locations
-            .push((value_offset, value_len));
+            .value_offsets
+            .push(value_buffer.len());
         self.array_builder.nulls.append_non_null();
         // put the buffers back into the array builder
         self.array_builder.metadata_buffer = metadata_buffer;
@@ -340,17 +329,19 @@ impl Drop for VariantArrayVariantBuilder<'_> {
 
 fn binary_view_array_from_buffers(
     buffer: Vec<u8>,
-    locations: Vec<(usize, usize)>,
+    offsets: Vec<usize>,
 ) -> BinaryViewArray {
-    let mut builder = BinaryViewBuilder::with_capacity(locations.len());
+    let mut builder = BinaryViewBuilder::with_capacity(offsets.len());
     let block = builder.append_block(buffer.into());
     // TODO this can be much faster if it creates the views directly during append
-    for (offset, length) in locations {
-        let offset = offset.try_into().expect("offset should fit in u32");
-        let length = length.try_into().expect("length should fit in u32");
+    let mut start = 0;
+    for end in offsets {
+        let end = u32::try_from(end).expect("offset should fit in u32");
+        let length = end - start;
         builder
-            .try_append_view(block, offset, length)
+            .try_append_view(block, start, length)
             .expect("Failed to append view");
+        start = end;
     }
     builder.finish()
 }
