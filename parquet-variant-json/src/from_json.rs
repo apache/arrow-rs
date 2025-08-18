@@ -21,7 +21,7 @@ use arrow_schema::ArrowError;
 use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
 use serde_json::{Number, Value};
 
-/// Converts a JSON string to Variant to a [`VariantBuilderExt`], such as
+/// Converts a JSON string to Variant using a [`VariantBuilderExt`], such as
 /// [`VariantBuilder`].
 ///
 /// The resulting `value` and `metadata` buffers can be
@@ -45,7 +45,7 @@ use serde_json::{Number, Value};
 /// let person_string = "{\"name\":\"Alice\", \"age\":30, ".to_string()
 /// + "\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
 /// + "\"additional_info\": null}";
-/// variant_builder.with_json(&person_string)?;
+/// variant_builder.append_json(&person_string)?;
 ///
 /// let (metadata, value) = variant_builder.finish();
 ///
@@ -65,11 +65,11 @@ use serde_json::{Number, Value};
 /// ```
 pub trait JsonToVariant {
     /// Create a Variant from a JSON string
-    fn with_json(&mut self, json: &str) -> Result<(), ArrowError>;
+    fn append_json(&mut self, json: &str) -> Result<(), ArrowError>;
 }
 
 impl<T: VariantBuilderExt> JsonToVariant for T {
-    fn with_json(&mut self, json: &str) -> Result<(), ArrowError> {
+    fn append_json(&mut self, json: &str) -> Result<(), ArrowError> {
         let json: Value = serde_json::from_str(json)
             .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
 
@@ -168,7 +168,7 @@ mod test {
     impl JsonToVariantTest<'_> {
         fn run(self) -> Result<(), ArrowError> {
             let mut variant_builder = VariantBuilder::new();
-            variant_builder.with_json(self.json)?;
+            variant_builder.append_json(self.json)?;
             let (metadata, value) = variant_builder.finish();
             let variant = Variant::try_new(&metadata, &value)?;
             assert_eq!(variant, self.expected);
@@ -619,7 +619,7 @@ mod test {
         );
         // Manually verify raw JSON value size
         let mut variant_builder = VariantBuilder::new();
-        variant_builder.with_json(&json)?;
+        variant_builder.append_json(&json)?;
         let (metadata, value) = variant_builder.finish();
         let v = Variant::try_new(&metadata, &value)?;
         let output_string = v.to_json_string()?;
@@ -660,7 +660,7 @@ mod test {
     fn test_json_to_variant_unicode() -> Result<(), ArrowError> {
         let json = "{\"爱\":\"अ\",\"a\":1}";
         let mut variant_builder = VariantBuilder::new();
-        variant_builder.with_json(json)?;
+        variant_builder.append_json(json)?;
         let (metadata, value) = variant_builder.finish();
         let v = Variant::try_new(&metadata, &value)?;
         let output_string = v.to_json_string()?;

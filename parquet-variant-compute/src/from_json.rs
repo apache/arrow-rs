@@ -42,7 +42,7 @@ pub fn json_to_variant(input: &ArrayRef) -> Result<VariantArray, ArrowError> {
         } else {
             let mut vb = variant_array_builder.variant_builder();
             // parse JSON directly to the variant builder
-            vb.with_json(input_string_array.value(i))?;
+            vb.append_json(input_string_array.value(i))?;
             vb.finish()
         }
     }
