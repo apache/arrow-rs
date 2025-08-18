@@ -85,29 +85,28 @@ fn append_packed_u32(dest: &mut Vec<u8>, value: u32, value_size: usize) {
 ///
 /// You can reuse an existing `Vec<u8>` by using the `from` impl
 #[derive(Debug, Default)]
-struct ValueBuffer(Vec<u8>);
+pub struct ValueBuilder(Vec<u8>);
 
-impl ValueBuffer {
+impl ValueBuilder {
     /// Construct a ValueBuffer that will write to a new underlying `Vec`
-    #[allow(unused)]
-    fn new() -> Self {
+    pub fn new() -> Self {
         Default::default()
     }
 }
 
-impl From<Vec<u8>> for ValueBuffer {
+impl From<Vec<u8>> for ValueBuilder {
     fn from(value: Vec<u8>) -> Self {
         Self(value)
     }
 }
 
-impl From<ValueBuffer> for Vec<u8> {
-    fn from(value_buffer: ValueBuffer) -> Self {
+impl From<ValueBuilder> for Vec<u8> {
+    fn from(value_buffer: ValueBuilder) -> Self {
         value_buffer.0
     }
 }
 
-impl ValueBuffer {
+impl ValueBuilder {
     fn append_u8(&mut self, term: u8) {
         self.0.push(term);
     }
@@ -120,7 +119,7 @@ impl ValueBuffer {
         self.0.push(primitive_header(primitive_type));
     }
 
-    fn into_inner(self) -> Vec<u8> {
+    pub fn into_inner(self) -> Vec<u8> {
         self.into()
     }
 
@@ -275,7 +274,7 @@ impl ValueBuffer {
         Ok(())
     }
 
-    fn offset(&self) -> usize {
+    pub fn offset(&self) -> usize {
         self.0.len()
     }
 
@@ -341,7 +340,7 @@ impl ValueBuffer {
         Self::try_append_variant_impl(state, variant)
     }
 
-    fn try_append_variant_impl(
+    pub fn try_append_variant_impl(
         mut state: ParentState<'_>,
         variant: Variant<'_, '_>,
     ) -> Result<(), ArrowError> {
@@ -438,7 +437,7 @@ impl ValueBuffer {
 ///
 /// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
 #[derive(Default, Debug)]
-struct MetadataBuilder {
+pub struct MetadataBuilder {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 
@@ -499,7 +498,11 @@ impl MetadataBuilder {
         self.field_names.iter().map(|k| k.len()).sum()
     }
 
-    fn finish(&mut self) {
+    pub fn offset(&self) -> usize {
+        self.metadata_buffer.len()
+    }
+
+    pub fn finish(&mut self) {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
@@ -541,7 +544,7 @@ impl MetadataBuilder {
     }
 
     /// Return the inner buffer, without finalizing any in progress metadata.
-    pub(crate) fn into_inner(self) -> Vec<u8> {
+    pub fn into_inner(self) -> Vec<u8> {
         self.metadata_buffer
     }
 }
@@ -581,16 +584,16 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// builder that uses it). So everything has to be here. Rust layout optimizations should treat the
 /// variants as a union, so that accessing a `buffer` or `metadata_builder` is branch-free.
 #[derive(Debug)]
-enum ParentState<'a> {
+pub enum ParentState<'a> {
     Variant {
-        buffer: &'a mut ValueBuffer,
+        buffer: &'a mut ValueBuilder,
         saved_buffer_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         finished: bool,
     },
     List {
-        buffer: &'a mut ValueBuffer,
+        buffer: &'a mut ValueBuilder,
         saved_buffer_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
@@ -599,7 +602,7 @@ enum ParentState<'a> {
         finished: bool,
     },
     Object {
-        buffer: &'a mut ValueBuffer,
+        buffer: &'a mut ValueBuilder,
         saved_buffer_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
@@ -610,7 +613,7 @@ enum ParentState<'a> {
 }
 
 impl<'a> ParentState<'a> {
-    fn variant(buffer: &'a mut ValueBuffer, metadata_builder: &'a mut MetadataBuilder) -> Self {
+    pub fn variant(buffer: &'a mut ValueBuilder, metadata_builder: &'a mut MetadataBuilder) -> Self {
         ParentState::Variant {
             saved_buffer_offset: buffer.offset(),
             saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
@@ -620,8 +623,8 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn list(
-        buffer: &'a mut ValueBuffer,
+    pub fn list(
+        buffer: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
         offsets: &'a mut Vec<usize>,
         saved_parent_buffer_offset: usize,
@@ -644,8 +647,8 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn object(
-        buffer: &'a mut ValueBuffer,
+    pub fn object(
+        buffer: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
         saved_parent_buffer_offset: usize,
@@ -677,7 +680,7 @@ impl<'a> ParentState<'a> {
         })
     }
 
-    fn buffer(&mut self) -> &mut ValueBuffer {
+    fn buffer(&mut self) -> &mut ValueBuilder {
         self.buffer_and_metadata_builder().0
     }
 
@@ -769,7 +772,7 @@ impl<'a> ParentState<'a> {
 
     /// Return mutable references to the buffer and metadata builder that this
     /// parent state is using.
-    fn buffer_and_metadata_builder(&mut self) -> (&mut ValueBuffer, &mut MetadataBuilder) {
+    fn buffer_and_metadata_builder(&mut self) -> (&mut ValueBuilder, &mut MetadataBuilder) {
         match self {
             ParentState::Variant {
                 buffer,
@@ -1068,7 +1071,7 @@ impl Drop for ParentState<'_> {
 /// ```
 #[derive(Default, Debug)]
 pub struct VariantBuilder {
-    buffer: ValueBuffer,
+    buffer: ValueBuilder,
     metadata_builder: MetadataBuilder,
     validate_unique_fields: bool,
 }
@@ -1090,7 +1093,7 @@ impl VariantBuilder {
     /// the specified buffers.
     pub fn new_with_buffers(metadata_buffer: Vec<u8>, value_buffer: Vec<u8>) -> Self {
         Self {
-            buffer: ValueBuffer::from(value_buffer),
+            buffer: ValueBuilder::from(value_buffer),
             metadata_builder: MetadataBuilder::from(metadata_buffer),
             validate_unique_fields: false,
         }
@@ -1196,7 +1199,7 @@ impl VariantBuilder {
         value: T,
     ) -> Result<(), ArrowError> {
         let state = ParentState::variant(&mut self.buffer, &mut self.metadata_builder);
-        ValueBuffer::try_append_variant_impl(state, value.into())
+        ValueBuilder::try_append_variant_impl(state, value.into())
     }
 
     /// Finish the builder and return the metadata and value buffers.
@@ -1228,7 +1231,7 @@ pub struct ListBuilder<'a> {
 }
 
 impl<'a> ListBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             offsets: vec![],
@@ -1290,7 +1293,7 @@ impl<'a> ListBuilder<'a> {
         value: T,
     ) -> Result<(), ArrowError> {
         let (state, _) = self.parent_state();
-        ValueBuffer::try_append_variant_impl(state, value.into())
+        ValueBuilder::try_append_variant_impl(state, value.into())
     }
 
     /// Builder-style API for appending a value to the list and returning self to enable method chaining.
@@ -1369,7 +1372,7 @@ pub struct ObjectBuilder<'a> {
 }
 
 impl<'a> ObjectBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             fields: IndexMap::new(),
@@ -1406,7 +1409,7 @@ impl<'a> ObjectBuilder<'a> {
         value: T,
     ) -> Result<(), ArrowError> {
         let (state, _) = self.parent_state(key)?;
-        ValueBuffer::try_append_variant_impl(state, value.into())
+        ValueBuilder::try_append_variant_impl(state, value.into())
     }
 
     /// Builder style API for adding a field with key and value to the object

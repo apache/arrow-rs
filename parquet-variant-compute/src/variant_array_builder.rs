@@ -20,7 +20,7 @@
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
-use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
+use parquet_variant::{MetadataBuilder, ValueBuilder, ListBuilder, ParentState, ObjectBuilder, Variant, VariantBuilderExt};
 use std::sync::Arc;
 
 /// A builder for [`VariantArray`]
@@ -73,11 +73,11 @@ pub struct VariantArrayBuilder {
     /// Nulls
     nulls: NullBufferBuilder,
     /// buffer for all the metadata
-    metadata_buffer: Vec<u8>,
+    metadata_builder: MetadataBuilder,
     /// (offset, len) pairs for locations of metadata in the buffer
     metadata_offsets: Vec<usize>,
     /// buffer for values
-    value_buffer: Vec<u8>,
+    value_builder: ValueBuilder,
     /// (offset, len) pairs for locations of values in the buffer
     value_offsets: Vec<usize>,
     /// The fields of the final `StructArray`
@@ -95,9 +95,9 @@ impl VariantArrayBuilder {
 
         Self {
             nulls: NullBufferBuilder::new(row_capacity),
-            metadata_buffer: Vec::new(), // todo allocation capacity
+            metadata_builder: Default::default(), // todo allocation capacity
             metadata_offsets: Vec::with_capacity(row_capacity),
-            value_buffer: Vec::new(),
+            value_builder: Default::default(),
             value_offsets: Vec::with_capacity(row_capacity),
             fields: Fields::from(vec![metadata_field, value_field]),
         }
@@ -107,16 +107,16 @@ impl VariantArrayBuilder {
     pub fn build(self) -> VariantArray {
         let Self {
             mut nulls,
-            metadata_buffer,
+            metadata_builder,
             metadata_offsets,
-            value_buffer,
+            value_builder,
             value_offsets,
             fields,
         } = self;
 
-        let metadata_array = binary_view_array_from_buffers(metadata_buffer, metadata_offsets);
+        let metadata_array = binary_view_array_from_buffers(metadata_builder.into_inner(), metadata_offsets);
 
-        let value_array = binary_view_array_from_buffers(value_buffer, value_offsets);
+        let value_array = binary_view_array_from_buffers(value_builder.into_inner(), value_offsets);
 
         // The build the final struct array
         let inner = StructArray::new(
@@ -136,15 +136,15 @@ impl VariantArrayBuilder {
     pub fn append_null(&mut self) {
         self.nulls.append_null();
         // The subfields are expected to be non-nullable according to the parquet variant spec.
-        self.metadata_offsets.push(self.metadata_buffer.len());
-        self.value_offsets.push(self.value_buffer.len());
+        self.metadata_offsets.push(self.metadata_builder.offset());
+        self.value_offsets.push(self.value_builder.offset());
     }
 
     /// Append the [`Variant`] to the builder as the next row
     pub fn append_variant(&mut self, variant: Variant) {
         let mut direct_builder = self.variant_builder();
-        direct_builder.variant_builder.append_value(variant);
-        direct_builder.finish()
+        direct_builder.append_value(variant);
+        direct_builder.finish();
     }
 
     /// Return a `VariantArrayVariantBuilder` that writes directly to the
@@ -181,10 +181,7 @@ impl VariantArrayBuilder {
     /// assert!(variant_array.value(1).as_object().is_some());
     ///  ```
     pub fn variant_builder(&mut self) -> VariantArrayVariantBuilder<'_> {
-        // append directly into the metadata and value buffers
-        let metadata_buffer = std::mem::take(&mut self.metadata_buffer);
-        let value_buffer = std::mem::take(&mut self.value_buffer);
-        VariantArrayVariantBuilder::new(self, metadata_buffer, value_buffer)
+        VariantArrayVariantBuilder::new(self)
     }
 }
 
@@ -207,22 +204,19 @@ pub struct VariantArrayVariantBuilder<'a> {
     /// have been moved into the variant builder, and must be returned on
     /// drop
     array_builder: &'a mut VariantArrayBuilder,
-    /// Builder for the in progress variant value, temporarily owns the buffers
-    /// from `array_builder`
-    variant_builder: VariantBuilder,
 }
 
 impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        self.variant_builder.append_value(value);
+        ValueBuilder::try_append_variant_impl(self.parent_state(), value.into()).unwrap()
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
-        Ok(self.variant_builder.new_list())
+        Ok(ListBuilder::new(self.parent_state(), false))
     }
 
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
-        Ok(self.variant_builder.new_object())
+        Ok(ObjectBuilder::new(self.parent_state(), false))
     }
 }
 
@@ -231,30 +225,22 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     ///
     /// Note this is not public as this is a structure that is logically
     /// part of the [`VariantArrayBuilder`] and relies on its internal structure
-    fn new(
-        array_builder: &'a mut VariantArrayBuilder,
-        metadata_buffer: Vec<u8>,
-        value_buffer: Vec<u8>,
-    ) -> Self {
-        let metadata_offset = metadata_buffer.len();
-        let value_offset = value_buffer.len();
+    fn new(array_builder: &'a mut VariantArrayBuilder) -> Self {
+        let metadata_offset = array_builder.metadata_builder.offset();
+        let value_offset = array_builder.value_builder.offset();
         VariantArrayVariantBuilder {
             finished: false,
             metadata_offset,
             value_offset,
-            variant_builder: VariantBuilder::new_with_buffers(metadata_buffer, value_buffer),
             array_builder,
         }
     }
 
-    /// Return a reference to the underlying `VariantBuilder`
-    pub fn inner(&self) -> &VariantBuilder {
-        &self.variant_builder
-    }
-
-    /// Return a mutable reference to the underlying `VariantBuilder`
-    pub fn inner_mut(&mut self) -> &mut VariantBuilder {
-        &mut self.variant_builder
+    fn parent_state(&mut self) -> ParentState<'_> {
+        ParentState::variant(
+            &mut self.array_builder.value_builder,
+            &mut self.array_builder.metadata_builder,
+        )
     }
 
     /// Called to finish the in progress variant and write it to the underlying
@@ -267,12 +253,15 @@ impl<'a> VariantArrayVariantBuilder<'a> {
 
         let metadata_offset = self.metadata_offset;
         let value_offset = self.value_offset;
-        // get the buffers back from the variant builder
-        let (metadata_buffer, value_buffer) = std::mem::take(&mut self.variant_builder).finish();
+
+        let metadata_builder = &mut self.array_builder.metadata_builder;
+        let value_builder = &mut self.array_builder.value_builder;
 
         // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost)
-        assert!(metadata_offset <= metadata_buffer.len(), "metadata length decreased unexpectedly");
-        assert!(value_offset <= value_buffer.len(), "value length decreased unexpectedly");
+        assert!(metadata_offset <= metadata_builder.offset(), "metadata length decreased unexpectedly");
+        assert!(value_offset <= value_builder.offset(), "value length decreased unexpectedly");
+
+        metadata_builder.finish();
 
         // commit the changes by putting the
         // offsets and lengths into the parent array builder.
@@ -283,9 +272,6 @@ impl<'a> VariantArrayVariantBuilder<'a> {
             .value_offsets
             .push(value_offset);
         self.array_builder.nulls.append_non_null();
-        // put the buffers back into the array builder
-        self.array_builder.metadata_buffer = metadata_buffer;
-        self.array_builder.value_buffer = value_buffer;
     }
 }
 
@@ -302,28 +288,12 @@ impl Drop for VariantArrayVariantBuilder<'_> {
         let metadata_offset = self.metadata_offset;
         let value_offset = self.value_offset;
 
-        // get the buffers back from the variant builder
-        let (mut metadata_buffer, mut value_buffer) =
-            std::mem::take(&mut self.variant_builder).into_buffers();
+        let metadata_builder = &mut self.array_builder.metadata_builder;
+        let value_builder = &mut self.array_builder.value_builder;
 
-        // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost) so panic immediately
-        metadata_buffer
-            .len()
-            .checked_sub(metadata_offset)
-            .expect("metadata length decreased unexpectedly");
-        value_buffer
-            .len()
-            .checked_sub(value_offset)
-            .expect("value length decreased unexpectedly");
-
-        // Note this truncate is fast because truncate doesn't free any memory:
-        // it just has to drop elements (and u8 doesn't have a destructor)
-        metadata_buffer.truncate(metadata_offset);
-        value_buffer.truncate(value_offset);
-
-        // put the buffers back into the array builder
-        self.array_builder.metadata_buffer = metadata_buffer;
-        self.array_builder.value_buffer = value_buffer;
+        // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost)
+        assert!(metadata_offset <= metadata_builder.offset(), "metadata length decreased unexpectedly");
+        assert!(value_offset <= value_builder.offset(), "value length decreased unexpectedly");
     }
 }
 
