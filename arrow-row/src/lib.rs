@@ -2183,6 +2183,7 @@ mod tests {
             )]
             .into(),
         );
+        // Test Case 1. empty array
         let s = arrow_array::new_empty_array(&ty);
 
         let sort_fields = vec![SortField::new(s.data_type().clone())];
@@ -2196,12 +2197,66 @@ mod tests {
         // s.ty = Struct(foo Dictionary(Int32, Int32)), s2.ty = Struct(foo Int32)
         assert_ne!(&s.data_type(), &s2.data_type());
         s2.to_data().validate_full().unwrap();
+        assert_eq!(s.len(), s2.len());
+
+        // Test Case 2. None empty array
+        let builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
+        let mut struct_builder = StructBuilder::new(
+            vec![Field::new_dictionary(
+                "foo",
+                DataType::Int32,
+                DataType::Int32,
+                false,
+            )],
+            vec![Box::new(builder)],
+        );
+        let dict_builder = struct_builder
+            .field_builder::<PrimitiveDictionaryBuilder<Int32Type, Int32Type>>(0)
+            .unwrap();
+
+        dict_builder.append(0).unwrap();
+        dict_builder.append(1).unwrap();
+        dict_builder.append(0).unwrap();
+        dict_builder.append(-1).unwrap();
+
+        for _ in 0..4 {
+            struct_builder.append(true);
+        }
+
+        let s = Arc::new(struct_builder.finish()) as ArrayRef;
+        let sort_fields = vec![SortField::new(s.data_type().clone())];
+        let converter = RowConverter::new(sort_fields).unwrap();
+        let r = converter.convert_columns(&[Arc::clone(&s)]).unwrap();
+
+        let back = converter.convert_rows(&r).unwrap();
+        let [s2] = back.try_into().unwrap();
+
+        // RowConverter flattens Dictionary
+        // s.ty = Struct(foo Dictionary(Int32, Int32)), s2.ty = Struct(foo Int32)
+        assert_ne!(&s.data_type(), &s2.data_type());
+        s2.to_data().validate_full().unwrap();
+
+        // Check if the logical data remains the same
+        let s1_struct = s.as_struct();
+        let s2_struct = s2.as_struct();
+        let s1_0 = s1_struct.column(0);
+        let s2_0 = s2_struct.column(0);
+        let s1_idx_0 = s1_0.as_dictionary::<Int32Type>();
+        let s2_idx_0 = s2_0.as_primitive::<Int32Type>();
+        let keys = s1_idx_0.keys();
+        let values = s1_idx_0.values().as_primitive::<Int32Type>();
+
+        for i in 0..keys.len() {
+            let dict_index = keys.value(i) as usize;
+            assert_eq!(values.value(dict_index), s2_idx_0.value(i));
+        }
     }
 
     #[test]
     fn test_list_of_primitive_dictionary() {
         let mut builder =
             ListBuilder::<PrimitiveDictionaryBuilder<Int32Type, Int32Type>>::default();
+        // List[0] = [2, 3, 0, null, 5, 3, -1 (dict)]
         builder.values().append(2).unwrap();
         builder.values().append(3).unwrap();
         builder.values().append(0).unwrap();
@@ -2210,7 +2265,9 @@ mod tests {
         builder.values().append(3).unwrap();
         builder.values().append(-1).unwrap();
         builder.append(true);
+        // List[1] = null
         builder.append(false);
+        // List[2] = [7, 0, 8 (dict)]
         builder.values().append(7).unwrap();
         builder.values().append(0).unwrap();
         builder.values().append(8).unwrap();
@@ -2232,6 +2289,47 @@ mod tests {
         assert_ne!(&a.data_type(), &a2.data_type());
 
         a2.to_data().validate_full().unwrap();
+
+        let a2_list = a2.as_list::<i32>();
+        let a1_list = a.as_list::<i32>();
+
+        // Check if the logical data remains the same
+        // List[0] = [2, 3, 0, null, 5, 3, -1]
+        let a1_0 = a1_list.value(0);
+        let a2_0 = a2_list.value(0);
+        let a1_idx_0 = a1_0.as_dictionary::<Int32Type>();
+        let a2_idx_0 = a2_0.as_primitive::<Int32Type>();
+        let keys = a1_idx_0.keys();
+        let values = a1_idx_0.values().as_primitive::<Int32Type>();
+
+        for i in 0..keys.len() {
+            if keys.is_null(i) {
+                assert!(a2_idx_0.is_null(i));
+            } else {
+                let dict_index = keys.value(i) as usize;
+                assert_eq!(values.value(dict_index), a2_idx_0.value(i));
+            }
+        }
+        // List[1] = null
+        assert!(a1_list.is_null(1));
+        assert!(a2_list.is_null(1));
+
+        // List[2] = [7, 0, 8]
+        let a1_2 = a1_list.value(2);
+        let a2_2 = a2_list.value(2);
+        let a1_idx_2 = a1_2.as_dictionary::<Int32Type>();
+        let a2_idx_2 = a2_2.as_primitive::<Int32Type>();
+        let keys = a1_idx_2.keys();
+        let values = a1_idx_2.values().as_primitive::<Int32Type>();
+
+        for i in 0..keys.len() {
+            if keys.is_null(i) {
+                assert!(a2_idx_2.is_null(i));
+            } else {
+                let dict_index = keys.value(i) as usize;
+                assert_eq!(values.value(dict_index), a2_idx_2.value(i));
+            }
+        }
     }
 
     #[test]
