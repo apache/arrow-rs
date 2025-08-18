@@ -20,7 +20,10 @@
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
-use parquet_variant::{MetadataBuilder, ValueBuilder, ListBuilder, ParentState, ObjectBuilder, Variant, VariantBuilderExt};
+use parquet_variant::{
+    ListBuilder, MetadataBuilder, ObjectBuilder, ParentState, ValueBuilder, Variant,
+    VariantBuilderExt,
+};
 use std::sync::Arc;
 
 /// A builder for [`VariantArray`]
@@ -114,7 +117,8 @@ impl VariantArrayBuilder {
             fields,
         } = self;
 
-        let metadata_array = binary_view_array_from_buffers(metadata_builder.into_inner(), metadata_offsets);
+        let metadata_array =
+            binary_view_array_from_buffers(metadata_builder.into_inner(), metadata_offsets);
 
         let value_array = binary_view_array_from_buffers(value_builder.into_inner(), value_offsets);
 
@@ -258,19 +262,21 @@ impl<'a> VariantArrayVariantBuilder<'a> {
         let value_builder = &mut self.array_builder.value_builder;
 
         // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost)
-        assert!(metadata_offset <= metadata_builder.offset(), "metadata length decreased unexpectedly");
-        assert!(value_offset <= value_builder.offset(), "value length decreased unexpectedly");
+        assert!(
+            metadata_offset <= metadata_builder.offset(),
+            "metadata length decreased unexpectedly"
+        );
+        assert!(
+            value_offset <= value_builder.offset(),
+            "value length decreased unexpectedly"
+        );
 
         metadata_builder.finish();
 
         // commit the changes by putting the
         // offsets and lengths into the parent array builder.
-        self.array_builder
-            .metadata_offsets
-            .push(metadata_offset);
-        self.array_builder
-            .value_offsets
-            .push(value_offset);
+        self.array_builder.metadata_offsets.push(metadata_offset);
+        self.array_builder.value_offsets.push(value_offset);
         self.array_builder.nulls.append_non_null();
     }
 }
@@ -280,16 +286,13 @@ impl Drop for VariantArrayVariantBuilder<'_> {
     fn drop(&mut self) {}
 }
 
-fn binary_view_array_from_buffers(
-    buffer: Vec<u8>,
-    mut offsets: Vec<usize>,
-) -> BinaryViewArray {
+fn binary_view_array_from_buffers(buffer: Vec<u8>, mut offsets: Vec<usize>) -> BinaryViewArray {
     let mut builder = BinaryViewBuilder::with_capacity(offsets.len());
     offsets.push(buffer.len());
     let block = builder.append_block(buffer.into());
     // TODO this can be much faster if it creates the views directly during append
     for i in 1..offsets.len() {
-        let start = u32::try_from(offsets[i-1]).expect("offset should fit in u32");
+        let start = u32::try_from(offsets[i - 1]).expect("offset should fit in u32");
         let end = u32::try_from(offsets[i]).expect("offset should fit in u32");
         let length = end - start;
         builder

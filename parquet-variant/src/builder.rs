@@ -272,10 +272,7 @@ impl ValueBuilder {
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
-    fn append_variant(
-        mut state: ParentState<'_>,
-        variant: Variant<'_, '_>,
-    ) {
+    fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
         let buffer = state.buffer();
         match variant {
             Variant::Null => buffer.append_null(),
@@ -570,7 +567,10 @@ pub enum ParentState<'a> {
 }
 
 impl<'a> ParentState<'a> {
-    pub fn variant(buffer: &'a mut ValueBuilder, metadata_builder: &'a mut MetadataBuilder) -> Self {
+    pub fn variant(
+        buffer: &'a mut ValueBuilder,
+        metadata_builder: &'a mut MetadataBuilder,
+    ) -> Self {
         ParentState::Variant {
             saved_buffer_offset: buffer.offset(),
             saved_metadata_builder_dict_size: metadata_builder.num_field_names(),

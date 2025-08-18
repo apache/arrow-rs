@@ -183,8 +183,7 @@ fn bench_object_unknown_schema(c: &mut Criterion) {
                     }
 
                     if rng.random_bool(0.5) {
-                        let mut inner_object_builder =
-                            object_builder.new_object("rand_object");
+                        let mut inner_object_builder = object_builder.new_object("rand_object");
 
                         for _num_fields in 0..random::<u8>(&mut rng, 0..25) {
                             let key = string_table.next();
@@ -236,8 +235,7 @@ fn bench_object_list_unknown_schema(c: &mut Criterion) {
                     }
 
                     if rng.random_bool(0.5) {
-                        let mut inner_object_builder =
-                            object_builder.new_object("rand_object");
+                        let mut inner_object_builder = object_builder.new_object("rand_object");
 
                         for _num_fields in 0..random::<u8>(&mut rng, 0..25) {
                             let key = string_table.next();
