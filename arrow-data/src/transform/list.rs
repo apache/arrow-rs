@@ -23,7 +23,9 @@ use crate::ArrayData;
 use arrow_buffer::ArrowNativeType;
 use num::{CheckedAdd, Integer};
 
-pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(array: &ArrayData) -> Extend {
+pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
+    array: &ArrayData,
+) -> Extend<'_> {
     let offsets = array.buffer::<T>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {

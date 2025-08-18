@@ -150,6 +150,7 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
 
 #[cfg(feature = "async")]
 #[tokio::test]
+#[allow(deprecated)]
 async fn bad_metadata_err() {
     use bytes::Bytes;
     use parquet::file::metadata::ParquetMetaDataReader;
