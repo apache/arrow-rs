@@ -187,7 +187,13 @@ impl VariantArray {
                     typed_value_to_variant(typed_value, index)
                 }
             }
-            ShreddingState::AllNull { .. } => Variant::Null,
+            ShreddingState::AllNull { .. } => {
+                // NOTE: This handles the case where neither value nor typed_value fields exist.
+                // For top-level variants, this returns Variant::Null (JSON null).
+                // For shredded object fields, this technically should indicate SQL NULL,
+                // but the current API cannot distinguish these contexts.
+                Variant::Null
+            }
         }
     }
 
@@ -249,7 +255,12 @@ pub enum ShreddingState {
         value: BinaryViewArray,
         typed_value: ArrayRef,
     },
-    /// All values are null, only metadata is present
+    /// All values are null, only metadata is present.
+    ///
+    /// This state occurs when neither `value` nor `typed_value` fields exist in the schema.
+    /// Note: By strict spec interpretation, this should only be valid for shredded object fields,
+    /// not top-level variants. However, we allow it and treat as Variant::Null for pragmatic
+    /// handling of missing data.
     AllNull { metadata: BinaryViewArray },
 }
 
@@ -442,7 +453,10 @@ mod test {
     fn all_null_missing_value_and_typed_value() {
         let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
         let array = StructArray::new(fields, vec![make_binary_view_array()], None);
-        // Should succeed and create an AllNull variant when neither value nor typed_value are present
+
+        // NOTE: By strict spec interpretation, this case (top-level variant with null/null)
+        // should be invalid, but we currently allow it and treat it as Variant::Null.
+        // This is a pragmatic decision to handle missing data gracefully.
         let variant_array = VariantArray::try_new(Arc::new(array)).unwrap();
 
         // Verify the shredding state is AllNull
@@ -450,6 +464,13 @@ mod test {
             variant_array.shredding_state(),
             ShreddingState::AllNull { .. }
         ));
+
+        // Verify that value() returns Variant::Null (compensating for spec violation)
+        for i in 0..variant_array.len() {
+            if variant_array.is_valid(i) {
+                assert_eq!(variant_array.value(i), parquet_variant::Variant::Null);
+            }
+        }
     }
 
     #[test]
