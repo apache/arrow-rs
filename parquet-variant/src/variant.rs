@@ -651,18 +651,19 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// ```
     /// use parquet_variant::Variant;
     ///
-    /// // you can extract a UUID string from a UUID variant
+    /// // You can extract a UUID from a UUID variant
     /// let s = uuid::Uuid::parse_str("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
     /// let v1 = Variant::Uuid(s);
-    /// assert_eq!("67e55044-10b1-426f-9247-bb680e5fe0c8", v1.as_uuid_string().unwrap());
+    /// assert_eq!(s, v1.as_uuid().unwrap());
+    /// assert_eq!("67e55044-10b1-426f-9247-bb680e5fe0c8", v1.as_uuid().unwrap().to_string());
     ///
     /// //but not from other variants
     /// let v2 = Variant::from(1234);
-    /// assert_eq!(None, v2.as_uuid_string())
+    /// assert_eq!(None, v2.as_uuid())
     /// ```
-    pub fn as_uuid_string(&self) -> Option<String> {
+    pub fn as_uuid(&self) -> Option<Uuid> {
         match self {
-            Variant::Uuid(u) => Some(u.to_string()),
+            Variant::Uuid(u) => Some(*u),
             _ => None,
         }
     }

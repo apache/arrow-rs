@@ -327,16 +327,8 @@ pub(crate) fn decode_time_ntz(data: &[u8]) -> Result<NaiveTime, ArrowError> {
 pub(crate) fn decode_timestamp_nanos(data: &[u8]) -> Result<DateTime<Utc>, ArrowError> {
     let nanos_since_epoch = i64::from_le_bytes(array_from_slice(data, 0)?);
 
-    // Copied from DateTime::from_timestamp_nanos as there is no infallible version
-    // will replace this when https://github.com/chronotope/chrono/issues/1722 has been released
-    let secs = nanos_since_epoch.div_euclid(1_000_000_000);
-    let nsecs = nanos_since_epoch.rem_euclid(1_000_000_000) as u32;
-
-    DateTime::from_timestamp(secs, nsecs).ok_or_else(|| {
-        ArrowError::CastError(format!(
-            "Could not cast `{nanos_since_epoch}` nanoseconds into a DateTime<Utc>"
-        ))
-    })
+    // DateTime::from_timestamp_nanos would never fail
+    Ok(DateTime::from_timestamp_nanos(nanos_since_epoch))
 }
 
 /// Decodes a TimestampNtzNanos from the value section of a variant.
