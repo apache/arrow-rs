@@ -2877,6 +2877,7 @@ mod tests {
 
     #[test]
     fn test_cast_decimal32_to_decimal32() {
+        // test changing precision
         let input_type = DataType::Decimal32(9, 3);
         let output_type = DataType::Decimal32(9, 4);
         assert!(can_cast_types(&input_type, &output_type));
@@ -2910,6 +2911,7 @@ mod tests {
 
     #[test]
     fn test_cast_decimal64_to_decimal64() {
+        // test changing precision
         let input_type = DataType::Decimal64(17, 3);
         let output_type = DataType::Decimal64(17, 4);
         assert!(can_cast_types(&input_type, &output_type));
@@ -2943,6 +2945,7 @@ mod tests {
 
     #[test]
     fn test_cast_decimal128_to_decimal128() {
+        // test changing precision
         let input_type = DataType::Decimal128(20, 3);
         let output_type = DataType::Decimal128(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
