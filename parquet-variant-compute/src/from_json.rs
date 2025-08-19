@@ -21,7 +21,7 @@
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use arrow_schema::ArrowError;
-use parquet_variant_json::json_to_variant;
+use parquet_variant_json::JsonToVariant;
 
 /// Macro to convert string array to variant array
 macro_rules! string_array_to_variant {
@@ -31,7 +31,7 @@ macro_rules! string_array_to_variant {
                 $builder.append_null();
             } else {
                 let mut vb = $builder.variant_builder();
-                json_to_variant($array.value(i), &mut vb)?;
+                vb.append_json($array.value(i))?;
                 vb.finish()
             }
         }
@@ -46,7 +46,7 @@ macro_rules! string_array_to_variant {
 /// - [`StringArray`]
 /// - [`LargeStringArray`]
 /// - [`StringViewArray`]
-pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, ArrowError> {
+pub fn json_to_variant(input: &ArrayRef) -> Result<VariantArray, ArrowError> {
     let mut variant_array_builder = VariantArrayBuilder::new(input.len());
 
     // Try each string array type in sequence
@@ -68,14 +68,14 @@ pub fn batch_json_string_to_variant(input: &ArrayRef) -> Result<VariantArray, Ar
 
 #[cfg(test)]
 mod test {
-    use crate::batch_json_string_to_variant;
+    use crate::json_to_variant;
     use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
     use arrow_schema::ArrowError;
     use parquet_variant::{Variant, VariantBuilder};
     use std::sync::Arc;
 
     #[test]
-    fn test_batch_json_string_to_variant() -> Result<(), ArrowError> {
+    fn test_json_to_variant() -> Result<(), ArrowError> {
         let input = StringArray::from(vec![
             Some("1"),
             None,
@@ -84,7 +84,7 @@ mod test {
             None,
         ]);
         let array_ref: ArrayRef = Arc::new(input);
-        let variant_array = batch_json_string_to_variant(&array_ref).unwrap();
+        let variant_array = json_to_variant(&array_ref).unwrap();
 
         let metadata_array = variant_array.metadata_field();
         let value_array = variant_array.value_field().expect("value field");
@@ -124,7 +124,7 @@ mod test {
     }
 
     #[test]
-    fn test_batch_json_string_to_variant_large_string() -> Result<(), ArrowError> {
+    fn test_json_to_variant_large_string() -> Result<(), ArrowError> {
         let input = LargeStringArray::from(vec![
             Some("1"),
             None,
@@ -133,7 +133,7 @@ mod test {
             None,
         ]);
         let array_ref: ArrayRef = Arc::new(input);
-        let variant_array = batch_json_string_to_variant(&array_ref).unwrap();
+        let variant_array = json_to_variant(&array_ref).unwrap();
 
         let metadata_array = variant_array.metadata_field();
         let value_array = variant_array.value_field().expect("value field");
@@ -173,7 +173,7 @@ mod test {
     }
 
     #[test]
-    fn test_batch_json_string_to_variant_string_view() -> Result<(), ArrowError> {
+    fn test_json_to_variant_string_view() -> Result<(), ArrowError> {
         let input = StringViewArray::from(vec![
             Some("1"),
             None,
@@ -182,7 +182,7 @@ mod test {
             None,
         ]);
         let array_ref: ArrayRef = Arc::new(input);
-        let variant_array = batch_json_string_to_variant(&array_ref).unwrap();
+        let variant_array = json_to_variant(&array_ref).unwrap();
 
         let metadata_array = variant_array.metadata_field();
         let value_array = variant_array.value_field().expect("value field");
