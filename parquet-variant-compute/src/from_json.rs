@@ -124,7 +124,7 @@ mod test {
     }
 
     #[test]
-    fn test_batch_json_string_to_variant_large_string() -> Result<(), ArrowError> {
+    fn test_json_to_variant_large_string() -> Result<(), ArrowError> {
         let input = LargeStringArray::from(vec![
             Some("1"),
             None,
@@ -173,7 +173,7 @@ mod test {
     }
 
     #[test]
-    fn test_batch_json_string_to_variant_string_view() -> Result<(), ArrowError> {
+    fn test_json_to_variant_string_view() -> Result<(), ArrowError> {
         let input = StringViewArray::from(vec![
             Some("1"),
             None,
