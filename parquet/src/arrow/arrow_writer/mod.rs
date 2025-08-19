@@ -1038,15 +1038,15 @@ impl ArrowColumnWriterFactory {
 
         match data_type {
             _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())?),
-            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => out.push(col(leaves.next().unwrap())?),
+            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => {
+                out.push(col(leaves.next().unwrap())?)
+            }
             ArrowDataType::LargeBinary
             | ArrowDataType::Binary
             | ArrowDataType::Utf8
             | ArrowDataType::LargeUtf8
             | ArrowDataType::BinaryView
-            | ArrowDataType::Utf8View => {
-                out.push(bytes(leaves.next().unwrap())?)
-            }
+            | ArrowDataType::Utf8View => out.push(bytes(leaves.next().unwrap())?),
             ArrowDataType::List(f)
             | ArrowDataType::LargeList(f)
             | ArrowDataType::FixedSizeList(f, _) => {
@@ -1063,21 +1063,29 @@ impl ArrowColumnWriterFactory {
                     self.get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
                 }
                 _ => unreachable!("invalid map type"),
-            }
+            },
             ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
-                    out.push(bytes(leaves.next().unwrap())?)
-                }
+                ArrowDataType::Utf8
+                | ArrowDataType::LargeUtf8
+                | ArrowDataType::Binary
+                | ArrowDataType::LargeBinary => out.push(bytes(leaves.next().unwrap())?),
                 ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
-                ArrowDataType::FixedSizeBinary(_) => {
+                ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
+                _ => out.push(col(leaves.next().unwrap())?),
+            },
+            ArrowDataType::RunEndEncoded(_run_ends, value_type) => match value_type.data_type() {
+                ArrowDataType::Utf8
+                | ArrowDataType::LargeUtf8
+                | ArrowDataType::Binary
+                | ArrowDataType::LargeBinary => out.push(bytes(leaves.next().unwrap())?),
+                ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
-                _ => {
-                    out.push(col(leaves.next().unwrap())?)
-                }
-            }
+                ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
+                _ => out.push(col(leaves.next().unwrap())?),
+            },
             _ => return Err(ParquetError::NYI(
                 format!(
                     "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
@@ -1171,6 +1179,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         write_primitive(typed, array.values(), levels)
                     }
                 },
+                ArrowDataType::RunEndEncoded(_run_ends, _value_type) => todo!(),
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array.as_primitive::<Int32Type>();
@@ -1253,6 +1262,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         write_primitive(typed, array.values(), levels)
                     }
                 },
+                ArrowDataType::RunEndEncoded(_run_ends, _values) => todo!(),
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
                     let array = array.as_primitive::<Int64Type>();
@@ -1329,6 +1339,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     let array = column.as_primitive::<Float16Type>();
                     get_float_16_array_slice(array, indices)
                 }
+                ArrowDataType::RunEndEncoded(_run_ends, _values) => todo!(),
                 _ => {
                     return Err(ParquetError::NYI(
                         "Attempting to write an Arrow type that is not yet implemented".to_string(),
@@ -4379,5 +4390,51 @@ mod tests {
 
         assert_eq!(get_dict_page_size(col0_meta), 1024 * 1024);
         assert_eq!(get_dict_page_size(col1_meta), 1024 * 1024 * 4);
+    }
+
+    #[test]
+    fn arrow_writer_run_end_encoded() {
+        // Create a run array of strings
+        let mut builder = StringRunBuilder::<Int16Type>::new();
+        builder.extend(
+            vec![Some("alpha"); 1000]
+                .into_iter()
+                .chain(vec![Some("beta"); 1000]),
+        );
+        let run_array: RunArray<Int16Type> = builder.finish();
+        println!("run_array type: {:?}", run_array.data_type());
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            run_array.data_type().clone(),
+            run_array.is_nullable(),
+        )]));
+
+        // Write to parquet
+        let mut parquet_bytes: Vec<u8> = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut parquet_bytes, schema.clone(), None).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(run_array)]).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Schema of output is plain, not dictionary or REE encoded!!
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            arrow_schema::DataType::Utf8,
+            false,
+        )]));
+
+        // Read from parquet
+        let bytes = Bytes::from(parquet_bytes);
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+        assert_eq!(reader.schema(), &expected_schema);
+        let batches: Vec<_> = reader
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches.len(), 2);
+        // Count rows in total
+        let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        assert_eq!(total_rows, 2000);
     }
 }
