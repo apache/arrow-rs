@@ -311,6 +311,41 @@ where
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
+
+    /// Builds the `DictionaryArray` without resetting the values builder or
+    /// the internal de-duplication map.
+    ///
+    /// The advantage of doing this is that the values will represent the entire
+    /// set of what has been built so-far by this builder and ensures
+    /// consistency in the assignment of keys to values across multiple calls
+    /// to `finish_preserve_values`. This enables ipc writers to efficiently
+    /// emit delta dictionaries.
+    ///
+    /// The downside to this is that building the record requires creating a
+    /// copy of the values, which can become slowly more expensive if the
+    /// dictionary grows.
+    ///
+    /// Additionally, if record batches from multiple different dictionary
+    /// builders for the same column are fed into a single ipc writer, beware
+    /// that entire dictionaries are likely to be re-sent frequently even when
+    /// the majority of the values are not used by the current record batch.
+    pub fn finish_preserve_values(&mut self) -> DictionaryArray<K> {
+        let values = self.values_builder.finish_cloned();
+        let keys = self.keys_builder.finish();
+
+        let data_type = DataType::Dictionary(
+            Box::new(K::DATA_TYPE),
+            Box::new(FixedSizeBinary(self.byte_width)),
+        );
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
 }
 
 fn get_bytes(values: &FixedSizeBinaryBuilder, byte_width: i32, idx: usize) -> &[u8] {
@@ -507,5 +542,63 @@ mod tests {
                 "Cast error: Can't cast dictionary keys from source type UInt16 to type UInt8"
             );
         }
+    }
+
+    #[test]
+    fn test_finish_preserve_values() {
+        // Create the first dictionary
+        let mut builder = FixedSizeBinaryDictionaryBuilder::<Int32Type>::new(3);
+        builder.append_value("aaa");
+        builder.append_value("bbb");
+        builder.append_value("ccc");
+        let dict = builder.finish_preserve_values();
+        assert_eq!(dict.keys().values(), &[0, 1, 2]);
+        let values = dict
+            .downcast_dict::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec![
+                Some("aaa".as_bytes()),
+                Some("bbb".as_bytes()),
+                Some("ccc".as_bytes())
+            ]
+        );
+
+        // Create a new dictionary
+        builder.append_value("ddd");
+        builder.append_value("eee");
+        let dict2 = builder.finish_preserve_values();
+
+        // Make sure the keys are assigned after the old ones and we have the
+        // right values
+        assert_eq!(dict2.keys().values(), &[3, 4]);
+        let values = dict2
+            .downcast_dict::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(values, [Some("ddd".as_bytes()), Some("eee".as_bytes())]);
+
+        // Check that we have all of the expected values
+        let all_values = dict2
+            .values()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all_values,
+            [
+                Some("aaa".as_bytes()),
+                Some("bbb".as_bytes()),
+                Some("ccc".as_bytes()),
+                Some("ddd".as_bytes()),
+                Some("eee".as_bytes())
+            ]
+        );
     }
 }

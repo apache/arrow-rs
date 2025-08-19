@@ -217,7 +217,7 @@ pub struct VariantArrayVariantBuilder<'a> {
     variant_builder: VariantBuilder,
 }
 
-impl<'a> VariantBuilderExt for VariantArrayVariantBuilder<'a> {
+impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.variant_builder.append_value(value);
     }
@@ -300,7 +300,7 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     }
 }
 
-impl<'a> Drop for VariantArrayVariantBuilder<'a> {
+impl Drop for VariantArrayVariantBuilder<'_> {
     /// If the builder was not finished, roll back any changes made to the
     /// underlying buffers (by truncating them)
     fn drop(&mut self) {

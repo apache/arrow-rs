@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::{AvroDataType, Codec, Nullability};
+use crate::codec::{AvroDataType, Codec, Nullability, Promotion, ResolutionInfo};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
@@ -154,6 +154,14 @@ enum Decoder {
     TimeMicros(Vec<i64>),
     TimestampMillis(bool, Vec<i64>),
     TimestampMicros(bool, Vec<i64>),
+    Int32ToInt64(Vec<i64>),
+    Int32ToFloat32(Vec<f32>),
+    Int32ToFloat64(Vec<f64>),
+    Int64ToFloat32(Vec<f32>),
+    Int64ToFloat64(Vec<f64>),
+    Float32ToFloat64(Vec<f64>),
+    BytesToString(OffsetBufferBuilder<i32>, Vec<u8>),
+    StringToBytes(OffsetBufferBuilder<i32>, Vec<u8>),
     Binary(OffsetBufferBuilder<i32>, Vec<u8>),
     /// String data encoded as UTF-8 bytes, mapped to Arrow's StringArray
     String(OffsetBufferBuilder<i32>, Vec<u8>),
@@ -179,36 +187,68 @@ enum Decoder {
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        let decoder = match data_type.codec() {
-            Codec::Null => Self::Null(0),
-            Codec::Boolean => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
-            Codec::Int32 => Self::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Int64 => Self::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Float32 => Self::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Float64 => Self::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Binary => Self::Binary(
+        // Extract just the Promotion (if any) to simplify pattern matching
+        let promotion = match data_type.resolution.as_ref() {
+            Some(ResolutionInfo::Promotion(p)) => Some(p),
+            _ => None,
+        };
+        let decoder = match (data_type.codec(), promotion) {
+            (Codec::Int64, Some(Promotion::IntToLong)) => {
+                Self::Int32ToInt64(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            (Codec::Float32, Some(Promotion::IntToFloat)) => {
+                Self::Int32ToFloat32(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            (Codec::Float64, Some(Promotion::IntToDouble)) => {
+                Self::Int32ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            (Codec::Float32, Some(Promotion::LongToFloat)) => {
+                Self::Int64ToFloat32(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            (Codec::Float64, Some(Promotion::LongToDouble)) => {
+                Self::Int64ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            (Codec::Float64, Some(Promotion::FloatToDouble)) => {
+                Self::Float32ToFloat64(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            (Codec::Utf8, Some(Promotion::BytesToString))
+            | (Codec::Utf8View, Some(Promotion::BytesToString)) => Self::BytesToString(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Utf8 => Self::String(
+            (Codec::Binary, Some(Promotion::StringToBytes)) => Self::StringToBytes(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Utf8View => Self::StringView(
+            (Codec::Null, _) => Self::Null(0),
+            (Codec::Boolean, _) => Self::Boolean(BooleanBufferBuilder::new(DEFAULT_CAPACITY)),
+            (Codec::Int32, _) => Self::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::Int64, _) => Self::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::Float32, _) => Self::Float32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::Float64, _) => Self::Float64(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::Binary, _) => Self::Binary(
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             ),
-            Codec::Date32 => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimeMillis => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimeMicros => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::TimestampMillis(is_utc) => {
+            (Codec::Utf8, _) => Self::String(
+                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                Vec::with_capacity(DEFAULT_CAPACITY),
+            ),
+            (Codec::Utf8View, _) => Self::StringView(
+                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                Vec::with_capacity(DEFAULT_CAPACITY),
+            ),
+            (Codec::Date32, _) => Self::Date32(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::TimeMillis, _) => Self::TimeMillis(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::TimeMicros, _) => Self::TimeMicros(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::TimestampMillis(is_utc), _) => {
                 Self::TimestampMillis(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            Codec::TimestampMicros(is_utc) => {
+            (Codec::TimestampMicros(is_utc), _) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            Codec::Fixed(sz) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
-            Codec::Decimal(precision, scale, size) => {
+            (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::Decimal(precision, scale, size), _) => {
                 let p = *precision;
                 let s = *scale;
                 let sz = *size;
@@ -247,8 +287,8 @@ impl Decoder {
                     }
                 }
             }
-            Codec::Interval => Self::Duration(IntervalMonthDayNanoBuilder::new()),
-            Codec::List(item) => {
+            (Codec::Interval, _) => Self::Duration(IntervalMonthDayNanoBuilder::new()),
+            (Codec::List(item), _) => {
                 let decoder = Self::try_new(item)?;
                 Self::Array(
                     Arc::new(item.field_with_name("item")),
@@ -256,10 +296,10 @@ impl Decoder {
                     Box::new(decoder),
                 )
             }
-            Codec::Enum(symbols) => {
+            (Codec::Enum(symbols), _) => {
                 Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone())
             }
-            Codec::Struct(fields) => {
+            (Codec::Struct(fields), _) => {
                 let mut arrow_fields = Vec::with_capacity(fields.len());
                 let mut encodings = Vec::with_capacity(fields.len());
                 for avro_field in fields.iter() {
@@ -269,7 +309,7 @@ impl Decoder {
                 }
                 Self::Record(arrow_fields.into(), encodings)
             }
-            Codec::Map(child) => {
+            (Codec::Map(child), _) => {
                 let val_field = child.field_with_name("value").with_nullable(true);
                 let map_field = Arc::new(ArrowField::new(
                     "entries",
@@ -288,7 +328,7 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
-            Codec::Uuid => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
@@ -307,12 +347,20 @@ impl Decoder {
             Self::Boolean(b) => b.append(false),
             Self::Int32(v) | Self::Date32(v) | Self::TimeMillis(v) => v.push(0),
             Self::Int64(v)
+            | Self::Int32ToInt64(v)
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
             | Self::TimestampMicros(_, v) => v.push(0),
-            Self::Float32(v) => v.push(0.),
-            Self::Float64(v) => v.push(0.),
-            Self::Binary(offsets, _) | Self::String(offsets, _) | Self::StringView(offsets, _) => {
+            Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
+            Self::Float64(v)
+            | Self::Int32ToFloat64(v)
+            | Self::Int64ToFloat64(v)
+            | Self::Float32ToFloat64(v) => v.push(0.),
+            Self::Binary(offsets, _)
+            | Self::String(offsets, _)
+            | Self::StringView(offsets, _)
+            | Self::BytesToString(offsets, _)
+            | Self::StringToBytes(offsets, _) => {
                 offsets.push_length(0);
             }
             Self::Uuid(v) => {
@@ -353,7 +401,15 @@ impl Decoder {
             | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
-            Self::Binary(offsets, values)
+            Self::Int32ToInt64(values) => values.push(buf.get_int()? as i64),
+            Self::Int32ToFloat32(values) => values.push(buf.get_int()? as f32),
+            Self::Int32ToFloat64(values) => values.push(buf.get_int()? as f64),
+            Self::Int64ToFloat32(values) => values.push(buf.get_long()? as f32),
+            Self::Int64ToFloat64(values) => values.push(buf.get_long()? as f64),
+            Self::Float32ToFloat64(values) => values.push(buf.get_float()? as f64),
+            Self::StringToBytes(offsets, values)
+            | Self::BytesToString(offsets, values)
+            | Self::Binary(offsets, values)
             | Self::String(offsets, values)
             | Self::StringView(offsets, values) => {
                 let data = buf.get_bytes()?;
@@ -464,12 +520,21 @@ impl Decoder {
             ),
             Self::Float32(values) => Arc::new(flush_primitive::<Float32Type>(values, nulls)),
             Self::Float64(values) => Arc::new(flush_primitive::<Float64Type>(values, nulls)),
-            Self::Binary(offsets, values) => {
+            Self::Int32ToInt64(values) => Arc::new(flush_primitive::<Int64Type>(values, nulls)),
+            Self::Int32ToFloat32(values) | Self::Int64ToFloat32(values) => {
+                Arc::new(flush_primitive::<Float32Type>(values, nulls))
+            }
+            Self::Int32ToFloat64(values)
+            | Self::Int64ToFloat64(values)
+            | Self::Float32ToFloat64(values) => {
+                Arc::new(flush_primitive::<Float64Type>(values, nulls))
+            }
+            Self::StringToBytes(offsets, values) | Self::Binary(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Arc::new(BinaryArray::new(offsets, values, nulls))
             }
-            Self::String(offsets, values) => {
+            Self::BytesToString(offsets, values) | Self::String(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
                 Arc::new(StringArray::new(offsets, values, nulls))
@@ -672,6 +737,7 @@ fn sign_extend_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::AvroField;
     use arrow_array::{
         cast::AsArray, Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
         IntervalMonthDayNanoArray, ListArray, MapArray, StringArray, StructArray,
@@ -707,6 +773,185 @@ mod tests {
 
     fn avro_from_codec(codec: Codec) -> AvroDataType {
         AvroDataType::new(codec, Default::default(), None)
+    }
+
+    fn decoder_for_promotion(
+        writer: PrimitiveType,
+        reader: PrimitiveType,
+        use_utf8view: bool,
+    ) -> Decoder {
+        let ws = Schema::TypeName(TypeName::Primitive(writer));
+        let rs = Schema::TypeName(TypeName::Primitive(reader));
+        let field =
+            AvroField::resolve_from_writer_and_reader(&ws, &rs, use_utf8view, false).unwrap();
+        Decoder::try_new(field.data_type()).unwrap()
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_int_to_long() {
+        let mut dec = decoder_for_promotion(PrimitiveType::Int, PrimitiveType::Long, false);
+        assert!(matches!(dec, Decoder::Int32ToInt64(_)));
+        for v in [0, 1, -2, 123456] {
+            let data = encode_avro_int(v);
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(a.value(0), 0);
+        assert_eq!(a.value(1), 1);
+        assert_eq!(a.value(2), -2);
+        assert_eq!(a.value(3), 123456);
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_int_to_float() {
+        let mut dec = decoder_for_promotion(PrimitiveType::Int, PrimitiveType::Float, false);
+        assert!(matches!(dec, Decoder::Int32ToFloat32(_)));
+        for v in [0, 42, -7] {
+            let data = encode_avro_int(v);
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(a.value(0), 0.0);
+        assert_eq!(a.value(1), 42.0);
+        assert_eq!(a.value(2), -7.0);
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_int_to_double() {
+        let mut dec = decoder_for_promotion(PrimitiveType::Int, PrimitiveType::Double, false);
+        assert!(matches!(dec, Decoder::Int32ToFloat64(_)));
+        for v in [1, -1, 10_000] {
+            let data = encode_avro_int(v);
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(a.value(0), 1.0);
+        assert_eq!(a.value(1), -1.0);
+        assert_eq!(a.value(2), 10_000.0);
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_long_to_float() {
+        let mut dec = decoder_for_promotion(PrimitiveType::Long, PrimitiveType::Float, false);
+        assert!(matches!(dec, Decoder::Int64ToFloat32(_)));
+        for v in [0_i64, 1_000_000_i64, -123_i64] {
+            let data = encode_avro_long(v);
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(a.value(0), 0.0);
+        assert_eq!(a.value(1), 1_000_000.0);
+        assert_eq!(a.value(2), -123.0);
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_long_to_double() {
+        let mut dec = decoder_for_promotion(PrimitiveType::Long, PrimitiveType::Double, false);
+        assert!(matches!(dec, Decoder::Int64ToFloat64(_)));
+        for v in [2_i64, -2_i64, 9_223_372_i64] {
+            let data = encode_avro_long(v);
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(a.value(0), 2.0);
+        assert_eq!(a.value(1), -2.0);
+        assert_eq!(a.value(2), 9_223_372.0);
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_float_to_double() {
+        let mut dec = decoder_for_promotion(PrimitiveType::Float, PrimitiveType::Double, false);
+        assert!(matches!(dec, Decoder::Float32ToFloat64(_)));
+        for v in [0.5_f32, -3.25_f32, 1.0e6_f32] {
+            let data = v.to_le_bytes().to_vec();
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(a.value(0), 0.5_f64);
+        assert_eq!(a.value(1), -3.25_f64);
+        assert_eq!(a.value(2), 1.0e6_f64);
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_bytes_to_string_utf8() {
+        let mut dec = decoder_for_promotion(PrimitiveType::Bytes, PrimitiveType::String, false);
+        assert!(matches!(dec, Decoder::BytesToString(_, _)));
+        for s in ["hello", "world", "héllo"] {
+            let data = encode_avro_bytes(s.as_bytes());
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(a.value(0), "hello");
+        assert_eq!(a.value(1), "world");
+        assert_eq!(a.value(2), "héllo");
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_bytes_to_string_utf8view_enabled() {
+        let mut dec = decoder_for_promotion(PrimitiveType::Bytes, PrimitiveType::String, true);
+        assert!(matches!(dec, Decoder::BytesToString(_, _)));
+        let data = encode_avro_bytes("abc".as_bytes());
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(a.value(0), "abc");
+    }
+
+    #[test]
+    fn test_schema_resolution_promotion_string_to_bytes() {
+        let mut dec = decoder_for_promotion(PrimitiveType::String, PrimitiveType::Bytes, false);
+        assert!(matches!(dec, Decoder::StringToBytes(_, _)));
+        for s in ["", "abc", "data"] {
+            let data = encode_avro_bytes(s.as_bytes());
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(a.value(0), b"");
+        assert_eq!(a.value(1), b"abc");
+        assert_eq!(a.value(2), "data".as_bytes());
+    }
+
+    #[test]
+    fn test_schema_resolution_no_promotion_passthrough_int() {
+        let ws = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
+        let rs = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
+        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
+        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+        assert!(matches!(dec, Decoder::Int32(_)));
+        for v in [7, -9] {
+            let data = encode_avro_int(v);
+            let mut cur = AvroCursor::new(&data);
+            dec.decode(&mut cur).unwrap();
+        }
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(a.value(0), 7);
+        assert_eq!(a.value(1), -9);
+    }
+
+    #[test]
+    fn test_schema_resolution_illegal_promotion_int_to_boolean_errors() {
+        let ws = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
+        let rs = Schema::TypeName(TypeName::Primitive(PrimitiveType::Boolean));
+        let res = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false);
+        assert!(res.is_err(), "expected error for illegal promotion");
     }
 
     #[test]

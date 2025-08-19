@@ -20,6 +20,7 @@ use crate::{
     VariantMetadata, VariantObject,
 };
 use arrow_schema::ArrowError;
+use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashSet;
 
@@ -190,6 +191,13 @@ impl ValueBuffer {
         self.append_slice(&micros.to_le_bytes());
     }
 
+    fn append_time_micros(&mut self, value: chrono::NaiveTime) {
+        self.append_primitive_header(VariantPrimitiveType::Time);
+        let micros_from_midnight = value.num_seconds_from_midnight() as u64 * 1_000_000
+            + value.nanosecond() as u64 / 1_000;
+        self.append_slice(&micros_from_midnight.to_le_bytes());
+    }
+
     fn append_decimal4(&mut self, decimal4: VariantDecimal4) {
         self.append_primitive_header(VariantPrimitiveType::Decimal4);
         self.append_u8(decimal4.scale());
@@ -334,6 +342,7 @@ impl ValueBuffer {
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(obj) => self.append_object(metadata_builder, obj),
             Variant::List(list) => self.append_list(metadata_builder, list),
+            Variant::Time(v) => self.append_time_micros(v),
         }
     }
 
@@ -364,6 +373,7 @@ impl ValueBuffer {
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(obj) => self.try_append_object(metadata_builder, obj)?,
             Variant::List(list) => self.try_append_list(metadata_builder, list)?,
+            Variant::Time(v) => self.append_time_micros(v),
         }
 
         Ok(())
@@ -669,7 +679,7 @@ impl ParentState<'_> {
         }
     }
 
-    // Return the offset of the underlying buffer at the time of calling this method.
+    // Return the current offset of the underlying buffer. Used as a savepoint for rollback.
     fn buffer_current_offset(&self) -> usize {
         match self {
             ParentState::Variant { buffer, .. }
@@ -678,8 +688,9 @@ impl ParentState<'_> {
         }
     }
 
-    // Return the current index of the undelying metadata buffer at the time of calling this method.
-    fn metadata_current_offset(&self) -> usize {
+    // Return the current dictionary size of the undelying metadata builder. Used as a savepoint for
+    // rollback.
+    fn metadata_num_fields(&self) -> usize {
         match self {
             ParentState::Variant {
                 metadata_builder, ..
@@ -689,7 +700,7 @@ impl ParentState<'_> {
             }
             | ParentState::List {
                 metadata_builder, ..
-            } => metadata_builder.metadata_buffer.len(),
+            } => metadata_builder.field_names.len(),
         }
     }
 }
@@ -1021,6 +1032,28 @@ impl VariantBuilder {
         self
     }
 
+    /// Builder-style API for appending a value to the list and returning self to enable method chaining.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if the variant contains duplicate field names in objects
+    /// when validation is enabled. For a fallible version, use [`ListBuilder::try_with_value`].
+    pub fn with_value<'m, 'd, T: Into<Variant<'m, 'd>>>(mut self, value: T) -> Self {
+        self.append_value(value);
+        self
+    }
+
+    /// Builder-style API for appending a value to the list and returns self for method chaining.
+    ///
+    /// This is the fallible version of [`ListBuilder::with_value`].
+    pub fn try_with_value<'m, 'd, T: Into<Variant<'m, 'd>>>(
+        mut self,
+        value: T,
+    ) -> Result<Self, ArrowError> {
+        self.try_append_value(value)?;
+        Ok(self)
+    }
+
     /// This method reserves capacity for field names in the Variant metadata,
     /// which can improve performance when you know the approximate number of unique field
     /// names that will be used across all objects in the [`Variant`].
@@ -1130,7 +1163,7 @@ pub struct ListBuilder<'a> {
 impl<'a> ListBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         let parent_value_offset_base = parent_state.buffer_current_offset();
-        let parent_metadata_offset_base = parent_state.metadata_current_offset();
+        let parent_metadata_offset_base = parent_state.metadata_num_fields();
         Self {
             parent_state,
             offsets: vec![],
@@ -1312,7 +1345,7 @@ pub struct ObjectBuilder<'a> {
 impl<'a> ObjectBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         let offset_base = parent_state.buffer_current_offset();
-        let meta_offset_base = parent_state.metadata_current_offset();
+        let meta_offset_base = parent_state.metadata_num_fields();
         Self {
             parent_state,
             fields: IndexMap::new(),
@@ -2928,13 +2961,16 @@ mod tests {
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
+
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 1);
-        assert_eq!(&metadata[0], "second");
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(&metadata[0], "first");
+        assert_eq!(&metadata[1], "second");
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let obj = variant.as_object().unwrap();
-        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
         assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
     }
 
@@ -2979,13 +3015,16 @@ mod tests {
         // The parent object should only contain the original fields
         object_builder.finish().unwrap();
         let (metadata, value) = builder.finish();
+
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
-        assert_eq!(metadata.len(), 1); // the fields of nested_object_builder has been rolled back
-        assert_eq!(&metadata[0], "second");
+        assert_eq!(metadata.len(), 2); // the fields of nested_object_builder has been rolled back
+        assert_eq!(&metadata[0], "first");
+        assert_eq!(&metadata[1], "second");
 
         let variant = Variant::try_new_with_metadata(metadata, &value).unwrap();
         let obj = variant.as_object().unwrap();
-        assert_eq!(obj.len(), 1);
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj.get("first"), Some(Variant::Int8(1)));
         assert_eq!(obj.get("second"), Some(Variant::Int8(2)));
     }
 
@@ -3120,5 +3159,51 @@ mod tests {
         list.finish();
 
         builder.finish()
+    }
+
+    // Make sure that we can correctly build deeply nested objects even when some of the nested
+    // builders don't finish.
+    #[test]
+    fn test_append_list_object_list_object() {
+        // An infinite counter
+        let mut counter = 0..;
+        let mut take = move |i| (&mut counter).take(i).collect::<Vec<_>>();
+        let mut builder = VariantBuilder::new();
+        let skip = 5;
+        {
+            let mut list = builder.new_list();
+            for i in take(4) {
+                let mut object = list.new_object();
+                for i in take(4) {
+                    let field_name = format!("field{i}");
+                    let mut list = object.new_list(&field_name);
+                    for i in take(3) {
+                        let mut object = list.new_object();
+                        for i in take(3) {
+                            if i % skip != 0 {
+                                object.insert(&format!("field{i}"), i);
+                            }
+                        }
+                        if i % skip != 0 {
+                            object.finish().unwrap();
+                        }
+                    }
+                    if i % skip != 0 {
+                        list.finish();
+                    }
+                }
+                if i % skip != 0 {
+                    object.finish().unwrap();
+                }
+            }
+            list.finish();
+        }
+        let (metadata, value) = builder.finish();
+        let v1 = Variant::try_new(&metadata, &value).unwrap();
+
+        let (metadata, value) = VariantBuilder::new().with_value(v1.clone()).finish();
+        let v2 = Variant::try_new(&metadata, &value).unwrap();
+
+        assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
     }
 }
