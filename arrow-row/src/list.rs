@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    fixed, null_sentinel, rebuild_field_with_child_type, LengthTracker, RowConverter, Rows,
-    SortField,
-};
+use crate::{fixed, null_sentinel, LengthTracker, RowConverter, Rows, SortField};
 use arrow_array::{new_null_array, Array, FixedSizeListArray, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
@@ -182,15 +179,20 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
 
     let child_data = child[0].to_data();
 
-    // Since RowConverter flattens certian data types (i.e. Dictionary),
+    // Since RowConverter flattens certain data types (i.e. Dictionary),
     // we need to use updated data type instead of original field
     let corrected_type = match &field.data_type {
-        DataType::List(inner_field) => DataType::List(Arc::new(rebuild_field_with_child_type(
-            inner_field,
-            &child_data,
-        ))),
+        DataType::List(inner_field) => DataType::List(Arc::new(
+            inner_field
+                .as_ref()
+                .clone()
+                .with_data_type(child_data.data_type().clone()),
+        )),
         DataType::LargeList(inner_field) => DataType::LargeList(Arc::new(
-            rebuild_field_with_child_type(inner_field, &child_data),
+            inner_field
+                .as_ref()
+                .clone()
+                .with_data_type(child_data.data_type().clone()),
         )),
         _ => unreachable!(),
     };
