@@ -18,10 +18,308 @@
 //! Module for converting Variant data to JSON format
 use arrow_schema::ArrowError;
 use base64::{engine::general_purpose, Engine as _};
+use chrono::Timelike;
+use parquet_variant::{Variant, VariantList, VariantObject};
 use serde_json::Value;
 use std::io::Write;
 
-use parquet_variant::{Variant, VariantList, VariantObject};
+/// Extension trait for converting Variants to JSON
+pub trait VariantToJson {
+    ///
+    /// This function writes JSON directly to any type that implements [`Write`],
+    /// making it efficient for streaming or when you want to control the output destination.
+    ///
+    /// See [`VariantToJson::to_json_string`] for a convenience function that returns a
+    /// JSON string.
+    ///
+    /// # Arguments
+    ///
+    /// * `writer` - Writer to output JSON to
+    /// * `variant` - The Variant value to convert
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if successful
+    /// * `Err` with error details if conversion fails
+    ///
+    /// # Examples
+    ///
+    ///
+    /// ```rust
+    /// # use parquet_variant::{Variant};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use arrow_schema::ArrowError;
+    /// let variant = Variant::from("Hello, World!");
+    /// let mut buffer = Vec::new();
+    /// variant.to_json(&mut buffer)?;
+    /// assert_eq!(String::from_utf8(buffer).unwrap(), "\"Hello, World!\"");
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    ///
+    /// # Example: Create a [`Variant::Object`] and convert to JSON
+    /// ```rust
+    /// # use parquet_variant::{Variant, VariantBuilder};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use arrow_schema::ArrowError;
+    /// let mut builder = VariantBuilder::new();
+    /// // Create an object builder that will write fields to the object
+    /// let mut object_builder = builder.new_object();
+    /// object_builder.insert("first_name", "Jiaying");
+    /// object_builder.insert("last_name", "Li");
+    /// object_builder.finish();
+    /// // Finish the builder to get the metadata and value
+    /// let (metadata, value) = builder.finish();
+    /// // Create the Variant and convert to JSON
+    /// let variant = Variant::try_new(&metadata, &value)?;
+    /// let mut writer = Vec::new();
+    /// variant.to_json(&mut writer)?;
+    /// assert_eq!(br#"{"first_name":"Jiaying","last_name":"Li"}"#, writer.as_slice());
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError>;
+
+    /// Convert [`Variant`] to JSON [`String`]
+    ///
+    /// This is a convenience function that converts a Variant to a JSON string.
+    /// This is the same as calling [`VariantToJson::to_json`] with a [`Vec`].
+    /// It's the simplest way to get a JSON representation when you just need a String result.
+    ///
+    /// # Arguments
+    ///
+    /// * `variant` - The Variant value to convert
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` containing the JSON representation
+    /// * `Err` with error details if conversion fails
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use parquet_variant::{Variant};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use arrow_schema::ArrowError;
+    /// let variant = Variant::Int32(42);
+    /// let json = variant.to_json_string()?;
+    /// assert_eq!(json, "42");
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    ///
+    /// # Example: Create a [`Variant::Object`] and convert to JSON
+    ///
+    /// This example shows how to create an object with two fields and convert it to JSON:
+    /// ```json
+    /// {
+    ///   "first_name": "Jiaying",
+    ///   "last_name": "Li"
+    /// }
+    /// ```
+    ///
+    /// ```rust
+    /// # use parquet_variant::{Variant, VariantBuilder};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use arrow_schema::ArrowError;
+    /// let mut builder = VariantBuilder::new();
+    /// // Create an object builder that will write fields to the object
+    /// let mut object_builder = builder.new_object();
+    /// object_builder.insert("first_name", "Jiaying");
+    /// object_builder.insert("last_name", "Li");
+    /// object_builder.finish();
+    /// // Finish the builder to get the metadata and value
+    /// let (metadata, value) = builder.finish();
+    /// // Create the Variant and convert to JSON
+    /// let variant = Variant::try_new(&metadata, &value)?;
+    /// let json = variant.to_json_string()?;
+    /// assert_eq!(r#"{"first_name":"Jiaying","last_name":"Li"}"#, json);
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    fn to_json_string(&self) -> Result<String, ArrowError>;
+
+    /// Convert [`Variant`] to [`serde_json::Value`]
+    ///
+    /// This function converts a Variant to a [`serde_json::Value`], which is useful
+    /// when you need to work with the JSON data programmatically or integrate with
+    /// other serde-based JSON processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `variant` - The Variant value to convert
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Value)` containing the JSON value
+    /// * `Err` with error details if conversion fails
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use parquet_variant::{Variant};
+    /// # use parquet_variant_json::VariantToJson;
+    /// # use serde_json::Value;
+    /// # use arrow_schema::ArrowError;
+    /// let variant = Variant::from("hello");
+    /// let json_value = variant.to_json_value()?;
+    /// assert_eq!(json_value, Value::String("hello".to_string()));
+    /// # Ok::<(), ArrowError>(())
+    /// ```
+    fn to_json_value(&self) -> Result<Value, ArrowError>;
+}
+
+impl<'m, 'v> VariantToJson for Variant<'m, 'v> {
+    fn to_json(&self, buffer: &mut impl Write) -> Result<(), ArrowError> {
+        match self {
+            Variant::Null => write!(buffer, "null")?,
+            Variant::BooleanTrue => write!(buffer, "true")?,
+            Variant::BooleanFalse => write!(buffer, "false")?,
+            Variant::Int8(i) => write!(buffer, "{i}")?,
+            Variant::Int16(i) => write!(buffer, "{i}")?,
+            Variant::Int32(i) => write!(buffer, "{i}")?,
+            Variant::Int64(i) => write!(buffer, "{i}")?,
+            Variant::Float(f) => write!(buffer, "{f}")?,
+            Variant::Double(f) => write!(buffer, "{f}")?,
+            Variant::Decimal4(decimal) => write!(buffer, "{decimal}")?,
+            Variant::Decimal8(decimal) => write!(buffer, "{decimal}")?,
+            Variant::Decimal16(decimal) => write!(buffer, "{decimal}")?,
+            Variant::Date(date) => write!(buffer, "\"{}\"", format_date_string(date))?,
+            Variant::TimestampMicros(ts) => write!(buffer, "\"{}\"", ts.to_rfc3339())?,
+            Variant::TimestampNtzMicros(ts) => {
+                write!(buffer, "\"{}\"", format_timestamp_ntz_string(ts))?
+            }
+            Variant::Time(time) => write!(buffer, "\"{}\"", format_time_ntz_str(time))?,
+            Variant::Binary(bytes) => {
+                // Encode binary as base64 string
+                let base64_str = format_binary_base64(bytes);
+                let json_str = serde_json::to_string(&base64_str).map_err(|e| {
+                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+                })?;
+                write!(buffer, "{json_str}")?
+            }
+            Variant::String(s) => {
+                // Use serde_json to properly escape the string
+                let json_str = serde_json::to_string(s).map_err(|e| {
+                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+                })?;
+                write!(buffer, "{json_str}")?
+            }
+            Variant::ShortString(s) => {
+                // Use serde_json to properly escape the string
+                let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
+                    ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
+                })?;
+                write!(buffer, "{json_str}")?
+            }
+            Variant::Object(obj) => {
+                convert_object_to_json(buffer, obj)?;
+            }
+            Variant::List(arr) => {
+                convert_array_to_json(buffer, arr)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn to_json_string(&self) -> Result<String, ArrowError> {
+        let mut buffer = Vec::new();
+        self.to_json(&mut buffer)?;
+        String::from_utf8(buffer)
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("UTF-8 conversion error: {e}")))
+    }
+
+    fn to_json_value(&self) -> Result<Value, ArrowError> {
+        match self {
+            Variant::Null => Ok(Value::Null),
+            Variant::BooleanTrue => Ok(Value::Bool(true)),
+            Variant::BooleanFalse => Ok(Value::Bool(false)),
+            Variant::Int8(i) => Ok(Value::Number((*i).into())),
+            Variant::Int16(i) => Ok(Value::Number((*i).into())),
+            Variant::Int32(i) => Ok(Value::Number((*i).into())),
+            Variant::Int64(i) => Ok(Value::Number((*i).into())),
+            Variant::Float(f) => serde_json::Number::from_f64((*f).into())
+                .map(Value::Number)
+                .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid float value".to_string())),
+            Variant::Double(f) => serde_json::Number::from_f64(*f)
+                .map(Value::Number)
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError("Invalid double value".to_string())
+                }),
+            Variant::Decimal4(decimal4) => {
+                let scale = decimal4.scale();
+                let integer = decimal4.integer();
+
+                let integer = if scale == 0 {
+                    integer
+                } else {
+                    let divisor = 10_i32.pow(scale as u32);
+                    if integer % divisor != 0 {
+                        // fall back to floating point
+                        return Ok(Value::from(integer as f64 / divisor as f64));
+                    }
+                    integer / divisor
+                };
+                Ok(Value::from(integer))
+            }
+            Variant::Decimal8(decimal8) => {
+                let scale = decimal8.scale();
+                let integer = decimal8.integer();
+
+                let integer = if scale == 0 {
+                    integer
+                } else {
+                    let divisor = 10_i64.pow(scale as u32);
+                    if integer % divisor != 0 {
+                        // fall back to floating point
+                        return Ok(Value::from(integer as f64 / divisor as f64));
+                    }
+                    integer / divisor
+                };
+                Ok(Value::from(integer))
+            }
+            Variant::Decimal16(decimal16) => {
+                let scale = decimal16.scale();
+                let integer = decimal16.integer();
+
+                let integer = if scale == 0 {
+                    integer
+                } else {
+                    let divisor = 10_i128.pow(scale as u32);
+                    if integer % divisor != 0 {
+                        // fall back to floating point
+                        return Ok(Value::from(integer as f64 / divisor as f64));
+                    }
+                    integer / divisor
+                };
+                // i128 has higher precision than any 64-bit type. Try a lossless narrowing cast to
+                // i64 or u64 first, falling back to a lossy narrowing cast to f64 if necessary.
+                let value = i64::try_from(integer)
+                    .map(Value::from)
+                    .or_else(|_| u64::try_from(integer).map(Value::from))
+                    .unwrap_or_else(|_| Value::from(integer as f64));
+                Ok(value)
+            }
+            Variant::Date(date) => Ok(Value::String(format_date_string(date))),
+            Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
+            Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),
+            Variant::Time(time) => Ok(Value::String(format_time_ntz_str(time))),
+            Variant::Binary(bytes) => Ok(Value::String(format_binary_base64(bytes))),
+            Variant::String(s) => Ok(Value::String(s.to_string())),
+            Variant::ShortString(s) => Ok(Value::String(s.to_string())),
+            Variant::Object(obj) => {
+                let map = obj
+                    .iter()
+                    .map(|(k, v)| v.to_json_value().map(|json_val| (k.to_string(), json_val)))
+                    .collect::<Result<_, _>>()?;
+                Ok(Value::Object(map))
+            }
+            Variant::List(arr) => {
+                let vec = arr
+                    .iter()
+                    .map(|element| element.to_json_value())
+                    .collect::<Result<_, _>>()?;
+                Ok(Value::Array(vec))
+            }
+        }
+    }
+}
 
 // Format string constants to avoid duplication and reduce errors
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -40,106 +338,17 @@ fn format_binary_base64(bytes: &[u8]) -> String {
     general_purpose::STANDARD.encode(bytes)
 }
 
-///
-/// This function writes JSON directly to any type that implements [`Write`],
-/// making it efficient for streaming or when you want to control the output destination.
-///
-/// See [`variant_to_json_string`] for a convenience function that returns a
-/// JSON string.
-///
-/// # Arguments
-///
-/// * `writer` - Writer to output JSON to
-/// * `variant` - The Variant value to convert
-///
-/// # Returns
-///
-/// * `Ok(())` if successful
-/// * `Err` with error details if conversion fails
-///
-/// # Examples
-///
-///
-/// ```rust
-/// # use parquet_variant::{Variant};
-/// # use parquet_variant_json::variant_to_json;
-/// # use arrow_schema::ArrowError;
-/// let variant = Variant::from("Hello, World!");
-/// let mut buffer = Vec::new();
-/// variant_to_json(&mut buffer, &variant)?;
-/// assert_eq!(String::from_utf8(buffer).unwrap(), "\"Hello, World!\"");
-/// # Ok::<(), ArrowError>(())
-/// ```
-///
-/// # Example: Create a [`Variant::Object`] and convert to JSON
-/// ```rust
-/// # use parquet_variant::{Variant, VariantBuilder};
-/// # use parquet_variant_json::variant_to_json;
-/// # use arrow_schema::ArrowError;
-/// let mut builder = VariantBuilder::new();
-/// // Create an object builder that will write fields to the object
-/// let mut object_builder = builder.new_object();
-/// object_builder.insert("first_name", "Jiaying");
-/// object_builder.insert("last_name", "Li");
-/// object_builder.finish();
-/// // Finish the builder to get the metadata and value
-/// let (metadata, value) = builder.finish();
-/// // Create the Variant and convert to JSON
-/// let variant = Variant::try_new(&metadata, &value)?;
-/// let mut writer = Vec::new();
-/// variant_to_json(&mut writer, &variant,)?;
-/// assert_eq!(br#"{"first_name":"Jiaying","last_name":"Li"}"#, writer.as_slice());
-/// # Ok::<(), ArrowError>(())
-/// ```
-pub fn variant_to_json(json_buffer: &mut impl Write, variant: &Variant) -> Result<(), ArrowError> {
-    match variant {
-        Variant::Null => write!(json_buffer, "null")?,
-        Variant::BooleanTrue => write!(json_buffer, "true")?,
-        Variant::BooleanFalse => write!(json_buffer, "false")?,
-        Variant::Int8(i) => write!(json_buffer, "{i}")?,
-        Variant::Int16(i) => write!(json_buffer, "{i}")?,
-        Variant::Int32(i) => write!(json_buffer, "{i}")?,
-        Variant::Int64(i) => write!(json_buffer, "{i}")?,
-        Variant::Float(f) => write!(json_buffer, "{f}")?,
-        Variant::Double(f) => write!(json_buffer, "{f}")?,
-        Variant::Decimal4(decimal) => write!(json_buffer, "{decimal}")?,
-        Variant::Decimal8(decimal) => write!(json_buffer, "{decimal}")?,
-        Variant::Decimal16(decimal) => write!(json_buffer, "{decimal}")?,
-        Variant::Date(date) => write!(json_buffer, "\"{}\"", format_date_string(date))?,
-        Variant::TimestampMicros(ts) => write!(json_buffer, "\"{}\"", ts.to_rfc3339())?,
-        Variant::TimestampNtzMicros(ts) => {
-            write!(json_buffer, "\"{}\"", format_timestamp_ntz_string(ts))?
-        }
-        Variant::Binary(bytes) => {
-            // Encode binary as base64 string
-            let base64_str = format_binary_base64(bytes);
-            let json_str = serde_json::to_string(&base64_str).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-            })?;
-            write!(json_buffer, "{json_str}")?
-        }
-        Variant::String(s) => {
-            // Use serde_json to properly escape the string
-            let json_str = serde_json::to_string(s).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-            })?;
-            write!(json_buffer, "{json_str}")?
-        }
-        Variant::ShortString(s) => {
-            // Use serde_json to properly escape the string
-            let json_str = serde_json::to_string(s.as_str()).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!("JSON encoding error: {e}"))
-            })?;
-            write!(json_buffer, "{json_str}")?
-        }
-        Variant::Object(obj) => {
-            convert_object_to_json(json_buffer, obj)?;
-        }
-        Variant::List(arr) => {
-            convert_array_to_json(json_buffer, arr)?;
+fn format_time_ntz_str(time: &chrono::NaiveTime) -> String {
+    let base = time.format("%H:%M:%S").to_string();
+    let micros = time.nanosecond() / 1000;
+    match micros {
+        0 => format!("{}.{}", base, 0),
+        _ => {
+            let micros_str = format!("{:06}", micros);
+            let micros_str_trimmed = micros_str.trim_matches('0');
+            format!("{}.{}", base, micros_str_trimmed)
         }
     }
-    Ok(())
 }
 
 /// Convert object fields to JSON
@@ -162,7 +371,7 @@ fn convert_object_to_json(buffer: &mut impl Write, obj: &VariantObject) -> Resul
         write!(buffer, "{json_key}:")?;
 
         // Recursively convert the value
-        variant_to_json(buffer, &value)?;
+        value.to_json(buffer)?;
     }
 
     write!(buffer, "}}")?;
@@ -180,210 +389,29 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
         }
         first = false;
 
-        variant_to_json(buffer, &element)?;
+        element.to_json(buffer)?;
     }
 
     write!(buffer, "]")?;
     Ok(())
 }
 
-/// Convert [`Variant`] to JSON [`String`]
-///
-/// This is a convenience function that converts a Variant to a JSON string.
-/// This is the same as calling [`variant_to_json`] with a [`Vec`].
-/// It's the simplest way to get a JSON representation when you just need a String result.
-///
-/// # Arguments
-///
-/// * `variant` - The Variant value to convert
-///
-/// # Returns
-///
-/// * `Ok(String)` containing the JSON representation
-/// * `Err` with error details if conversion fails
-///
-/// # Examples
-///
-/// ```rust
-/// # use parquet_variant::{Variant};
-/// # use parquet_variant_json::variant_to_json_string;
-/// # use arrow_schema::ArrowError;
-/// let variant = Variant::Int32(42);
-/// let json = variant_to_json_string(&variant)?;
-/// assert_eq!(json, "42");
-/// # Ok::<(), ArrowError>(())
-/// ```
-///
-/// # Example: Create a [`Variant::Object`] and convert to JSON
-///
-/// This example shows how to create an object with two fields and convert it to JSON:
-/// ```json
-/// {
-///   "first_name": "Jiaying",
-///   "last_name": "Li"
-/// }
-/// ```
-///
-/// ```rust
-/// # use parquet_variant::{Variant, VariantBuilder};
-/// # use parquet_variant_json::variant_to_json_string;
-/// # use arrow_schema::ArrowError;
-/// let mut builder = VariantBuilder::new();
-/// // Create an object builder that will write fields to the object
-/// let mut object_builder = builder.new_object();
-/// object_builder.insert("first_name", "Jiaying");
-/// object_builder.insert("last_name", "Li");
-/// object_builder.finish();
-/// // Finish the builder to get the metadata and value
-/// let (metadata, value) = builder.finish();
-/// // Create the Variant and convert to JSON
-/// let variant = Variant::try_new(&metadata, &value)?;
-/// let json = variant_to_json_string(&variant)?;
-/// assert_eq!(r#"{"first_name":"Jiaying","last_name":"Li"}"#, json);
-/// # Ok::<(), ArrowError>(())
-/// ```
-pub fn variant_to_json_string(variant: &Variant) -> Result<String, ArrowError> {
-    let mut buffer = Vec::new();
-    variant_to_json(&mut buffer, variant)?;
-    String::from_utf8(buffer)
-        .map_err(|e| ArrowError::InvalidArgumentError(format!("UTF-8 conversion error: {e}")))
-}
-
-/// Convert [`Variant`] to [`serde_json::Value`]
-///
-/// This function converts a Variant to a [`serde_json::Value`], which is useful
-/// when you need to work with the JSON data programmatically or integrate with
-/// other serde-based JSON processing.
-///
-/// # Arguments
-///
-/// * `variant` - The Variant value to convert
-///
-/// # Returns
-///
-/// * `Ok(Value)` containing the JSON value
-/// * `Err` with error details if conversion fails
-///
-/// # Examples
-///
-/// ```rust
-/// # use parquet_variant::{Variant};
-/// # use parquet_variant_json::variant_to_json_value;
-/// # use serde_json::Value;
-/// # use arrow_schema::ArrowError;
-/// let variant = Variant::from("hello");
-/// let json_value = variant_to_json_value(&variant)?;
-/// assert_eq!(json_value, Value::String("hello".to_string()));
-/// # Ok::<(), ArrowError>(())
-/// ```
-pub fn variant_to_json_value(variant: &Variant) -> Result<Value, ArrowError> {
-    match variant {
-        Variant::Null => Ok(Value::Null),
-        Variant::BooleanTrue => Ok(Value::Bool(true)),
-        Variant::BooleanFalse => Ok(Value::Bool(false)),
-        Variant::Int8(i) => Ok(Value::Number((*i).into())),
-        Variant::Int16(i) => Ok(Value::Number((*i).into())),
-        Variant::Int32(i) => Ok(Value::Number((*i).into())),
-        Variant::Int64(i) => Ok(Value::Number((*i).into())),
-        Variant::Float(f) => serde_json::Number::from_f64((*f).into())
-            .map(Value::Number)
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid float value".to_string())),
-        Variant::Double(f) => serde_json::Number::from_f64(*f)
-            .map(Value::Number)
-            .ok_or_else(|| ArrowError::InvalidArgumentError("Invalid double value".to_string())),
-        Variant::Decimal4(decimal4) => {
-            let scale = decimal4.scale();
-            let integer = decimal4.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i32.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            Ok(Value::from(integer))
-        }
-        Variant::Decimal8(decimal8) => {
-            let scale = decimal8.scale();
-            let integer = decimal8.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i64.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            Ok(Value::from(integer))
-        }
-        Variant::Decimal16(decimal16) => {
-            let scale = decimal16.scale();
-            let integer = decimal16.integer();
-
-            let integer = if scale == 0 {
-                integer
-            } else {
-                let divisor = 10_i128.pow(scale as u32);
-                if integer % divisor != 0 {
-                    // fall back to floating point
-                    return Ok(Value::from(integer as f64 / divisor as f64));
-                }
-                integer / divisor
-            };
-            // i128 has higher precision than any 64-bit type. Try a lossless narrowing cast to
-            // i64 or u64 first, falling back to a lossy narrowing cast to f64 if necessary.
-            let value = i64::try_from(integer)
-                .map(Value::from)
-                .or_else(|_| u64::try_from(integer).map(Value::from))
-                .unwrap_or_else(|_| Value::from(integer as f64));
-            Ok(value)
-        }
-        Variant::Date(date) => Ok(Value::String(format_date_string(date))),
-        Variant::TimestampMicros(ts) => Ok(Value::String(ts.to_rfc3339())),
-        Variant::TimestampNtzMicros(ts) => Ok(Value::String(format_timestamp_ntz_string(ts))),
-        Variant::Binary(bytes) => Ok(Value::String(format_binary_base64(bytes))),
-        Variant::String(s) => Ok(Value::String(s.to_string())),
-        Variant::ShortString(s) => Ok(Value::String(s.to_string())),
-        Variant::Object(obj) => {
-            let map = obj
-                .iter()
-                .map(|(k, v)| variant_to_json_value(&v).map(|json_val| (k.to_string(), json_val)))
-                .collect::<Result<_, _>>()?;
-            Ok(Value::Object(map))
-        }
-        Variant::List(arr) => {
-            let vec = arr
-                .iter()
-                .map(|element| variant_to_json_value(&element))
-                .collect::<Result<_, _>>()?;
-            Ok(Value::Array(vec))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, NaiveDate, Utc};
+    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use parquet_variant::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 
     #[test]
     fn test_decimal_edge_cases() -> Result<(), ArrowError> {
         // Test negative decimal
         let negative_variant = Variant::from(VariantDecimal4::try_new(-12345, 3)?);
-        let negative_json = variant_to_json_string(&negative_variant)?;
+        let negative_json = negative_variant.to_json_string()?;
         assert_eq!(negative_json, "-12.345");
 
         // Test large scale decimal
         let large_scale_variant = Variant::from(VariantDecimal8::try_new(123456789, 6)?);
-        let large_scale_json = variant_to_json_string(&large_scale_variant)?;
+        let large_scale_json = large_scale_variant.to_json_string()?;
         assert_eq!(large_scale_json, "123.456789");
 
         Ok(())
@@ -392,15 +420,15 @@ mod tests {
     #[test]
     fn test_decimal16_to_json() -> Result<(), ArrowError> {
         let variant = Variant::from(VariantDecimal16::try_new(123456789012345, 4)?);
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert_eq!(json, "12345678901.2345");
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert!(matches!(json_value, Value::Number(_)));
 
         // Test very large number
         let large_variant = Variant::from(VariantDecimal16::try_new(999999999999999999, 2)?);
-        let large_json = variant_to_json_string(&large_variant)?;
+        let large_json = large_variant.to_json_string()?;
         // Due to f64 precision limits, very large numbers may lose precision
         assert!(
             large_json.starts_with("9999999999999999")
@@ -413,16 +441,16 @@ mod tests {
     fn test_date_to_json() -> Result<(), ArrowError> {
         let date = NaiveDate::from_ymd_opt(2023, 12, 25).unwrap();
         let variant = Variant::Date(date);
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert_eq!(json, "\"2023-12-25\"");
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert_eq!(json_value, Value::String("2023-12-25".to_string()));
 
         // Test leap year date
         let leap_date = NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
         let leap_variant = Variant::Date(leap_date);
-        let leap_json = variant_to_json_string(&leap_variant)?;
+        let leap_json = leap_variant.to_json_string()?;
         assert_eq!(leap_json, "\"2024-02-29\"");
         Ok(())
     }
@@ -433,11 +461,11 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let variant = Variant::TimestampMicros(timestamp);
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert!(json.contains("2023-12-25T10:30:45"));
         assert!(json.starts_with('"') && json.ends_with('"'));
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert!(matches!(json_value, Value::String(_)));
         Ok(())
     }
@@ -448,11 +476,23 @@ mod tests {
             .unwrap()
             .naive_utc();
         let variant = Variant::TimestampNtzMicros(naive_timestamp);
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert!(json.contains("2023-12-25"));
         assert!(json.starts_with('"') && json.ends_with('"'));
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
+        assert!(matches!(json_value, Value::String(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_time_to_json() -> Result<(), ArrowError> {
+        let naive_time = NaiveTime::from_num_seconds_from_midnight_opt(12345, 123460708).unwrap();
+        let variant = Variant::Time(naive_time);
+        let json = variant.to_json_string()?;
+        assert_eq!("\"03:25:45.12346\"", json);
+
+        let json_value = variant.to_json_value()?;
         assert!(matches!(json_value, Value::String(_)));
         Ok(())
     }
@@ -461,23 +501,23 @@ mod tests {
     fn test_binary_to_json() -> Result<(), ArrowError> {
         let binary_data = b"Hello, World!";
         let variant = Variant::Binary(binary_data);
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
 
         // Should be base64 encoded and quoted
         assert!(json.starts_with('"') && json.ends_with('"'));
         assert!(json.len() > 2); // Should have content
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert!(matches!(json_value, Value::String(_)));
 
         // Test empty binary
         let empty_variant = Variant::Binary(b"");
-        let empty_json = variant_to_json_string(&empty_variant)?;
+        let empty_json = empty_variant.to_json_string()?;
         assert_eq!(empty_json, "\"\"");
 
         // Test binary with special bytes
         let special_variant = Variant::Binary(&[0, 255, 128, 64]);
-        let special_json = variant_to_json_string(&special_variant)?;
+        let special_json = special_variant.to_json_string()?;
         assert!(special_json.starts_with('"') && special_json.ends_with('"'));
         Ok(())
     }
@@ -485,10 +525,10 @@ mod tests {
     #[test]
     fn test_string_to_json() -> Result<(), ArrowError> {
         let variant = Variant::from("hello world");
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert_eq!(json, "\"hello world\"");
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert_eq!(json_value, Value::String("hello world".to_string()));
         Ok(())
     }
@@ -498,10 +538,10 @@ mod tests {
         use parquet_variant::ShortString;
         let short_string = ShortString::try_new("short")?;
         let variant = Variant::ShortString(short_string);
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert_eq!(json, "\"short\"");
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert_eq!(json_value, Value::String("short".to_string()));
         Ok(())
     }
@@ -509,10 +549,10 @@ mod tests {
     #[test]
     fn test_string_escaping() -> Result<(), ArrowError> {
         let variant = Variant::from("hello\nworld\t\"quoted\"");
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert_eq!(json, "\"hello\\nworld\\t\\\"quoted\\\"\"");
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert_eq!(
             json_value,
             Value::String("hello\nworld\t\"quoted\"".to_string())
@@ -524,7 +564,7 @@ mod tests {
     fn test_json_buffer_writing() -> Result<(), ArrowError> {
         let variant = Variant::Int8(123);
         let mut buffer = Vec::new();
-        variant_to_json(&mut buffer, &variant)?;
+        variant.to_json(&mut buffer)?;
 
         let result = String::from_utf8(buffer)
             .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
@@ -541,7 +581,9 @@ mod tests {
 
     impl JsonTest {
         fn run(self) {
-            let json_string = variant_to_json_string(&self.variant)
+            let json_string = self
+                .variant
+                .to_json_string()
                 .expect("variant_to_json_string should succeed");
             assert_eq!(
                 json_string, self.expected_json,
@@ -549,8 +591,10 @@ mod tests {
                 self.variant
             );
 
-            let json_value =
-                variant_to_json_value(&self.variant).expect("variant_to_json_value should succeed");
+            let json_value = self
+                .variant
+                .to_json_value()
+                .expect("variant_to_json_value should succeed");
 
             // For floating point numbers, we need special comparison due to JSON number representation
             match (&json_value, &self.expected_value) {
@@ -830,20 +874,18 @@ mod tests {
 
     #[test]
     fn test_buffer_writing_variants() -> Result<(), ArrowError> {
-        use crate::variant_to_json;
-
         let variant = Variant::from("test buffer writing");
 
         // Test writing to a Vec<u8>
         let mut buffer = Vec::new();
-        variant_to_json(&mut buffer, &variant)?;
+        variant.to_json(&mut buffer)?;
         let result = String::from_utf8(buffer)
             .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
         assert_eq!(result, "\"test buffer writing\"");
 
         // Test writing to vec![]
         let mut buffer = vec![];
-        variant_to_json(&mut buffer, &variant)?;
+        variant.to_json(&mut buffer)?;
         let result = String::from_utf8(buffer)
             .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
         assert_eq!(result, "\"test buffer writing\"");
@@ -869,7 +911,7 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
 
         // Parse the JSON to verify structure - handle JSON parsing errors manually
         let parsed: Value = serde_json::from_str(&json).unwrap();
@@ -881,7 +923,7 @@ mod tests {
         assert_eq!(obj.len(), 4);
 
         // Test variant_to_json_value as well
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert!(matches!(json_value, Value::Object(_)));
 
         Ok(())
@@ -900,10 +942,10 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert_eq!(json, "{}");
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert_eq!(json_value, Value::Object(serde_json::Map::new()));
 
         Ok(())
@@ -925,7 +967,7 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
 
         // Verify that special characters are properly escaped
         assert!(json.contains("Hello \\\"World\\\"\\nWith\\tTabs"));
@@ -956,10 +998,10 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert_eq!(json, "[1,2,3,4,5]");
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         let arr = json_value.as_array().expect("expected JSON array");
         assert_eq!(arr.len(), 5);
         assert_eq!(arr[0], Value::Number(1.into()));
@@ -981,10 +1023,10 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
         assert_eq!(json, "[]");
 
-        let json_value = variant_to_json_value(&variant)?;
+        let json_value = variant.to_json_value()?;
         assert_eq!(json_value, Value::Array(vec![]));
 
         Ok(())
@@ -1007,7 +1049,7 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
 
         let parsed: Value = serde_json::from_str(&json).unwrap();
         let arr = parsed.as_array().expect("expected JSON array");
@@ -1038,7 +1080,7 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
 
         // Parse and verify all fields are present
         let parsed: Value = serde_json::from_str(&json).unwrap();
@@ -1070,7 +1112,7 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
 
         let parsed: Value = serde_json::from_str(&json).unwrap();
         let arr = parsed.as_array().expect("expected JSON array");
@@ -1105,7 +1147,7 @@ mod tests {
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
-        let json = variant_to_json_string(&variant)?;
+        let json = variant.to_json_string()?;
 
         let parsed: Value = serde_json::from_str(&json).unwrap();
         let obj = parsed.as_object().expect("expected JSON object");
@@ -1132,8 +1174,8 @@ mod tests {
             6,
         )?);
 
-        let json_string = variant_to_json_string(&high_precision_decimal8)?;
-        let json_value = variant_to_json_value(&high_precision_decimal8)?;
+        let json_string = high_precision_decimal8.to_json_string()?;
+        let json_value = high_precision_decimal8.to_json_value()?;
 
         // Due to f64 precision limits, we expect precision loss for values > 2^53
         // Both functions should produce consistent results (even if not exact)
@@ -1146,7 +1188,7 @@ mod tests {
             6,
         )?);
 
-        let json_string_exact = variant_to_json_string(&exact_decimal)?;
+        let json_string_exact = exact_decimal.to_json_string()?;
         assert_eq!(json_string_exact, "1234567.89");
 
         // Test integer case (should be exact)
@@ -1155,7 +1197,7 @@ mod tests {
             6,
         )?);
 
-        let json_string_integer = variant_to_json_string(&integer_decimal)?;
+        let json_string_integer = integer_decimal.to_json_string()?;
         assert_eq!(json_string_integer, "42");
 
         Ok(())
@@ -1165,7 +1207,7 @@ mod tests {
     fn test_float_nan_inf_handling() -> Result<(), ArrowError> {
         // Test NaN handling - should return an error since JSON doesn't support NaN
         let nan_variant = Variant::Float(f32::NAN);
-        let nan_result = variant_to_json_value(&nan_variant);
+        let nan_result = nan_variant.to_json_value();
         assert!(nan_result.is_err());
         assert!(nan_result
             .unwrap_err()
@@ -1174,7 +1216,7 @@ mod tests {
 
         // Test positive infinity - should return an error since JSON doesn't support Infinity
         let pos_inf_variant = Variant::Float(f32::INFINITY);
-        let pos_inf_result = variant_to_json_value(&pos_inf_variant);
+        let pos_inf_result = pos_inf_variant.to_json_value();
         assert!(pos_inf_result.is_err());
         assert!(pos_inf_result
             .unwrap_err()
@@ -1183,7 +1225,7 @@ mod tests {
 
         // Test negative infinity - should return an error since JSON doesn't support -Infinity
         let neg_inf_variant = Variant::Float(f32::NEG_INFINITY);
-        let neg_inf_result = variant_to_json_value(&neg_inf_variant);
+        let neg_inf_result = neg_inf_variant.to_json_value();
         assert!(neg_inf_result.is_err());
         assert!(neg_inf_result
             .unwrap_err()
@@ -1192,7 +1234,7 @@ mod tests {
 
         // Test the same for Double variants
         let nan_double_variant = Variant::Double(f64::NAN);
-        let nan_double_result = variant_to_json_value(&nan_double_variant);
+        let nan_double_result = nan_double_variant.to_json_value();
         assert!(nan_double_result.is_err());
         assert!(nan_double_result
             .unwrap_err()
@@ -1200,7 +1242,7 @@ mod tests {
             .contains("Invalid double value"));
 
         let pos_inf_double_variant = Variant::Double(f64::INFINITY);
-        let pos_inf_double_result = variant_to_json_value(&pos_inf_double_variant);
+        let pos_inf_double_result = pos_inf_double_variant.to_json_value();
         assert!(pos_inf_double_result.is_err());
         assert!(pos_inf_double_result
             .unwrap_err()
@@ -1208,7 +1250,7 @@ mod tests {
             .contains("Invalid double value"));
 
         let neg_inf_double_variant = Variant::Double(f64::NEG_INFINITY);
-        let neg_inf_double_result = variant_to_json_value(&neg_inf_double_variant);
+        let neg_inf_double_result = neg_inf_double_variant.to_json_value();
         assert!(neg_inf_double_result.is_err());
         assert!(neg_inf_double_result
             .unwrap_err()
@@ -1217,11 +1259,11 @@ mod tests {
 
         // Test normal float values still work
         let normal_float = Variant::Float(std::f32::consts::PI);
-        let normal_result = variant_to_json_value(&normal_float)?;
+        let normal_result = normal_float.to_json_value()?;
         assert!(matches!(normal_result, Value::Number(_)));
 
         let normal_double = Variant::Double(std::f64::consts::E);
-        let normal_double_result = variant_to_json_value(&normal_double)?;
+        let normal_double_result = normal_double.to_json_value()?;
         assert!(matches!(normal_double_result, Value::Number(_)));
 
         Ok(())

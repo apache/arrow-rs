@@ -112,7 +112,7 @@ mod test {
     use arrow_schema::{DataType, Field, FieldRef, Fields};
     use parquet_variant::{Variant, VariantPath};
 
-    use crate::batch_json_string_to_variant;
+    use crate::json_to_variant;
     use crate::VariantArray;
 
     use super::{variant_get, GetOptions};
@@ -121,14 +121,14 @@ mod test {
         // Create input array from JSON string
         let input_array_ref: ArrayRef = Arc::new(StringArray::from(vec![Some(input_json)]));
         let input_variant_array_ref: ArrayRef =
-            Arc::new(batch_json_string_to_variant(&input_array_ref).unwrap());
+            Arc::new(json_to_variant(&input_array_ref).unwrap());
 
         let result =
             variant_get(&input_variant_array_ref, GetOptions::new_with_path(path)).unwrap();
 
         // Create expected array from JSON string
         let expected_array_ref: ArrayRef = Arc::new(StringArray::from(vec![Some(expected_json)]));
-        let expected_variant_array = batch_json_string_to_variant(&expected_array_ref).unwrap();
+        let expected_variant_array = json_to_variant(&expected_array_ref).unwrap();
 
         let result_array: &VariantArray = result.as_any().downcast_ref().unwrap();
         assert_eq!(

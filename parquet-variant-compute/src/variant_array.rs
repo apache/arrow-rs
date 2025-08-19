@@ -146,8 +146,8 @@ impl VariantArray {
 
     /// Return the [`Variant`] instance stored at the given row
     ///
-    /// Consistently with other Arrow arrays types, this API requires you to
-    /// check for nulls first using [`Self::is_valid`].
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
     ///
     /// # Panics
     /// * if the index is out of bounds

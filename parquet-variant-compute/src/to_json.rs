@@ -23,11 +23,11 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use arrow_schema::ArrowError;
 use parquet_variant::Variant;
-use parquet_variant_json::variant_to_json;
+use parquet_variant_json::VariantToJson;
 
 /// Transform a batch of Variant represented as STRUCT<metadata: BINARY, value: BINARY> to a batch
 /// of JSON strings where nulls are preserved. The JSON strings in the input must be valid.
-pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, ArrowError> {
+pub fn variant_to_json(input: &ArrayRef) -> Result<StringArray, ArrowError> {
     let struct_array = input
         .as_any()
         .downcast_ref::<StructArray>()
@@ -83,7 +83,7 @@ pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, Arr
             let value = value_array.value(i);
             let variant = Variant::new(metadata, value);
             let start_len = json_buffer.len();
-            variant_to_json(&mut json_buffer, &variant)?;
+            variant.to_json(&mut json_buffer)?;
             let written = (json_buffer.len() - start_len) as i32;
             current_offset += written;
             offsets.push(current_offset);
@@ -104,7 +104,7 @@ pub fn batch_variant_to_json_string(input: &ArrayRef) -> Result<StringArray, Arr
 
 #[cfg(test)]
 mod test {
-    use crate::batch_variant_to_json_string;
+    use crate::variant_to_json;
     use arrow::array::{Array, ArrayRef, BinaryBuilder, BooleanBufferBuilder, StructArray};
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::DataType;
@@ -113,7 +113,7 @@ mod test {
     use std::sync::Arc;
 
     #[test]
-    fn test_batch_variant_to_json_string() {
+    fn test_variant_to_json() {
         let mut metadata_builder = BinaryBuilder::new();
         let mut value_builder = BinaryBuilder::new();
 
@@ -161,7 +161,7 @@ mod test {
 
         let input = Arc::new(struct_array) as ArrayRef;
 
-        let result = batch_variant_to_json_string(&input).unwrap();
+        let result = variant_to_json(&input).unwrap();
 
         // Expected output: ["0", null, "{\"a\":32}", "null", null]
         let expected = vec![Some("0"), None, Some("{\"a\":32}"), Some("null"), None];
