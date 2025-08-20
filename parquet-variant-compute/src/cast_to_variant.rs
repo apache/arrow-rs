@@ -591,13 +591,19 @@ mod tests {
             Arc::new(microsecond_array.with_timezone("+01:00".to_string())),
         );
 
-        // nanoseconds should get truncated to microseconds
+        let timestamp = DateTime::from_timestamp_nanos(nanosecond);
         let nanosecond_array = TimestampNanosecondArray::from(vec![Some(nanosecond), None]);
-        run_array_tests(
-            microsecond,
+        run_test(
             Arc::new(nanosecond_array.clone()),
+            vec![
+                Some(Variant::TimestampNtzNanos(timestamp.naive_utc())),
+                None,
+            ],
+        );
+        run_test(
             Arc::new(nanosecond_array.with_timezone("+01:00".to_string())),
-        )
+            vec![Some(Variant::TimestampNanos(timestamp)), None],
+        );
     }
 
     #[test]
