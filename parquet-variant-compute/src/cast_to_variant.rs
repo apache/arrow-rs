@@ -535,47 +535,44 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(value);
             }
         }
-        DataType::Map(field, _) => {
-            match field.data_type() {
-                DataType::Struct(_) => {
-                    let map_array = input.as_map();
-                    let keys = cast_to_variant(map_array.keys())?;
-                    let values = cast_to_variant(map_array.values())?;
-                    let offsets = map_array.offsets();
+        DataType::Map(field, _) => match field.data_type() {
+            DataType::Struct(_) => {
+                let map_array = input.as_map();
+                let keys = cast_to_variant(map_array.keys())?;
+                let values = cast_to_variant(map_array.values())?;
+                let offsets = map_array.offsets();
 
-                    let mut start_offset = offsets[0];
-                    for end_offset in offsets.iter().skip(1) {
-                        if start_offset >= *end_offset {
-                            builder.append_null();
-                            continue;
-                        }
-
-                        let length = (end_offset - start_offset) as usize;
-
-                        let mut tmp_builder = VariantBuilder::new();
-                        let mut object_builder = tmp_builder.new_object();
-
-                        for i in start_offset..*end_offset {
-                            let value = values.value(i as usize);
-                            object_builder
-                                .insert(keys.value(i as usize).as_string().unwrap(), value);
-                        }
-                        object_builder.finish()?;
-                        let (metadata, value) = tmp_builder.finish();
-                        let variant = Variant::try_new(&metadata, &value).unwrap();
-
-                        builder.append_variant(variant);
-
-                        start_offset += length as i32;
+                let mut start_offset = offsets[0];
+                for end_offset in offsets.iter().skip(1) {
+                    if start_offset >= *end_offset {
+                        builder.append_null();
+                        continue;
                     }
-                }
-                _ => {
-                    return Err(ArrowError::CastError(format!(
-                        "Unsupported map field type for casting to Variant: {field:?}",
-                    )));
+
+                    let length = (end_offset - start_offset) as usize;
+
+                    let mut variant_builder = VariantBuilder::new();
+                    let mut object_builder = variant_builder.new_object();
+
+                    for i in start_offset..*end_offset {
+                        let value = values.value(i as usize);
+                        object_builder.insert(keys.value(i as usize).as_string().unwrap(), value);
+                    }
+                    object_builder.finish()?;
+                    let (metadata, value) = variant_builder.finish();
+                    let variant = Variant::try_new(&metadata, &value).unwrap();
+
+                    builder.append_variant(variant);
+
+                    start_offset += length as i32;
                 }
             }
-        }
+            _ => {
+                return Err(ArrowError::CastError(format!(
+                    "Unsupported map field type for casting to Variant: {field:?}",
+                )));
+            }
+        },
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
