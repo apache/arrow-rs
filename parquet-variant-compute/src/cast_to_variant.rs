@@ -2017,6 +2017,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn test_cast_map_to_variant_object() {
         let keys = vec!["key1", "key2", "key3"];
         let values_data = Int32Array::from(vec![1, 2, 3]);
