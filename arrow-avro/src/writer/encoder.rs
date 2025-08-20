@@ -139,7 +139,7 @@ enum Encoder<'a> {
 impl<'a> Encoder<'a> {
     /// Encode the value at `idx`.
     #[inline]
-    fn encode(&mut self, idx: usize, out: &mut dyn Write) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         match self {
             Encoder::Boolean(e) => e.encode(idx, out),
             Encoder::Int(e) => e.encode(idx, out),
@@ -167,7 +167,7 @@ impl<'a> NullableEncoder<'a> {
 
     /// Encode the value at `idx`, assuming it's not-null.
     #[inline]
-    fn encode(&mut self, idx: usize, out: &mut dyn Write) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         self.encoder.encode(idx, out)
     }
 
@@ -222,7 +222,7 @@ pub fn make_encoder<'a>(array: &'a dyn Array) -> Result<NullableEncoder<'a>, Arr
 struct BooleanEncoder<'a>(&'a arrow_array::BooleanArray);
 impl BooleanEncoder<'_> {
     #[inline]
-    fn encode(&mut self, idx: usize, out: &mut dyn Write) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_bool(out, self.0.value(idx))
     }
 }
@@ -231,7 +231,7 @@ impl BooleanEncoder<'_> {
 struct IntEncoder<'a, P: ArrowPrimitiveType<Native = i32>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
     #[inline]
-    fn encode(&mut self, idx: usize, out: &mut dyn Write) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_int(out, self.0.value(idx))
     }
 }
@@ -240,7 +240,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
 struct LongEncoder<'a, P: ArrowPrimitiveType<Native = i64>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
     #[inline]
-    fn encode(&mut self, idx: usize, out: &mut dyn Write) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_long(out, self.0.value(idx))
     }
 }
@@ -249,7 +249,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
 struct BinaryEncoder<'a, O: OffsetSizeTrait>(&'a GenericBinaryArray<O>);
 impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
     #[inline]
-    fn encode(&mut self, idx: usize, out: &mut dyn Write) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_len_prefixed(out, self.0.value(idx))
     }
 }
@@ -257,7 +257,7 @@ impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
 struct F32Encoder<'a>(&'a arrow_array::Float32Array);
 impl F32Encoder<'_> {
     #[inline]
-    fn encode(&mut self, idx: usize, out: &mut dyn Write) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         // Avro float: 4 bytes, IEEE-754 little-endian
         let bits = self.0.value(idx).to_bits();
         out.write_all(&bits.to_le_bytes())
@@ -268,7 +268,7 @@ impl F32Encoder<'_> {
 struct F64Encoder<'a>(&'a arrow_array::Float64Array);
 impl F64Encoder<'_> {
     #[inline]
-    fn encode(&mut self, idx: usize, out: &mut dyn Write) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         // Avro double: 8 bytes, IEEE-754 little-endian
         let bits = self.0.value(idx).to_bits();
         out.write_all(&bits.to_le_bytes())
