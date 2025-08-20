@@ -58,6 +58,13 @@ pub(crate) trait OutputBuilder {
         metadata: &BinaryViewArray,
         value_field: &BinaryViewArray,
     ) -> Result<ArrayRef>;
+
+    /// write out an all-null variant array
+    fn all_null(
+        &self,
+        variant_array: &VariantArray,
+        metadata: &BinaryViewArray,
+    ) -> Result<ArrayRef>;
 }
 
 pub(crate) fn instantiate_output_builder<'a>(
