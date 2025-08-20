@@ -501,15 +501,68 @@ thrift_enum!(
 ///
 /// [WriterVersion]: crate::file::properties::WriterVersion
 enum Encoding {
+  /// Default encoding.
+  /// - BOOLEAN - 1 bit per value. 0 is false; 1 is true.
+  /// - INT32 - 4 bytes per value.  Stored as little-endian.
+  /// - INT64 - 8 bytes per value.  Stored as little-endian.
+  /// - FLOAT - 4 bytes per value.  IEEE. Stored as little-endian.
+  /// - DOUBLE - 8 bytes per value.  IEEE. Stored as little-endian.
+  /// - BYTE_ARRAY - 4 byte length stored as little endian, followed by bytes.
+  /// - FIXED_LEN_BYTE_ARRAY - Just the bytes.
   PLAIN = 0;
   //  GROUP_VAR_INT = 1;
+  /// **Deprecated** dictionary encoding.
+  ///
+  /// The values in the dictionary are encoded using PLAIN encoding.
+  /// Since it is deprecated, RLE_DICTIONARY encoding is used for a data page, and
+  /// PLAIN encoding is used for dictionary page.
   PLAIN_DICTIONARY = 2;
+  /// Group packed run length encoding.
+  ///
+  /// Usable for definition/repetition levels encoding and boolean values.
   RLE = 3;
+  /// **Deprecated** Bit-packed encoding.
+  ///
+  /// This can only be used if the data has a known max width.
+  /// Usable for definition/repetition levels encoding.
+  ///
+  /// There are compatibility issues with files using this encoding.
+  /// The parquet standard specifies the bits to be packed starting from the
+  /// most-significant bit, several implementations do not follow this bit order.
+  /// Several other implementations also have issues reading this encoding
+  /// because of incorrect assumptions about the length of the encoded data.
+  ///
+  /// The RLE/bit-packing hybrid is more cpu and memory efficient and should be used instead.
+  #[deprecated(
+      since = "51.0.0",
+      note = "Please see documentation for compatibility issues and use the RLE/bit-packing hybrid encoding instead"
+  )]
   BIT_PACKED = 4;
+  /// Delta encoding for integers, either INT32 or INT64.
+  ///
+  /// Works best on sorted data.
   DELTA_BINARY_PACKED = 5;
+  /// Encoding for byte arrays to separate the length values and the data.
+  ///
+  /// The lengths are encoded using DELTA_BINARY_PACKED encoding.
   DELTA_LENGTH_BYTE_ARRAY = 6;
+  /// Incremental encoding for byte arrays.
+  ///
+  /// Prefix lengths are encoded using DELTA_BINARY_PACKED encoding.
+  /// Suffixes are stored using DELTA_LENGTH_BYTE_ARRAY encoding.
   DELTA_BYTE_ARRAY = 7;
+  /// Dictionary encoding.
+  ///
+  /// The ids are encoded using the RLE encoding.
   RLE_DICTIONARY = 8;
+  /// Encoding for fixed-width data.
+  ///
+  /// K byte-streams are created where K is the size in bytes of the data type.
+  /// The individual bytes of a value are scattered to the corresponding stream and
+  /// the streams are concatenated.
+  /// This itself does not reduce the size of the data but can lead to better compression
+  /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
+  /// perform poorly for large values of N.
   BYTE_STREAM_SPLIT = 9;
 }
 );
