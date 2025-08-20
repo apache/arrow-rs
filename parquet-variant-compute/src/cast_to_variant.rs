@@ -23,10 +23,11 @@ use arrow::array::{
     TimestampSecondArray,
 };
 use arrow::datatypes::{
-    i256, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, LargeBinaryType, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    i256, ArrowNativeType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
+    Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, LargeBinaryType, RunEndIndexType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
 use arrow::temporal_conversions::{
     timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
@@ -503,48 +504,9 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-            DataType::Int16 => {
-                let run_array = input.as_run::<Int16Type>();
-                let values_variant_array = cast_to_variant(run_array.values().as_ref())?;
-
-                for i in 0..run_array.len() {
-                    let physical_idx = run_array.get_physical_index(i);
-                    if values_variant_array.is_null(physical_idx) {
-                        builder.append_null();
-                    } else {
-                        let value = values_variant_array.value(physical_idx);
-                        builder.append_variant(value);
-                    }
-                }
-            }
-            DataType::Int32 => {
-                let run_array = input.as_run::<Int32Type>();
-                let values_variant_array = cast_to_variant(run_array.values().as_ref())?;
-
-                for i in 0..run_array.len() {
-                    let physical_idx = run_array.get_physical_index(i);
-                    if values_variant_array.is_null(physical_idx) {
-                        builder.append_null();
-                    } else {
-                        let value = values_variant_array.value(physical_idx);
-                        builder.append_variant(value);
-                    }
-                }
-            }
-            DataType::Int64 => {
-                let run_array = input.as_run::<Int64Type>();
-                let values_variant_array = cast_to_variant(run_array.values().as_ref())?;
-
-                for i in 0..run_array.len() {
-                    let physical_idx = run_array.get_physical_index(i);
-                    if values_variant_array.is_null(physical_idx) {
-                        builder.append_null();
-                    } else {
-                        let value = values_variant_array.value(physical_idx);
-                        builder.append_variant(value);
-                    }
-                }
-            }
+            DataType::Int16 => process_run_end_encoded::<Int16Type>(input, &mut builder)?,
+            DataType::Int32 => process_run_end_encoded::<Int32Type>(input, &mut builder)?,
+            DataType::Int64 => process_run_end_encoded::<Int64Type>(input, &mut builder)?,
             _ => {
                 return Err(ArrowError::CastError(format!(
                     "Unsupported run ends type: {:?}",
@@ -559,6 +521,41 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         }
     };
     Ok(builder.build())
+}
+
+/// Generic function to process run-end encoded arrays
+fn process_run_end_encoded<R: RunEndIndexType>(
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) -> Result<(), ArrowError> {
+    let run_array = input.as_run::<R>();
+    let values_variant_array = cast_to_variant(run_array.values().as_ref())?;
+
+    // Process runs in batches for better performance
+    let run_ends = run_array.run_ends().values();
+    let mut logical_start = 0;
+
+    for (physical_idx, &run_end) in run_ends.iter().enumerate() {
+        let logical_end = run_end.as_usize();
+        let run_length = logical_end - logical_start;
+
+        if values_variant_array.is_null(physical_idx) {
+            // Append nulls for the entire run
+            for _ in 0..run_length {
+                builder.append_null();
+            }
+        } else {
+            // Get the value once and append it for the entire run
+            let value = values_variant_array.value(physical_idx);
+            for _ in 0..run_length {
+                builder.append_variant(value.clone());
+            }
+        }
+
+        logical_start = logical_end;
+    }
+
+    Ok(())
 }
 
 // TODO do we need a cast_with_options to allow specifying conversion behavior,
