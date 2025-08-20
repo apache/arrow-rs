@@ -502,6 +502,56 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder
             );
         }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => {
+                let run_array = input.as_run::<Int16Type>();
+                let values_variant_array = cast_to_variant(run_array.values().as_ref())?;
+
+                for i in 0..run_array.len() {
+                    let physical_idx = run_array.get_physical_index(i);
+                    if values_variant_array.is_null(physical_idx) {
+                        builder.append_null();
+                    } else {
+                        let value = values_variant_array.value(physical_idx);
+                        builder.append_variant(value);
+                    }
+                }
+            }
+            DataType::Int32 => {
+                let run_array = input.as_run::<Int32Type>();
+                let values_variant_array = cast_to_variant(run_array.values().as_ref())?;
+
+                for i in 0..run_array.len() {
+                    let physical_idx = run_array.get_physical_index(i);
+                    if values_variant_array.is_null(physical_idx) {
+                        builder.append_null();
+                    } else {
+                        let value = values_variant_array.value(physical_idx);
+                        builder.append_variant(value);
+                    }
+                }
+            }
+            DataType::Int64 => {
+                let run_array = input.as_run::<Int64Type>();
+                let values_variant_array = cast_to_variant(run_array.values().as_ref())?;
+
+                for i in 0..run_array.len() {
+                    let physical_idx = run_array.get_physical_index(i);
+                    if values_variant_array.is_null(physical_idx) {
+                        builder.append_null();
+                    } else {
+                        let value = values_variant_array.value(physical_idx);
+                        builder.append_variant(value);
+                    }
+                }
+            }
+            _ => {
+                return Err(ArrowError::CastError(format!(
+                    "Unsupported run ends type: {:?}",
+                    run_ends.data_type()
+                )));
+            }
+        },
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -523,9 +573,9 @@ mod tests {
         Decimal256Array, Decimal32Array, Decimal64Array, FixedSizeBinaryBuilder, Float16Array,
         Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int16Array,
         Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray, NullArray,
-        StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-        UInt8Array,
+        StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow_schema::{Field, Fields};
@@ -1816,6 +1866,58 @@ mod tests {
                 None,
                 Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
                 Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_run_end_encoded() {
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.append_value("apple");
+        builder.append_value("apple");
+        builder.append_value("banana");
+        builder.append_value("banana");
+        builder.append_value("banana");
+        builder.append_value("cherry");
+        let run_array = builder.finish();
+
+        run_test(
+            Arc::new(run_array),
+            vec![
+                Some(Variant::from("apple")),
+                Some(Variant::from("apple")),
+                Some(Variant::from("banana")),
+                Some(Variant::from("banana")),
+                Some(Variant::from("banana")),
+                Some(Variant::from("cherry")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_run_end_encoded_with_nulls() {
+        use arrow::array::StringRunBuilder;
+        use arrow::datatypes::Int32Type;
+
+        // Test run-end encoded array with nulls
+        let mut builder = StringRunBuilder::<Int32Type>::new();
+        builder.append_value("apple");
+        builder.append_null();
+        builder.append_value("banana");
+        builder.append_value("banana");
+        builder.append_null();
+        builder.append_null();
+        let run_array = builder.finish();
+
+        run_test(
+            Arc::new(run_array),
+            vec![
+                Some(Variant::from("apple")),
+                None,
+                Some(Variant::from("banana")),
+                Some(Variant::from("banana")),
+                None,
+                None,
             ],
         );
     }
