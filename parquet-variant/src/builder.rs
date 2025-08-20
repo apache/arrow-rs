@@ -929,13 +929,10 @@ impl ParentState<'_> {
 /// use parquet_variant::VariantBuilder;
 ///
 /// let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
-/// let mut obj = builder.new_object();
-///
-/// obj.insert("a", 1);
-/// obj.insert("a", 2); // duplicate field
-///
-/// // When validation is enabled, finish will return an error
-/// let result = obj.finish(); // returns Err
+/// let result = builder
+///     .new_object();
+///     .with_field("a", 1)
+///     .try_with_field("a", 2); // duplicate field
 /// assert!(result.is_err());
 /// ```
 ///
