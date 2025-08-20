@@ -167,7 +167,7 @@ use arrow_array::cast::*;
 use arrow_array::types::ArrowDictionaryKeyType;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
 
@@ -1700,8 +1700,24 @@ unsafe fn decode_column(
             rows.iter_mut().for_each(|row| *row = &row[1..]);
             let children = converter.convert_raw(rows, validate_utf8)?;
 
-            let child_data = children.iter().map(|c| c.to_data()).collect();
-            let builder = ArrayDataBuilder::new(field.data_type.clone())
+            let child_data: Vec<ArrayData> = children.iter().map(|c| c.to_data()).collect();
+            // Since RowConverter flattens certain data types (i.e. Dictionary),
+            // we need to use updated data type instead of original field
+            let corrected_fields: Vec<Field> = match &field.data_type {
+                DataType::Struct(struct_fields) => struct_fields
+                    .iter()
+                    .zip(child_data.iter())
+                    .map(|(orig_field, child_array)| {
+                        orig_field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(child_array.data_type().clone())
+                    })
+                    .collect(),
+                _ => unreachable!("Only Struct types should be corrected here"),
+            };
+            let corrected_struct_type = DataType::Struct(corrected_fields.into());
+            let builder = ArrayDataBuilder::new(corrected_struct_type)
                 .len(rows.len())
                 .null_count(null_count)
                 .null_bit_buffer(Some(nulls))
@@ -1830,6 +1846,66 @@ mod tests {
         for (expected, actual) in cols.iter().zip(&back) {
             assert_eq!(expected, actual);
         }
+    }
+
+    #[test]
+    fn test_decimal32() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Decimal32(
+            DECIMAL32_MAX_PRECISION,
+            7,
+        ))])
+        .unwrap();
+        let col = Arc::new(
+            Decimal32Array::from_iter([
+                None,
+                Some(i32::MIN),
+                Some(-13),
+                Some(46_i32),
+                Some(5456_i32),
+                Some(i32::MAX),
+            ])
+            .with_precision_and_scale(9, 7)
+            .unwrap(),
+        ) as ArrayRef;
+
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+        for i in 0..rows.num_rows() - 1 {
+            assert!(rows.row(i) < rows.row(i + 1));
+        }
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(col.as_ref(), back[0].as_ref())
+    }
+
+    #[test]
+    fn test_decimal64() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Decimal64(
+            DECIMAL64_MAX_PRECISION,
+            7,
+        ))])
+        .unwrap();
+        let col = Arc::new(
+            Decimal64Array::from_iter([
+                None,
+                Some(i64::MIN),
+                Some(-13),
+                Some(46_i64),
+                Some(5456_i64),
+                Some(i64::MAX),
+            ])
+            .with_precision_and_scale(18, 7)
+            .unwrap(),
+        ) as ArrayRef;
+
+        let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
+        for i in 0..rows.num_rows() - 1 {
+            assert!(rows.row(i) < rows.row(i + 1));
+        }
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(col.as_ref(), back[0].as_ref())
     }
 
     #[test]
@@ -2181,6 +2257,177 @@ mod tests {
     }
 
     #[test]
+    fn test_dictionary_in_struct() {
+        let builder = StringDictionaryBuilder::<Int32Type>::new();
+        let mut struct_builder = StructBuilder::new(
+            vec![Field::new_dictionary(
+                "foo",
+                DataType::Int32,
+                DataType::Utf8,
+                true,
+            )],
+            vec![Box::new(builder)],
+        );
+
+        let dict_builder = struct_builder
+            .field_builder::<StringDictionaryBuilder<Int32Type>>(0)
+            .unwrap();
+
+        // Flattened: ["a", null, "a", "b"]
+        dict_builder.append_value("a");
+        dict_builder.append_null();
+        dict_builder.append_value("a");
+        dict_builder.append_value("b");
+
+        for _ in 0..4 {
+            struct_builder.append(true);
+        }
+
+        let s = Arc::new(struct_builder.finish()) as ArrayRef;
+        let sort_fields = vec![SortField::new(s.data_type().clone())];
+        let converter = RowConverter::new(sort_fields).unwrap();
+        let r = converter.convert_columns(&[Arc::clone(&s)]).unwrap();
+
+        let back = converter.convert_rows(&r).unwrap();
+        let [s2] = back.try_into().unwrap();
+
+        // RowConverter flattens Dictionary
+        // s.ty = Struct(foo Dictionary(Int32, Utf8)), s2.ty = Struct(foo Utf8)
+        assert_ne!(&s.data_type(), &s2.data_type());
+        s2.to_data().validate_full().unwrap();
+
+        // Check if the logical data remains the same
+        // Keys: [0, null, 0, 1]
+        // Values: ["a", "b"]
+        let s1_struct = s.as_struct();
+        let s1_0 = s1_struct.column(0);
+        let s1_idx_0 = s1_0.as_dictionary::<Int32Type>();
+        let keys = s1_idx_0.keys();
+        let values = s1_idx_0.values().as_string::<i32>();
+        // Flattened: ["a", null, "a", "b"]
+        let s2_struct = s2.as_struct();
+        let s2_0 = s2_struct.column(0);
+        let s2_idx_0 = s2_0.as_string::<i32>();
+
+        for i in 0..keys.len() {
+            if keys.is_null(i) {
+                assert!(s2_idx_0.is_null(i));
+            } else {
+                let dict_index = keys.value(i) as usize;
+                assert_eq!(values.value(dict_index), s2_idx_0.value(i));
+            }
+        }
+    }
+
+    #[test]
+    fn test_dictionary_in_struct_empty() {
+        let ty = DataType::Struct(
+            vec![Field::new_dictionary(
+                "foo",
+                DataType::Int32,
+                DataType::Int32,
+                false,
+            )]
+            .into(),
+        );
+        let s = arrow_array::new_empty_array(&ty);
+
+        let sort_fields = vec![SortField::new(s.data_type().clone())];
+        let converter = RowConverter::new(sort_fields).unwrap();
+        let r = converter.convert_columns(&[Arc::clone(&s)]).unwrap();
+
+        let back = converter.convert_rows(&r).unwrap();
+        let [s2] = back.try_into().unwrap();
+
+        // RowConverter flattens Dictionary
+        // s.ty = Struct(foo Dictionary(Int32, Int32)), s2.ty = Struct(foo Int32)
+        assert_ne!(&s.data_type(), &s2.data_type());
+        s2.to_data().validate_full().unwrap();
+        assert_eq!(s.len(), 0);
+        assert_eq!(s2.len(), 0);
+    }
+
+    #[test]
+    fn test_list_of_string_dictionary() {
+        let mut builder = ListBuilder::<StringDictionaryBuilder<Int32Type>>::default();
+        // List[0] = ["a", "b", "zero", null, "c", "b", "d" (dict)]
+        builder.values().append("a").unwrap();
+        builder.values().append("b").unwrap();
+        builder.values().append("zero").unwrap();
+        builder.values().append_null();
+        builder.values().append("c").unwrap();
+        builder.values().append("b").unwrap();
+        builder.values().append("d").unwrap();
+        builder.append(true);
+        // List[1] = null
+        builder.append(false);
+        // List[2] = ["e", "zero", "a" (dict)]
+        builder.values().append("e").unwrap();
+        builder.values().append("zero").unwrap();
+        builder.values().append("a").unwrap();
+        builder.append(true);
+
+        let a = Arc::new(builder.finish()) as ArrayRef;
+        let data_type = a.data_type().clone();
+
+        let field = SortField::new(data_type.clone());
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&a)]).unwrap();
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        let [a2] = back.try_into().unwrap();
+
+        // RowConverter flattens Dictionary
+        // a.ty: List(Dictionary(Int32, Utf8)), a2.ty: List(Utf8)
+        assert_ne!(&a.data_type(), &a2.data_type());
+
+        a2.to_data().validate_full().unwrap();
+
+        let a2_list = a2.as_list::<i32>();
+        let a1_list = a.as_list::<i32>();
+
+        // Check if the logical data remains the same
+        // List[0] = ["a", "b", "zero", null, "c", "b", "d" (dict)]
+        let a1_0 = a1_list.value(0);
+        let a1_idx_0 = a1_0.as_dictionary::<Int32Type>();
+        let keys = a1_idx_0.keys();
+        let values = a1_idx_0.values().as_string::<i32>();
+        let a2_0 = a2_list.value(0);
+        let a2_idx_0 = a2_0.as_string::<i32>();
+
+        for i in 0..keys.len() {
+            if keys.is_null(i) {
+                assert!(a2_idx_0.is_null(i));
+            } else {
+                let dict_index = keys.value(i) as usize;
+                assert_eq!(values.value(dict_index), a2_idx_0.value(i));
+            }
+        }
+
+        // List[1] = null
+        assert!(a1_list.is_null(1));
+        assert!(a2_list.is_null(1));
+
+        // List[2] = ["e", "zero", "a" (dict)]
+        let a1_2 = a1_list.value(2);
+        let a1_idx_2 = a1_2.as_dictionary::<Int32Type>();
+        let keys = a1_idx_2.keys();
+        let values = a1_idx_2.values().as_string::<i32>();
+        let a2_2 = a2_list.value(2);
+        let a2_idx_2 = a2_2.as_string::<i32>();
+
+        for i in 0..keys.len() {
+            if keys.is_null(i) {
+                assert!(a2_idx_2.is_null(i));
+            } else {
+                let dict_index = keys.value(i) as usize;
+                assert_eq!(values.value(dict_index), a2_idx_2.value(i));
+            }
+        }
+    }
+
+    #[test]
     fn test_primitive_dictionary() {
         let mut builder = PrimitiveDictionaryBuilder::<Int32Type, Int32Type>::new();
         builder.append(2).unwrap();
@@ -2203,6 +2450,10 @@ mod tests {
         assert!(rows.row(3) < rows.row(2));
         assert!(rows.row(6) < rows.row(2));
         assert!(rows.row(3) < rows.row(6));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
     }
 
     #[test]
