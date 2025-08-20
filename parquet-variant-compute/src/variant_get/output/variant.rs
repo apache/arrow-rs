@@ -35,7 +35,7 @@ impl<'a> VariantOutputBuilder<'a> {
     }
 }
 
-impl<'a> OutputBuilder for VariantOutputBuilder<'a> {
+impl OutputBuilder for VariantOutputBuilder<'_> {
     fn partially_shredded(
         &self,
         variant_array: &VariantArray,
@@ -143,6 +143,19 @@ impl<'a> OutputBuilder for VariantOutputBuilder<'a> {
             builder.append_variant(new_variant);
         }
 
+        Ok(Arc::new(builder.build()))
+    }
+
+    fn all_null(
+        &self,
+        variant_array: &VariantArray,
+        _metadata: &BinaryViewArray,
+    ) -> arrow::error::Result<ArrayRef> {
+        // For all-null case, simply create a VariantArray with all null values
+        let mut builder = VariantArrayBuilder::new(variant_array.len());
+        for _i in 0..variant_array.len() {
+            builder.append_null();
+        }
         Ok(Arc::new(builder.build()))
     }
 }

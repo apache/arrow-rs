@@ -20,7 +20,7 @@ use arrow::util::test_util::seedable_rng;
 use criterion::{criterion_group, criterion_main, Criterion};
 use parquet_variant::{Variant, VariantBuilder};
 use parquet_variant_compute::variant_get::{variant_get, GetOptions};
-use parquet_variant_compute::{batch_json_string_to_variant, VariantArray, VariantArrayBuilder};
+use parquet_variant_compute::{json_to_variant, VariantArray, VariantArrayBuilder};
 use rand::distr::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -34,7 +34,7 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
         "batch_json_string_to_variant repeated_struct 8k string",
         |b| {
             b.iter(|| {
-                let _ = batch_json_string_to_variant(&array_ref).unwrap();
+                let _ = json_to_variant(&array_ref).unwrap();
             });
         },
     );
@@ -43,7 +43,7 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let array_ref: ArrayRef = Arc::new(input_array);
     c.bench_function("batch_json_string_to_variant json_list 8k string", |b| {
         b.iter(|| {
-            let _ = batch_json_string_to_variant(&array_ref).unwrap();
+            let _ = json_to_variant(&array_ref).unwrap();
         });
     });
 
@@ -60,7 +60,7 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let array_ref: ArrayRef = Arc::new(input_array);
     c.bench_function(&id, |b| {
         b.iter(|| {
-            let _ = batch_json_string_to_variant(&array_ref).unwrap();
+            let _ = json_to_variant(&array_ref).unwrap();
         });
     });
 
@@ -77,7 +77,7 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let array_ref: ArrayRef = Arc::new(input_array);
     c.bench_function(&id, |b| {
         b.iter(|| {
-            let _ = batch_json_string_to_variant(&array_ref).unwrap();
+            let _ = json_to_variant(&array_ref).unwrap();
         });
     });
 }

@@ -20,7 +20,7 @@ use std::{ops::Range, sync::Arc};
 use crate::arrow::arrow_reader::ArrowReaderOptions;
 use crate::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use bytes::Bytes;
 use futures::{future::BoxFuture, FutureExt, TryFutureExt};
 use object_store::{path::Path, ObjectStore};
@@ -200,8 +200,8 @@ impl AsyncFileReader for ParquetObjectReader {
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let mut metadata = ParquetMetaDataReader::new()
-                .with_column_indexes(self.preload_column_index)
-                .with_offset_indexes(self.preload_offset_index)
+                .with_column_index_policy(PageIndexPolicy::from(self.preload_column_index))
+                .with_offset_index_policy(PageIndexPolicy::from(self.preload_offset_index))
                 .with_prefetch_hint(self.metadata_size_hint);
 
             #[cfg(feature = "encryption")]
