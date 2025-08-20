@@ -1919,25 +1919,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_to_variant_dictionary() {
-        let values = StringArray::from(vec!["apple", "banana", "cherry", "date"]);
-        let keys = Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(0), Some(3)]);
-        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
-
-        run_test(
-            Arc::new(dict_array),
-            vec![
-                Some(Variant::from("apple")),
-                Some(Variant::from("banana")),
-                None,
-                Some(Variant::from("cherry")),
-                Some(Variant::from("apple")),
-                Some(Variant::from("date")),
-            ],
-        );
-    }
-
-    #[test]
     fn test_cast_to_variant_run_end_encoded_with_nulls() {
         use arrow::array::StringRunBuilder;
         use arrow::datatypes::Int32Type;
@@ -1961,6 +1942,25 @@ mod tests {
                 Some(Variant::from("banana")),
                 None,
                 None,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_dictionary() {
+        let values = StringArray::from(vec!["apple", "banana", "cherry", "date"]);
+        let keys = Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(0), Some(3)]);
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        run_test(
+            Arc::new(dict_array),
+            vec![
+                Some(Variant::from("apple")),
+                Some(Variant::from("banana")),
+                None,
+                Some(Variant::from("cherry")),
+                Some(Variant::from("apple")),
+                Some(Variant::from("date")),
             ],
         );
     }
