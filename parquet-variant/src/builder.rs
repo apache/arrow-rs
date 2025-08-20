@@ -1586,9 +1586,17 @@ impl<'a> ObjectBuilder<'a> {
 pub trait VariantBuilderExt {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
-    fn new_list(&mut self) -> ListBuilder<'_>;
+    fn new_list(&mut self) -> ListBuilder<'_> {
+        self.try_new_list().unwrap()
+    }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_>;
+    fn new_object(&mut self) -> ObjectBuilder<'_> {
+        self.try_new_object().unwrap()
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
 }
 
 impl VariantBuilderExt for ListBuilder<'_> {
@@ -1596,12 +1604,12 @@ impl VariantBuilderExt for ListBuilder<'_> {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.new_list()
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        Ok(self.new_list())
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.new_object()
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        Ok(self.new_object())
     }
 }
 
@@ -1610,12 +1618,12 @@ impl VariantBuilderExt for VariantBuilder {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.new_list()
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        Ok(self.new_list())
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.new_object()
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        Ok(self.new_object())
     }
 }
 

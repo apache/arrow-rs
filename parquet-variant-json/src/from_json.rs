@@ -111,14 +111,14 @@ fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(),
         }
         Value::String(s) => builder.append_value(s.as_str()),
         Value::Array(arr) => {
-            let mut list_builder = builder.new_list();
+            let mut list_builder = builder.try_new_list()?;
             for val in arr {
                 append_json(val, &mut list_builder)?;
             }
             list_builder.finish();
         }
         Value::Object(obj) => {
-            let mut obj_builder = builder.new_object();
+            let mut obj_builder = builder.try_new_object()?;
             for (key, value) in obj.iter() {
                 let mut field_builder = ObjectFieldBuilder {
                     key,
@@ -142,12 +142,12 @@ impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
         self.builder.insert(self.key, value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.builder.new_list(self.key)
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        self.builder.try_new_list(self.key)
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.builder.new_object(self.key)
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        self.builder.try_new_object(self.key)
     }
 }
 
