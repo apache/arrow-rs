@@ -150,6 +150,7 @@ impl std::io::Read for PushBuffers {
                 let slice = data.slice(start_offset..end_offset);
                 buf.copy_from_slice(slice.as_ref());
                 found = true;
+                break;
             }
         }
         if found {
