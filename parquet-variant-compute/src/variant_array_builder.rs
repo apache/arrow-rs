@@ -185,7 +185,7 @@ impl VariantArrayBuilder {
     /// assert_eq!(variant_array.value(0), Variant::from("Hello, World!"));
     /// assert!(variant_array.value(1).as_object().is_some());
     ///  ```
-    pub fn variant_builder(&mut self) -> VariantArrayVariantBuilder {
+    pub fn variant_builder(&mut self) -> VariantArrayVariantBuilder<'_> {
         // append directly into the metadata and value buffers
         let metadata_buffer = std::mem::take(&mut self.metadata_buffer);
         let value_buffer = std::mem::take(&mut self.value_buffer);
@@ -217,16 +217,16 @@ pub struct VariantArrayVariantBuilder<'a> {
     variant_builder: VariantBuilder,
 }
 
-impl<'a> VariantBuilderExt for VariantArrayVariantBuilder<'a> {
+impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.variant_builder.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder {
+    fn new_list(&mut self) -> ListBuilder<'_> {
         self.variant_builder.new_list()
     }
 
-    fn new_object(&mut self) -> ObjectBuilder {
+    fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.variant_builder.new_object()
     }
 }
@@ -300,7 +300,7 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     }
 }
 
-impl<'a> Drop for VariantArrayVariantBuilder<'a> {
+impl Drop for VariantArrayVariantBuilder<'_> {
     /// If the builder was not finished, roll back any changes made to the
     /// underlying buffers (by truncating them)
     fn drop(&mut self) {
@@ -375,7 +375,7 @@ mod test {
 
         // the metadata and value fields of non shredded variants should not be null
         assert!(variant_array.metadata_field().nulls().is_none());
-        assert!(variant_array.value_field().nulls().is_none());
+        assert!(variant_array.value_field().unwrap().nulls().is_none());
         let DataType::Struct(fields) = variant_array.data_type() else {
             panic!("Expected VariantArray to have Struct data type");
         };

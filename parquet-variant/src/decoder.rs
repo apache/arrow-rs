@@ -20,7 +20,8 @@ use crate::utils::{
 use crate::ShortString;
 
 use arrow_schema::ArrowError;
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use uuid::Uuid;
 
 /// The basic type of a [`Variant`] value, encoded in the first two bits of the
 /// header byte.
@@ -63,6 +64,10 @@ pub enum VariantPrimitiveType {
     Float = 14,
     Binary = 15,
     String = 16,
+    Time = 17,
+    TimestampNanos = 18,
+    TimestampNtzNanos = 19,
+    Uuid = 20,
 }
 
 /// Extracts the basic type from a header byte
@@ -104,6 +109,10 @@ impl TryFrom<u8> for VariantPrimitiveType {
             14 => Ok(VariantPrimitiveType::Float),
             15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
+            17 => Ok(VariantPrimitiveType::Time),
+            18 => Ok(VariantPrimitiveType::TimestampNanos),
+            19 => Ok(VariantPrimitiveType::TimestampNtzNanos),
+            20 => Ok(VariantPrimitiveType::Uuid),
             _ => Err(ArrowError::InvalidArgumentError(format!(
                 "unknown primitive type: {value}",
             ))),
@@ -295,6 +304,44 @@ pub(crate) fn decode_timestampntz_micros(data: &[u8]) -> Result<NaiveDateTime, A
         .map(|v| v.naive_utc())
 }
 
+pub(crate) fn decode_time_ntz(data: &[u8]) -> Result<NaiveTime, ArrowError> {
+    let micros_since_epoch = u64::from_le_bytes(array_from_slice(data, 0)?);
+
+    let case_error = ArrowError::CastError(format!(
+        "Could not cast {micros_since_epoch} microseconds into a NaiveTime"
+    ));
+
+    if micros_since_epoch >= 86_400_000_000 {
+        return Err(case_error);
+    }
+
+    let nanos_since_midnight = micros_since_epoch * 1_000;
+    NaiveTime::from_num_seconds_from_midnight_opt(
+        (nanos_since_midnight / 1_000_000_000) as u32,
+        (nanos_since_midnight % 1_000_000_000) as u32,
+    )
+    .ok_or(case_error)
+}
+
+/// Decodes a TimestampNanos from the value section of a variant.
+pub(crate) fn decode_timestamp_nanos(data: &[u8]) -> Result<DateTime<Utc>, ArrowError> {
+    let nanos_since_epoch = i64::from_le_bytes(array_from_slice(data, 0)?);
+
+    // DateTime::from_timestamp_nanos would never fail
+    Ok(DateTime::from_timestamp_nanos(nanos_since_epoch))
+}
+
+/// Decodes a TimestampNtzNanos from the value section of a variant.
+pub(crate) fn decode_timestampntz_nanos(data: &[u8]) -> Result<NaiveDateTime, ArrowError> {
+    decode_timestamp_nanos(data).map(|v| v.naive_utc())
+}
+
+/// Decodes a UUID from the value section of a variant.
+pub(crate) fn decode_uuid(data: &[u8]) -> Result<Uuid, ArrowError> {
+    Uuid::from_slice(&data[0..16])
+        .map_err(|_| ArrowError::CastError(format!("Cant decode uuid from {:?}", &data[0..16])))
+}
+
 /// Decodes a Binary from the value section of a variant.
 pub(crate) fn decode_binary(data: &[u8]) -> Result<&[u8], ArrowError> {
     let len = u32::from_le_bytes(array_from_slice(data, 0)?) as usize;
@@ -308,7 +355,10 @@ pub(crate) fn decode_long_string(data: &[u8]) -> Result<&str, ArrowError> {
 }
 
 /// Decodes a short string from the value section of a variant.
-pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<ShortString, ArrowError> {
+pub(crate) fn decode_short_string(
+    metadata: u8,
+    data: &[u8],
+) -> Result<ShortString<'_>, ArrowError> {
     let len = (metadata >> 2) as usize;
     let string = string_from_slice(data, 0, 0..len)?;
     ShortString::try_new(string)
@@ -436,6 +486,80 @@ mod tests {
                 .and_hms_milli_opt(16, 34, 56, 780)
                 .unwrap()
         );
+
+        test_decoder_bounds!(
+            test_timestamp_nanos,
+            [0x15, 0x41, 0xa2, 0x5a, 0x36, 0xa2, 0x5b, 0x18],
+            decode_timestamp_nanos,
+            NaiveDate::from_ymd_opt(2025, 8, 14)
+                .unwrap()
+                .and_hms_nano_opt(12, 33, 54, 123456789)
+                .unwrap()
+                .and_utc()
+        );
+
+        test_decoder_bounds!(
+            test_timestamp_nanos_before_epoch,
+            [0x15, 0x41, 0x52, 0xd4, 0x94, 0xe5, 0xad, 0xfa],
+            decode_timestamp_nanos,
+            NaiveDate::from_ymd_opt(1957, 11, 7)
+                .unwrap()
+                .and_hms_nano_opt(12, 33, 54, 123456789)
+                .unwrap()
+                .and_utc()
+        );
+
+        test_decoder_bounds!(
+            test_timestampntz_nanos,
+            [0x15, 0x41, 0xa2, 0x5a, 0x36, 0xa2, 0x5b, 0x18],
+            decode_timestampntz_nanos,
+            NaiveDate::from_ymd_opt(2025, 8, 14)
+                .unwrap()
+                .and_hms_nano_opt(12, 33, 54, 123456789)
+                .unwrap()
+        );
+
+        test_decoder_bounds!(
+            test_timestampntz_nanos_before_epoch,
+            [0x15, 0x41, 0x52, 0xd4, 0x94, 0xe5, 0xad, 0xfa],
+            decode_timestampntz_nanos,
+            NaiveDate::from_ymd_opt(1957, 11, 7)
+                .unwrap()
+                .and_hms_nano_opt(12, 33, 54, 123456789)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_uuid() {
+        let data = [
+            0xf2, 0x4f, 0x9b, 0x64, 0x81, 0xfa, 0x49, 0xd1, 0xb7, 0x4e, 0x8c, 0x09, 0xa6, 0xe3,
+            0x1c, 0x56,
+        ];
+        let result = decode_uuid(&data).unwrap();
+        assert_eq!(
+            Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap(),
+            result
+        );
+    }
+
+    mod time {
+        use super::*;
+
+        test_decoder_bounds!(
+            test_timentz,
+            [0x53, 0x1f, 0x8e, 0xdf, 0x2, 0, 0, 0],
+            decode_time_ntz,
+            NaiveTime::from_num_seconds_from_midnight_opt(12340, 567_891_000).unwrap()
+        );
+
+        #[test]
+        fn test_decode_time_ntz_invalid() {
+            let invalid_second = u64::MAX;
+            let data = invalid_second.to_le_bytes();
+            let result = decode_time_ntz(&data);
+            assert!(matches!(result, Err(ArrowError::CastError(_))));
+        }
     }
 
     #[test]

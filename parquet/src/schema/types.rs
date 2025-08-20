@@ -78,12 +78,15 @@ impl HeapSize for Type {
 
 impl Type {
     /// Creates primitive type builder with provided field name and physical type.
-    pub fn primitive_type_builder(name: &str, physical_type: PhysicalType) -> PrimitiveTypeBuilder {
+    pub fn primitive_type_builder(
+        name: &str,
+        physical_type: PhysicalType,
+    ) -> PrimitiveTypeBuilder<'_> {
         PrimitiveTypeBuilder::new(name, physical_type)
     }
 
     /// Creates group type builder with provided column name.
-    pub fn group_type_builder(name: &str) -> GroupTypeBuilder {
+    pub fn group_type_builder(name: &str) -> GroupTypeBuilder<'_> {
         GroupTypeBuilder::new(name)
     }
 

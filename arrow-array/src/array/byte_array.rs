@@ -276,6 +276,10 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Returns the element at index `i`
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &T::Native {
@@ -304,6 +308,10 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Returns the element at index `i`
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &T::Native {
