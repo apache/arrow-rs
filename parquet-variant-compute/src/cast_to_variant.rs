@@ -502,6 +502,27 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder
             );
         }
+        DataType::Dictionary(_, _) => {
+            let dict_array = input.as_any_dictionary();
+            let values_variant_array = cast_to_variant(dict_array.values().as_ref())?;
+            let normalized_keys = dict_array.normalized_keys();
+            let keys = dict_array.keys();
+
+            for (i, key_idx) in normalized_keys.iter().enumerate() {
+                if keys.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+
+                if values_variant_array.is_null(*key_idx) {
+                    builder.append_null();
+                    continue;
+                }
+
+                let value = values_variant_array.value(*key_idx);
+                builder.append_variant(value);
+            }
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -520,12 +541,12 @@ mod tests {
     use super::*;
     use arrow::array::{
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, Decimal32Array, Decimal64Array, FixedSizeBinaryBuilder, Float16Array,
-        Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int16Array,
-        Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray, NullArray,
-        StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-        UInt8Array,
+        Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, FixedSizeBinaryBuilder,
+        Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder,
+        Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray,
+        NullArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow_schema::{Field, Fields};
@@ -591,13 +612,19 @@ mod tests {
             Arc::new(microsecond_array.with_timezone("+01:00".to_string())),
         );
 
-        // nanoseconds should get truncated to microseconds
+        let timestamp = DateTime::from_timestamp_nanos(nanosecond);
         let nanosecond_array = TimestampNanosecondArray::from(vec![Some(nanosecond), None]);
-        run_array_tests(
-            microsecond,
+        run_test(
             Arc::new(nanosecond_array.clone()),
+            vec![
+                Some(Variant::TimestampNtzNanos(timestamp.naive_utc())),
+                None,
+            ],
+        );
+        run_test(
             Arc::new(nanosecond_array.with_timezone("+01:00".to_string())),
-        )
+            vec![Some(Variant::TimestampNanos(timestamp)), None],
+        );
     }
 
     #[test]
@@ -1816,6 +1843,43 @@ mod tests {
                 None,
                 Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
                 Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_dictionary() {
+        let values = StringArray::from(vec!["apple", "banana", "cherry", "date"]);
+        let keys = Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(0), Some(3)]);
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        run_test(
+            Arc::new(dict_array),
+            vec![
+                Some(Variant::from("apple")),
+                Some(Variant::from("banana")),
+                None,
+                Some(Variant::from("cherry")),
+                Some(Variant::from("apple")),
+                Some(Variant::from("date")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_dictionary_with_nulls() {
+        // Test dictionary with null values in the values array
+        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let keys = Int8Array::from(vec![Some(0), Some(1), Some(2), Some(0)]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        run_test(
+            Arc::new(dict_array),
+            vec![
+                Some(Variant::from("a")),
+                None, // key 1 points to null value
+                Some(Variant::from("c")),
+                Some(Variant::from("a")),
             ],
         );
     }
