@@ -28,6 +28,7 @@ use parquet_variant::{
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use uuid::Uuid;
 
 /// Returns a directory path for the parquet variant test data.
 ///
@@ -126,6 +127,9 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
         ("primitive_string", Variant::String("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
         ("primitive_timestamp", Variant::TimestampMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(16, 34, 56, 780).unwrap().and_utc())),
         ("primitive_timestampntz", Variant::TimestampNtzMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap())),
+        ("primitive_timestamp_nanos", Variant::TimestampNanos(NaiveDate::from_ymd_opt(2024, 11, 7).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap().and_utc())),
+        ("primitive_timestampntz_nanos", Variant::TimestampNtzNanos(NaiveDate::from_ymd_opt(2024, 11, 7).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap())),
+        ("primitive_uuid", Variant::Uuid(Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap())),
         ("short_string", Variant::ShortString(ShortString::try_new("Less than 64 bytes (❤\u{fe0f} with utf8)").unwrap())),
         ("primitive_time", Variant::Time(NaiveTime::from_hms_micro_opt(12, 33, 54, 123456).unwrap())),
     ]
