@@ -627,10 +627,10 @@ mod test {
         // Verify metadata size = 1 + 2 + 2 * 497 + 3 * 496
         assert_eq!(metadata.len(), 2485);
         // Verify value size.
-        // Size of innermost_list: 1 + 1 + 258 + 256 = 516
-        // Size of inner object: 1 + 4 + 256 + 257 * 3 + 256 * 516 = 133128
-        // Size of json: 1 + 4 + 512 + 1028 + 256 * 133128 = 34082313
-        assert_eq!(value.len(), 34082313);
+        // Size of innermost_list: 1 + 1 + 2*(128 + 1) + 2*128 = 516
+        // Size of inner object: 1 + 4 + 2*256 + 3*(256 + 1) + 256 * 516 = 133384
+        // Size of json: 1 + 4 + 2*256 + 4*(256 + 1) + 256 * 133384 = 34147849
+        assert_eq!(value.len(), 34147849);
 
         let mut variant_builder = VariantBuilder::new();
         let mut object_builder = variant_builder.new_object();
