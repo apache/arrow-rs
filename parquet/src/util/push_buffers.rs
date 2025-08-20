@@ -38,7 +38,7 @@ use std::ops::Range;
 ///
 /// Thus, the implementation defers to the caller to coalesce subsequent requests
 /// if desired.
-# [derive(Debug, Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct PushBuffers {
     /// the virtual "offset" of this buffers (added to any request)
     offset: u64,
@@ -137,7 +137,7 @@ impl Length for PushBuffers {
     }
 }
 
-/// less efficinet implementation of Read for Buffers
+/// less efficient implementation of Read for Buffers
 impl std::io::Read for PushBuffers {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         // Find the range that contains the start offset
