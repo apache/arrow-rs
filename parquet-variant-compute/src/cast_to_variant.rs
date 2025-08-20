@@ -538,9 +538,9 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Map(field, _) => {
             match field.data_type() {
                 DataType::Struct(_) => {
-                    // Get the struct array for the map entries
                     let map_array = input.as_map();
-                    let entries = cast_to_variant(map_array.entries())?;
+                    let keys = cast_to_variant(map_array.keys())?;
+                    let values = cast_to_variant(map_array.values())?;
                     let offsets = map_array.offsets();
 
                     let mut start_offset = offsets[0];
@@ -553,13 +553,14 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                         let length = (end_offset - start_offset) as usize;
 
                         let mut tmp_builder = VariantBuilder::new();
-                        let mut list_builder = tmp_builder.new_list();
+                        let mut object_builder = tmp_builder.new_object();
 
                         for i in start_offset..*end_offset {
-                            let value = entries.value(i as usize);
-                            list_builder.append_value(value);
+                            let value = values.value(i as usize);
+                            object_builder
+                                .insert(keys.value(i as usize).as_string().unwrap(), value);
                         }
-                        list_builder.finish();
+                        object_builder.finish()?;
                         let (metadata, value) = tmp_builder.finish();
                         let variant = Variant::try_new(&metadata, &value).unwrap();
 
@@ -627,7 +628,13 @@ fn process_run_end_encoded<R: RunEndIndexType>(
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray, MapArray, NullArray, StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+        Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, FixedSizeBinaryBuilder,
+        Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder,
+        Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray,
+        MapArray, NullArray, StringArray, StringRunBuilder, StringViewArray, StructArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow_schema::{Field, Fields};
@@ -2029,38 +2036,22 @@ mod tests {
         let result = cast_to_variant(&map_array).unwrap();
         // [{"key1":1}]
         let variant1 = result.value(0);
-        let item = variant1.as_list().unwrap().get(0).unwrap();
         assert_eq!(
-            item.as_object().unwrap().get("keys").unwrap(),
-            Variant::from("key1")
-        );
-        assert_eq!(
-            item.as_object().unwrap().get("values").unwrap(),
-            Variant::from(1i32)
+            variant1.as_object().unwrap().get("key1").unwrap(),
+            Variant::from(1)
         );
 
         assert!(result.is_null(1)); // Second row is null
 
         // [{"key2":2},{"key3":3}]
         let variant2 = result.value(2);
-        let item = variant2.as_list().unwrap().get(0).unwrap();
         assert_eq!(
-            item.as_object().unwrap().get("keys").unwrap(),
-            Variant::from("key2")
+            variant2.as_object().unwrap().get("key2").unwrap(),
+            Variant::from(2)
         );
         assert_eq!(
-            item.as_object().unwrap().get("values").unwrap(),
-            Variant::from(2i32)
-        );
-
-        let item = variant2.as_list().unwrap().get(1).unwrap();
-        assert_eq!(
-            item.as_object().unwrap().get("keys").unwrap(),
-            Variant::from("key3")
-        );
-        assert_eq!(
-            item.as_object().unwrap().get("values").unwrap(),
-            Variant::from(3i32)
+            variant2.as_object().unwrap().get("key3").unwrap(),
+            Variant::from(3)
         );
     }
 
