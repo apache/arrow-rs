@@ -23,6 +23,7 @@ use arrow_schema::ArrowError;
 use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashSet;
+use uuid::Uuid;
 
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
@@ -198,6 +199,23 @@ impl ValueBuffer {
         self.append_slice(&micros_from_midnight.to_le_bytes());
     }
 
+    fn append_timestamp_nanos(&mut self, value: chrono::DateTime<chrono::Utc>) {
+        self.append_primitive_header(VariantPrimitiveType::TimestampNanos);
+        let nanos = value.timestamp_nanos_opt().unwrap();
+        self.append_slice(&nanos.to_le_bytes());
+    }
+
+    fn append_timestamp_ntz_nanos(&mut self, value: chrono::NaiveDateTime) {
+        self.append_primitive_header(VariantPrimitiveType::TimestampNtzNanos);
+        let nanos = value.and_utc().timestamp_nanos_opt().unwrap();
+        self.append_slice(&nanos.to_le_bytes());
+    }
+
+    fn append_uuid(&mut self, value: Uuid) {
+        self.append_primitive_header(VariantPrimitiveType::Uuid);
+        self.append_slice(&value.into_bytes());
+    }
+
     fn append_decimal4(&mut self, decimal4: VariantDecimal4) {
         self.append_primitive_header(VariantPrimitiveType::Decimal4);
         self.append_u8(decimal4.scale());
@@ -332,6 +350,8 @@ impl ValueBuffer {
             Variant::Date(v) => self.append_date(v),
             Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
             Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
+            Variant::TimestampNanos(v) => self.append_timestamp_nanos(v),
+            Variant::TimestampNtzNanos(v) => self.append_timestamp_ntz_nanos(v),
             Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
             Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
             Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
@@ -340,6 +360,7 @@ impl ValueBuffer {
             Variant::Binary(v) => self.append_binary(v),
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
+            Variant::Uuid(v) => self.append_uuid(v),
             Variant::Object(obj) => self.append_object(metadata_builder, obj),
             Variant::List(list) => self.append_list(metadata_builder, list),
             Variant::Time(v) => self.append_time_micros(v),
@@ -363,12 +384,15 @@ impl ValueBuffer {
             Variant::Date(v) => self.append_date(v),
             Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
             Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
+            Variant::TimestampNanos(v) => self.append_timestamp_nanos(v),
+            Variant::TimestampNtzNanos(v) => self.append_timestamp_ntz_nanos(v),
             Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
             Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
             Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
             Variant::Float(v) => self.append_float(v),
             Variant::Double(v) => self.append_double(v),
             Variant::Binary(v) => self.append_binary(v),
+            Variant::Uuid(v) => self.append_uuid(v),
             Variant::String(s) => self.append_string(s),
             Variant::ShortString(s) => self.append_short_string(s),
             Variant::Object(obj) => self.try_append_object(metadata_builder, obj)?,
