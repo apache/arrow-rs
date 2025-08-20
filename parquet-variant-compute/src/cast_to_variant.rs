@@ -34,10 +34,10 @@ use arrow::temporal_conversions::{
     timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType, TimeUnit};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{offset, DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use half::f16;
 use parquet_variant::{
-    Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+    Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantList,
 };
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
@@ -535,6 +535,46 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(value);
             }
         }
+        DataType::Map(field, _) => {
+            match field.data_type() {
+                DataType::Struct(_) => {
+                    // Get the struct array for the map entries
+                    let map_array = input.as_map();
+                    let entries = cast_to_variant(map_array.entries())?;
+                    let offsets = map_array.offsets();
+
+                    let mut start_offset = offsets[0];
+                    for end_offset in offsets.iter().skip(1) {
+                        if start_offset >= *end_offset {
+                            builder.append_null();
+                            continue;
+                        }
+
+                        let length = (end_offset - start_offset) as usize;
+
+                        let mut tmp_builder = VariantBuilder::new();
+                        let mut list_builder = tmp_builder.new_list();
+
+                        for i in start_offset..*end_offset {
+                            let value = entries.value(i as usize);
+                            list_builder.append_value(value);
+                        }
+                        list_builder.finish();
+                        let (metadata, value) = tmp_builder.finish();
+                        let variant = Variant::try_new(&metadata, &value).unwrap();
+
+                        builder.append_variant(variant);
+
+                        start_offset += length as i32;
+                    }
+                }
+                _ => {
+                    return Err(ArrowError::CastError(format!(
+                        "Unsupported map field type for casting to Variant: {field:?}",
+                    )));
+                }
+            }
+        }
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -587,13 +627,7 @@ fn process_run_end_encoded<R: RunEndIndexType>(
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, FixedSizeBinaryBuilder,
-        Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder,
-        Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray,
-        NullArray, StringArray, StringRunBuilder, StringViewArray, StructArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray, MapArray, NullArray, StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array
     };
     use arrow::buffer::NullBuffer;
     use arrow_schema::{Field, Fields};
@@ -1980,6 +2014,52 @@ mod tests {
                 Some(Variant::from("c")),
                 Some(Variant::from("a")),
             ],
+        );
+    }
+
+    fn test_cast_map_to_variant_object() {
+        let keys = vec!["key1", "key2", "key3"];
+        let values_data = Int32Array::from(vec![1, 2, 3]);
+        let entry_offsets = vec![0, 1, 1, 3];
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
+
+        let result = cast_to_variant(&map_array).unwrap();
+        // [{"key1":1}]
+        let variant1 = result.value(0);
+        let item = variant1.as_list().unwrap().get(0).unwrap();
+        assert_eq!(
+            item.as_object().unwrap().get("keys").unwrap(),
+            Some(Variant::from("key1")).unwrap()
+        );
+        assert_eq!(
+            item.as_object().unwrap().get("values").unwrap(),
+            Some(Variant::from(1i32)).unwrap()
+        );
+
+        assert!(result.is_null(1)); // Second row is null
+
+        // [{"key2":2},{"key3":3}]
+        let variant2 = result.value(2);
+        let item = variant2.as_list().unwrap().get(0).unwrap();
+        assert_eq!(
+            item.as_object().unwrap().get("keys").unwrap(),
+            Some(Variant::from("key2")).unwrap()
+        );
+        assert_eq!(
+            item.as_object().unwrap().get("values").unwrap(),
+            Some(Variant::from(2i32)).unwrap()
+        );
+
+        let item = variant2.as_list().unwrap().get(1).unwrap();
+        assert_eq!(
+            item.as_object().unwrap().get("keys").unwrap(),
+            Some(Variant::from("key3")).unwrap()
+        );
+        assert_eq!(
+            item.as_object().unwrap().get("values").unwrap(),
+            Some(Variant::from(3i32)).unwrap()
         );
     }
 
