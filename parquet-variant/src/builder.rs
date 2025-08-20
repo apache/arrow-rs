@@ -674,7 +674,7 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn object(
+    fn try_object(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
@@ -783,7 +783,7 @@ impl<'a> ParentState<'a> {
             }
         };
 
-        // List and Object builders need to roll back the starting offset they stored
+        // List and Object builders also need to roll back the starting offset they stored.
         match self {
             ParentState::Variant { .. } => (),
             ParentState::List {
@@ -1496,7 +1496,7 @@ impl<'a> ObjectBuilder<'a> {
         let saved_parent_value_builder_offset = self.parent_state.saved_value_builder_offset();
         let validate_unique_fields = self.validate_unique_fields;
         let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-        let state = ParentState::object(
+        let state = ParentState::try_object(
             value_builder,
             metadata_builder,
             &mut self.fields,
