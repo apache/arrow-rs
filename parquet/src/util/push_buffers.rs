@@ -21,14 +21,24 @@ use bytes::Bytes;
 use std::fmt::Display;
 use std::ops::Range;
 
-/// Holds multiple buffers of data that have been requested by the ParquetDecoder
+/// Holds multiple buffers of data
 ///
-/// This is the in-memory buffer for the ParquetDecoder
+/// This is the in-memory buffer for the ParquetDecoder and ParquetMetadataDecoders
 ///
-/// Features it has:
-/// 1. Zero copy as much as possible
-/// 2. Keeps non contiguous ranges of bytes
-#[derive(Debug, Clone)]
+/// Features:
+/// 1. Zero copy
+/// 2. non contiguous ranges of bytes
+///
+/// # Non Coalescing
+///
+/// This buffer does not coalesce  (merging adjacent ranges of bytes into a
+/// single range). Coalescing at this level would require copying the data but
+/// the caller may already have the needed data in a single buffer which would
+/// require no copying.
+///
+/// Thus, the implementation defers to the caller to coalesce subsequent requests
+/// if desired.
+# [derive(Debug, Clone)]
 pub(crate) struct PushBuffers {
     /// the virtual "offset" of this buffers (added to any request)
     offset: u64,
