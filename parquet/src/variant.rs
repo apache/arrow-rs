@@ -71,7 +71,7 @@
 //! ```rust
 //! # use std::sync::Arc;
 //! # use arrow_array::{ArrayRef, RecordBatch, StringArray};
-//! # use parquet::variant::compute::batch_json_string_to_variant;
+//! # use parquet::variant::compute::json_to_variant;
 //! # use parquet::variant::compute::VariantArray;
 //! # use parquet::arrow::ArrowWriter;
 //! # fn main() -> Result<(), parquet::errors::ParquetError> {
@@ -86,7 +86,7 @@
 //! let input_array: ArrayRef = Arc::new(input_array);
 //!
 //! // Convert the JSON strings to a VariantArray
-//! let array: VariantArray = batch_json_string_to_variant(&input_array)?;
+//! let array: VariantArray = json_to_variant(&input_array)?;
 //!
 //! // TODO support writing VariantArray directly
 //! // at the moment it panics when trying to downcast to a struct array
