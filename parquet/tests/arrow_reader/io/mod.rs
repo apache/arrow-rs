@@ -297,7 +297,7 @@ impl TestRowGroups {
 
                         let page_locations = page_locations
                             .iter()
-                            .map(|loc| parquet::format::PageLocation::from(loc))
+                            .map(parquet::format::PageLocation::from)
                             .collect();
 
                         TestColumnChunk {
