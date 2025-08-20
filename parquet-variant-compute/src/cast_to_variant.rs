@@ -34,10 +34,10 @@ use arrow::temporal_conversions::{
     timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType, TimeUnit};
-use chrono::{offset, DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use half::f16;
 use parquet_variant::{
-    Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantList,
+    Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
@@ -2031,11 +2031,11 @@ mod tests {
         let item = variant1.as_list().unwrap().get(0).unwrap();
         assert_eq!(
             item.as_object().unwrap().get("keys").unwrap(),
-            Some(Variant::from("key1")).unwrap()
+            Variant::from("key1")
         );
         assert_eq!(
             item.as_object().unwrap().get("values").unwrap(),
-            Some(Variant::from(1i32)).unwrap()
+            Variant::from(1i32)
         );
 
         assert!(result.is_null(1)); // Second row is null
@@ -2045,21 +2045,21 @@ mod tests {
         let item = variant2.as_list().unwrap().get(0).unwrap();
         assert_eq!(
             item.as_object().unwrap().get("keys").unwrap(),
-            Some(Variant::from("key2")).unwrap()
+            Variant::from("key2")
         );
         assert_eq!(
             item.as_object().unwrap().get("values").unwrap(),
-            Some(Variant::from(2i32)).unwrap()
+            Variant::from(2i32)
         );
 
         let item = variant2.as_list().unwrap().get(1).unwrap();
         assert_eq!(
             item.as_object().unwrap().get("keys").unwrap(),
-            Some(Variant::from("key3")).unwrap()
+            Variant::from("key3")
         );
         assert_eq!(
             item.as_object().unwrap().get("values").unwrap(),
-            Some(Variant::from(3i32)).unwrap()
+            Variant::from(3i32)
         );
     }
 
