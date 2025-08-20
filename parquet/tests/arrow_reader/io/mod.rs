@@ -49,7 +49,6 @@ use parquet::data_type::AsBytes;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, ParquetOffsetIndex};
 use parquet::file::properties::WriterProperties;
 use parquet::file::FOOTER_SIZE;
-use parquet::format::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -257,7 +256,7 @@ struct TestColumnChunk {
     dictionary_page_location: Option<i64>,
 
     /// The location of the data pages in the file
-    page_locations: Vec<PageLocation>,
+    page_locations: Vec<parquet::format::PageLocation>,
 }
 
 /// Information about the pages in a single row group
@@ -295,6 +294,11 @@ impl TestRowGroups {
                         let (start_offset, length) = col_meta.byte_range();
                         let start_offset = start_offset as usize;
                         let end_offset = start_offset + length as usize;
+
+                        let page_locations = page_locations
+                            .iter()
+                            .map(|loc| parquet::format::PageLocation::from(loc))
+                            .collect();
 
                         TestColumnChunk {
                             name: column_name.clone(),
