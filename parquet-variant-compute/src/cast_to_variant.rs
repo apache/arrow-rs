@@ -1668,21 +1668,27 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_union_to_variant_sparse() {
-        // Create a sparse union array with mixed types
-        let int_array = Int32Array::from(vec![Some(1), None, Some(34)]);
-        let float_array = Float64Array::from(vec![None, Some(3.2), None]);
-        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+    fn test_cast_to_variant_union_sparse() {
+        // Create a sparse union array with mixed types (int, float, string)
+        let int_array = Int32Array::from(vec![Some(1), None, None, None, Some(34)]);
+        let float_array = Float64Array::from(vec![None, Some(3.2), None, Some(32.5), None]);
+        let string_array = StringArray::from(vec![None, None, Some("hello"), None, None]);
+        let type_ids = [0, 1, 2, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
 
         let union_fields = UnionFields::new(
-            vec![0, 1],
+            vec![0, 1, 2],
             vec![
                 Field::new("int_field", DataType::Int32, false),
                 Field::new("float_field", DataType::Float64, false),
+                Field::new("string_field", DataType::Utf8, false),
             ],
         );
 
-        let children: Vec<Arc<dyn Array>> = vec![Arc::new(int_array), Arc::new(float_array)];
+        let children: Vec<Arc<dyn Array>> = vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(string_array),
+        ];
 
         let union_array = UnionArray::try_new(
             union_fields,
@@ -1697,28 +1703,36 @@ mod tests {
             vec![
                 Some(Variant::Int32(1)),
                 Some(Variant::Double(3.2)),
+                Some(Variant::from("hello")),
+                Some(Variant::Double(32.5)),
                 Some(Variant::Int32(34)),
             ],
         );
     }
 
     #[test]
-    fn test_cast_union_to_variant_dense() {
-        // Create a dense union array with mixed types
+    fn test_cast_to_variant_union_dense() {
+        // Create a dense union array with mixed types (int, float, string)
         let int_array = Int32Array::from(vec![1, 34]);
-        let float_array = Float64Array::from(vec![3.2]);
-        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
-        let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+        let float_array = Float64Array::from(vec![3.2, 32.5]);
+        let string_array = StringArray::from(vec!["hello"]);
+        let type_ids = [0, 1, 2, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 0, 1, 1].into_iter().collect::<ScalarBuffer<i32>>();
 
         let union_fields = UnionFields::new(
-            vec![0, 1],
+            vec![0, 1, 2],
             vec![
                 Field::new("int_field", DataType::Int32, false),
                 Field::new("float_field", DataType::Float64, false),
+                Field::new("string_field", DataType::Utf8, false),
             ],
         );
 
-        let children: Vec<Arc<dyn Array>> = vec![Arc::new(int_array), Arc::new(float_array)];
+        let children: Vec<Arc<dyn Array>> = vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(string_array),
+        ];
 
         let union_array = UnionArray::try_new(
             union_fields,
@@ -1733,6 +1747,8 @@ mod tests {
             vec![
                 Some(Variant::Int32(1)),
                 Some(Variant::Double(3.2)),
+                Some(Variant::from("hello")),
+                Some(Variant::Double(32.5)),
                 Some(Variant::Int32(34)),
             ],
         );
