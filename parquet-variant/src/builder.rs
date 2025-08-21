@@ -477,6 +477,11 @@ impl MetadataBuilder {
         id as u32
     }
 
+    /// The current length of the underlying metadata buffer
+    pub fn offset(&self) -> usize {
+        self.metadata_buffer.len()
+    }
+
     /// Returns the number of field names stored in the metadata builder.
     /// Note: this method should be the only place to call `self.field_names.len()`
     ///
