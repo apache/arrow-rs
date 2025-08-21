@@ -19,7 +19,7 @@
 
 use crate::basic::{BoundaryOrder, Type};
 use crate::data_type::private::ParquetValueType;
-use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
+use crate::data_type::Int96;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::Index;
@@ -27,9 +27,7 @@ use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
 use crate::thrift_struct;
-use crate::util::bit_util::*;
-use std::marker::PhantomData;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 
 /// Computes the covering range of two optional ranges
 ///
@@ -138,7 +136,7 @@ pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, Pa
 }
 
 thrift_struct!(
-pub(crate) struct ColumnIndex<'a> {
+pub(crate) struct ThriftColumnIndex<'a> {
   1: required list<bool> null_pages
   2: required list<'a><binary> min_values
   3: required list<'a><binary> max_values
@@ -149,23 +147,149 @@ pub(crate) struct ColumnIndex<'a> {
 }
 );
 
-/// column index
-pub struct NativeColumnIndex<T: ParquetValueType> {
-    phantom_data: PhantomData<T>,
+// TODO: the following should move to its own module
+
+/// Common bits of the column index
+pub struct ColumnIndex {
     null_pages: Vec<bool>,
     boundary_order: BoundaryOrder,
     null_counts: Option<Vec<i64>>,
     repetition_level_histograms: Option<Vec<i64>>,
     definition_level_histograms: Option<Vec<i64>>,
+}
+
+impl ColumnIndex {
+    /// Returns the number of pages
+    pub fn num_pages(&self) -> u64 {
+        self.null_pages.len() as u64
+    }
+
+    /// Returns the number of null values in the page indexed by `idx`
+    pub fn null_count(&self, idx: usize) -> Option<i64> {
+        self.null_counts.as_ref().map(|nc| nc[idx])
+    }
+
+    /// Returns the repetition level histogram for the page indexed by `idx`
+    pub fn repetition_level_histogram(&self, idx: usize) -> Option<&[i64]> {
+        if let Some(rep_hists) = self.repetition_level_histograms.as_ref() {
+            let num_lvls = rep_hists.len() / self.num_pages() as usize;
+            let start = num_lvls * idx;
+            Some(&rep_hists[start..start + num_lvls])
+        } else {
+            None
+        }
+    }
+
+    /// Returns the definition level histogram for the page indexed by `idx`
+    pub fn definition_level_histogram(&self, idx: usize) -> Option<&[i64]> {
+        if let Some(def_hists) = self.definition_level_histograms.as_ref() {
+            let num_lvls = def_hists.len() / self.num_pages() as usize;
+            let start = num_lvls * idx;
+            Some(&def_hists[start..start + num_lvls])
+        } else {
+            None
+        }
+    }
+
+    /// Returns whether the page indexed by `idx` consists of all null values
+    pub fn is_null_page(&self, idx: usize) -> bool {
+        self.null_pages[idx]
+    }
+}
+
+/// Column index for primitive types
+pub struct PrimitiveColumnIndex<T: ParquetValueType> {
+    column_index: ColumnIndex,
+    min_values: Vec<T>,
+    max_values: Vec<T>,
+}
+
+impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
+    fn try_new(index: ThriftColumnIndex) -> Result<Self> {
+        let len = index.null_pages.len();
+
+        let mut min_values = Vec::with_capacity(len);
+        let mut max_values = Vec::with_capacity(len);
+
+        for (i, is_null) in index.null_pages.iter().enumerate().take(len) {
+            if !is_null {
+                let min = index.min_values[i];
+                min_values.push(T::try_from_le_slice(min)?);
+
+                let max = index.max_values[i];
+                max_values.push(T::try_from_le_slice(max)?);
+            } else {
+                min_values.push(Default::default());
+                max_values.push(Default::default());
+            }
+        }
+
+        Ok(Self {
+            column_index: ColumnIndex {
+                null_pages: index.null_pages,
+                boundary_order: index.boundary_order,
+                null_counts: index.null_counts,
+                repetition_level_histograms: index.repetition_level_histograms,
+                definition_level_histograms: index.definition_level_histograms,
+            },
+            min_values,
+            max_values,
+        })
+    }
+
+    /// Returns an array containing the min values for each page
+    pub fn min_values(&self) -> &[T] {
+        &self.min_values
+    }
+
+    /// Returns an array containing the max values for each page
+    pub fn max_values(&self) -> &[T] {
+        &self.max_values
+    }
+
+    /// Returns the min value for the page indexed by `idx`
+    ///
+    /// It is `None` when all values are null
+    pub fn min_value(&self, idx: usize) -> Option<&T> {
+        if self.null_pages[idx] {
+            None
+        } else {
+            Some(&self.min_values[idx])
+        }
+    }
+
+    /// Returns the max value for the page indexed by `idx`
+    ///
+    /// It is `None` when all values are null
+    pub fn max_value(&self, idx: usize) -> Option<&T> {
+        if self.null_pages[idx] {
+            None
+        } else {
+            Some(&self.max_values[idx])
+        }
+    }
+}
+
+impl<T: ParquetValueType> Deref for PrimitiveColumnIndex<T> {
+    type Target = ColumnIndex;
+
+    fn deref(&self) -> &Self::Target {
+        &self.column_index
+    }
+}
+
+/// Column index for byte arrays (fixed length and variable)
+pub struct ByteArrayColumnIndex {
+    column_index: ColumnIndex,
     // raw bytes for min and max values
     min_bytes: Vec<u8>,
-    min_offsets: Vec<usize>, // offsets are really only needed for BYTE_ARRAY
+    min_offsets: Vec<usize>,
     max_bytes: Vec<u8>,
     max_offsets: Vec<usize>,
 }
 
-impl<T: ParquetValueType> NativeColumnIndex<T> {
-    fn try_new(index: ColumnIndex) -> Result<Self> {
+impl ByteArrayColumnIndex {
+    fn try_new(index: ThriftColumnIndex) -> Result<Self> {
         let len = index.null_pages.len();
 
         let min_len = index.min_values.iter().map(|&v| v.len()).sum();
@@ -202,12 +326,14 @@ impl<T: ParquetValueType> NativeColumnIndex<T> {
         max_offsets[len] = max_pos;
 
         Ok(Self {
-            phantom_data: PhantomData,
-            null_pages: index.null_pages,
-            boundary_order: index.boundary_order,
-            null_counts: index.null_counts,
-            repetition_level_histograms: index.repetition_level_histograms,
-            definition_level_histograms: index.definition_level_histograms,
+            column_index: ColumnIndex {
+                null_pages: index.null_pages,
+                boundary_order: index.boundary_order,
+                null_counts: index.null_counts,
+                repetition_level_histograms: index.repetition_level_histograms,
+                definition_level_histograms: index.definition_level_histograms,
+            },
+
             min_bytes,
             min_offsets,
             max_bytes,
@@ -215,47 +341,10 @@ impl<T: ParquetValueType> NativeColumnIndex<T> {
         })
     }
 
-    /// Returns the number of pages
-    pub fn num_pages(&self) -> u64 {
-        self.null_pages.len() as u64
-    }
-
-    /// Returns the number of null values in the page indexed by `idx`
-    pub fn null_count(&self, idx: usize) -> Option<i64> {
-        self.null_counts.as_ref().map(|nc| nc[idx])
-    }
-
-    /// Returns the repetition level histogram for the page indexed by `idx`
-    pub fn repetition_level_histogram(&self, idx: usize) -> Option<&[i64]> {
-        if let Some(rep_hists) = self.repetition_level_histograms.as_ref() {
-            let num_lvls = rep_hists.len() / self.num_pages() as usize;
-            let start = num_lvls * idx;
-            Some(&rep_hists[start..start + num_lvls])
-        } else {
-            None
-        }
-    }
-
-    /// Returns the definition level histogram for the page indexed by `idx`
-    pub fn definition_level_histogram(&self, idx: usize) -> Option<&[i64]> {
-        if let Some(def_hists) = self.definition_level_histograms.as_ref() {
-            let num_lvls = def_hists.len() / self.num_pages() as usize;
-            let start = num_lvls * idx;
-            Some(&def_hists[start..start + num_lvls])
-        } else {
-            None
-        }
-    }
-
-    /// Returns whether this is an all null page
-    pub fn is_null_page(&self, idx: usize) -> bool {
-        self.null_pages[idx]
-    }
-
-    /// Returns the minimum value in the page indexed by `idx` as raw bytes
+    /// Returns the min value for the page indexed by `idx`
     ///
     /// It is `None` when all values are null
-    pub fn min_value_bytes(&self, idx: usize) -> Option<&[u8]> {
+    pub fn min_value(&self, idx: usize) -> Option<&[u8]> {
         if self.null_pages[idx] {
             None
         } else {
@@ -265,10 +354,10 @@ impl<T: ParquetValueType> NativeColumnIndex<T> {
         }
     }
 
-    /// Returns the maximum value in the page indexed by `idx` as raw bytes
+    /// Returns the max value for the page indexed by `idx`
     ///
     /// It is `None` when all values are null
-    pub fn max_value_bytes(&self, idx: usize) -> Option<&[u8]> {
+    pub fn max_value(&self, idx: usize) -> Option<&[u8]> {
         if self.null_pages[idx] {
             None
         } else {
@@ -279,32 +368,51 @@ impl<T: ParquetValueType> NativeColumnIndex<T> {
     }
 }
 
-macro_rules! min_max_values {
-    ($ty: ty) => {
-        impl NativeColumnIndex<$ty> {
-            /// Returns the minimum value in the page indexed by `idx`
-            ///
-            /// It is `None` when all values are null
-            pub fn min_value(&self, idx: usize) -> Option<$ty> {
-                <$ty>::try_from_le_slice(self.min_value_bytes(idx)?).ok()
-            }
+impl Deref for ByteArrayColumnIndex {
+    type Target = ColumnIndex;
 
-            /// Returns the maximum value in the page indexed by `idx`
-            ///
-            /// It is `None` when all values are null
-            pub fn max_value(&self, idx: usize) -> Option<$ty> {
-                <$ty>::try_from_le_slice(self.max_value_bytes(idx)?).ok()
-            }
-        }
-    };
+    fn deref(&self) -> &Self::Target {
+        &self.column_index
+    }
 }
 
-min_max_values!(bool);
-min_max_values!(i32);
-min_max_values!(i64);
-min_max_values!(f32);
-min_max_values!(f64);
-min_max_values!(Int96);
+// Macro to generate getter functions for ColumnIndexMetaData.
+macro_rules! colidx_enum_func {
+    ($self:ident, $func:ident, $arg:ident) => {{
+        match *$self {
+            Self::BOOLEAN(ref typed) => typed.$func($arg),
+            Self::INT32(ref typed) => typed.$func($arg),
+            Self::INT64(ref typed) => typed.$func($arg),
+            Self::INT96(ref typed) => typed.$func($arg),
+            Self::FLOAT(ref typed) => typed.$func($arg),
+            Self::DOUBLE(ref typed) => typed.$func($arg),
+            Self::BYTE_ARRAY(ref typed) => typed.$func($arg),
+            Self::FIXED_LEN_BYTE_ARRAY(ref typed) => typed.$func($arg),
+            _ => panic!(concat!(
+                "Cannot call ",
+                stringify!($func),
+                " on ColumnIndexMetaData::NONE"
+            )),
+        }
+    }};
+    ($self:ident, $func:ident) => {{
+        match *$self {
+            Self::BOOLEAN(ref typed) => typed.$func(),
+            Self::INT32(ref typed) => typed.$func(),
+            Self::INT64(ref typed) => typed.$func(),
+            Self::INT96(ref typed) => typed.$func(),
+            Self::FLOAT(ref typed) => typed.$func(),
+            Self::DOUBLE(ref typed) => typed.$func(),
+            Self::BYTE_ARRAY(ref typed) => typed.$func(),
+            Self::FIXED_LEN_BYTE_ARRAY(ref typed) => typed.$func(),
+            _ => panic!(concat!(
+                "Cannot call ",
+                stringify!($func),
+                " on ColumnIndexMetaData::NONE"
+            )),
+        }
+    }};
+}
 
 /// index
 #[allow(non_camel_case_types)]
@@ -314,21 +422,21 @@ pub enum ColumnIndexMetaData {
     /// `NONE` represents this lack of index information
     NONE,
     /// Boolean type index
-    BOOLEAN(NativeColumnIndex<bool>),
+    BOOLEAN(PrimitiveColumnIndex<bool>),
     /// 32-bit integer type index
-    INT32(NativeColumnIndex<i32>),
+    INT32(PrimitiveColumnIndex<i32>),
     /// 64-bit integer type index
-    INT64(NativeColumnIndex<i64>),
+    INT64(PrimitiveColumnIndex<i64>),
     /// 96-bit integer type (timestamp) index
-    INT96(NativeColumnIndex<Int96>),
+    INT96(PrimitiveColumnIndex<Int96>),
     /// 32-bit floating point type index
-    FLOAT(NativeColumnIndex<f32>),
+    FLOAT(PrimitiveColumnIndex<f32>),
     /// 64-bit floating point type index
-    DOUBLE(NativeColumnIndex<f64>),
+    DOUBLE(PrimitiveColumnIndex<f64>),
     /// Byte array type index
-    BYTE_ARRAY(NativeColumnIndex<ByteArray>),
+    BYTE_ARRAY(ByteArrayColumnIndex),
     /// Fixed length byte array type index
-    FIXED_LEN_BYTE_ARRAY(NativeColumnIndex<FixedLenByteArray>),
+    FIXED_LEN_BYTE_ARRAY(ByteArrayColumnIndex),
 }
 
 impl ColumnIndexMetaData {
@@ -345,33 +453,60 @@ impl ColumnIndexMetaData {
     /// Get boundary_order of this page index.
     pub fn get_boundary_order(&self) -> Option<BoundaryOrder> {
         match self {
-            ColumnIndexMetaData::NONE => None,
-            ColumnIndexMetaData::BOOLEAN(index) => Some(index.boundary_order),
-            ColumnIndexMetaData::INT32(index) => Some(index.boundary_order),
-            ColumnIndexMetaData::INT64(index) => Some(index.boundary_order),
-            ColumnIndexMetaData::INT96(index) => Some(index.boundary_order),
-            ColumnIndexMetaData::FLOAT(index) => Some(index.boundary_order),
-            ColumnIndexMetaData::DOUBLE(index) => Some(index.boundary_order),
-            ColumnIndexMetaData::BYTE_ARRAY(index) => Some(index.boundary_order),
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => Some(index.boundary_order),
+            Self::NONE => None,
+            Self::BOOLEAN(index) => Some(index.boundary_order),
+            Self::INT32(index) => Some(index.boundary_order),
+            Self::INT64(index) => Some(index.boundary_order),
+            Self::INT96(index) => Some(index.boundary_order),
+            Self::FLOAT(index) => Some(index.boundary_order),
+            Self::DOUBLE(index) => Some(index.boundary_order),
+            Self::BYTE_ARRAY(index) => Some(index.boundary_order),
+            Self::FIXED_LEN_BYTE_ARRAY(index) => Some(index.boundary_order),
         }
+    }
+
+    /// Returns the number of pages
+    pub fn num_pages(&self) -> u64 {
+        colidx_enum_func!(self, num_pages)
+    }
+
+    /// Returns the number of null values in the page indexed by `idx`
+    pub fn null_count(&self, idx: usize) -> Option<i64> {
+        colidx_enum_func!(self, null_count, idx)
+    }
+
+    /// Returns the repetition level histogram for the page indexed by `idx`
+    pub fn repetition_level_histogram(&self, idx: usize) -> Option<&[i64]> {
+        colidx_enum_func!(self, repetition_level_histogram, idx)
+    }
+
+    /// Returns the definition level histogram for the page indexed by `idx`
+    pub fn definition_level_histogram(&self, idx: usize) -> Option<&[i64]> {
+        colidx_enum_func!(self, definition_level_histogram, idx)
+    }
+
+    /// Returns whether the page indexed by `idx` consists of all null values
+    pub fn is_null_page(&self, idx: usize) -> bool {
+        colidx_enum_func!(self, is_null_page, idx)
     }
 }
 
 pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
     let mut prot = ThriftCompactInputProtocol::new(data);
-    let index = ColumnIndex::try_from(&mut prot)?;
+    let index = ThriftColumnIndex::try_from(&mut prot)?;
 
-    let index = match column_type {
-        Type::BOOLEAN => ColumnIndexMetaData::BOOLEAN(NativeColumnIndex::<bool>::try_new(index)?),
-        Type::INT32 => ColumnIndexMetaData::INT32(NativeColumnIndex::<i32>::try_new(index)?),
-        Type::INT64 => ColumnIndexMetaData::INT64(NativeColumnIndex::<i64>::try_new(index)?),
-        Type::INT96 => ColumnIndexMetaData::INT96(NativeColumnIndex::<Int96>::try_new(index)?),
-        Type::FLOAT => ColumnIndexMetaData::FLOAT(NativeColumnIndex::<f32>::try_new(index)?),
-        Type::DOUBLE => ColumnIndexMetaData::DOUBLE(NativeColumnIndex::<f64>::try_new(index)?),
-        Type::BYTE_ARRAY => ColumnIndexMetaData::BYTE_ARRAY(NativeColumnIndex::try_new(index)?),
+    let _index = match column_type {
+        Type::BOOLEAN => {
+            ColumnIndexMetaData::BOOLEAN(PrimitiveColumnIndex::<bool>::try_new(index)?)
+        }
+        Type::INT32 => ColumnIndexMetaData::INT32(PrimitiveColumnIndex::<i32>::try_new(index)?),
+        Type::INT64 => ColumnIndexMetaData::INT64(PrimitiveColumnIndex::<i64>::try_new(index)?),
+        Type::INT96 => ColumnIndexMetaData::INT96(PrimitiveColumnIndex::<Int96>::try_new(index)?),
+        Type::FLOAT => ColumnIndexMetaData::FLOAT(PrimitiveColumnIndex::<f32>::try_new(index)?),
+        Type::DOUBLE => ColumnIndexMetaData::DOUBLE(PrimitiveColumnIndex::<f64>::try_new(index)?),
+        Type::BYTE_ARRAY => ColumnIndexMetaData::BYTE_ARRAY(ByteArrayColumnIndex::try_new(index)?),
         Type::FIXED_LEN_BYTE_ARRAY => {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(NativeColumnIndex::try_new(index)?)
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(ByteArrayColumnIndex::try_new(index)?)
         }
     };
 

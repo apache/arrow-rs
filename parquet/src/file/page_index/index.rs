@@ -24,7 +24,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::ParquetError;
 use crate::file::metadata::LevelHistogram;
-use crate::file::page_index::index_reader::ColumnIndex;
+use crate::file::page_index::index_reader::ThriftColumnIndex;
 use std::fmt::Debug;
 
 /// Typed statistics for one data page
@@ -310,7 +310,8 @@ impl<T: ParquetValueType> NativeIndex<T> {
     }
 
     /// Creates a new [`NativeIndex`]
-    pub(crate) fn try_new_local(index: ColumnIndex) -> Result<Self, ParquetError> {
+    #[allow(dead_code)]
+    pub(crate) fn try_new_local(index: ThriftColumnIndex) -> Result<Self, ParquetError> {
         let len = index.min_values.len();
 
         // turn Option<Vec<i64>> into Vec<Option<i64>>
