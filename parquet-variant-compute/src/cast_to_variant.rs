@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{VariantArray, VariantArrayBuilder};
@@ -33,7 +34,7 @@ use arrow::temporal_conversions::{
     timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
-use arrow_schema::{ArrowError, DataType, TimeUnit};
+use arrow_schema::{ArrowError, DataType, TimeUnit, UnionFields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use half::f16;
 use parquet_variant::{
@@ -485,6 +486,9 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(variant);
             }
         }
+        DataType::Union(fields, _) => {
+            process_union(fields, input, &mut builder)?;
+        }
         DataType::Date32 => {
             generic_conversion!(
                 Date32Type,
@@ -544,6 +548,39 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     Ok(builder.build())
 }
 
+/// Process union arrays
+fn process_union(
+    fields: &UnionFields,
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) -> Result<(), ArrowError> {
+    let union_array = input.as_union();
+
+    // Convert each child array to variant arrays
+    let mut child_variant_arrays = HashMap::new();
+    for (type_id, _) in fields.iter() {
+        let child_array = union_array.child(type_id);
+        let child_variant_array = cast_to_variant(child_array.as_ref())?;
+        child_variant_arrays.insert(type_id, child_variant_array);
+    }
+
+    // Process each element in the union array
+    for i in 0..union_array.len() {
+        let type_id = union_array.type_id(i);
+        let value_offset = union_array.value_offset(i);
+
+        if let Some(child_variant_array) = child_variant_arrays.get(&type_id) {
+            let value = child_variant_array.value(value_offset);
+            builder.append_variant(value);
+        } else {
+            // This should not happen in a valid union, but handle gracefully
+            builder.append_null();
+        }
+    }
+
+    Ok(())
+}
+
 /// Generic function to process run-end encoded arrays
 fn process_run_end_encoded<R: RunEndIndexType>(
     input: &dyn Array,
@@ -593,10 +630,10 @@ mod tests {
         Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray,
         NullArray, StringArray, StringRunBuilder, StringViewArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
     };
-    use arrow::buffer::NullBuffer;
-    use arrow_schema::{Field, Fields};
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
+    use arrow_schema::{DataType, Field, Fields, UnionFields};
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
@@ -1618,6 +1655,77 @@ mod tests {
         let obj4 = variant4.as_object().unwrap();
         assert_eq!(obj4.get("id"), Some(Variant::from(1003i64)));
         assert_eq!(obj4.get("age"), None);
+    }
+
+    #[test]
+    fn test_cast_union_to_variant_sparse() {
+        // Create a sparse union array with mixed types
+        let int_array = Int32Array::from(vec![Some(1), None, Some(34)]);
+        let float_array = Float64Array::from(vec![None, Some(3.2), None]);
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let union_fields = UnionFields::new(
+            vec![0, 1],
+            vec![
+                Field::new("int_field", DataType::Int32, false),
+                Field::new("float_field", DataType::Float64, false),
+            ],
+        );
+
+        let children: Vec<Arc<dyn Array>> = vec![Arc::new(int_array), Arc::new(float_array)];
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            None, // Sparse union
+            children,
+        )
+        .unwrap();
+
+        run_test(
+            Arc::new(union_array),
+            vec![
+                Some(Variant::Int32(1)),
+                Some(Variant::Double(3.2)),
+                Some(Variant::Int32(34)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_union_to_variant_dense() {
+        // Create a dense union array with mixed types
+        let int_array = Int32Array::from(vec![1, 34]);
+        let float_array = Float64Array::from(vec![3.2]);
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields = UnionFields::new(
+            vec![0, 1],
+            vec![
+                Field::new("int_field", DataType::Int32, false),
+                Field::new("float_field", DataType::Float64, false),
+            ],
+        );
+
+        let children: Vec<Arc<dyn Array>> = vec![Arc::new(int_array), Arc::new(float_array)];
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            Some(offsets), // Dense union
+            children,
+        )
+        .unwrap();
+
+        run_test(
+            Arc::new(union_array),
+            vec![
+                Some(Variant::Int32(1)),
+                Some(Variant::Double(3.2)),
+                Some(Variant::Int32(34)),
+            ],
+        );
     }
 
     #[test]
