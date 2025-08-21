@@ -1265,6 +1265,7 @@ impl VariantBuilder {
 /// A builder for creating [`Variant::List`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
+#[derive(Debug)]
 pub struct ListBuilder<'a> {
     parent_state: ParentState<'a>,
     offsets: Vec<usize>,
@@ -2516,12 +2517,30 @@ mod tests {
         assert!(obj.finish().is_ok());
 
         // Deeply nested list structure with duplicates
+        let mut builder = VariantBuilder::new();
         let mut outer_list = builder.new_list();
         let mut inner_list = outer_list.new_list();
         let mut nested_obj = inner_list.new_object();
         nested_obj.insert("x", 1);
         nested_obj.insert("x", 2);
+        nested_obj.new_list("x").with_value(3).finish();
+        nested_obj
+            .new_object("x")
+            .with_field("y", 4)
+            .finish()
+            .unwrap();
         assert!(nested_obj.finish().is_ok());
+        inner_list.finish();
+        outer_list.finish();
+
+        // Verify the nested object is built correctly -- the nested object "x" should have "won"
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let outer_element = variant.get_list_element(0).unwrap();
+        let inner_element = outer_element.get_list_element(0).unwrap();
+        let outer_field = inner_element.get_object_field("x").unwrap();
+        let inner_field = outer_field.get_object_field("y").unwrap();
+        assert_eq!(inner_field, Variant::from(4));
     }
 
     #[test]
@@ -2542,15 +2561,25 @@ mod tests {
         // Deeply nested list -> list -> object with duplicate
         let mut outer_list = builder.new_list();
         let mut inner_list = outer_list.new_list();
-        let nested_result = inner_list
-            .new_object()
-            .with_field("x", 1)
-            .try_with_field("x", 2);
+        let mut object = inner_list.new_object().with_field("x", 1);
+        let nested_result = object.try_insert("x", 2);
+        assert_eq!(
+            nested_result.unwrap_err().to_string(),
+            "Invalid argument error: Duplicate field name: x"
+        );
+        let nested_result = object.try_new_list("x");
         assert_eq!(
             nested_result.unwrap_err().to_string(),
             "Invalid argument error: Duplicate field name: x"
         );
 
+        let nested_result = object.try_new_object("x");
+        assert_eq!(
+            nested_result.unwrap_err().to_string(),
+            "Invalid argument error: Duplicate field name: x"
+        );
+
+        drop(object);
         inner_list.finish();
         outer_list.finish();
 
