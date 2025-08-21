@@ -25,6 +25,9 @@ use crate::file::metadata::{
 };
 use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::page_index::index::{Index, NativeIndex, PageIndex};
+use crate::file::page_index::index_reader::{
+    ByteArrayColumnIndex, ColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
+};
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics::{Statistics, ValueStatistics};
 use std::sync::Arc;
@@ -154,6 +157,48 @@ impl HeapSize for OffsetIndexMetaData {
     }
 }
 
+impl HeapSize for ColumnIndexMetaData {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::NONE => 0,
+            Self::BOOLEAN(native_index) => native_index.heap_size(),
+            Self::INT32(native_index) => native_index.heap_size(),
+            Self::INT64(native_index) => native_index.heap_size(),
+            Self::INT96(native_index) => native_index.heap_size(),
+            Self::FLOAT(native_index) => native_index.heap_size(),
+            Self::DOUBLE(native_index) => native_index.heap_size(),
+            Self::BYTE_ARRAY(native_index) => native_index.heap_size(),
+            Self::FIXED_LEN_BYTE_ARRAY(native_index) => native_index.heap_size(),
+        }
+    }
+}
+
+impl HeapSize for ColumnIndex {
+    fn heap_size(&self) -> usize {
+        self.null_pages.heap_size()
+            + self.boundary_order.heap_size()
+            + self.null_counts.heap_size()
+            + self.definition_level_histograms.heap_size()
+            + self.repetition_level_histograms.heap_size()
+    }
+}
+
+impl<T: ParquetValueType> HeapSize for PrimitiveColumnIndex<T> {
+    fn heap_size(&self) -> usize {
+        self.column_index.heap_size() + self.min_values.heap_size() + self.max_values.heap_size()
+    }
+}
+
+impl HeapSize for ByteArrayColumnIndex {
+    fn heap_size(&self) -> usize {
+        self.column_index.heap_size()
+            + self.min_bytes.heap_size()
+            + self.min_offsets.heap_size()
+            + self.max_bytes.heap_size()
+            + self.max_offsets.heap_size()
+    }
+}
+
 impl HeapSize for Index {
     fn heap_size(&self) -> usize {
         match self {
@@ -189,6 +234,11 @@ impl<T: ParquetValueType> HeapSize for ValueStatistics<T> {
     }
 }
 impl HeapSize for bool {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
+    }
+}
+impl HeapSize for u8 {
     fn heap_size(&self) -> usize {
         0 // no heap allocations
     }

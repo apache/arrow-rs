@@ -22,7 +22,6 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::Int96;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
-use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
@@ -57,7 +56,7 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Option<Vec<Index>>, ParquetError> {
+) -> Result<Option<Vec<ColumnIndexMetaData>>, ParquetError> {
     let fetch = chunks
         .iter()
         .fold(None, |range, c| acc_range(range, c.column_index_range()));
@@ -78,7 +77,7 @@ pub fn read_columns_indexes<R: ChunkReader>(
                         ..usize::try_from(r.end - fetch.start)?],
                     c.column_type(),
                 ),
-                None => Ok(Index::NONE),
+                None => Ok(ColumnIndexMetaData::NONE),
             })
             .collect(),
     )
@@ -150,12 +149,13 @@ pub(crate) struct ThriftColumnIndex<'a> {
 // TODO: the following should move to its own module
 
 /// Common bits of the column index
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColumnIndex {
-    null_pages: Vec<bool>,
-    boundary_order: BoundaryOrder,
-    null_counts: Option<Vec<i64>>,
-    repetition_level_histograms: Option<Vec<i64>>,
-    definition_level_histograms: Option<Vec<i64>>,
+    pub(crate) null_pages: Vec<bool>,
+    pub(crate) boundary_order: BoundaryOrder,
+    pub(crate) null_counts: Option<Vec<i64>>,
+    pub(crate) repetition_level_histograms: Option<Vec<i64>>,
+    pub(crate) definition_level_histograms: Option<Vec<i64>>,
 }
 
 impl ColumnIndex {
@@ -198,10 +198,11 @@ impl ColumnIndex {
 }
 
 /// Column index for primitive types
+#[derive(Debug, Clone, PartialEq)]
 pub struct PrimitiveColumnIndex<T: ParquetValueType> {
-    column_index: ColumnIndex,
-    min_values: Vec<T>,
-    max_values: Vec<T>,
+    pub(crate) column_index: ColumnIndex,
+    pub(crate) min_values: Vec<T>,
+    pub(crate) max_values: Vec<T>,
 }
 
 impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
@@ -268,6 +269,35 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
             Some(&self.max_values[idx])
         }
     }
+
+    pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
+        let min_values = self
+            .min_values
+            .iter()
+            .map(|x| x.as_bytes().to_vec())
+            .collect::<Vec<_>>();
+
+        let max_values = self
+            .max_values
+            .iter()
+            .map(|x| x.as_bytes().to_vec())
+            .collect::<Vec<_>>();
+
+        let null_counts = self.null_counts.clone();
+        let repetition_level_histograms = self.repetition_level_histograms.clone();
+        let definition_level_histograms = self.definition_level_histograms.clone();
+        let null_pages = self.null_pages.clone();
+
+        crate::format::ColumnIndex::new(
+            null_pages,
+            min_values,
+            max_values,
+            self.boundary_order.into(),
+            null_counts,
+            repetition_level_histograms,
+            definition_level_histograms,
+        )
+    }
 }
 
 impl<T: ParquetValueType> Deref for PrimitiveColumnIndex<T> {
@@ -279,13 +309,14 @@ impl<T: ParquetValueType> Deref for PrimitiveColumnIndex<T> {
 }
 
 /// Column index for byte arrays (fixed length and variable)
+#[derive(Debug, Clone, PartialEq)]
 pub struct ByteArrayColumnIndex {
-    column_index: ColumnIndex,
+    pub(crate) column_index: ColumnIndex,
     // raw bytes for min and max values
-    min_bytes: Vec<u8>,
-    min_offsets: Vec<usize>,
-    max_bytes: Vec<u8>,
-    max_offsets: Vec<usize>,
+    pub(crate) min_bytes: Vec<u8>,
+    pub(crate) min_offsets: Vec<usize>,
+    pub(crate) max_bytes: Vec<u8>,
+    pub(crate) max_offsets: Vec<usize>,
 }
 
 impl ByteArrayColumnIndex {
@@ -312,7 +343,7 @@ impl ByteArrayColumnIndex {
                 min_pos += min.len();
 
                 let max = index.max_values[i];
-                let dst = &mut max_bytes[max_pos..max_pos + min.len()];
+                let dst = &mut max_bytes[max_pos..max_pos + max.len()];
                 dst.copy_from_slice(max);
                 max_offsets[i] = max_pos;
                 max_pos += max.len();
@@ -366,6 +397,33 @@ impl ByteArrayColumnIndex {
             Some(&self.max_bytes[start..end])
         }
     }
+
+    pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
+        let mut min_values = Vec::with_capacity(self.num_pages() as usize);
+        for i in 0..self.num_pages() as usize {
+            min_values.push(self.min_value(i).unwrap_or(&vec![]).to_owned());
+        }
+
+        let mut max_values = Vec::with_capacity(self.num_pages() as usize);
+        for i in 0..self.num_pages() as usize {
+            max_values.push(self.max_value(i).unwrap_or(&vec![]).to_owned());
+        }
+
+        let null_counts = self.null_counts.clone();
+        let repetition_level_histograms = self.repetition_level_histograms.clone();
+        let definition_level_histograms = self.definition_level_histograms.clone();
+        let null_pages = self.null_pages.clone();
+
+        crate::format::ColumnIndex::new(
+            null_pages,
+            min_values,
+            max_values,
+            self.boundary_order.into(),
+            null_counts,
+            repetition_level_histograms,
+            definition_level_histograms,
+        )
+    }
 }
 
 impl Deref for ByteArrayColumnIndex {
@@ -415,6 +473,7 @@ macro_rules! colidx_enum_func {
 }
 
 /// index
+#[derive(Debug, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
 pub enum ColumnIndexMetaData {
     /// Sometimes reading page index from parquet file
@@ -491,11 +550,14 @@ impl ColumnIndexMetaData {
     }
 }
 
-pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
+pub(crate) fn decode_column_index(
+    data: &[u8],
+    column_type: Type,
+) -> Result<ColumnIndexMetaData, ParquetError> {
     let mut prot = ThriftCompactInputProtocol::new(data);
     let index = ThriftColumnIndex::try_from(&mut prot)?;
 
-    let _index = match column_type {
+    let index = match column_type {
         Type::BOOLEAN => {
             ColumnIndexMetaData::BOOLEAN(PrimitiveColumnIndex::<bool>::try_new(index)?)
         }
@@ -510,6 +572,5 @@ pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Inde
         }
     };
 
-    //Ok(index)
-    Ok(Index::NONE)
+    Ok(index)
 }

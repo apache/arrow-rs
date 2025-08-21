@@ -1063,6 +1063,7 @@ mod tests {
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type};
     use crate::file::page_index::index::Index;
+    use crate::file::page_index::index_reader::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::{
@@ -2083,9 +2084,9 @@ mod tests {
         assert_eq!(column_index[0].len(), 2); // 2 column
 
         let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, Index::INT32(_)), "{a_idx:?}");
+        assert!(matches!(a_idx, ColumnIndexMetaData::INT32(_)), "{a_idx:?}");
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
     }
 
     #[test]
@@ -2169,16 +2170,16 @@ mod tests {
         let column_index = reader.metadata().column_index().unwrap();
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let Index::BYTE_ARRAY(index) = &column_index[0][0] {
-            assert_eq!(index.indexes.len(), 1);
-            &index.indexes[0]
+        let col_idx = if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] {
+            assert_eq!(index.num_pages(), 1);
+            index
         } else {
             unreachable!()
         };
 
-        assert!(col_idx.repetition_level_histogram().is_none());
-        assert!(col_idx.definition_level_histogram().is_some());
-        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
+        assert!(col_idx.repetition_level_histogram(0).is_none());
+        assert!(col_idx.definition_level_histogram(0).is_some());
+        check_def_hist(col_idx.definition_level_histogram(0).unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
@@ -2324,15 +2325,15 @@ mod tests {
         let column_index = reader.metadata().column_index().unwrap();
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let Index::INT32(index) = &column_index[0][0] {
-            assert_eq!(index.indexes.len(), 1);
-            &index.indexes[0]
+        let col_idx = if let ColumnIndexMetaData::INT32(index) = &column_index[0][0] {
+            assert_eq!(index.num_pages(), 1);
+            index
         } else {
             unreachable!()
         };
 
-        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
-        check_rep_hist(col_idx.repetition_level_histogram().unwrap().values());
+        check_def_hist(col_idx.definition_level_histogram(0).unwrap());
+        check_rep_hist(col_idx.repetition_level_histogram(0).unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
