@@ -48,8 +48,8 @@ prost = { version = "0.14.1", default-features = false, features = ["derive"] }
 # For Timestamp type
 prost-types = { version = "0.14.1", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"], optional = true }
-tonic = { version = "0.14.0", default-features = false, features = ["transport", "codegen", "router"] }
-tonic-prost = { version = "0.14.0", default-features = false }
+tonic = { version = "0.14.1", default-features = false, features = ["transport", "codegen", "router"] }
+tonic-prost = { version = "0.14.1", default-features = false }
 
 # CLI-related dependencies
 anyhow = { version = "1.0", optional = true }
