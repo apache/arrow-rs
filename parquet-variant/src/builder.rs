@@ -121,7 +121,7 @@ impl ValueBuilder {
     }
 
     pub fn into_inner(self) -> Vec<u8> {
-        self.into()
+        self.0
     }
 
     fn inner_mut(&mut self) -> &mut Vec<u8> {
@@ -498,17 +498,15 @@ impl MetadataBuilder {
         self.field_names.iter().map(|k| k.len()).sum()
     }
 
-    pub fn finish(self) -> Vec<u8> {
+    pub fn finish(&mut self) -> usize {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
         let total_dict_size: usize = self.metadata_size();
 
-        let Self {
-            field_names,
-            is_sorted,
-            mut metadata_buffer,
-        } = self;
+        let metadata_buffer = &mut self.metadata_buffer;
+        let is_sorted = std::mem::take(&mut self.is_sorted);
+        let field_names = std::mem::take(&mut self.field_names);
 
         // Determine appropriate offset size based on the larger of dict size or total string size
         let max_offset = std::cmp::max(total_dict_size, nkeys);
@@ -524,23 +522,23 @@ impl MetadataBuilder {
         metadata_buffer.push(0x01 | (is_sorted as u8) << 4 | ((offset_size - 1) << 6));
 
         // Write dictionary size
-        write_offset(&mut metadata_buffer, nkeys, offset_size);
+        write_offset(metadata_buffer, nkeys, offset_size);
 
         // Write offsets
         let mut cur_offset = 0;
         for key in field_names.iter() {
-            write_offset(&mut metadata_buffer, cur_offset, offset_size);
+            write_offset(metadata_buffer, cur_offset, offset_size);
             cur_offset += key.len();
         }
         // Write final offset
-        write_offset(&mut metadata_buffer, cur_offset, offset_size);
+        write_offset(metadata_buffer, cur_offset, offset_size);
 
         // Write string data
         for key in field_names {
             metadata_buffer.extend_from_slice(key.as_bytes());
         }
 
-        metadata_buffer
+        metadata_buffer.len()
     }
 
     /// Return the inner buffer, without finalizing any in progress metadata.
@@ -1215,11 +1213,9 @@ impl VariantBuilder {
     }
 
     /// Finish the builder and return the metadata and value buffers.
-    pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
-        (
-            self.metadata_builder.finish(),
-            self.value_builder.into_inner(),
-        )
+    pub fn finish(mut self) -> (Vec<u8>, Vec<u8>) {
+        self.metadata_builder.finish();
+        self.into_buffers()
     }
 
     /// Return the inner metadata buffers and value buffer.
