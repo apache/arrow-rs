@@ -54,7 +54,7 @@ macro_rules! non_generic_conversion_single_value {
 #[macro_export]
 macro_rules! generic_conversion_array {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        non_generic_conversion_array!($input.$method::<$t>(), $cast_fn, $builder)
+        $crate::non_generic_conversion_array!($input.$method::<$t>(), $cast_fn, $builder)
     }};
 }
 
@@ -78,7 +78,7 @@ macro_rules! generic_conversion_single_value {
 #[macro_export]
 macro_rules! primitive_conversion_array {
     ($t:ty, $input:expr, $builder:expr) => {{
-        generic_conversion_array!($t, as_primitive, |v| v, $input, $builder)
+        $crate::generic_conversion_array!($t, as_primitive, |v| v, $input, $builder)
     }};
 }
 
