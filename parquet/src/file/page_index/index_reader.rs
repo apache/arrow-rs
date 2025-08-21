@@ -312,7 +312,7 @@ impl ByteArrayColumnIndex {
                 min_pos += min.len();
 
                 let max = index.max_values[i];
-                let dst = &mut max_bytes[max_pos..max_pos + min.len()];
+                let dst = &mut max_bytes[max_pos..max_pos + max.len()];
                 dst.copy_from_slice(max);
                 max_offsets[i] = max_pos;
                 max_pos += max.len();
