@@ -108,6 +108,7 @@ impl ValueBuilder {
         self.0.push(primitive_header(primitive_type));
     }
 
+    /// Returns the underlying buffer, consuming self
     pub fn into_inner(self) -> Vec<u8> {
         self.0
     }
@@ -280,6 +281,7 @@ impl ValueBuilder {
         Ok(())
     }
 
+    /// Returns the current size of the underlying buffer
     pub fn offset(&self) -> usize {
         self.0.len()
     }
@@ -481,6 +483,9 @@ impl MetadataBuilder {
         self.field_names.iter().map(|k| k.len()).sum()
     }
 
+    /// Finalizes the metadata dictionary and appends its serialized bytes to the underlying buffer,
+    /// returning the resulting [`Self::offset`]. The builder state is reset and ready to start
+    /// building a new metadata dictionary.
     pub fn finish(&mut self) -> usize {
         let nkeys = self.num_field_names();
 
@@ -524,7 +529,7 @@ impl MetadataBuilder {
         metadata_buffer.len()
     }
 
-    /// Return the inner buffer, without finalizing any in progress metadata.
+    /// Returns the inner buffer, consuming self without finalizing any in progress metadata.
     pub fn into_inner(self) -> Vec<u8> {
         self.metadata_buffer
     }
@@ -595,6 +600,9 @@ pub enum ParentState<'a> {
 }
 
 impl<'a> ParentState<'a> {
+    /// Creates a new instance suitable for a top-level variant builder
+    /// (e.g. [`VariantBuilder`]). The value and metadata builder state is checkpointed and will
+    /// roll back on drop, unless [`Self::finish`] is called.
     pub fn variant(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
@@ -608,6 +616,9 @@ impl<'a> ParentState<'a> {
         }
     }
 
+    /// Creates a new instance suitable for a [`ListBuilder`]. The value and metadata builder state
+    /// is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The new
+    /// element's offset is also captured eagerly and will also roll back if not finished.
     pub fn list(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
@@ -632,6 +643,11 @@ impl<'a> ParentState<'a> {
         }
     }
 
+    /// Creates a new instance suitable for an [`ObjectBuilder`]. The value and metadata builder state
+    /// is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The new
+    /// field's name and offset are also captured eagerly and will also roll back if not finished.
+    ///
+    /// The call fails if the field name is invalid (e.g. because it duplicates an existing field).
     pub fn try_object(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
@@ -698,7 +714,7 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    // Mark the insertion as having succeeded.
+    /// Mark the insertion as having succeeded. Internal state will no longer roll back on drop.
     pub fn finish(&mut self) {
         *self.is_finished() = true
     }
@@ -1171,6 +1187,7 @@ pub struct ListBuilder<'a> {
 }
 
 impl<'a> ListBuilder<'a> {
+    /// Creates a new list builder, nested on top of the given parent state.
     pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
@@ -1313,6 +1330,7 @@ pub struct ObjectBuilder<'a> {
 }
 
 impl<'a> ObjectBuilder<'a> {
+    /// Creates a new object builder, nested on top of the given parent state.
     pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
@@ -1514,18 +1532,27 @@ impl<'a> ObjectBuilder<'a> {
 /// Allows users to append values to a [`VariantBuilder`], [`ListBuilder`] or
 /// [`ObjectBuilder`]. using the same interface.
 pub trait VariantBuilderExt {
+    /// Appends a new variant value to this builder. See e.g. [`VariantBuilder::append_value`].
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
+    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Panics if the nested
+    /// builder cannot be created, see e.g. [`ObjectBuilder::new_list`].
     fn new_list(&mut self) -> ListBuilder<'_> {
         self.try_new_list().unwrap()
     }
 
+    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_object`]. Panics if the nested
+    /// builder cannot be created, see e.g. [`ObjectBuilder::new_object`].
     fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.try_new_object().unwrap()
     }
 
+    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Returns an error if
+    /// the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_list`].
     fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
 
+    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_object`]. Returns an error if
+    /// the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_object`].
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
 }
 
