@@ -2086,14 +2086,14 @@ mod tests {
 
     #[test]
     fn test_cast_map_with_non_string_keys_to_variant_object() {
-        let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
+        let offsets = OffsetBuffer::new(vec![0, 1, 3].into());
         let fields = Fields::from(vec![
             Field::new("key", DataType::Int32, false),
             Field::new("values", DataType::Int32, false),
         ]);
         let columns = vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
         ];
 
         let entries = StructArray::new(fields.clone(), columns, None);
@@ -2101,8 +2101,23 @@ mod tests {
 
         let map_array = MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
 
-        let result = cast_to_variant(&map_array);
-        assert!(result.is_err());
+        let result = cast_to_variant(&map_array).unwrap();
+
+        let variant1 = result.value(0);
+        assert_eq!(
+            variant1.as_object().unwrap().get("1").unwrap(),
+            Variant::from(1)
+        );
+
+        let variant2 = result.value(1);
+        assert_eq!(
+            variant2.as_object().unwrap().get("2").unwrap(),
+            Variant::from(2)
+        );
+        assert_eq!(
+            variant2.as_object().unwrap().get("3").unwrap(),
+            Variant::from(3)
+        );
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
