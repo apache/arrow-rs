@@ -251,8 +251,8 @@ impl ValueBuilder {
         self.append_slice(value.as_bytes());
     }
 
-    fn append_object(&mut self, metadata_builder: &mut MetadataBuilder, obj: VariantObject) {
-        let mut object_builder = self.new_object(metadata_builder);
+    fn append_object(state: ParentState<'_>, obj: VariantObject) {
+        let mut object_builder = ObjectBuilder::new(state, false);
 
         for (field_name, value) in obj.iter() {
             object_builder.insert(field_name, value);
@@ -261,37 +261,27 @@ impl ValueBuilder {
         object_builder.finish().unwrap();
     }
 
-    fn try_append_object(
-        &mut self,
-        metadata_builder: &mut MetadataBuilder,
-        obj: VariantObject,
-    ) -> Result<(), ArrowError> {
-        let mut object_builder = self.new_object(metadata_builder);
+    fn try_append_object(state: ParentState<'_>, obj: VariantObject) -> Result<(), ArrowError> {
+        let mut object_builder = ObjectBuilder::new(state, false);
 
         for res in obj.iter_try() {
             let (field_name, value) = res?;
             object_builder.try_insert(field_name, value)?;
         }
 
-        object_builder.finish()?;
-
-        Ok(())
+        object_builder.finish()
     }
 
-    fn append_list(&mut self, metadata_builder: &mut MetadataBuilder, list: VariantList) {
-        let mut list_builder = self.new_list(metadata_builder);
+    fn append_list(state: ParentState<'_>, list: VariantList) {
+        let mut list_builder = ListBuilder::new(state, false);
         for value in list.iter() {
             list_builder.append_value(value);
         }
         list_builder.finish();
     }
 
-    fn try_append_list(
-        &mut self,
-        metadata_builder: &mut MetadataBuilder,
-        list: VariantList,
-    ) -> Result<(), ArrowError> {
-        let mut list_builder = self.new_list(metadata_builder);
+    fn try_append_list(state: ParentState<'_>, list: VariantList) -> Result<(), ArrowError> {
+        let mut list_builder = ListBuilder::new(state, false);
         for res in list.iter_try() {
             let value = res?;
             list_builder.try_append_value(value)?;
@@ -306,93 +296,80 @@ impl ValueBuilder {
         self.0.len()
     }
 
-    fn new_object<'a>(
-        &'a mut self,
-        metadata_builder: &'a mut MetadataBuilder,
-    ) -> ObjectBuilder<'a> {
-        let parent_state = ParentState::variant(self, metadata_builder);
-        let validate_unique_fields = false;
-        ObjectBuilder::new(parent_state, validate_unique_fields)
-    }
-
-    fn new_list<'a>(&'a mut self, metadata_builder: &'a mut MetadataBuilder) -> ListBuilder<'a> {
-        let parent_state = ParentState::variant(self, metadata_builder);
-        let validate_unique_fields = false;
-        ListBuilder::new(parent_state, validate_unique_fields)
-    }
-
     /// Appends a variant to the builder.
     ///
     /// # Panics
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
-    fn append_variant<'m, 'd>(
-        &mut self,
-        variant: Variant<'m, 'd>,
-        metadata_builder: &mut MetadataBuilder,
-    ) {
+    fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
+        let builder = state.value_builder();
         match variant {
-            Variant::Null => self.append_null(),
-            Variant::BooleanTrue => self.append_bool(true),
-            Variant::BooleanFalse => self.append_bool(false),
-            Variant::Int8(v) => self.append_int8(v),
-            Variant::Int16(v) => self.append_int16(v),
-            Variant::Int32(v) => self.append_int32(v),
-            Variant::Int64(v) => self.append_int64(v),
-            Variant::Date(v) => self.append_date(v),
-            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::TimestampNanos(v) => self.append_timestamp_nanos(v),
-            Variant::TimestampNtzNanos(v) => self.append_timestamp_ntz_nanos(v),
-            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
-            Variant::Float(v) => self.append_float(v),
-            Variant::Double(v) => self.append_double(v),
-            Variant::Binary(v) => self.append_binary(v),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_short_string(s),
-            Variant::Uuid(v) => self.append_uuid(v),
-            Variant::Object(obj) => self.append_object(metadata_builder, obj),
-            Variant::List(list) => self.append_list(metadata_builder, list),
-            Variant::Time(v) => self.append_time_micros(v),
+            Variant::Null => builder.append_null(),
+            Variant::BooleanTrue => builder.append_bool(true),
+            Variant::BooleanFalse => builder.append_bool(false),
+            Variant::Int8(v) => builder.append_int8(v),
+            Variant::Int16(v) => builder.append_int16(v),
+            Variant::Int32(v) => builder.append_int32(v),
+            Variant::Int64(v) => builder.append_int64(v),
+            Variant::Date(v) => builder.append_date(v),
+            Variant::Time(v) => builder.append_time_micros(v),
+            Variant::TimestampMicros(v) => builder.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => builder.append_timestamp_ntz_micros(v),
+            Variant::TimestampNanos(v) => builder.append_timestamp_nanos(v),
+            Variant::TimestampNtzNanos(v) => builder.append_timestamp_ntz_nanos(v),
+            Variant::Decimal4(decimal4) => builder.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => builder.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => builder.append_decimal16(decimal16),
+            Variant::Float(v) => builder.append_float(v),
+            Variant::Double(v) => builder.append_double(v),
+            Variant::Binary(v) => builder.append_binary(v),
+            Variant::String(s) => builder.append_string(s),
+            Variant::ShortString(s) => builder.append_short_string(s),
+            Variant::Uuid(v) => builder.append_uuid(v),
+            Variant::Object(obj) => return Self::append_object(state, obj),
+            Variant::List(list) => return Self::append_list(state, list),
         }
+        state.finish();
     }
 
-    /// Appends a variant to the builder
-    fn try_append_variant<'m, 'd>(
-        &mut self,
-        variant: Variant<'m, 'd>,
-        metadata_builder: &mut MetadataBuilder,
+    /// Tries to append a variant to the provided [`ParentState`] instance.
+    ///
+    /// The attempt fails if the variant contains duplicate field names in objects when validation
+    /// is enabled.
+    pub fn try_append_variant(
+        mut state: ParentState<'_>,
+        variant: Variant<'_, '_>,
     ) -> Result<(), ArrowError> {
+        let builder = state.value_builder();
         match variant {
-            Variant::Null => self.append_null(),
-            Variant::BooleanTrue => self.append_bool(true),
-            Variant::BooleanFalse => self.append_bool(false),
-            Variant::Int8(v) => self.append_int8(v),
-            Variant::Int16(v) => self.append_int16(v),
-            Variant::Int32(v) => self.append_int32(v),
-            Variant::Int64(v) => self.append_int64(v),
-            Variant::Date(v) => self.append_date(v),
-            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::TimestampNanos(v) => self.append_timestamp_nanos(v),
-            Variant::TimestampNtzNanos(v) => self.append_timestamp_ntz_nanos(v),
-            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
-            Variant::Float(v) => self.append_float(v),
-            Variant::Double(v) => self.append_double(v),
-            Variant::Binary(v) => self.append_binary(v),
-            Variant::Uuid(v) => self.append_uuid(v),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_short_string(s),
-            Variant::Object(obj) => self.try_append_object(metadata_builder, obj)?,
-            Variant::List(list) => self.try_append_list(metadata_builder, list)?,
-            Variant::Time(v) => self.append_time_micros(v),
+            Variant::Null => builder.append_null(),
+            Variant::BooleanTrue => builder.append_bool(true),
+            Variant::BooleanFalse => builder.append_bool(false),
+            Variant::Int8(v) => builder.append_int8(v),
+            Variant::Int16(v) => builder.append_int16(v),
+            Variant::Int32(v) => builder.append_int32(v),
+            Variant::Int64(v) => builder.append_int64(v),
+            Variant::Date(v) => builder.append_date(v),
+            Variant::Time(v) => builder.append_time_micros(v),
+            Variant::TimestampMicros(v) => builder.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => builder.append_timestamp_ntz_micros(v),
+            Variant::TimestampNanos(v) => builder.append_timestamp_nanos(v),
+            Variant::TimestampNtzNanos(v) => builder.append_timestamp_ntz_nanos(v),
+            Variant::Decimal4(decimal4) => builder.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => builder.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => builder.append_decimal16(decimal16),
+            Variant::Float(v) => builder.append_float(v),
+            Variant::Double(v) => builder.append_double(v),
+            Variant::Binary(v) => builder.append_binary(v),
+            Variant::String(s) => builder.append_string(s),
+            Variant::ShortString(s) => builder.append_short_string(s),
+            Variant::Uuid(v) => builder.append_uuid(v),
+            Variant::Object(obj) => return Self::try_append_object(state, obj),
+            Variant::List(list) => return Self::try_append_list(state, list),
         }
 
+        state.finish();
         Ok(())
     }
 
@@ -1224,9 +1201,8 @@ impl VariantBuilder {
     /// builder.append_value(42i8);
     /// ```
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        let variant = value.into();
-        self.value_builder
-            .append_variant(variant, &mut self.metadata_builder);
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ValueBuilder::append_variant(state, value.into())
     }
 
     /// Append a value to the builder.
@@ -1234,11 +1210,8 @@ impl VariantBuilder {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        let variant = value.into();
-        self.value_builder
-            .try_append_variant(variant, &mut self.metadata_builder)?;
-
-        Ok(())
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Finish the builder and return the metadata and value buffers.
@@ -1326,7 +1299,8 @@ impl<'a> ListBuilder<'a> {
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ListBuilder::try_append_value`].
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        self.try_append_value(value).unwrap();
+        let (state, _) = self.parent_state();
+        ValueBuilder::append_variant(state, value.into())
     }
 
     /// Appends a new primitive value to this list
@@ -1334,11 +1308,8 @@ impl<'a> ListBuilder<'a> {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        let (mut state, _) = self.parent_state();
-        let (value_builder, metadata_builder) = state.value_and_metadata_builders();
-        value_builder.try_append_variant(value.into(), metadata_builder)?;
-        state.finish();
-        Ok(())
+        let (state, _) = self.parent_state();
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Builder-style API for appending a value to the list and returning self to enable method chaining.
@@ -1436,7 +1407,8 @@ impl<'a> ObjectBuilder<'a> {
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ObjectBuilder::try_insert`]
     pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
-        self.try_insert(key, value).unwrap();
+        let (state, _) = self.parent_state(key).unwrap();
+        ValueBuilder::append_variant(state, value.into())
     }
 
     /// Add a field with key and value to the object
@@ -1453,11 +1425,8 @@ impl<'a> ObjectBuilder<'a> {
         key: &str,
         value: T,
     ) -> Result<(), ArrowError> {
-        let (mut state, _) = self.parent_state(key)?;
-        let (value_builder, metadata_builder) = state.value_and_metadata_builders();
-        value_builder.try_append_variant(value.into(), metadata_builder)?;
-        state.finish();
-        Ok(())
+        let (state, _) = self.parent_state(key)?;
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Builder style API for adding a field with key and value to the object
