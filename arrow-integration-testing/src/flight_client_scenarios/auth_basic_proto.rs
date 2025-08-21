@@ -22,7 +22,7 @@ use crate::{AUTH_PASSWORD, AUTH_USERNAME};
 use arrow_flight::{flight_service_client::FlightServiceClient, BasicAuth, HandshakeRequest};
 use futures::{stream, StreamExt};
 use prost::Message;
-use tonic::{metadata::MetadataValue, Request, Status};
+use tonic::{metadata::MetadataValue, transport::Endpoint, Request, Status};
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
@@ -32,7 +32,9 @@ type Client = FlightServiceClient<tonic::transport::Channel>;
 /// Run a scenario that tests basic auth.
 pub async fn run_scenario(host: &str, port: u16) -> Result {
     let url = format!("http://{host}:{port}");
-    let mut client = FlightServiceClient::connect(url).await?;
+    let endpoint = Endpoint::new(url)?;
+    let channel = endpoint.connect().await?;
+    let mut client = FlightServiceClient::new(channel);
 
     let action = arrow_flight::Action::default();
 
