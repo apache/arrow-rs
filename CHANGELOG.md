@@ -31,6 +31,7 @@
 - Parquet reader: add method for sync reader read bloom filter [\#8023](https://github.com/apache/arrow-rs/issues/8023) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[parquet\] Support writing logically equivalent types  to `ArrowWriter` [\#8012](https://github.com/apache/arrow-rs/issues/8012) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Improve StringArray\(Utf8\) sort performance [\#7847](https://github.com/apache/arrow-rs/issues/7847) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- feat: arrow-ipc delta dictionary support [\#8001](https://github.com/apache/arrow-rs/pull/8001) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([JakeDern](https://github.com/JakeDern))
 
 **Fixed bugs:**
 
@@ -147,7 +148,6 @@
 - feat: add method for sync Parquet reader read bloom filter [\#8024](https://github.com/apache/arrow-rs/pull/8024) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([mapleFU](https://github.com/mapleFU))
 - \[Variant\] Add `variant_get` and Shredded `VariantArray` [\#8021](https://github.com/apache/arrow-rs/pull/8021) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Implement arrow-avro SchemaStore and Fingerprinting To Enable Schema Resolution [\#8006](https://github.com/apache/arrow-rs/pull/8006) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
-- feat: arrow-ipc delta dictionary support [\#8001](https://github.com/apache/arrow-rs/pull/8001) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([JakeDern](https://github.com/JakeDern))
 - \[Parquet\] Add tests for IO/CPU access in parquet reader [\#7971](https://github.com/apache/arrow-rs/pull/7971) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Speed up Parquet filter pushdown v4 \(Predicate evaluation cache for async\_reader\) [\#7850](https://github.com/apache/arrow-rs/pull/7850) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([XiangpengHao](https://github.com/XiangpengHao))
 - Implement cast and other operations on decimal32 and decimal64 [\#7815](https://github.com/apache/arrow-rs/pull/7815) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([CurtHagenlocher](https://github.com/CurtHagenlocher))
