@@ -74,11 +74,11 @@ pub struct VariantArrayBuilder {
     nulls: NullBufferBuilder,
     /// buffer for all the metadata
     metadata_buffer: Vec<u8>,
-    /// starting offset for each serialized metadata dictionary in the buffer
+    /// ending offset for each serialized metadata dictionary in the buffer
     metadata_offsets: Vec<usize>,
     /// buffer for values
     value_buffer: Vec<u8>,
-    /// starting offset for each serialized variant value in the buffer
+    /// ending offset for each serialized variant value in the buffer
     value_offsets: Vec<usize>,
     /// The fields of the final `StructArray`
     ///
@@ -277,9 +277,11 @@ impl<'a> VariantArrayVariantBuilder<'a> {
         );
 
         // commit the changes by putting the
-        // offsets and lengths into the parent array builder.
-        self.array_builder.metadata_offsets.push(metadata_offset);
-        self.array_builder.value_offsets.push(value_offset);
+        // ending offsets into the parent array builder.
+        self.array_builder
+            .metadata_offsets
+            .push(metadata_buffer.len());
+        self.array_builder.value_offsets.push(value_buffer.len());
         self.array_builder.nulls.append_non_null();
         // put the buffers back into the array builder
         self.array_builder.metadata_buffer = metadata_buffer;
@@ -325,18 +327,21 @@ impl Drop for VariantArrayVariantBuilder<'_> {
     }
 }
 
-fn binary_view_array_from_buffers(buffer: Vec<u8>, mut offsets: Vec<usize>) -> BinaryViewArray {
+fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> BinaryViewArray {
+    // All offsets are less than or equal to the buffer length, so we can safely cast all offsets
+    // inside the loop as long as the buffer length fits in u32.
+    u32::try_from(buffer.len()).expect("buffer length should fit in u32");
+
     let mut builder = BinaryViewBuilder::with_capacity(offsets.len());
-    offsets.push(buffer.len());
     let block = builder.append_block(buffer.into());
     // TODO this can be much faster if it creates the views directly during append
-    let mut start = u32::try_from(offsets[0]).expect("offset should fit in u32");
-    for &end in &offsets[1..] {
-        let end = u32::try_from(end).expect("offset should fit in u32");
+    let mut start = 0;
+    for &end in &offsets {
+        let end = end as u32; // Safe cast: validated max offset fits in u32 above
         builder
             .try_append_view(block, start, end - start)
             .expect("Failed to append view");
-        start = end
+        start = end;
     }
     builder.finish()
 }
