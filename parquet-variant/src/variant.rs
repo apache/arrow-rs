@@ -1328,6 +1328,12 @@ impl From<NaiveTime> for Variant<'_, '_> {
     }
 }
 
+impl From<Uuid> for Variant<'_, '_> {
+    fn from(value: Uuid) -> Self {
+        Variant::Uuid(value)
+    }
+}
+
 impl<'v> From<&'v str> for Variant<'_, 'v> {
     fn from(value: &'v str) -> Self {
         if value.len() > MAX_SHORT_STRING_BYTES {
