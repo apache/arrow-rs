@@ -25,6 +25,7 @@
 
 **Implemented enhancements:**
 
+- Implement cast and other operations on decimal32 and decimal64 \#7815 [\#8204](https://github.com/apache/arrow-rs/issues/8204) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Speed up Parquet filter pushdown with predicate cache [\#8203](https://github.com/apache/arrow-rs/issues/8203) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Optionally read parquet page indexes [\#8070](https://github.com/apache/arrow-rs/issues/8070) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Parquet reader: add method for sync reader read bloom filter [\#8023](https://github.com/apache/arrow-rs/issues/8023) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
@@ -41,6 +42,7 @@
 
 - arrow-row: Document dictionary handling [\#8168](https://github.com/apache/arrow-rs/pull/8168) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - Docs: Clarify that Array::value does not check for nulls [\#8065](https://github.com/apache/arrow-rs/pull/8065) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- docs: Fix a  typo in README [\#8036](https://github.com/apache/arrow-rs/pull/8036) ([EricccTaiwan](https://github.com/EricccTaiwan))
 - Add more comments to the internal parquet reader [\#7932](https://github.com/apache/arrow-rs/pull/7932) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 
 **Performance improvements:**
@@ -140,7 +142,6 @@
 - implement `cast_to_variant` kernel to cast native types to `VariantArray` [\#8044](https://github.com/apache/arrow-rs/pull/8044) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Add arrow-avro `SchemaStore` and fingerprinting [\#8039](https://github.com/apache/arrow-rs/pull/8039) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
 - Add more benchmarks for Parquet thrift decoding [\#8037](https://github.com/apache/arrow-rs/pull/8037) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
-- docs: Fix a  typo in README [\#8036](https://github.com/apache/arrow-rs/pull/8036) ([EricccTaiwan](https://github.com/EricccTaiwan))
 - Support multi-threaded writing of Parquet files with modular encryption [\#8029](https://github.com/apache/arrow-rs/pull/8029) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([rok](https://github.com/rok))
 - Add arrow-avro Decoder Benchmarks  [\#8025](https://github.com/apache/arrow-rs/pull/8025) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
 - feat: add method for sync Parquet reader read bloom filter [\#8024](https://github.com/apache/arrow-rs/pull/8024) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([mapleFU](https://github.com/mapleFU))
