@@ -39,6 +39,8 @@ use arrow::temporal_conversions::{
 };
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+#[allow(unused_imports)]
+use half::f16;
 use parquet_variant::{
     Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
