@@ -185,13 +185,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             primitive_conversion_array!(UInt64Type, input, builder);
         }
         DataType::Float16 => {
-            generic_conversion_array!(
-                Float16Type,
-                as_primitive,
-                |v: f16| -> f32 { v.into() },
-                input,
-                builder
-            );
+            generic_conversion_array!(Float16Type, as_primitive, f32::from, input, builder);
         }
         DataType::Float32 => {
             primitive_conversion_array!(Float32Type, input, builder);

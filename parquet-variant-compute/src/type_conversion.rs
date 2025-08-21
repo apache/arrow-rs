@@ -41,10 +41,11 @@ macro_rules! non_generic_conversion_single_value {
     ($method:ident, $cast_fn:expr, $input:expr, $index:expr) => {{
         let array = $input.$method();
         if array.is_null($index) {
-            return Variant::Null;
+            Variant::Null
+        } else {
+            let cast_value = $cast_fn(array.value($index));
+            Variant::from(cast_value)
         }
-        let cast_value = $cast_fn(array.value($index));
-        Variant::from(cast_value)
     }};
 }
 
@@ -66,10 +67,11 @@ macro_rules! generic_conversion_single_value {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $index:expr) => {{
         let array = $input.$method::<$t>();
         if array.is_null($index) {
-            return Variant::Null;
+            Variant::Null
+        } else {
+            let cast_value = $cast_fn(array.value($index));
+            Variant::from(cast_value)
         }
-        let cast_value = $cast_fn(array.value($index));
-        Variant::from(cast_value)
     }};
 }
 
@@ -88,9 +90,10 @@ macro_rules! primitive_conversion_single_value {
     ($t:ty, $input:expr, $index:expr) => {{
         let array = $input.as_primitive::<$t>();
         if array.is_null($index) {
-            return Variant::Null;
+            Variant::Null
+        } else {
+            Variant::from(array.value($index))
         }
-        Variant::from(array.value($index))
     }};
 }
 
