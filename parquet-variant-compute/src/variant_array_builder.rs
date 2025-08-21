@@ -19,7 +19,7 @@
 
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
-use arrow_schema::{DataType, Field, Fields};
+use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
 use std::sync::Arc;
 
@@ -222,12 +222,12 @@ impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
         self.variant_builder.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.variant_builder.new_list()
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        Ok(self.variant_builder.new_list())
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.variant_builder.new_object()
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        Ok(self.variant_builder.new_object())
     }
 }
 
