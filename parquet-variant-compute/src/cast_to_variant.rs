@@ -560,12 +560,8 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         
                 let (metadata, value) = variant_builder.finish();
                 let variant = Variant::new(&metadata, &value);
-        
-                // Now safely unwrap the VariantList
-                match variant.as_list() {
-                    Some(inner_list) => builder.append_variant(Variant::List(inner_list.clone())),
-                    None => builder.append_null(), // This should never happen, but safe fallback
-                }
+                let variant_list = variant.as_list().expect("Variant should be list");
+                builder.append_variant(Variant::List(variant_list.clone()))
             }
         }
         
@@ -596,12 +592,8 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         
                 let (metadata, value) = variant_builder.finish();
                 let variant = Variant::new(&metadata, &value);
-        
-                // Now safely unwrap the VariantList
-                match variant.as_list() {
-                    Some(inner_list) => builder.append_variant(Variant::List(inner_list.clone())),
-                    None => builder.append_null(), // This should never happen, but safe fallback
-                }
+                let variant_list = variant.as_list().expect("Variant should be list");
+                builder.append_variant(Variant::List(variant_list.clone()))
             }
         }
 
