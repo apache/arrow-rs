@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::variant_get::output::OutputBuilder;
-use crate::{primitive_conversion, VariantArray, VariantArrayBuilder};
+use crate::{primitive_conversion_array, VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray};
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_schema::{ArrowError, DataType};
@@ -93,10 +93,10 @@ impl OutputBuilder for VariantOutputBuilder<'_> {
         let mut array_builder = VariantArrayBuilder::new(variant_array.len());
         match typed_value.data_type() {
             DataType::Int32 => {
-                primitive_conversion!(Int32Type, typed_value, array_builder);
+                primitive_conversion_array!(Int32Type, typed_value, array_builder);
             }
             DataType::Int16 => {
-                primitive_conversion!(Int16Type, typed_value, array_builder);
+                primitive_conversion_array!(Int16Type, typed_value, array_builder);
             }
             dt => {
                 // https://github.com/apache/arrow-rs/issues/8087

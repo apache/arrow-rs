@@ -20,7 +20,7 @@
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
 #[macro_export]
-macro_rules! primitive_conversion {
+macro_rules! primitive_conversion_array {
     ($t:ty, $input:expr, $builder:expr) => {{
         let array = $input.as_primitive::<$t>();
         for i in 0..array.len() {
@@ -96,6 +96,7 @@ macro_rules! non_generic_conversion_array {
     }};
 }
 
+/// Convert the value at a specific index in the given array into a `Variant`.
 #[macro_export]
 macro_rules! non_generic_conversion_single_value {
     ($method:ident, $cast_fn:expr, $input:expr, $index:expr) => {{
@@ -103,6 +104,7 @@ macro_rules! non_generic_conversion_single_value {
         if array.is_null($index) {
             return Variant::Null;
         }
+        let cast_value = $cast_fn(array.value($index));
         Variant::from(cast_value)
     }};
 }
@@ -110,57 +112,17 @@ macro_rules! non_generic_conversion_single_value {
 /// Convert a decimal value to a `VariantDecimal`
 #[macro_export]
 macro_rules! decimal_to_variant_decimal {
-    ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {
-        if *$scale < 0 {
+    ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {{
+        let (v, scale) = if *$scale < 0 {
             // For negative scale, we need to multiply the value by 10^|scale|
-            // For example: 123 with scale -2 becomes 12300
-            let multiplier = (10 as $value_type).pow((-*$scale) as u32);
-            // Check for overflow
-            if $v > 0 && $v > <$value_type>::MAX / multiplier {
-                return Variant::Null;
-            }
-            if $v < 0 && $v < <$value_type>::MIN / multiplier {
-                return Variant::Null;
-            }
-            <$variant_type>::try_new($v * multiplier, 0)
-                .map(|v| v.into())
-                .unwrap_or(Variant::Null)
+            // For example: 123 with scale -2 becomes 12300 with scale 0
+            let multiplier = <$value_type>::pow(10, (-*$scale) as u32);
+            (<$value_type>::checked_mul($v, multiplier), 0u8)
         } else {
-            <$variant_type>::try_new($v, *$scale as u8)
-                .map(|v| v.into())
-                .unwrap_or(Variant::Null)
-        }
-    };
-}
+            (Some($v), *$scale as u8)
+        };
 
-/// Convert arrays that don't need generic type parameters
-#[macro_export]
-macro_rules! cast_conversion_nongeneric {
-    ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.$method();
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
-    }};
-}
-
-/// Convert string arrays using the offset size as the type parameter
-#[macro_export]
-macro_rules! cast_conversion_string {
-    ($offset_type:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.$method::<$offset_type>();
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
+        v.and_then(|v| <$variant_type>::try_new(v, scale).ok())
+            .map_or(Variant::Null, Variant::from)
     }};
 }

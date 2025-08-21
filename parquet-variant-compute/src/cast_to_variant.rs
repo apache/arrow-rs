@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use crate::{
-    cast_conversion_nongeneric, cast_conversion_string, decimal_to_variant_decimal,
-    generic_conversion_array, non_generic_conversion_array, primitive_conversion,
+    decimal_to_variant_decimal, generic_conversion_array, non_generic_conversion_array,
+    primitive_conversion_array,
 };
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
@@ -161,28 +161,28 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             generic_conversion_array!(BinaryViewType, as_byte_view, |v| v, input, builder);
         }
         DataType::Int8 => {
-            primitive_conversion!(Int8Type, input, builder);
+            primitive_conversion_array!(Int8Type, input, builder);
         }
         DataType::Int16 => {
-            primitive_conversion!(Int16Type, input, builder);
+            primitive_conversion_array!(Int16Type, input, builder);
         }
         DataType::Int32 => {
-            primitive_conversion!(Int32Type, input, builder);
+            primitive_conversion_array!(Int32Type, input, builder);
         }
         DataType::Int64 => {
-            primitive_conversion!(Int64Type, input, builder);
+            primitive_conversion_array!(Int64Type, input, builder);
         }
         DataType::UInt8 => {
-            primitive_conversion!(UInt8Type, input, builder);
+            primitive_conversion_array!(UInt8Type, input, builder);
         }
         DataType::UInt16 => {
-            primitive_conversion!(UInt16Type, input, builder);
+            primitive_conversion_array!(UInt16Type, input, builder);
         }
         DataType::UInt32 => {
-            primitive_conversion!(UInt32Type, input, builder);
+            primitive_conversion_array!(UInt32Type, input, builder);
         }
         DataType::UInt64 => {
-            primitive_conversion!(UInt64Type, input, builder);
+            primitive_conversion_array!(UInt64Type, input, builder);
         }
         DataType::Float16 => {
             generic_conversion_array!(
@@ -194,10 +194,10 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::Float32 => {
-            primitive_conversion!(Float32Type, input, builder);
+            primitive_conversion_array!(Float32Type, input, builder);
         }
         DataType::Float64 => {
-            primitive_conversion!(Float64Type, input, builder);
+            primitive_conversion_array!(Float64Type, input, builder);
         }
         DataType::Decimal32(_, scale) => {
             generic_conversion_array!(
@@ -332,13 +332,13 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             ));
         }
         DataType::Utf8 => {
-            cast_conversion_string!(i32, as_string, |v| v, input, builder);
+            generic_conversion_array!(i32, as_string, |v| v, input, builder);
         }
         DataType::LargeUtf8 => {
-            cast_conversion_string!(i64, as_string, |v| v, input, builder);
+            generic_conversion_array!(i64, as_string, |v| v, input, builder);
         }
         DataType::Utf8View => {
-            cast_conversion_nongeneric!(as_string_view, |v| v, input, builder);
+            non_generic_conversion_array!(as_string_view, |v| v, input, builder);
         }
         DataType::Struct(_) => {
             let struct_array = input.as_struct();
