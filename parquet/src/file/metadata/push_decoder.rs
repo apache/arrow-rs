@@ -83,7 +83,7 @@ use crate::DecodeResult;
 ///
 /// # Example with "prefetching"
 ///
-/// By default, the [`ParquetMetaDataPushDecoder`] will requests only the exact byte
+/// By default, the [`ParquetMetaDataPushDecoder`] will request only the exact byte
 /// ranges it needs. This minimizes the number of bytes read, however it
 /// requires at least two IO operations to read the metadata - one to read the
 /// footer and then one to read the metadata.
@@ -289,9 +289,12 @@ impl ParquetMetaDataPushDecoder {
         }
 
         // Try to parse the metadata from the buffers we have.
-        // If we don't have enough data, it will return a `ParquetError::NeedMoreData`
+        //
+        // If we don't have enough data, returns a `ParquetError::NeedMoreData`
         // with the number of bytes needed to complete the metadata parsing.
-        // If we have enough data, it will return `Ok(())` and we can
+        //
+        // If we have enough data, returns `Ok(())` and we can complete
+        // the metadata parsing.
         let maybe_metadata = self
             .metadata_reader
             .try_parse_sized(&self.buffers, self.buffers.file_len());
