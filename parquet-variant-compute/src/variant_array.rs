@@ -25,7 +25,7 @@ use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::primitive_conversion_single_value;
+use crate::type_conversion::primitive_conversion_single_value;
 
 /// An array of Parquet [`Variant`] values
 ///

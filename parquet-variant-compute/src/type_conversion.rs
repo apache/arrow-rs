@@ -20,7 +20,6 @@
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// not requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
-#[macro_export]
 macro_rules! non_generic_conversion_array {
     ($array:expr, $cast_fn:expr, $builder:expr) => {{
         let array = $array;
@@ -34,12 +33,12 @@ macro_rules! non_generic_conversion_array {
         }
     }};
 }
+pub(crate) use non_generic_conversion_array;
 
 /// Convert the value at a specific index in the given array into a `Variant`.
-#[macro_export]
 macro_rules! non_generic_conversion_single_value {
-    ($method:ident, $cast_fn:expr, $input:expr, $index:expr) => {{
-        let array = $input.$method();
+    ($array:expr, $cast_fn:expr, $index:expr) => {{
+        let array = $array;
         if array.is_null($index) {
             Variant::Null
         } else {
@@ -48,57 +47,66 @@ macro_rules! non_generic_conversion_single_value {
         }
     }};
 }
+pub(crate) use non_generic_conversion_single_value;
 
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
-#[macro_export]
 macro_rules! generic_conversion_array {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        $crate::non_generic_conversion_array!($input.$method::<$t>(), $cast_fn, $builder)
+        $crate::type_conversion::non_generic_conversion_array!(
+            $input.$method::<$t>(),
+            $cast_fn,
+            $builder
+        )
     }};
 }
+pub(crate) use generic_conversion_array;
 
 /// Convert the value at a specific index in the given array into a `Variant`,
 /// using `method` requiring a generic type to downcast the generic array
 /// to a specific array type and `cast_fn` to transform the element.
-#[macro_export]
 macro_rules! generic_conversion_single_value {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $index:expr) => {{
-        let array = $input.$method::<$t>();
-        if array.is_null($index) {
-            Variant::Null
-        } else {
-            let cast_value = $cast_fn(array.value($index));
-            Variant::from(cast_value)
-        }
+        $crate::type_conversion::non_generic_conversion_single_value!(
+            $input.$method::<$t>(),
+            $cast_fn,
+            $index
+        )
     }};
 }
+pub(crate) use generic_conversion_single_value;
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
-#[macro_export]
 macro_rules! primitive_conversion_array {
     ($t:ty, $input:expr, $builder:expr) => {{
-        $crate::generic_conversion_array!($t, as_primitive, |v| v, $input, $builder)
+        $crate::type_conversion::generic_conversion_array!(
+            $t,
+            as_primitive,
+            |v| v,
+            $input,
+            $builder
+        )
     }};
 }
+pub(crate) use primitive_conversion_array;
 
 /// Convert the value at a specific index in the given array into a `Variant`.
-#[macro_export]
 macro_rules! primitive_conversion_single_value {
     ($t:ty, $input:expr, $index:expr) => {{
-        let array = $input.as_primitive::<$t>();
-        if array.is_null($index) {
-            Variant::Null
-        } else {
-            Variant::from(array.value($index))
-        }
+        $crate::type_conversion::generic_conversion_single_value!(
+            $t,
+            as_primitive,
+            |v| v,
+            $input,
+            $index
+        )
     }};
 }
+pub(crate) use primitive_conversion_single_value;
 
 /// Convert a decimal value to a `VariantDecimal`
-#[macro_export]
 macro_rules! decimal_to_variant_decimal {
     ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {{
         let (v, scale) = if *$scale < 0 {
@@ -114,3 +122,4 @@ macro_rules! decimal_to_variant_decimal {
             .map_or(Variant::Null, Variant::from)
     }};
 }
+pub(crate) use decimal_to_variant_decimal;

@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::{
+use crate::type_conversion::{
     decimal_to_variant_decimal, generic_conversion_array, non_generic_conversion_array,
     primitive_conversion_array,
 };
@@ -39,8 +39,6 @@ use arrow::temporal_conversions::{
 };
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-#[allow(unused_imports)]
-use half::f16;
 use parquet_variant::{
     Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
@@ -495,6 +493,7 @@ mod tests {
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
+    use half::f16;
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
 
