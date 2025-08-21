@@ -86,11 +86,11 @@ fn append_packed_u32(dest: &mut Vec<u8>, value: u32, value_size: usize) {
 ///
 /// You can reuse an existing `Vec<u8>` by using the `from` impl
 #[derive(Debug, Default)]
-struct ValueBuilder(Vec<u8>);
+pub struct ValueBuilder(Vec<u8>);
 
 impl ValueBuilder {
     /// Construct a ValueBuffer that will write to a new underlying `Vec`
-    fn new() -> Self {
+    pub fn new() -> Self {
         Default::default()
     }
 }
@@ -120,7 +120,7 @@ impl ValueBuilder {
         self.0.push(primitive_header(primitive_type));
     }
 
-    fn into_inner(self) -> Vec<u8> {
+    pub fn into_inner(self) -> Vec<u8> {
         self.into()
     }
 
@@ -292,7 +292,7 @@ impl ValueBuilder {
         Ok(())
     }
 
-    fn offset(&self) -> usize {
+    pub fn offset(&self) -> usize {
         self.0.len()
     }
 
@@ -302,7 +302,7 @@ impl ValueBuilder {
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
-    fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
+    pub fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
         let builder = state.value_builder();
         match variant {
             Variant::Null => builder.append_null(),
@@ -437,7 +437,7 @@ impl ValueBuilder {
 ///
 /// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
 #[derive(Default, Debug)]
-struct MetadataBuilder {
+pub struct MetadataBuilder {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 
@@ -498,7 +498,7 @@ impl MetadataBuilder {
         self.field_names.iter().map(|k| k.len()).sum()
     }
 
-    fn finish(self) -> Vec<u8> {
+    pub fn finish(self) -> Vec<u8> {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
@@ -544,7 +544,7 @@ impl MetadataBuilder {
     }
 
     /// Return the inner buffer, without finalizing any in progress metadata.
-    pub(crate) fn into_inner(self) -> Vec<u8> {
+    pub fn into_inner(self) -> Vec<u8> {
         self.metadata_buffer
     }
 }
@@ -585,7 +585,7 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// treat the variants as a union, so that accessing a `value_builder` or `metadata_builder` is
 /// branch-free.
 #[derive(Debug)]
-enum ParentState<'a> {
+pub enum ParentState<'a> {
     Variant {
         value_builder: &'a mut ValueBuilder,
         saved_value_builder_offset: usize,
@@ -614,7 +614,7 @@ enum ParentState<'a> {
 }
 
 impl<'a> ParentState<'a> {
-    fn variant(
+    pub fn variant(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
     ) -> Self {
@@ -627,7 +627,7 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn list(
+    pub fn list(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
         offsets: &'a mut Vec<usize>,
@@ -651,7 +651,7 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn try_object(
+    pub fn try_object(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
@@ -718,7 +718,7 @@ impl<'a> ParentState<'a> {
     }
 
     // Mark the insertion as having succeeded.
-    fn finish(&mut self) {
+    pub fn finish(&mut self) {
         *self.is_finished() = true
     }
 
@@ -778,7 +778,7 @@ impl<'a> ParentState<'a> {
 
     /// Return mutable references to the value and metadata builders that this
     /// parent state is using.
-    fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut MetadataBuilder) {
+    pub fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut MetadataBuilder) {
         match self {
             ParentState::Variant {
                 value_builder,
@@ -1246,7 +1246,7 @@ pub struct ListBuilder<'a> {
 }
 
 impl<'a> ListBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             offsets: vec![],
@@ -1388,7 +1388,7 @@ pub struct ObjectBuilder<'a> {
 }
 
 impl<'a> ObjectBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             fields: IndexMap::new(),
