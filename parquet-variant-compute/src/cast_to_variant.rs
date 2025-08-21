@@ -487,7 +487,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             }
         }
         DataType::Union(fields, _) => {
-            process_union(fields, input, &mut builder)?;
+            convert_union(fields, input, &mut builder)?;
         }
         DataType::Date32 => {
             generic_conversion!(
@@ -508,9 +508,9 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-            DataType::Int16 => process_run_end_encoded::<Int16Type>(input, &mut builder)?,
-            DataType::Int32 => process_run_end_encoded::<Int32Type>(input, &mut builder)?,
-            DataType::Int64 => process_run_end_encoded::<Int64Type>(input, &mut builder)?,
+            DataType::Int16 => convert_run_end_encoded::<Int16Type>(input, &mut builder)?,
+            DataType::Int32 => convert_run_end_encoded::<Int32Type>(input, &mut builder)?,
+            DataType::Int64 => convert_run_end_encoded::<Int64Type>(input, &mut builder)?,
             _ => {
                 return Err(ArrowError::CastError(format!(
                     "Unsupported run ends type: {:?}",
@@ -519,25 +519,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             }
         },
         DataType::Dictionary(_, _) => {
-            let dict_array = input.as_any_dictionary();
-            let values_variant_array = cast_to_variant(dict_array.values().as_ref())?;
-            let normalized_keys = dict_array.normalized_keys();
-            let keys = dict_array.keys();
-
-            for (i, key_idx) in normalized_keys.iter().enumerate() {
-                if keys.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                if values_variant_array.is_null(*key_idx) {
-                    builder.append_null();
-                    continue;
-                }
-
-                let value = values_variant_array.value(*key_idx);
-                builder.append_variant(value);
-            }
+            convert_dictionary_encoded(input, &mut builder)?;
         }
         dt => {
             return Err(ArrowError::CastError(format!(
@@ -548,8 +530,8 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     Ok(builder.build())
 }
 
-/// Process union arrays
-fn process_union(
+/// Convert union arrays
+fn convert_union(
     fields: &UnionFields,
     input: &dyn Array,
     builder: &mut VariantArrayBuilder,
@@ -581,8 +563,8 @@ fn process_union(
     Ok(())
 }
 
-/// Generic function to process run-end encoded arrays
-fn process_run_end_encoded<R: RunEndIndexType>(
+/// Generic function to convert run-end encoded arrays
+fn convert_run_end_encoded<R: RunEndIndexType>(
     input: &dyn Array,
     builder: &mut VariantArrayBuilder,
 ) -> Result<(), ArrowError> {
@@ -611,6 +593,34 @@ fn process_run_end_encoded<R: RunEndIndexType>(
         }
 
         logical_start = logical_end;
+    }
+
+    Ok(())
+}
+
+/// Convert dictionary encoded arrays
+fn convert_dictionary_encoded(
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) -> Result<(), ArrowError> {
+    let dict_array = input.as_any_dictionary();
+    let values_variant_array = cast_to_variant(dict_array.values().as_ref())?;
+    let normalized_keys = dict_array.normalized_keys();
+    let keys = dict_array.keys();
+
+    for (i, key_idx) in normalized_keys.iter().enumerate() {
+        if keys.is_null(i) {
+            builder.append_null();
+            continue;
+        }
+
+        if values_variant_array.is_null(*key_idx) {
+            builder.append_null();
+            continue;
+        }
+
+        let value = values_variant_array.value(*key_idx);
+        builder.append_variant(value);
     }
 
     Ok(())
