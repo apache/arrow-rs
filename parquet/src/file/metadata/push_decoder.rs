@@ -98,7 +98,7 @@ use crate::DecodeResult;
 /// not push enough bytes, the decoder will return the ranges that are still
 /// needed.
 ///
-/// This approach can also be used when you the entire file already in memory
+/// This approach can also be used when you have the entire file already in memory
 /// for other reasons.
 ///
 /// ```rust
@@ -121,7 +121,7 @@ use crate::DecodeResult;
 /// # };
 /// #
 /// let file_len = file_bytes.len() as u64;
-/// // for this example, we "prefetch" all the bytes which we have in memory,
+/// // For this example, we "prefetch" all the bytes which we have in memory,
 /// // but in a real application, you would likely read a chunk from the end
 /// // for example 1MB.
 /// let prefetched_bytes = file_bytes.clone();
@@ -133,9 +133,9 @@ use crate::DecodeResult;
 /// // you still need to call `try_decode` in a loop until it returns `DecodeResult::Data`
 /// // as shown in  the previous example
 ///  match decoder.try_decode() {
-///        Ok(DecodeResult::Data(metadata)) => { return Ok(metadata); } // decode successful]
-///        other @ _ => { panic!("expected DecodeResult::Data, got: {other:?}") }
-///    }
+///      Ok(DecodeResult::Data(metadata)) => { return Ok(metadata); } // decode successful]
+///      other @ _ => { panic!("expected DecodeResult::Data, got: {other:?}") }
+///  }
 /// # }
 /// ```
 ///
@@ -157,7 +157,7 @@ use crate::DecodeResult;
 /// # use parquet::errors::ParquetError;
 /// # use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataPushDecoder};
 /// #
-/// // this function decodes Parquet Metadata from anything that implements
+/// // This function decodes Parquet Metadata from anything that implements
 /// // [`AsyncRead`] and [`AsyncSeek`] such as a tokio::fs::File
 /// async fn decode_metadata(
 ///   file_len: u64,
@@ -178,7 +178,7 @@ use crate::DecodeResult;
 ///             let mut buffer = vec![0; (range.end - range.start) as usize];
 ///             async_source.seek(std::io::SeekFrom::Start(range.start)).await?;
 ///             async_source.read_exact(&mut buffer).await?;
-///            data.push(Bytes::from(buffer));
+///             data.push(Bytes::from(buffer));
 ///           }
 ///           // Push the data into the decoder and try to decode again on the next iteration.
 ///           decoder.push_ranges(ranges, data).unwrap();
