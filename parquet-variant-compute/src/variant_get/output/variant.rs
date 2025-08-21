@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::variant_get::output::OutputBuilder;
-use crate::{primitive_conversion_array, VariantArray, VariantArrayBuilder};
+use crate::{
+    generic_conversion_array, non_generic_conversion_array, primitive_conversion_array,
+    VariantArray, VariantArrayBuilder,
+};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray};
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_schema::{ArrowError, DataType};

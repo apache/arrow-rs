@@ -148,7 +148,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // todo: handle other types like Boolean, Date, Timestamp, etc.
     match input_type {
         DataType::Boolean => {
-            non_generic_conversion_array!(as_boolean, |v| v, input, builder);
+            non_generic_conversion_array!(input.as_boolean(), |v| v, builder);
         }
 
         DataType::Binary => {
@@ -245,7 +245,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::FixedSizeBinary(_) => {
-            non_generic_conversion_array!(as_fixed_size_binary, |v| v, input, builder);
+            non_generic_conversion_array!(input.as_fixed_size_binary(), |v| v, builder);
         }
         DataType::Null => {
             for _ in 0..input.len() {
@@ -338,7 +338,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             generic_conversion_array!(i64, as_string, |v| v, input, builder);
         }
         DataType::Utf8View => {
-            non_generic_conversion_array!(as_string_view, |v| v, input, builder);
+            non_generic_conversion_array!(input.as_string_view(), |v| v, builder);
         }
         DataType::Struct(_) => {
             let struct_array = input.as_struct();
