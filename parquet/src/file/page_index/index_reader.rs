@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for reading [`Index`] and [`OffsetIndexMetaData`] from parquet metadata.
+//! Support for reading [`ColumnIndexMetaData`] and [`OffsetIndexMetaData`] from parquet metadata.
 
 use crate::basic::{BoundaryOrder, Type};
 use crate::data_type::private::ParquetValueType;
@@ -38,7 +38,7 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
     }
 }
 
-/// Reads per-column [`Index`] for all columns of a row group by
+/// Reads per-column [`ColumnIndexMetaData`] for all columns of a row group by
 /// decoding [`ColumnIndex`] .
 ///
 /// Returns a vector of `index[column_number]`.

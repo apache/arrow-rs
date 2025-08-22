@@ -1186,7 +1186,7 @@ fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
 }
 
 /// Extracts the min statistics from an iterator
-/// of parquet page [`Index`]'es to an [`ArrayRef`]
+/// of parquet page [`ColumnIndexMetaData`]'s to an [`ArrayRef`]
 pub(crate) fn min_page_statistics<'a, I>(
     data_type: &DataType,
     iterator: I,
@@ -1199,7 +1199,7 @@ where
 }
 
 /// Extracts the max statistics from an iterator
-/// of parquet page [`Index`]'es to an [`ArrayRef`]
+/// of parquet page [`ColumnIndexMetaData`]'s to an [`ArrayRef`]
 pub(crate) fn max_page_statistics<'a, I>(
     data_type: &DataType,
     iterator: I,
@@ -1212,7 +1212,7 @@ where
 }
 
 /// Extracts the null count statistics from an iterator
-/// of parquet page [`Index`]'es to an [`ArrayRef`]
+/// of parquet page [`ColumnIndexMetaData`]'s to an [`ArrayRef`]
 ///
 /// The returned Array is an [`UInt64Array`]
 pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
@@ -1552,7 +1552,7 @@ impl<'a> StatisticsConverter<'a> {
     /// page level statistics can prune at a finer granularity.
     ///
     /// However since they are stored in a separate metadata
-    /// structure ([`Index`]) there is different code to extract them as
+    /// structure ([`ColumnIndexMetaData`]) there is different code to extract them as
     /// compared to arrow statistics.
     ///
     /// # Parameters:
