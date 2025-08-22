@@ -34,7 +34,7 @@ use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
-use crate::file::page_index::index::Index;
+use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
@@ -566,7 +566,7 @@ impl ParquetMetaDataReader {
                                     col_idx,
                                 )
                             }
-                            None => Ok(Index::NONE),
+                            None => Ok(ColumnIndexMetaData::NONE),
                         })
                         .collect::<Result<Vec<_>>>()
                 })
@@ -584,7 +584,7 @@ impl ParquetMetaDataReader {
         column: &ColumnChunkMetaData,
         row_group_index: usize,
         col_index: usize,
-    ) -> Result<Index> {
+    ) -> Result<ColumnIndexMetaData> {
         match &column.column_crypto_metadata {
             Some(crypto_metadata) => {
                 let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
@@ -612,7 +612,7 @@ impl ParquetMetaDataReader {
         column: &ColumnChunkMetaData,
         _row_group_index: usize,
         _col_index: usize,
-    ) -> Result<Index> {
+    ) -> Result<ColumnIndexMetaData> {
         decode_column_index(bytes, column.column_type())
     }
 

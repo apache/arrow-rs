@@ -1488,6 +1488,7 @@ mod tests {
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::column::page::{Page, PageReader};
     use crate::file::page_encoding_stats::PageEncodingStats;
+    use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
     use crate::format::PageHeader;
     use crate::schema::types::ColumnPath;
@@ -1507,7 +1508,6 @@ mod tests {
     use crate::basic::Encoding;
     use crate::data_type::AsBytes;
     use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataReader};
-    use crate::file::page_index::index::Index;
     use crate::file::properties::{
         BloomFilterPosition, EnabledStatistics, ReaderProperties, WriterVersion,
     };
@@ -4002,9 +4002,12 @@ mod tests {
         assert_eq!(column_index[0].len(), 2); // 2 columns
 
         let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, Index::BYTE_ARRAY(_)), "{a_idx:?}");
+        assert!(
+            matches!(a_idx, ColumnIndexMetaData::BYTE_ARRAY(_)),
+            "{a_idx:?}"
+        );
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
     }
 
     #[test]
@@ -4070,9 +4073,9 @@ mod tests {
         assert_eq!(column_index[0].len(), 2); // 2 columns
 
         let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, Index::NONE), "{a_idx:?}");
+        assert!(matches!(a_idx, ColumnIndexMetaData::NONE), "{a_idx:?}");
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
     }
 
     #[test]
