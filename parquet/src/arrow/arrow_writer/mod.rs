@@ -173,7 +173,7 @@ mod levels;
 /// ```
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
-    pub writer: SerializedFileWriter<W>,
+    writer: SerializedFileWriter<W>,
 
     /// The in-progress row group if any
     in_progress: Option<ArrowRowGroupWriter>,
@@ -409,39 +409,31 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Create a new row group writer and return its column writers.
-    pub fn get_column_writers(&mut self) -> Result<(usize, Vec<ArrowColumnWriter>, SerializedRowGroupWriter<W>)> {
+    pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         self.flush()?;
-        let row_group_factory = &self.row_group_writer_factory;
-        let row_group_index = self.writer.flushed_row_groups().len();
-        let in_progress = row_group_factory.create_row_group_writer(row_group_index)?;
-        let serialized_row_group_writer = self.writer.next_row_group()?;
-        Ok((row_group_index, in_progress.writers, serialized_row_group_writer))
-    }
-
-    /// Returns the ArrowRowGroupWriterFactory used by this ArrowWriter.
-    pub fn get_row_group_writer_factory(self) -> ArrowRowGroupWriterFactory {
-        self.row_group_writer_factory
+        let in_progress = self
+            .row_group_writer_factory
+            .create_row_group_writer(self.writer.flushed_row_groups().len())?;
+        Ok(in_progress.writers)
     }
 
     /// Append the given column chunks to the file as a new row group.
-    pub fn append_row_group(
-        chunks: Vec<ArrowColumnChunk>,
-        mut row_group_writer: SerializedRowGroupWriter<W>,
-    ) -> Result<()> {
+    pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
+        let mut row_group_writer = self.writer.next_row_group()?;
         for chunk in chunks {
             chunk.append_to_row_group(&mut row_group_writer)?;
         }
         row_group_writer.close()?;
         Ok(())
     }
-    // pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
-    //     let mut row_group_writer = self.writer.next_row_group()?;
-    //     for chunk in chunks {
-    //         chunk.append_to_row_group(&mut row_group_writer)?;
-    //     }
-    //     row_group_writer.close()?;
-    //     Ok(())
-    // }
+
+    /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`]
+    pub fn into_serialized_writer(
+        mut self,
+    ) -> Result<(SerializedFileWriter<W>, ArrowRowGroupWriterFactory)> {
+        self.flush()?;
+        Ok((self.writer, self.row_group_writer_factory))
+    }
 }
 
 impl<W: Write + Send> RecordBatchWriter for ArrowWriter<W> {
@@ -908,7 +900,7 @@ impl ArrowRowGroupWriterFactory {
     }
 
     #[cfg(feature = "encryption")]
-    pub fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
+    fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
         let writers = get_column_writers_with_encryptor(
             &self.schema,
             &self.props,
@@ -926,7 +918,7 @@ impl ArrowRowGroupWriterFactory {
     }
 
     /// Create a new row group writer and return its column writers.
-    pub fn get_column_writers(&mut self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+    pub fn get_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
         // let row_group_index = self.writer.flushed_row_groups().len();
         let in_progress = self.create_row_group_writer(row_group_index)?;
         Ok(in_progress.writers)
