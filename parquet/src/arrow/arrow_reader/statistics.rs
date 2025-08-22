@@ -25,7 +25,7 @@ use crate::basic::Type as PhysicalType;
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
-use crate::file::page_index::index::{Index, PageIndex};
+use crate::file::page_index::index_reader::ColumnIndexMetaData;
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::builder::{
@@ -597,17 +597,17 @@ macro_rules! get_statistics {
 }
 
 macro_rules! make_data_page_stats_iterator {
-    ($iterator_type: ident, $func: expr, $index_type: path, $stat_value_type: ty) => {
+    ($iterator_type: ident, $func: ident, $index_type: path, $stat_value_type: ty, $conv:expr) => {
         struct $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             iter: I,
         }
 
         impl<'a, I> $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             fn new(iter: I) -> Self {
                 Self { iter }
@@ -616,7 +616,7 @@ macro_rules! make_data_page_stats_iterator {
 
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             type Item = Vec<Option<$stat_value_type>>;
 
@@ -624,9 +624,12 @@ macro_rules! make_data_page_stats_iterator {
                 let next = self.iter.next();
                 match next {
                     Some((len, index)) => match index {
-                        $index_type(native_index) => {
-                            Some(native_index.indexes.iter().map($func).collect::<Vec<_>>())
-                        }
+                        $index_type(native_index) => Some(
+                            native_index
+                                .$func()
+                                .map(|v| v.map($conv))
+                                .collect::<Vec<_>>(),
+                        ),
                         // No matching `Index` found;
                         // thus no statistics that can be extracted.
                         // We return vec![None; len] to effectively
@@ -648,114 +651,130 @@ macro_rules! make_data_page_stats_iterator {
 
 make_data_page_stats_iterator!(
     MinBooleanDataPageStatsIterator,
-    |x: &PageIndex<bool>| { x.min },
-    Index::BOOLEAN,
-    bool
+    min_values_iter,
+    ColumnIndexMetaData::BOOLEAN,
+    bool,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MaxBooleanDataPageStatsIterator,
-    |x: &PageIndex<bool>| { x.max },
-    Index::BOOLEAN,
-    bool
+    max_values_iter,
+    ColumnIndexMetaData::BOOLEAN,
+    bool,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MinInt32DataPageStatsIterator,
-    |x: &PageIndex<i32>| { x.min },
-    Index::INT32,
-    i32
+    min_values_iter,
+    ColumnIndexMetaData::INT32,
+    i32,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MaxInt32DataPageStatsIterator,
-    |x: &PageIndex<i32>| { x.max },
-    Index::INT32,
-    i32
+    max_values_iter,
+    ColumnIndexMetaData::INT32,
+    i32,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MinInt64DataPageStatsIterator,
-    |x: &PageIndex<i64>| { x.min },
-    Index::INT64,
-    i64
+    min_values_iter,
+    ColumnIndexMetaData::INT64,
+    i64,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MaxInt64DataPageStatsIterator,
-    |x: &PageIndex<i64>| { x.max },
-    Index::INT64,
-    i64
+    max_values_iter,
+    ColumnIndexMetaData::INT64,
+    i64,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MinFloat16DataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
+    min_values_iter,
+    ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray,
+    |m| FixedLenByteArray::from(m.to_owned())
 );
 make_data_page_stats_iterator!(
     MaxFloat16DataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
+    max_values_iter,
+    ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray,
+    |m| FixedLenByteArray::from(m.to_owned())
 );
 make_data_page_stats_iterator!(
     MinFloat32DataPageStatsIterator,
-    |x: &PageIndex<f32>| { x.min },
-    Index::FLOAT,
-    f32
+    min_values_iter,
+    ColumnIndexMetaData::FLOAT,
+    f32,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MaxFloat32DataPageStatsIterator,
-    |x: &PageIndex<f32>| { x.max },
-    Index::FLOAT,
-    f32
+    max_values_iter,
+    ColumnIndexMetaData::FLOAT,
+    f32,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MinFloat64DataPageStatsIterator,
-    |x: &PageIndex<f64>| { x.min },
-    Index::DOUBLE,
-    f64
+    min_values_iter,
+    ColumnIndexMetaData::DOUBLE,
+    f64,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MaxFloat64DataPageStatsIterator,
-    |x: &PageIndex<f64>| { x.max },
-    Index::DOUBLE,
-    f64
+    max_values_iter,
+    ColumnIndexMetaData::DOUBLE,
+    f64,
+    |m| m.clone()
 );
 make_data_page_stats_iterator!(
     MinByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.min.clone() },
-    Index::BYTE_ARRAY,
-    ByteArray
+    min_values_iter,
+    ColumnIndexMetaData::BYTE_ARRAY,
+    ByteArray,
+    |m| ByteArray::from(m.to_owned())
 );
 make_data_page_stats_iterator!(
     MaxByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.max.clone() },
-    Index::BYTE_ARRAY,
-    ByteArray
+    max_values_iter,
+    ColumnIndexMetaData::BYTE_ARRAY,
+    ByteArray,
+    |m| ByteArray::from(m.to_owned())
 );
 make_data_page_stats_iterator!(
     MaxFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
+    max_values_iter,
+    ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray,
+    |m| FixedLenByteArray::from(m.to_owned())
 );
 
 make_data_page_stats_iterator!(
     MinFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray
+    min_values_iter,
+    ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY,
+    FixedLenByteArray,
+    |m| FixedLenByteArray::from(m.to_owned())
 );
 
 macro_rules! get_decimal_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $stat_value_type: ident, $convert_func: ident) => {
         struct $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             iter: I,
         }
 
         impl<'a, I> $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             fn new(iter: I) -> Self {
                 Self { iter }
@@ -764,44 +783,37 @@ macro_rules! get_decimal_page_stats_iterator {
 
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             type Item = Vec<Option<$stat_value_type>>;
 
+            // Some(native_index.$func().map(|v| v.map($conv)).collect::<Vec<_>>())
             fn next(&mut self) -> Option<Self::Item> {
                 let next = self.iter.next();
                 match next {
                     Some((len, index)) => match index {
-                        Index::INT32(native_index) => Some(
+                        ColumnIndexMetaData::INT32(native_index) => Some(
                             native_index
-                                .indexes
-                                .iter()
-                                .map(|x| x.$func.and_then(|x| Some($stat_value_type::from(x))))
+                                .$func()
+                                .map(|x| x.map(|x| $stat_value_type::from(*x)))
                                 .collect::<Vec<_>>(),
                         ),
-                        Index::INT64(native_index) => Some(
+                        ColumnIndexMetaData::INT64(native_index) => Some(
                             native_index
-                                .indexes
-                                .iter()
-                                .map(|x| x.$func.and_then(|x| $stat_value_type::try_from(x).ok()))
+                                .$func()
+                                .map(|x| x.map(|x| $stat_value_type::try_from(*x).unwrap()))
                                 .collect::<Vec<_>>(),
                         ),
-                        Index::BYTE_ARRAY(native_index) => Some(
+                        ColumnIndexMetaData::BYTE_ARRAY(native_index) => Some(
                             native_index
-                                .indexes
-                                .iter()
-                                .map(|x| {
-                                    x.clone().$func.and_then(|x| Some($convert_func(x.data())))
-                                })
+                                .$func()
+                                .map(|x| x.map(|x| $convert_func(x)))
                                 .collect::<Vec<_>>(),
                         ),
-                        Index::FIXED_LEN_BYTE_ARRAY(native_index) => Some(
+                        ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(native_index) => Some(
                             native_index
-                                .indexes
-                                .iter()
-                                .map(|x| {
-                                    x.clone().$func.and_then(|x| Some($convert_func(x.data())))
-                                })
+                                .$func()
+                                .map(|x| x.map(|x| $convert_func(x)))
                                 .collect::<Vec<_>>(),
                         ),
                         _ => Some(vec![None; len]),
@@ -819,56 +831,56 @@ macro_rules! get_decimal_page_stats_iterator {
 
 get_decimal_page_stats_iterator!(
     MinDecimal32DataPageStatsIterator,
-    min,
+    min_values_iter,
     i32,
     from_bytes_to_i32
 );
 
 get_decimal_page_stats_iterator!(
     MaxDecimal32DataPageStatsIterator,
-    max,
+    max_values_iter,
     i32,
     from_bytes_to_i32
 );
 
 get_decimal_page_stats_iterator!(
     MinDecimal64DataPageStatsIterator,
-    min,
+    min_values_iter,
     i64,
     from_bytes_to_i64
 );
 
 get_decimal_page_stats_iterator!(
     MaxDecimal64DataPageStatsIterator,
-    max,
+    max_values_iter,
     i64,
     from_bytes_to_i64
 );
 
 get_decimal_page_stats_iterator!(
     MinDecimal128DataPageStatsIterator,
-    min,
+    min_values_iter,
     i128,
     from_bytes_to_i128
 );
 
 get_decimal_page_stats_iterator!(
     MaxDecimal128DataPageStatsIterator,
-    max,
+    max_values_iter,
     i128,
     from_bytes_to_i128
 );
 
 get_decimal_page_stats_iterator!(
     MinDecimal256DataPageStatsIterator,
-    min,
+    min_values_iter,
     i256,
     from_bytes_to_i256
 );
 
 get_decimal_page_stats_iterator!(
     MaxDecimal256DataPageStatsIterator,
-    max,
+    max_values_iter,
     i256,
     from_bytes_to_i256
 );
@@ -1181,7 +1193,7 @@ pub(crate) fn min_page_statistics<'a, I>(
     physical_type: Option<PhysicalType>,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = (usize, &'a Index)>,
+    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
 {
     get_data_page_statistics!(Min, data_type, iterator, physical_type)
 }
@@ -1194,7 +1206,7 @@ pub(crate) fn max_page_statistics<'a, I>(
     physical_type: Option<PhysicalType>,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = (usize, &'a Index)>,
+    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
 {
     get_data_page_statistics!(Max, data_type, iterator, physical_type)
 }
@@ -1205,46 +1217,13 @@ where
 /// The returned Array is an [`UInt64Array`]
 pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
 where
-    I: Iterator<Item = (usize, &'a Index)>,
+    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
 {
     let iter = iterator.flat_map(|(len, index)| match index {
-        Index::NONE => vec![None; len],
-        Index::BOOLEAN(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::INT32(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::INT64(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::FLOAT(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::DOUBLE(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::BYTE_ARRAY(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        _ => unimplemented!(),
+        ColumnIndexMetaData::NONE => vec![None; len],
+        column_index => column_index.null_counts().map_or(vec![None; len], |v| {
+            v.iter().map(|i| Some(*i as u64)).collect::<Vec<_>>()
+        }),
     });
 
     Ok(UInt64Array::from_iter(iter))

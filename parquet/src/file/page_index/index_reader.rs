@@ -165,6 +165,8 @@ impl ColumnIndex {
     }
 
     /// Returns the number of null values in the page indexed by `idx`
+    ///
+    /// Returns `None` if no null counts have been set in the index
     pub fn null_count(&self, idx: usize) -> Option<i64> {
         self.null_counts.as_ref().map(|nc| nc[idx])
     }
@@ -220,6 +222,7 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
                 let max = index.max_values[i];
                 max_values.push(T::try_from_le_slice(max)?);
             } else {
+                // need placeholders
                 min_values.push(Default::default());
                 max_values.push(Default::default());
             }
@@ -238,14 +241,46 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
         })
     }
 
-    /// Returns an array containing the min values for each page
+    /// Returns an array containing the min values for each page.
+    ///
+    /// Values in the returned slice are only valid if [`ColumnIndex::is_null_page()`]
+    /// is `false` for the same index.
     pub fn min_values(&self) -> &[T] {
         &self.min_values
     }
 
-    /// Returns an array containing the max values for each page
+    /// Returns an array containing the max values for each page.
+    ///
+    /// Values in the returned slice are only valid if [`ColumnIndex::is_null_page()`]
+    /// is `false` for the same index.
     pub fn max_values(&self) -> &[T] {
         &self.max_values
+    }
+
+    /// Returns an iterator over the min values.
+    ///
+    /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
+    pub fn min_values_iter(&self) -> impl Iterator<Item = Option<&T>> {
+        self.min_values.iter().enumerate().map(|(i, min)| {
+            if self.is_null_page(i) {
+                None
+            } else {
+                Some(min)
+            }
+        })
+    }
+
+    /// Returns an iterator over the max values.
+    ///
+    /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
+    pub fn max_values_iter(&self) -> impl Iterator<Item = Option<&T>> {
+        self.max_values.iter().enumerate().map(|(i, min)| {
+            if self.is_null_page(i) {
+                None
+            } else {
+                Some(min)
+            }
+        })
     }
 
     /// Returns the min value for the page indexed by `idx`
@@ -398,6 +433,32 @@ impl ByteArrayColumnIndex {
         }
     }
 
+    /// Returns an iterator over the min values.
+    ///
+    /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
+    pub fn min_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
+        (0..self.num_pages() as usize).into_iter().map(|i| {
+            if self.is_null_page(i) {
+                None
+            } else {
+                self.min_value(i)
+            }
+        })
+    }
+
+    /// Returns an iterator over the max values.
+    ///
+    /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
+    pub fn max_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
+        (0..self.num_pages() as usize).into_iter().map(|i| {
+            if self.is_null_page(i) {
+                None
+            } else {
+                self.max_value(i)
+            }
+        })
+    }
+
     pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
         let mut min_values = Vec::with_capacity(self.num_pages() as usize);
         for i in 0..self.num_pages() as usize {
@@ -524,12 +585,31 @@ impl ColumnIndexMetaData {
         }
     }
 
+    /// Returns array of null counts, one per page.
+    ///
+    /// Returns `None` if now null counts have been set in the index
+    pub fn null_counts(&self) -> Option<&Vec<i64>> {
+        match self {
+            Self::NONE => None,
+            Self::BOOLEAN(index) => index.null_counts.as_ref(),
+            Self::INT32(index) => index.null_counts.as_ref(),
+            Self::INT64(index) => index.null_counts.as_ref(),
+            Self::INT96(index) => index.null_counts.as_ref(),
+            Self::FLOAT(index) => index.null_counts.as_ref(),
+            Self::DOUBLE(index) => index.null_counts.as_ref(),
+            Self::BYTE_ARRAY(index) => index.null_counts.as_ref(),
+            Self::FIXED_LEN_BYTE_ARRAY(index) => index.null_counts.as_ref(),
+        }
+    }
+
     /// Returns the number of pages
     pub fn num_pages(&self) -> u64 {
         colidx_enum_func!(self, num_pages)
     }
 
     /// Returns the number of null values in the page indexed by `idx`
+    ///
+    /// Returns `None` if no null counts have been set in the index
     pub fn null_count(&self, idx: usize) -> Option<i64> {
         colidx_enum_func!(self, null_count, idx)
     }
