@@ -775,6 +775,7 @@ async fn test_multi_threaded_encrypted_writing() {
     // LOW-LEVEL API: Use low level API to write into a file using multiple threads
 
     // Get column writers
+    #[allow(deprecated)]
     let col_writers = writer.get_column_writers().unwrap();
     let num_columns = col_writers.len();
 
@@ -797,7 +798,8 @@ async fn test_multi_threaded_encrypted_writing() {
     }
 
     // Append the finalized row group to the SerializedFileWriter
-    assert!(writer.append_row_group(finalized_rg).is_ok());
+    #[allow(deprecated)]
+    writer.append_row_group(finalized_rg).unwrap();
 
     // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
 
