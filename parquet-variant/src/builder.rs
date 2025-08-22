@@ -22,7 +22,6 @@ use crate::{
 use arrow_schema::ArrowError;
 use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
-use std::collections::HashSet;
 use uuid::Uuid;
 
 const BASIC_TYPE_BITS: u8 = 2;
@@ -252,8 +251,8 @@ impl ValueBuilder {
         self.append_slice(value.as_bytes());
     }
 
-    fn append_object(&mut self, metadata_builder: &mut MetadataBuilder, obj: VariantObject) {
-        let mut object_builder = self.new_object(metadata_builder);
+    fn append_object(state: ParentState<'_>, obj: VariantObject) {
+        let mut object_builder = ObjectBuilder::new(state, false);
 
         for (field_name, value) in obj.iter() {
             object_builder.insert(field_name, value);
@@ -262,37 +261,27 @@ impl ValueBuilder {
         object_builder.finish().unwrap();
     }
 
-    fn try_append_object(
-        &mut self,
-        metadata_builder: &mut MetadataBuilder,
-        obj: VariantObject,
-    ) -> Result<(), ArrowError> {
-        let mut object_builder = self.new_object(metadata_builder);
+    fn try_append_object(state: ParentState<'_>, obj: VariantObject) -> Result<(), ArrowError> {
+        let mut object_builder = ObjectBuilder::new(state, false);
 
         for res in obj.iter_try() {
             let (field_name, value) = res?;
             object_builder.try_insert(field_name, value)?;
         }
 
-        object_builder.finish()?;
-
-        Ok(())
+        object_builder.finish()
     }
 
-    fn append_list(&mut self, metadata_builder: &mut MetadataBuilder, list: VariantList) {
-        let mut list_builder = self.new_list(metadata_builder);
+    fn append_list(state: ParentState<'_>, list: VariantList) {
+        let mut list_builder = ListBuilder::new(state, false);
         for value in list.iter() {
             list_builder.append_value(value);
         }
         list_builder.finish();
     }
 
-    fn try_append_list(
-        &mut self,
-        metadata_builder: &mut MetadataBuilder,
-        list: VariantList,
-    ) -> Result<(), ArrowError> {
-        let mut list_builder = self.new_list(metadata_builder);
+    fn try_append_list(state: ParentState<'_>, list: VariantList) -> Result<(), ArrowError> {
+        let mut list_builder = ListBuilder::new(state, false);
         for res in list.iter_try() {
             let value = res?;
             list_builder.try_append_value(value)?;
@@ -307,99 +296,80 @@ impl ValueBuilder {
         self.0.len()
     }
 
-    fn new_object<'a>(
-        &'a mut self,
-        metadata_builder: &'a mut MetadataBuilder,
-    ) -> ObjectBuilder<'a> {
-        let parent_state = ParentState::Variant {
-            value_builder: self,
-            metadata_builder,
-        };
-        let validate_unique_fields = false;
-        ObjectBuilder::new(parent_state, validate_unique_fields)
-    }
-
-    fn new_list<'a>(&'a mut self, metadata_builder: &'a mut MetadataBuilder) -> ListBuilder<'a> {
-        let parent_state = ParentState::Variant {
-            value_builder: self,
-            metadata_builder,
-        };
-        let validate_unique_fields = false;
-        ListBuilder::new(parent_state, validate_unique_fields)
-    }
-
     /// Appends a variant to the builder.
     ///
     /// # Panics
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
-    fn append_variant<'m, 'd>(
-        &mut self,
-        variant: Variant<'m, 'd>,
-        metadata_builder: &mut MetadataBuilder,
-    ) {
+    fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
+        let builder = state.value_builder();
         match variant {
-            Variant::Null => self.append_null(),
-            Variant::BooleanTrue => self.append_bool(true),
-            Variant::BooleanFalse => self.append_bool(false),
-            Variant::Int8(v) => self.append_int8(v),
-            Variant::Int16(v) => self.append_int16(v),
-            Variant::Int32(v) => self.append_int32(v),
-            Variant::Int64(v) => self.append_int64(v),
-            Variant::Date(v) => self.append_date(v),
-            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::TimestampNanos(v) => self.append_timestamp_nanos(v),
-            Variant::TimestampNtzNanos(v) => self.append_timestamp_ntz_nanos(v),
-            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
-            Variant::Float(v) => self.append_float(v),
-            Variant::Double(v) => self.append_double(v),
-            Variant::Binary(v) => self.append_binary(v),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_short_string(s),
-            Variant::Uuid(v) => self.append_uuid(v),
-            Variant::Object(obj) => self.append_object(metadata_builder, obj),
-            Variant::List(list) => self.append_list(metadata_builder, list),
-            Variant::Time(v) => self.append_time_micros(v),
+            Variant::Null => builder.append_null(),
+            Variant::BooleanTrue => builder.append_bool(true),
+            Variant::BooleanFalse => builder.append_bool(false),
+            Variant::Int8(v) => builder.append_int8(v),
+            Variant::Int16(v) => builder.append_int16(v),
+            Variant::Int32(v) => builder.append_int32(v),
+            Variant::Int64(v) => builder.append_int64(v),
+            Variant::Date(v) => builder.append_date(v),
+            Variant::Time(v) => builder.append_time_micros(v),
+            Variant::TimestampMicros(v) => builder.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => builder.append_timestamp_ntz_micros(v),
+            Variant::TimestampNanos(v) => builder.append_timestamp_nanos(v),
+            Variant::TimestampNtzNanos(v) => builder.append_timestamp_ntz_nanos(v),
+            Variant::Decimal4(decimal4) => builder.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => builder.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => builder.append_decimal16(decimal16),
+            Variant::Float(v) => builder.append_float(v),
+            Variant::Double(v) => builder.append_double(v),
+            Variant::Binary(v) => builder.append_binary(v),
+            Variant::String(s) => builder.append_string(s),
+            Variant::ShortString(s) => builder.append_short_string(s),
+            Variant::Uuid(v) => builder.append_uuid(v),
+            Variant::Object(obj) => return Self::append_object(state, obj),
+            Variant::List(list) => return Self::append_list(state, list),
         }
+        state.finish();
     }
 
-    /// Appends a variant to the builder
-    fn try_append_variant<'m, 'd>(
-        &mut self,
-        variant: Variant<'m, 'd>,
-        metadata_builder: &mut MetadataBuilder,
+    /// Tries to append a variant to the provided [`ParentState`] instance.
+    ///
+    /// The attempt fails if the variant contains duplicate field names in objects when validation
+    /// is enabled.
+    pub fn try_append_variant(
+        mut state: ParentState<'_>,
+        variant: Variant<'_, '_>,
     ) -> Result<(), ArrowError> {
+        let builder = state.value_builder();
         match variant {
-            Variant::Null => self.append_null(),
-            Variant::BooleanTrue => self.append_bool(true),
-            Variant::BooleanFalse => self.append_bool(false),
-            Variant::Int8(v) => self.append_int8(v),
-            Variant::Int16(v) => self.append_int16(v),
-            Variant::Int32(v) => self.append_int32(v),
-            Variant::Int64(v) => self.append_int64(v),
-            Variant::Date(v) => self.append_date(v),
-            Variant::TimestampMicros(v) => self.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => self.append_timestamp_ntz_micros(v),
-            Variant::TimestampNanos(v) => self.append_timestamp_nanos(v),
-            Variant::TimestampNtzNanos(v) => self.append_timestamp_ntz_nanos(v),
-            Variant::Decimal4(decimal4) => self.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => self.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => self.append_decimal16(decimal16),
-            Variant::Float(v) => self.append_float(v),
-            Variant::Double(v) => self.append_double(v),
-            Variant::Binary(v) => self.append_binary(v),
-            Variant::Uuid(v) => self.append_uuid(v),
-            Variant::String(s) => self.append_string(s),
-            Variant::ShortString(s) => self.append_short_string(s),
-            Variant::Object(obj) => self.try_append_object(metadata_builder, obj)?,
-            Variant::List(list) => self.try_append_list(metadata_builder, list)?,
-            Variant::Time(v) => self.append_time_micros(v),
+            Variant::Null => builder.append_null(),
+            Variant::BooleanTrue => builder.append_bool(true),
+            Variant::BooleanFalse => builder.append_bool(false),
+            Variant::Int8(v) => builder.append_int8(v),
+            Variant::Int16(v) => builder.append_int16(v),
+            Variant::Int32(v) => builder.append_int32(v),
+            Variant::Int64(v) => builder.append_int64(v),
+            Variant::Date(v) => builder.append_date(v),
+            Variant::Time(v) => builder.append_time_micros(v),
+            Variant::TimestampMicros(v) => builder.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => builder.append_timestamp_ntz_micros(v),
+            Variant::TimestampNanos(v) => builder.append_timestamp_nanos(v),
+            Variant::TimestampNtzNanos(v) => builder.append_timestamp_ntz_nanos(v),
+            Variant::Decimal4(decimal4) => builder.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => builder.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => builder.append_decimal16(decimal16),
+            Variant::Float(v) => builder.append_float(v),
+            Variant::Double(v) => builder.append_double(v),
+            Variant::Binary(v) => builder.append_binary(v),
+            Variant::String(s) => builder.append_string(s),
+            Variant::ShortString(s) => builder.append_short_string(s),
+            Variant::Uuid(v) => builder.append_uuid(v),
+            Variant::Object(obj) => return Self::try_append_object(state, obj),
+            Variant::List(list) => return Self::try_append_list(state, list),
         }
 
+        state.finish();
         Ok(())
     }
 
@@ -614,27 +584,106 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// child builder that uses it). So everything has to be here. Rust layout optimizations should
 /// treat the variants as a union, so that accessing a `value_builder` or `metadata_builder` is
 /// branch-free.
+#[derive(Debug)]
 enum ParentState<'a> {
     Variant {
         value_builder: &'a mut ValueBuilder,
+        saved_value_builder_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
+        saved_metadata_builder_dict_size: usize,
+        finished: bool,
     },
     List {
         value_builder: &'a mut ValueBuilder,
+        saved_value_builder_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
-        parent_value_offset_base: usize,
+        saved_metadata_builder_dict_size: usize,
         offsets: &'a mut Vec<usize>,
+        saved_offsets_size: usize,
+        finished: bool,
     },
     Object {
         value_builder: &'a mut ValueBuilder,
+        saved_value_builder_offset: usize,
         metadata_builder: &'a mut MetadataBuilder,
+        saved_metadata_builder_dict_size: usize,
         fields: &'a mut IndexMap<u32, usize>,
-        field_name: &'a str,
-        parent_value_offset_base: usize,
+        saved_fields_size: usize,
+        finished: bool,
     },
 }
 
-impl ParentState<'_> {
+impl<'a> ParentState<'a> {
+    fn variant(
+        value_builder: &'a mut ValueBuilder,
+        metadata_builder: &'a mut MetadataBuilder,
+    ) -> Self {
+        ParentState::Variant {
+            saved_value_builder_offset: value_builder.offset(),
+            saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
+            value_builder,
+            metadata_builder,
+            finished: false,
+        }
+    }
+
+    fn list(
+        value_builder: &'a mut ValueBuilder,
+        metadata_builder: &'a mut MetadataBuilder,
+        offsets: &'a mut Vec<usize>,
+        saved_parent_value_builder_offset: usize,
+    ) -> Self {
+        // The saved_parent_buffer_offset is the buffer size as of when the parent builder was
+        // constructed. The saved_buffer_offset is the buffer size as of now (when a child builder
+        // is created). The variant field_offset entry for this list element is their difference.
+        let saved_value_builder_offset = value_builder.offset();
+        let saved_offsets_size = offsets.len();
+        offsets.push(saved_value_builder_offset - saved_parent_value_builder_offset);
+
+        ParentState::List {
+            saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
+            saved_value_builder_offset,
+            saved_offsets_size,
+            metadata_builder,
+            value_builder,
+            offsets,
+            finished: false,
+        }
+    }
+
+    fn try_object(
+        value_builder: &'a mut ValueBuilder,
+        metadata_builder: &'a mut MetadataBuilder,
+        fields: &'a mut IndexMap<u32, usize>,
+        saved_parent_value_builder_offset: usize,
+        field_name: &str,
+        validate_unique_fields: bool,
+    ) -> Result<Self, ArrowError> {
+        // The saved_parent_buffer_offset is the buffer size as of when the parent builder was
+        // constructed. The saved_buffer_offset is the buffer size as of now (when a child builder
+        // is created). The variant field_offset entry for this field is their difference.
+        let saved_value_builder_offset = value_builder.offset();
+        let saved_fields_size = fields.len();
+        let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
+        let field_id = metadata_builder.upsert_field_name(field_name);
+        let field_start = saved_value_builder_offset - saved_parent_value_builder_offset;
+        if fields.insert(field_id, field_start).is_some() && validate_unique_fields {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Duplicate field name: {field_name}"
+            )));
+        }
+
+        Ok(ParentState::Object {
+            saved_metadata_builder_dict_size,
+            saved_value_builder_offset,
+            saved_fields_size,
+            value_builder,
+            metadata_builder,
+            fields,
+            finished: false,
+        })
+    }
+
     fn value_builder(&mut self) -> &mut ValueBuilder {
         self.value_and_metadata_builders().0
     }
@@ -643,29 +692,87 @@ impl ParentState<'_> {
         self.value_and_metadata_builders().1
     }
 
-    // Performs any parent-specific aspects of finishing, after the child has appended all necessary
-    // bytes to the parent's value builder. ListBuilder records the new value's starting offset;
-    // ObjectBuilder associates the new value's starting offset with its field id; VariantBuilder
-    // doesn't need anything special.
-    fn finish(&mut self, starting_offset: usize) {
+    fn saved_value_builder_offset(&mut self) -> usize {
+        match self {
+            ParentState::Variant {
+                saved_value_builder_offset,
+                ..
+            }
+            | ParentState::List {
+                saved_value_builder_offset,
+                ..
+            }
+            | ParentState::Object {
+                saved_value_builder_offset,
+                ..
+            } => *saved_value_builder_offset,
+        }
+    }
+
+    fn is_finished(&mut self) -> &mut bool {
+        match self {
+            ParentState::Variant { finished, .. }
+            | ParentState::List { finished, .. }
+            | ParentState::Object { finished, .. } => finished,
+        }
+    }
+
+    // Mark the insertion as having succeeded.
+    fn finish(&mut self) {
+        *self.is_finished() = true
+    }
+
+    // Performs any parent-specific aspects of rolling back a builder if an insertion failed.
+    fn rollback(&mut self) {
+        if *self.is_finished() {
+            return;
+        }
+
+        // All builders need to revert the buffers
+        match self {
+            ParentState::Variant {
+                value_builder,
+                saved_value_builder_offset,
+                metadata_builder,
+                saved_metadata_builder_dict_size,
+                ..
+            }
+            | ParentState::List {
+                value_builder,
+                saved_value_builder_offset,
+                metadata_builder,
+                saved_metadata_builder_dict_size,
+                ..
+            }
+            | ParentState::Object {
+                value_builder,
+                saved_value_builder_offset,
+                metadata_builder,
+                saved_metadata_builder_dict_size,
+                ..
+            } => {
+                value_builder
+                    .inner_mut()
+                    .truncate(*saved_value_builder_offset);
+                metadata_builder
+                    .field_names
+                    .truncate(*saved_metadata_builder_dict_size);
+            }
+        };
+
+        // List and Object builders also need to roll back the starting offset they stored.
         match self {
             ParentState::Variant { .. } => (),
             ParentState::List {
                 offsets,
-                parent_value_offset_base,
+                saved_offsets_size,
                 ..
-            } => offsets.push(starting_offset - *parent_value_offset_base),
+            } => offsets.truncate(*saved_offsets_size),
             ParentState::Object {
-                metadata_builder,
                 fields,
-                field_name,
-                parent_value_offset_base,
+                saved_fields_size,
                 ..
-            } => {
-                let field_id = metadata_builder.upsert_field_name(field_name);
-                let shifted_start_offset = starting_offset - *parent_value_offset_base;
-                fields.insert(field_id, shifted_start_offset);
-            }
+            } => fields.truncate(*saved_fields_size),
         }
     }
 
@@ -676,6 +783,7 @@ impl ParentState<'_> {
             ParentState::Variant {
                 value_builder,
                 metadata_builder,
+                ..
             }
             | ParentState::List {
                 value_builder,
@@ -686,33 +794,15 @@ impl ParentState<'_> {
                 value_builder,
                 metadata_builder,
                 ..
-            } => (value_builder, metadata_builder),
+            } => (value_builder, *metadata_builder),
         }
     }
+}
 
-    // Return the current offset of the underlying buffer. Used as a savepoint for rollback.
-    fn value_current_offset(&self) -> usize {
-        match self {
-            ParentState::Variant { value_builder, .. }
-            | ParentState::List { value_builder, .. }
-            | ParentState::Object { value_builder, .. } => value_builder.offset(),
-        }
-    }
-
-    // Return the current dictionary size of the undelying metadata builder. Used as a savepoint for
-    // rollback.
-    fn metadata_num_fields(&self) -> usize {
-        match self {
-            ParentState::Variant {
-                metadata_builder, ..
-            }
-            | ParentState::List {
-                metadata_builder, ..
-            }
-            | ParentState::Object {
-                metadata_builder, ..
-            } => metadata_builder.field_names.len(),
-        }
+/// Automatically rolls back any unfinished `ParentState`.
+impl Drop for ParentState<'_> {
+    fn drop(&mut self) {
+        self.rollback()
     }
 }
 
@@ -936,16 +1026,15 @@ impl ParentState<'_> {
 /// This example shows how enabling unique field validation will cause an error
 /// if the same field is inserted more than once.
 /// ```
-/// use parquet_variant::VariantBuilder;
-///
+/// # use parquet_variant::VariantBuilder;
+/// #
 /// let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
-/// let mut obj = builder.new_object();
 ///
-/// obj.insert("a", 1);
-/// obj.insert("a", 2); // duplicate field
-///
-/// // When validation is enabled, finish will return an error
-/// let result = obj.finish(); // returns Err
+/// // When validation is enabled, try_with_field will return an error
+/// let result = builder
+///     .new_object()
+///     .with_field("a", 1)
+///     .try_with_field("a", 2);
 /// assert!(result.is_err());
 /// ```
 ///
@@ -1079,29 +1168,22 @@ impl VariantBuilder {
         self.metadata_builder.upsert_field_name(field_name);
     }
 
-    // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state(&mut self) -> (ParentState<'_>, bool) {
-        let state = ParentState::Variant {
-            value_builder: &mut self.value_builder,
-            metadata_builder: &mut self.metadata_builder,
-        };
-        (state, self.validate_unique_fields)
-    }
-
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_list(&mut self) -> ListBuilder<'_> {
-        let (parent_state, validate_unique_fields) = self.parent_state();
-        ListBuilder::new(parent_state, validate_unique_fields)
+        let parent_state =
+            ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ListBuilder::new(parent_state, self.validate_unique_fields)
     }
 
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
     pub fn new_object(&mut self) -> ObjectBuilder<'_> {
-        let (parent_state, validate_unique_fields) = self.parent_state();
-        ObjectBuilder::new(parent_state, validate_unique_fields)
+        let parent_state =
+            ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ObjectBuilder::new(parent_state, self.validate_unique_fields)
     }
 
     /// Append a value to the builder.
@@ -1119,9 +1201,8 @@ impl VariantBuilder {
     /// builder.append_value(42i8);
     /// ```
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        let variant = value.into();
-        self.value_builder
-            .append_variant(variant, &mut self.metadata_builder);
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ValueBuilder::append_variant(state, value.into())
     }
 
     /// Append a value to the builder.
@@ -1129,11 +1210,8 @@ impl VariantBuilder {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        let variant = value.into();
-        self.value_builder
-            .try_append_variant(variant, &mut self.metadata_builder)?;
-
-        Ok(())
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Finish the builder and return the metadata and value buffers.
@@ -1160,30 +1238,18 @@ impl VariantBuilder {
 /// A builder for creating [`Variant::List`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
+#[derive(Debug)]
 pub struct ListBuilder<'a> {
     parent_state: ParentState<'a>,
     offsets: Vec<usize>,
-    /// The starting offset in the parent's value builder where this list starts
-    parent_value_offset_base: usize,
-    /// The starting offset in the parent's metadata buffer where this list starts
-    /// used to truncate the written fields in `drop` if the current list has not been finished
-    parent_metadata_offset_base: usize,
-    /// Whether the list has been finished, the written content of the current list
-    /// will be truncated in `drop` if `has_been_finished` is false
-    has_been_finished: bool,
     validate_unique_fields: bool,
 }
 
 impl<'a> ListBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
-        let parent_value_offset_base = parent_state.value_current_offset();
-        let parent_metadata_offset_base = parent_state.metadata_num_fields();
         Self {
             parent_state,
             offsets: vec![],
-            parent_value_offset_base,
-            has_been_finished: false,
-            parent_metadata_offset_base,
             validate_unique_fields,
         }
     }
@@ -1199,14 +1265,14 @@ impl<'a> ListBuilder<'a> {
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
     fn parent_state(&mut self) -> (ParentState<'_>, bool) {
+        let saved_parent_value_builder_offset = self.parent_state.saved_value_builder_offset();
         let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-
-        let state = ParentState::List {
+        let state = ParentState::list(
             value_builder,
             metadata_builder,
-            parent_value_offset_base: self.parent_value_offset_base,
-            offsets: &mut self.offsets,
-        };
+            &mut self.offsets,
+            saved_parent_value_builder_offset,
+        );
         (state, self.validate_unique_fields)
     }
 
@@ -1233,7 +1299,8 @@ impl<'a> ListBuilder<'a> {
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ListBuilder::try_append_value`].
     pub fn append_value<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, value: T) {
-        self.try_append_value(value).unwrap();
+        let (state, _) = self.parent_state();
+        ValueBuilder::append_variant(state, value.into())
     }
 
     /// Appends a new primitive value to this list
@@ -1241,14 +1308,8 @@ impl<'a> ListBuilder<'a> {
         &mut self,
         value: T,
     ) -> Result<(), ArrowError> {
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-
-        let offset = value_builder.offset() - self.parent_value_offset_base;
-        self.offsets.push(offset);
-
-        value_builder.try_append_variant(value.into(), metadata_builder)?;
-
-        Ok(())
+        let (state, _) = self.parent_state();
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Builder-style API for appending a value to the list and returning self to enable method chaining.
@@ -1275,18 +1336,17 @@ impl<'a> ListBuilder<'a> {
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) {
+        let starting_offset = self.parent_state.saved_value_builder_offset();
         let value_builder = self.parent_state.value_builder();
 
         let data_size = value_builder
             .offset()
-            .checked_sub(self.parent_value_offset_base)
+            .checked_sub(starting_offset)
             .expect("Data size overflowed usize");
 
         let num_elements = self.offsets.len();
         let is_large = num_elements > u8::MAX as usize;
         let offset_size = int_size(data_size);
-
-        let starting_offset = self.parent_value_offset_base;
 
         let num_elements_size = if is_large { 4 } else { 1 }; // is_large: 4 bytes, else 1 byte.
         let num_elements = self.offsets.len();
@@ -1313,61 +1373,26 @@ impl<'a> ListBuilder<'a> {
             .inner_mut()
             .splice(starting_offset..starting_offset, bytes_to_splice);
 
-        self.parent_state.finish(starting_offset);
-        self.has_been_finished = true;
-    }
-}
-
-/// Drop implementation for ListBuilder does nothing
-/// as the `finish` method must be called to finalize the list.
-/// This is to ensure that the list is always finalized before its parent builder
-/// is finalized.
-impl Drop for ListBuilder<'_> {
-    fn drop(&mut self) {
-        if !self.has_been_finished {
-            self.parent_state
-                .value_builder()
-                .inner_mut()
-                .truncate(self.parent_value_offset_base);
-            self.parent_state
-                .metadata_builder()
-                .field_names
-                .truncate(self.parent_metadata_offset_base);
-        }
+        self.parent_state.finish();
     }
 }
 
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
+#[derive(Debug)]
 pub struct ObjectBuilder<'a> {
     parent_state: ParentState<'a>,
     fields: IndexMap<u32, usize>, // (field_id, offset)
-    /// The starting offset in the parent's value buffer where this object starts
-    parent_value_offset_base: usize,
-    /// The starting offset in the parent's metadata buffer where this object starts
-    /// used to truncate the written fields in `drop` if the current object has not been finished
-    parent_metadata_offset_base: usize,
-    /// Whether the object has been finished, the written content of the current object
-    /// will be truncated in `drop` if `has_been_finished` is false
-    has_been_finished: bool,
     validate_unique_fields: bool,
-    /// Set of duplicate fields to report for errors
-    duplicate_fields: HashSet<u32>,
 }
 
 impl<'a> ObjectBuilder<'a> {
     fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
-        let offset_base = parent_state.value_current_offset();
-        let meta_offset_base = parent_state.metadata_num_fields();
         Self {
             parent_state,
             fields: IndexMap::new(),
-            parent_value_offset_base: offset_base,
-            has_been_finished: false,
-            parent_metadata_offset_base: meta_offset_base,
             validate_unique_fields,
-            duplicate_fields: HashSet::new(),
         }
     }
 
@@ -1382,7 +1407,8 @@ impl<'a> ObjectBuilder<'a> {
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ObjectBuilder::try_insert`]
     pub fn insert<'m, 'd, T: Into<Variant<'m, 'd>>>(&mut self, key: &str, value: T) {
-        self.try_insert(key, value).unwrap();
+        let (state, _) = self.parent_state(key).unwrap();
+        ValueBuilder::append_variant(state, value.into())
     }
 
     /// Add a field with key and value to the object
@@ -1399,17 +1425,8 @@ impl<'a> ObjectBuilder<'a> {
         key: &str,
         value: T,
     ) -> Result<(), ArrowError> {
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-
-        let field_id = metadata_builder.upsert_field_name(key);
-        let field_start = value_builder.offset() - self.parent_value_offset_base;
-
-        if self.fields.insert(field_id, field_start).is_some() && self.validate_unique_fields {
-            self.duplicate_fields.insert(field_id);
-        }
-
-        value_builder.try_append_variant(value.into(), metadata_builder)?;
-        Ok(())
+        let (state, _) = self.parent_state(key)?;
+        ValueBuilder::try_append_variant(state, value.into())
     }
 
     /// Builder style API for adding a field with key and value to the object
@@ -1442,54 +1459,65 @@ impl<'a> ObjectBuilder<'a> {
     }
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state<'b>(&'b mut self, key: &'b str) -> (ParentState<'b>, bool) {
+    fn parent_state<'b>(
+        &'b mut self,
+        field_name: &'b str,
+    ) -> Result<(ParentState<'b>, bool), ArrowError> {
+        let saved_parent_value_builder_offset = self.parent_state.saved_value_builder_offset();
         let validate_unique_fields = self.validate_unique_fields;
-
         let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-
-        let state = ParentState::Object {
+        let state = ParentState::try_object(
             value_builder,
             metadata_builder,
-            fields: &mut self.fields,
-            field_name: key,
-            parent_value_offset_base: self.parent_value_offset_base,
-        };
-        (state, validate_unique_fields)
+            &mut self.fields,
+            saved_parent_value_builder_offset,
+            field_name,
+            validate_unique_fields,
+        )?;
+        Ok((state, validate_unique_fields))
     }
 
     /// Returns an object builder that can be used to append a new (nested) object to this object.
     ///
+    /// Panics if the proposed key was a duplicate
+    ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
     pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b> {
-        let (parent_state, validate_unique_fields) = self.parent_state(key);
-        ObjectBuilder::new(parent_state, validate_unique_fields)
+        self.try_new_object(key).unwrap()
+    }
+
+    /// Returns an object builder that can be used to append a new (nested) object to this object.
+    ///
+    /// Fails if the proposed key was a duplicate
+    ///
+    /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
+    pub fn try_new_object<'b>(&'b mut self, key: &'b str) -> Result<ObjectBuilder<'b>, ArrowError> {
+        let (parent_state, validate_unique_fields) = self.parent_state(key)?;
+        Ok(ObjectBuilder::new(parent_state, validate_unique_fields))
     }
 
     /// Returns a list builder that can be used to append a new (nested) list to this object.
     ///
+    /// Panics if the proposed key was a duplicate
+    ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
     pub fn new_list<'b>(&'b mut self, key: &'b str) -> ListBuilder<'b> {
-        let (parent_state, validate_unique_fields) = self.parent_state(key);
-        ListBuilder::new(parent_state, validate_unique_fields)
+        self.try_new_list(key).unwrap()
+    }
+
+    /// Returns a list builder that can be used to append a new (nested) list to this object.
+    ///
+    /// Fails if the proposed key was a duplicate
+    ///
+    /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
+    pub fn try_new_list<'b>(&'b mut self, key: &'b str) -> Result<ListBuilder<'b>, ArrowError> {
+        let (parent_state, validate_unique_fields) = self.parent_state(key)?;
+        Ok(ListBuilder::new(parent_state, validate_unique_fields))
     }
 
     /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) -> Result<(), ArrowError> {
         let metadata_builder = self.parent_state.metadata_builder();
-        if self.validate_unique_fields && !self.duplicate_fields.is_empty() {
-            let mut names = self
-                .duplicate_fields
-                .iter()
-                .map(|id| metadata_builder.field_name(*id as usize))
-                .collect::<Vec<_>>();
-
-            names.sort_unstable();
-
-            let joined = names.join(", ");
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Duplicate field keys detected: [{joined}]",
-            )));
-        }
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
             let field_a_name = metadata_builder.field_name(field_a_id as usize);
@@ -1500,10 +1528,11 @@ impl<'a> ObjectBuilder<'a> {
         let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
         let id_size = int_size(max_id as usize);
 
+        let starting_offset = self.parent_state.saved_value_builder_offset();
         let value_builder = self.parent_state.value_builder();
         let current_offset = value_builder.offset();
         // Current object starts from `object_start_offset`
-        let data_size = current_offset - self.parent_value_offset_base;
+        let data_size = current_offset - starting_offset;
         let offset_size = int_size(data_size);
 
         let num_fields = self.fields.len();
@@ -1513,8 +1542,6 @@ impl<'a> ObjectBuilder<'a> {
             (if is_large { 4 } else { 1 }) + // num_fields
             (num_fields * id_size as usize) + // field IDs
             ((num_fields + 1) * offset_size as usize); // field offsets + data_size
-
-        let starting_offset = self.parent_value_offset_base;
 
         // Shift existing data to make room for the header
         value_builder.inner_mut().splice(
@@ -1551,33 +1578,9 @@ impl<'a> ObjectBuilder<'a> {
                 Some(data_size),
                 offset_size,
             );
-        self.parent_state.finish(starting_offset);
-
-        // Mark that this object has been finished
-        self.has_been_finished = true;
+        self.parent_state.finish();
 
         Ok(())
-    }
-}
-
-/// Drop implementation for ObjectBuilder does nothing
-/// as the `finish` method must be called to finalize the object.
-/// This is to ensure that the object is always finalized before its parent builder
-/// is finalized.
-impl Drop for ObjectBuilder<'_> {
-    fn drop(&mut self) {
-        // Truncate the buffers if the `finish` method has not been called.
-        if !self.has_been_finished {
-            self.parent_state
-                .value_builder()
-                .inner_mut()
-                .truncate(self.parent_value_offset_base);
-
-            self.parent_state
-                .metadata_builder()
-                .field_names
-                .truncate(self.parent_metadata_offset_base);
-        }
     }
 }
 
@@ -1588,9 +1591,17 @@ impl Drop for ObjectBuilder<'_> {
 pub trait VariantBuilderExt {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
-    fn new_list(&mut self) -> ListBuilder<'_>;
+    fn new_list(&mut self) -> ListBuilder<'_> {
+        self.try_new_list().unwrap()
+    }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_>;
+    fn new_object(&mut self) -> ObjectBuilder<'_> {
+        self.try_new_object().unwrap()
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
 }
 
 impl VariantBuilderExt for ListBuilder<'_> {
@@ -1598,12 +1609,12 @@ impl VariantBuilderExt for ListBuilder<'_> {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.new_list()
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        Ok(self.new_list())
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.new_object()
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        Ok(self.new_object())
     }
 }
 
@@ -1612,12 +1623,12 @@ impl VariantBuilderExt for VariantBuilder {
         self.append_value(value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.new_list()
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        Ok(self.new_list())
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.new_object()
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        Ok(self.new_object())
     }
 }
 
@@ -2475,12 +2486,30 @@ mod tests {
         assert!(obj.finish().is_ok());
 
         // Deeply nested list structure with duplicates
+        let mut builder = VariantBuilder::new();
         let mut outer_list = builder.new_list();
         let mut inner_list = outer_list.new_list();
         let mut nested_obj = inner_list.new_object();
         nested_obj.insert("x", 1);
         nested_obj.insert("x", 2);
+        nested_obj.new_list("x").with_value(3).finish();
+        nested_obj
+            .new_object("x")
+            .with_field("y", 4)
+            .finish()
+            .unwrap();
         assert!(nested_obj.finish().is_ok());
+        inner_list.finish();
+        outer_list.finish();
+
+        // Verify the nested object is built correctly -- the nested object "x" should have "won"
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+        let outer_element = variant.get_list_element(0).unwrap();
+        let inner_element = outer_element.get_list_element(0).unwrap();
+        let outer_field = inner_element.get_object_field("x").unwrap();
+        let inner_field = outer_field.get_object_field("y").unwrap();
+        assert_eq!(inner_field, Variant::from(4));
     }
 
     #[test]
@@ -2488,31 +2517,38 @@ mod tests {
         let mut builder = VariantBuilder::new().with_validate_unique_fields(true);
 
         // Root-level object with duplicates
-        let mut root_obj = builder.new_object();
-        root_obj.insert("a", 1);
-        root_obj.insert("b", 2);
-        root_obj.insert("a", 3);
-        root_obj.insert("b", 4);
-
-        let result = root_obj.finish();
+        let result = builder
+            .new_object()
+            .with_field("a", 1)
+            .with_field("b", 2)
+            .try_with_field("a", 3);
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Invalid argument error: Duplicate field keys detected: [a, b]"
+            "Invalid argument error: Duplicate field name: a"
         );
 
         // Deeply nested list -> list -> object with duplicate
         let mut outer_list = builder.new_list();
         let mut inner_list = outer_list.new_list();
-        let mut nested_obj = inner_list.new_object();
-        nested_obj.insert("x", 1);
-        nested_obj.insert("x", 2);
-
-        let nested_result = nested_obj.finish();
+        let mut object = inner_list.new_object().with_field("x", 1);
+        let nested_result = object.try_insert("x", 2);
         assert_eq!(
             nested_result.unwrap_err().to_string(),
-            "Invalid argument error: Duplicate field keys detected: [x]"
+            "Invalid argument error: Duplicate field name: x"
+        );
+        let nested_result = object.try_new_list("x");
+        assert_eq!(
+            nested_result.unwrap_err().to_string(),
+            "Invalid argument error: Duplicate field name: x"
         );
 
+        let nested_result = object.try_new_object("x");
+        assert_eq!(
+            nested_result.unwrap_err().to_string(),
+            "Invalid argument error: Duplicate field name: x"
+        );
+
+        drop(object);
         inner_list.finish();
         outer_list.finish();
 
