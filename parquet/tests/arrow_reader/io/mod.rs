@@ -298,6 +298,11 @@ impl TestRowGroups {
                         let start_offset = start_offset as usize;
                         let end_offset = start_offset + length as usize;
 
+                        let page_locations = page_locations
+                            .iter()
+                            .map(parquet::format::PageLocation::from)
+                            .collect();
+
                         TestColumnChunk {
                             name: column_name.clone(),
                             location: start_offset..end_offset,
