@@ -624,6 +624,12 @@ macro_rules! make_data_page_stats_iterator {
                 let next = self.iter.next();
                 match next {
                     Some((len, index)) => match index {
+                        // No matching `Index` found;
+                        // thus no statistics that can be extracted.
+                        // We return vec![None; len] to effectively
+                        // create an arrow null-array with the length
+                        // corresponding to the number of entries in
+                        // `ParquetOffsetIndex` per row group per column.
                         ColumnIndexMetaData::NONE => Some(vec![None; len]),
                         _ => Some(<$stat_value_type>::$func(&index).collect::<Vec<_>>()),
                     },
