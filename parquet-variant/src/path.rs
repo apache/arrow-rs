@@ -95,10 +95,10 @@ impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
     }
 }
 
-/// Create from &str
+/// Create from &str with support for dot notation
 impl<'a> From<&'a str> for VariantPath<'a> {
     fn from(path: &'a str) -> Self {
-        VariantPath::new(vec![path.into()])
+        VariantPath::new(path.split('.').map(Into::into).collect())
     }
 }
 
