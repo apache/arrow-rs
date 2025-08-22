@@ -191,7 +191,7 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
     let column_index = &column_index[0][float_col_idx];
 
     match column_index {
-        parquet::file::page_index::index_reader::ColumnIndexMetaData::FLOAT(float_index) => {
+        parquet::file::page_index::column_index::ColumnIndexMetaData::FLOAT(float_index) => {
             assert_eq!(float_index.num_pages(), 1);
             assert_eq!(float_index.min_value(0), Some(&0.0f32));
             assert!(float_index

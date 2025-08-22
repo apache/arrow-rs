@@ -1102,7 +1102,7 @@ mod tests {
 
     use bytes::Buf;
 
-    use crate::file::page_index::index_reader::{
+    use crate::file::page_index::column_index::{
         ByteArrayColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
     };
     use crate::file::properties::{EnabledStatistics, WriterProperties};

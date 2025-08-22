@@ -24,10 +24,10 @@ use crate::file::metadata::{
     ColumnChunkMetaData, FileMetaData, KeyValue, RowGroupMetaData, SortingColumn,
 };
 use crate::file::page_encoding_stats::PageEncodingStats;
-use crate::file::page_index::index::{Index, NativeIndex, PageIndex};
-use crate::file::page_index::index_reader::{
+use crate::file::page_index::column_index::{
     ByteArrayColumnIndex, ColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
 };
+use crate::file::page_index::index::{Index, NativeIndex, PageIndex};
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics::{Statistics, ValueStatistics};
 use std::sync::Arc;

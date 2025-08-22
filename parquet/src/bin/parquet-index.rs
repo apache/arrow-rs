@@ -37,7 +37,7 @@
 use clap::Parser;
 use parquet::data_type::ByteArray;
 use parquet::errors::{ParquetError, Result};
-use parquet::file::page_index::index_reader::{
+use parquet::file::page_index::column_index::{
     ByteArrayColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
 };
 use parquet::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
