@@ -32,7 +32,7 @@ use crate::format::{AesGcmV1, ColumnCryptoMetaData};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
-use crate::{errors::Result, file::page_index::index_reader::ColumnIndexMetaData};
+use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;

@@ -106,7 +106,7 @@ use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::{
     page_encoding_stats::{self, PageEncodingStats},
-    page_index::{index_reader::ColumnIndexMetaData, offset_index::PageLocation},
+    page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation},
 };
 use crate::file::{
     page_index::index::PageIndex,
@@ -1948,7 +1948,7 @@ impl OffsetIndexBuilder {
 mod tests {
     use super::*;
     use crate::basic::{PageType, SortOrder};
-    use crate::file::page_index::index_reader::{ColumnIndex, PrimitiveColumnIndex};
+    use crate::file::page_index::column_index::{ColumnIndex, PrimitiveColumnIndex};
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {

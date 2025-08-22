@@ -311,7 +311,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
 
     /// Creates a new [`NativeIndex`]
     #[allow(dead_code)]
-    pub(crate) fn try_new_local(index: ThriftColumnIndex) -> Result<Self, ParquetError> {
+    pub(super) fn try_new_local(index: ThriftColumnIndex) -> Result<Self, ParquetError> {
         let len = index.min_values.len();
 
         // turn Option<Vec<i64>> into Vec<Option<i64>>

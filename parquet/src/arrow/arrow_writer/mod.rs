@@ -1488,7 +1488,7 @@ mod tests {
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::column::page::{Page, PageReader};
     use crate::file::page_encoding_stats::PageEncodingStats;
-    use crate::file::page_index::index_reader::ColumnIndexMetaData;
+    use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
     use crate::format::PageHeader;
     use crate::schema::types::ColumnPath;
