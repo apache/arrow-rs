@@ -1062,7 +1062,6 @@ mod tests {
     use crate::column::reader::get_typed_column_reader;
     use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type};
-    use crate::file::page_index::index::Index;
     use crate::file::page_index::index_reader::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
