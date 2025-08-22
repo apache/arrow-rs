@@ -24,6 +24,8 @@ use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
 use uuid::Uuid;
 
+use std::collections::HashMap;
+
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
@@ -431,13 +433,97 @@ impl ValueBuilder {
     }
 }
 
+/// A trait for building variant metadata dictionaries, to be used in conjunction with a
+/// [`ValueBuilder`]. The trait provides methods for managing field names and their IDs, as well as
+/// rolling back a failed builder operation that might have created new field ids.
+pub trait MetadataBuilder: std::fmt::Debug {
+    /// Attempts to register a field name, returning the corresponding (possibly newly-created)
+    /// field id on success. Attempting to register the same field name twice will _generally_
+    /// produce the same field id both times, but the variant spec does not actually require it.
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError>;
+
+    /// Retrieves the field name for a given field id, which must be less than
+    /// [`Self::num_field_names`]. Panics if the field id is out of bounds.
+    fn field_name(&self, field_id: usize) -> &str;
+
+    /// Returns the number of field names stored in this metadata builder. Any number less than this
+    /// is a valid field id. The builder can be reverted back to this size later on (discarding any
+    /// newer/higher field ids) by calling [`Self::truncate_field_names`].
+    fn num_field_names(&self) -> usize;
+
+    /// Reverts the field names to a previous size, discarding any newly out of bounds field ids.
+    fn truncate_field_names(&mut self, new_size: usize);
+}
+
+impl MetadataBuilder for BasicMetadataBuilder {
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        Ok(self.upsert_field_name(field_name))
+    }
+    fn field_name(&self, field_id: usize) -> &str {
+        self.field_name(field_id)
+    }
+    fn num_field_names(&self) -> usize {
+        self.num_field_names()
+    }
+    fn truncate_field_names(&mut self, new_size: usize) {
+        self.field_names.truncate(new_size)
+    }
+}
+
+/// A metadata builder that cannot register new field names, and merely returns the field id
+/// associated with a known field name. This is useful for variant unshredding operations, where the
+/// metadata column is fixed and -- per variant shredding spec -- already contains all field names
+/// from the typed_value column. It is also useful when projecting a subset of fields from a variant
+/// object value, since the bytes can be copied across directly without re-encoding their field ids.
+#[derive(Debug)]
+pub struct ReadOnlyMetadataBuilder<'m> {
+    metadata: VariantMetadata<'m>,
+    known_field_names: HashMap<&'m str, u32>,
+}
+
+impl<'m> ReadOnlyMetadataBuilder<'m> {
+    /// Creates a new read-only metadata builder from the given metadata dictionary.
+    pub fn new(metadata: VariantMetadata<'m>) -> Self {
+        Self {
+            metadata,
+            known_field_names: HashMap::new(),
+        }
+    }
+}
+
+impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        if let Some(field_id) = self.known_field_names.get(field_name) {
+            return Ok(*field_id);
+        }
+
+        let (field_id, field_name) = self.metadata.get_entry(field_name).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Field name '{field_name}' not found in metadata dictionary"
+            ))
+        })?;
+
+        self.known_field_names.insert(field_name, field_id);
+        Ok(field_id)
+    }
+    fn field_name(&self, field_id: usize) -> &str {
+        &self.metadata[field_id]
+    }
+    fn num_field_names(&self) -> usize {
+        self.metadata.len()
+    }
+    fn truncate_field_names(&mut self, new_size: usize) {
+        debug_assert_eq!(self.metadata.len(), new_size);
+    }
+}
+
 /// Builder for constructing metadata for [`Variant`] values.
 ///
 /// This is used internally by the [`VariantBuilder`] to construct the metadata
 ///
 /// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
 #[derive(Default, Debug)]
-struct MetadataBuilder {
+struct BasicMetadataBuilder {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 
@@ -449,7 +535,7 @@ struct MetadataBuilder {
 }
 
 /// Create a new MetadataBuilder that will write to the specified metadata buffer
-impl From<Vec<u8>> for MetadataBuilder {
+impl From<Vec<u8>> for BasicMetadataBuilder {
     fn from(metadata_buffer: Vec<u8>) -> Self {
         Self {
             metadata_buffer,
@@ -458,7 +544,7 @@ impl From<Vec<u8>> for MetadataBuilder {
     }
 }
 
-impl MetadataBuilder {
+impl BasicMetadataBuilder {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
@@ -549,7 +635,7 @@ impl MetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
+impl<S: AsRef<str>> FromIterator<S> for BasicMetadataBuilder {
     fn from_iter<T: IntoIterator<Item = S>>(iter: T) -> Self {
         let mut this = Self::default();
         this.extend(iter);
@@ -558,7 +644,7 @@ impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
+impl<S: AsRef<str>> Extend<S> for BasicMetadataBuilder {
     fn extend<T: IntoIterator<Item = S>>(&mut self, iter: T) {
         let iter = iter.into_iter();
         let (min, _) = iter.size_hint();
@@ -589,14 +675,14 @@ enum ParentState<'a> {
     Variant {
         value_builder: &'a mut ValueBuilder,
         saved_value_builder_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         finished: bool,
     },
     List {
         value_builder: &'a mut ValueBuilder,
         saved_value_builder_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         offsets: &'a mut Vec<usize>,
         saved_offsets_size: usize,
@@ -605,7 +691,7 @@ enum ParentState<'a> {
     Object {
         value_builder: &'a mut ValueBuilder,
         saved_value_builder_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         fields: &'a mut IndexMap<u32, usize>,
         saved_fields_size: usize,
@@ -616,7 +702,7 @@ enum ParentState<'a> {
 impl<'a> ParentState<'a> {
     fn variant(
         value_builder: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
     ) -> Self {
         ParentState::Variant {
             saved_value_builder_offset: value_builder.offset(),
@@ -629,7 +715,7 @@ impl<'a> ParentState<'a> {
 
     fn list(
         value_builder: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         offsets: &'a mut Vec<usize>,
         saved_parent_value_builder_offset: usize,
     ) -> Self {
@@ -653,7 +739,7 @@ impl<'a> ParentState<'a> {
 
     fn try_object(
         value_builder: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
         saved_parent_value_builder_offset: usize,
         field_name: &str,
@@ -665,7 +751,7 @@ impl<'a> ParentState<'a> {
         let saved_value_builder_offset = value_builder.offset();
         let saved_fields_size = fields.len();
         let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
-        let field_id = metadata_builder.upsert_field_name(field_name);
+        let field_id = metadata_builder.try_upsert_field_name(field_name)?;
         let field_start = saved_value_builder_offset - saved_parent_value_builder_offset;
         if fields.insert(field_id, field_start).is_some() && validate_unique_fields {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -688,7 +774,7 @@ impl<'a> ParentState<'a> {
         self.value_and_metadata_builders().0
     }
 
-    fn metadata_builder(&mut self) -> &mut MetadataBuilder {
+    fn metadata_builder(&mut self) -> &mut dyn MetadataBuilder {
         self.value_and_metadata_builders().1
     }
 
@@ -754,9 +840,7 @@ impl<'a> ParentState<'a> {
                 value_builder
                     .inner_mut()
                     .truncate(*saved_value_builder_offset);
-                metadata_builder
-                    .field_names
-                    .truncate(*saved_metadata_builder_dict_size);
+                metadata_builder.truncate_field_names(*saved_metadata_builder_dict_size);
             }
         };
 
@@ -778,7 +862,7 @@ impl<'a> ParentState<'a> {
 
     /// Return mutable references to the value and metadata builders that this
     /// parent state is using.
-    fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut MetadataBuilder) {
+    fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut dyn MetadataBuilder) {
         match self {
             ParentState::Variant {
                 value_builder,
@@ -1079,7 +1163,7 @@ impl Drop for ParentState<'_> {
 #[derive(Default, Debug)]
 pub struct VariantBuilder {
     value_builder: ValueBuilder,
-    metadata_builder: MetadataBuilder,
+    metadata_builder: BasicMetadataBuilder,
     validate_unique_fields: bool,
 }
 
@@ -1088,7 +1172,7 @@ impl VariantBuilder {
     pub fn new() -> Self {
         Self {
             value_builder: ValueBuilder::new(),
-            metadata_builder: MetadataBuilder::default(),
+            metadata_builder: BasicMetadataBuilder::default(),
             validate_unique_fields: false,
         }
     }
@@ -1105,7 +1189,7 @@ impl VariantBuilder {
     pub fn new_with_buffers(metadata_buffer: Vec<u8>, value_buffer: Vec<u8>) -> Self {
         Self {
             value_builder: ValueBuilder::from(value_buffer),
-            metadata_builder: MetadataBuilder::from(metadata_buffer),
+            metadata_builder: BasicMetadataBuilder::from(metadata_buffer),
             validate_unique_fields: false,
         }
     }
@@ -2703,28 +2787,28 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_from_iter() {
-        let metadata = MetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
+        let metadata = BasicMetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "apple");
         assert_eq!(metadata.field_name(1), "banana");
         assert_eq!(metadata.field_name(2), "cherry");
         assert!(metadata.is_sorted);
 
-        let metadata = MetadataBuilder::from_iter(["zebra", "apple", "banana"]);
+        let metadata = BasicMetadataBuilder::from_iter(["zebra", "apple", "banana"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "zebra");
         assert_eq!(metadata.field_name(1), "apple");
         assert_eq!(metadata.field_name(2), "banana");
         assert!(!metadata.is_sorted);
 
-        let metadata = MetadataBuilder::from_iter(Vec::<&str>::new());
+        let metadata = BasicMetadataBuilder::from_iter(Vec::<&str>::new());
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
     }
 
     #[test]
     fn test_metadata_builder_extend() {
-        let mut metadata = MetadataBuilder::default();
+        let mut metadata = BasicMetadataBuilder::default();
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
 
@@ -2749,7 +2833,7 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_extend_sort_order() {
-        let mut metadata = MetadataBuilder::default();
+        let mut metadata = BasicMetadataBuilder::default();
 
         metadata.extend(["middle"]);
         assert!(metadata.is_sorted);
@@ -2765,17 +2849,20 @@ mod tests {
     #[test]
     fn test_metadata_builder_from_iter_with_string_types() {
         // &str
-        let metadata = MetadataBuilder::from_iter(["a", "b", "c"]);
+        let metadata = BasicMetadataBuilder::from_iter(["a", "b", "c"]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // string
-        let metadata =
-            MetadataBuilder::from_iter(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        let metadata = BasicMetadataBuilder::from_iter(vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+        ]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // mixed types (anything that implements AsRef<str>)
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
-        let metadata = MetadataBuilder::from_iter(field_names);
+        let metadata = BasicMetadataBuilder::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
     }
 
