@@ -1133,6 +1133,18 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal32array() {
+        let a = Decimal32Array::from_iter_values([1, 2, 4, 5]);
+        assert!(!as_primitive_array::<Decimal32Type>(&a).is_empty());
+    }
+
+    #[test]
+    fn test_decimal64array() {
+        let a = Decimal64Array::from_iter_values([1, 2, 4, 5]);
+        assert!(!as_primitive_array::<Decimal64Type>(&a).is_empty());
+    }
+
+    #[test]
     fn test_decimal128array() {
         let a = Decimal128Array::from_iter_values([1, 2, 4, 5]);
         assert!(!as_primitive_array::<Decimal128Type>(&a).is_empty());

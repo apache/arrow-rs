@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks for `arrow‑avro` **Decoder**
+//! Benchmarks for `arrow‑avro` **Writer** (Avro Object Container Files)
 //!
 
 extern crate arrow_avro;
