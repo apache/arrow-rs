@@ -1541,8 +1541,8 @@ pub trait VariantBuilderExt {
         self.try_new_list().unwrap()
     }
 
-    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_object`]. Panics if the nested
-    /// builder cannot be created, see e.g. [`ObjectBuilder::new_object`].
+    /// Creates a nested object builder. See e.g. [`VariantBuilder::new_object`]. Panics if the
+    /// nested builder cannot be created, see e.g. [`ObjectBuilder::new_object`].
     fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.try_new_object().unwrap()
     }
@@ -1551,8 +1551,8 @@ pub trait VariantBuilderExt {
     /// the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_list`].
     fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
 
-    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_object`]. Returns an error if
-    /// the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_object`].
+    /// Creates a nested object builder. See e.g. [`VariantBuilder::new_object`]. Returns an error
+    /// if the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_object`].
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
 }
 
