@@ -500,7 +500,7 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
         let Some((field_id, field_name)) = self.metadata.get_entry(field_name) else {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Field name '{field_name}' not found in metadata dictionary"
-            )))
+            )));
         };
 
         self.known_field_names.insert(field_name, field_id);
