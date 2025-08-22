@@ -24,7 +24,6 @@ use parquet_variant::{Variant, VariantPath};
 use std::sync::Arc;
 
 /// Outputs VariantArrays
-#[allow(unused)]
 pub(super) struct VariantOutputBuilder<'a> {
     /// What path to extract
     path: VariantPath<'a>,

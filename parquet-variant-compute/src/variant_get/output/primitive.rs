@@ -33,7 +33,6 @@ use std::sync::Arc;
 /// Trait for Arrow primitive types that can be used in the output builder
 ///
 /// This just exists to add a generic way to convert from Variant to the primitive type
-#[allow(unused)]
 pub(super) trait ArrowPrimitiveVariant: ArrowPrimitiveType {
     /// Try to extract the primitive value from a Variant, returning None if it
     /// cannot be converted
@@ -43,7 +42,6 @@ pub(super) trait ArrowPrimitiveVariant: ArrowPrimitiveType {
 }
 
 /// Outputs Primitive arrays
-#[allow(unused)]
 pub(super) struct PrimitiveOutputBuilder<'a, T: ArrowPrimitiveVariant> {
     /// What path to extract
     path: VariantPath<'a>,
