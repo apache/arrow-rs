@@ -427,7 +427,8 @@ impl<W: Write + Send> ArrowWriter<W> {
         Ok(())
     }
 
-    /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`]
+    /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
+    /// This can be useful to provide more control over how files are written.
     pub fn into_serialized_writer(
         mut self,
     ) -> Result<(SerializedFileWriter<W>, ArrowRowGroupWriterFactory)> {
@@ -859,8 +860,7 @@ impl ArrowRowGroupWriter {
     }
 }
 
-/// ArrowRowGroupWriterFactory can be used for creating new [`ArrowRowGroupWriter`] instances
-/// for each row group in the Parquet file.
+/// Factory that creates new column writers for each row group in the Parquet file.
 pub struct ArrowRowGroupWriterFactory {
     schema: SchemaDescriptor,
     arrow_schema: SchemaRef,
@@ -917,11 +917,10 @@ impl ArrowRowGroupWriterFactory {
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
 
-    /// Create a new row group writer and return its column writers.
-    pub fn get_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
-        // let row_group_index = self.writer.flushed_row_groups().len();
-        let in_progress = self.create_row_group_writer(row_group_index)?;
-        Ok(in_progress.writers)
+    /// Create column writers for a new row group.
+    pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+        let rg_writer = self.create_row_group_writer(row_group_index)?;
+        Ok(rg_writer.writers)
     }
 }
 

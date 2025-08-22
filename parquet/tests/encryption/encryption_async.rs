@@ -503,14 +503,15 @@ async fn read_and_roundtrip_to_encrypted_file_async(
     verify_encryption_test_file_read_async(&mut file, decryption_properties).await
 }
 
+// Type aliases for multithreaded file writing tests
 type ColSender = Sender<ArrowLeafColumn>;
 type ColumnWriterTask = JoinHandle<Result<ArrowColumnWriter, ParquetError>>;
 type RBStreamSerializeResult = Result<(Vec<ArrowColumnChunk>, usize), ParquetError>;
 
 async fn send_arrays_to_column_writers(
-    col_array_channels: &Vec<ColSender>,
+    col_array_channels: &[ColSender],
     rb: &RecordBatch,
-    schema: Arc<Schema>,
+    schema: &Arc<Schema>,
 ) -> Result<(), ParquetError> {
     // Each leaf column has its own channel, increment next_channel for each leaf column sent.
     let mut next_channel = 0;
@@ -545,17 +546,17 @@ fn spawn_rg_join_and_finalize_task(
 }
 
 fn spawn_parquet_parallel_serialization_task(
-    rgwf: ArrowRowGroupWriterFactory,
+    writer_factory: ArrowRowGroupWriterFactory,
     mut data: Receiver<RecordBatch>,
     serialize_tx: Sender<JoinHandle<RBStreamSerializeResult>>,
     schema: Arc<Schema>,
-) -> Result<JoinHandle<Result<(), ParquetError>>, ParquetError> {
-    let handle = tokio::spawn(async move {
+) -> JoinHandle<Result<(), ParquetError>> {
+    tokio::spawn(async move {
         let max_buffer_rb = 10;
         let max_row_group_rows = 10;
         let mut row_group_index = 0;
 
-        let column_writers = rgwf.get_column_writers(row_group_index).unwrap();
+        let column_writers = writer_factory.create_column_writers(row_group_index)?;
 
         // type ColumnWriterTask = SpawnedTask<Result<(ArrowColumnWriter, MemoryReservation)>>;
         let (mut col_writer_tasks, mut col_array_channels) =
@@ -569,14 +570,13 @@ fn spawn_parquet_parallel_serialization_task(
             // function.
             loop {
                 if current_rg_rows + rb.num_rows() < max_row_group_rows {
-                    send_arrays_to_column_writers(&col_array_channels, &rb, schema.clone()).await?;
+                    send_arrays_to_column_writers(&col_array_channels, &rb, &schema).await?;
                     current_rg_rows += rb.num_rows();
                     break;
                 } else {
                     let rows_left = max_row_group_rows - current_rg_rows;
                     let rb_split = rb.slice(0, rows_left);
-                    send_arrays_to_column_writers(&col_array_channels, &rb_split, schema.clone())
-                        .await?;
+                    send_arrays_to_column_writers(&col_array_channels, &rb_split, &schema).await?;
 
                     // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
                     // on a separate task, so that we can immediately start on the next RG before waiting
@@ -596,9 +596,9 @@ fn spawn_parquet_parallel_serialization_task(
                     rb = rb.slice(rows_left, rb.num_rows() - rows_left);
 
                     row_group_index += 1;
-                    let column_writers = rgwf.get_column_writers(row_group_index).unwrap();
+                    let column_writers = writer_factory.create_column_writers(row_group_index)?;
                     (col_writer_tasks, col_array_channels) =
-                        spawn_column_parallel_row_group_writer(column_writers, 100).unwrap();
+                        spawn_column_parallel_row_group_writer(column_writers, 100)?;
                 }
             }
         }
@@ -617,9 +617,7 @@ fn spawn_parquet_parallel_serialization_task(
         }
 
         Ok(())
-    });
-
-    Ok(handle)
+    })
 }
 
 fn spawn_column_parallel_row_group_writer(
@@ -645,8 +643,8 @@ fn spawn_column_parallel_row_group_writer(
     Ok((col_writer_tasks, col_array_channels))
 }
 
-/// Consume RowGroups serialized by other parallel tasks and concatenate them in
-/// to the final parquet file, while flushing finalized bytes to an [ObjectStore]
+/// Consume RowGroups serialized by other parallel tasks and concatenate them
+/// to the final parquet file
 async fn concatenate_parallel_row_groups<W: Write + Send>(
     mut parquet_writer: SerializedFileWriter<W>,
     mut serialize_rx: Receiver<JoinHandle<RBStreamSerializeResult>>,
@@ -657,8 +655,8 @@ async fn concatenate_parallel_row_groups<W: Write + Send>(
         let (serialized_columns, _cnt) =
             result.map_err(|e| ParquetError::General(e.to_string()))??;
 
-        for task in serialized_columns {
-            task.append_to_row_group(&mut rg_out)?;
+        for column_chunk in serialized_columns {
+            column_chunk.append_to_row_group(&mut rg_out)?;
         }
         rg_out.close()?;
     }
@@ -711,18 +709,17 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
         ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props.clone()).unwrap();
 
     let (writer, row_group_writer_factory) = arrow_writer.into_serialized_writer().unwrap();
-    let max_rowgroups = 1;
+    let max_row_groups = 1;
 
     let (serialize_tx, serialize_rx) =
-        tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(max_rowgroups);
+        tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(max_row_groups);
 
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
         row_group_writer_factory,
         data,
         serialize_tx,
         schema.clone(),
-    )
-    .unwrap();
+    );
 
     let _file_metadata = concatenate_parallel_row_groups(writer, serialize_rx)
         .await
@@ -800,7 +797,6 @@ async fn test_multi_threaded_encrypted_writing() {
     }
 
     // Append the finalized row group to the SerializedFileWriter
-    // assert!(writer.append_row_group(finalized_rg).is_ok());
     assert!(writer.append_row_group(finalized_rg).is_ok());
 
     // HIGH-LEVEL API: Write RecordBatches into the file using ArrowWriter
