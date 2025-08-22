@@ -25,7 +25,7 @@ use crate::basic::Type as PhysicalType;
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
-use crate::file::page_index::column_index::ColumnIndexMetaData;
+use crate::file::page_index::column_index::{ColumnIndexIterators, ColumnIndexMetaData};
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::builder::{
@@ -597,7 +597,7 @@ macro_rules! get_statistics {
 }
 
 macro_rules! make_data_page_stats_iterator {
-    ($iterator_type: ident, $func: ident, $index_type: path, $stat_value_type: ty, $conv:expr) => {
+    ($iterator_type: ident, $func: ident, $stat_value_type: ty) => {
         struct $iterator_type<'a, I>
         where
             I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
@@ -624,19 +624,8 @@ macro_rules! make_data_page_stats_iterator {
                 let next = self.iter.next();
                 match next {
                     Some((len, index)) => match index {
-                        $index_type(native_index) => Some(
-                            native_index
-                                .$func()
-                                .map(|v| v.map($conv))
-                                .collect::<Vec<_>>(),
-                        ),
-                        // No matching `Index` found;
-                        // thus no statistics that can be extracted.
-                        // We return vec![None; len] to effectively
-                        // create an arrow null-array with the length
-                        // corresponding to the number of entries in
-                        // `ParquetOffsetIndex` per row group per column.
-                        _ => Some(vec![None; len]),
+                        ColumnIndexMetaData::NONE => Some(vec![None; len]),
+                        _ => Some(<$stat_value_type>::$func(&index).collect::<Vec<_>>()),
                     },
                     _ => None,
                 }
@@ -649,118 +638,46 @@ macro_rules! make_data_page_stats_iterator {
     };
 }
 
-make_data_page_stats_iterator!(
-    MinBooleanDataPageStatsIterator,
-    min_values_iter,
-    ColumnIndexMetaData::BOOLEAN,
-    bool,
-    |m| *m
-);
-make_data_page_stats_iterator!(
-    MaxBooleanDataPageStatsIterator,
-    max_values_iter,
-    ColumnIndexMetaData::BOOLEAN,
-    bool,
-    |m| *m
-);
-make_data_page_stats_iterator!(
-    MinInt32DataPageStatsIterator,
-    min_values_iter,
-    ColumnIndexMetaData::INT32,
-    i32,
-    |m| *m
-);
-make_data_page_stats_iterator!(
-    MaxInt32DataPageStatsIterator,
-    max_values_iter,
-    ColumnIndexMetaData::INT32,
-    i32,
-    |m| *m
-);
-make_data_page_stats_iterator!(
-    MinInt64DataPageStatsIterator,
-    min_values_iter,
-    ColumnIndexMetaData::INT64,
-    i64,
-    |m| *m
-);
-make_data_page_stats_iterator!(
-    MaxInt64DataPageStatsIterator,
-    max_values_iter,
-    ColumnIndexMetaData::INT64,
-    i64,
-    |m| *m
-);
+make_data_page_stats_iterator!(MinBooleanDataPageStatsIterator, min_values_iter, bool);
+make_data_page_stats_iterator!(MaxBooleanDataPageStatsIterator, max_values_iter, bool);
+make_data_page_stats_iterator!(MinInt32DataPageStatsIterator, min_values_iter, i32);
+make_data_page_stats_iterator!(MaxInt32DataPageStatsIterator, max_values_iter, i32);
+make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min_values_iter, i64);
+make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max_values_iter, i64);
 make_data_page_stats_iterator!(
     MinFloat16DataPageStatsIterator,
     min_values_iter,
-    ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray,
-    |m| FixedLenByteArray::from(m.to_owned())
+    FixedLenByteArray
 );
 make_data_page_stats_iterator!(
     MaxFloat16DataPageStatsIterator,
     max_values_iter,
-    ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray,
-    |m| FixedLenByteArray::from(m.to_owned())
+    FixedLenByteArray
 );
-make_data_page_stats_iterator!(
-    MinFloat32DataPageStatsIterator,
-    min_values_iter,
-    ColumnIndexMetaData::FLOAT,
-    f32,
-    |m| *m
-);
-make_data_page_stats_iterator!(
-    MaxFloat32DataPageStatsIterator,
-    max_values_iter,
-    ColumnIndexMetaData::FLOAT,
-    f32,
-    |m| *m
-);
-make_data_page_stats_iterator!(
-    MinFloat64DataPageStatsIterator,
-    min_values_iter,
-    ColumnIndexMetaData::DOUBLE,
-    f64,
-    |m| *m
-);
-make_data_page_stats_iterator!(
-    MaxFloat64DataPageStatsIterator,
-    max_values_iter,
-    ColumnIndexMetaData::DOUBLE,
-    f64,
-    |m| *m
-);
+make_data_page_stats_iterator!(MinFloat32DataPageStatsIterator, min_values_iter, f32);
+make_data_page_stats_iterator!(MaxFloat32DataPageStatsIterator, max_values_iter, f32);
+make_data_page_stats_iterator!(MinFloat64DataPageStatsIterator, min_values_iter, f64);
+make_data_page_stats_iterator!(MaxFloat64DataPageStatsIterator, max_values_iter, f64);
 make_data_page_stats_iterator!(
     MinByteArrayDataPageStatsIterator,
     min_values_iter,
-    ColumnIndexMetaData::BYTE_ARRAY,
-    ByteArray,
-    |m| ByteArray::from(m.to_owned())
+    ByteArray
 );
 make_data_page_stats_iterator!(
     MaxByteArrayDataPageStatsIterator,
     max_values_iter,
-    ColumnIndexMetaData::BYTE_ARRAY,
-    ByteArray,
-    |m| ByteArray::from(m.to_owned())
+    ByteArray
 );
 make_data_page_stats_iterator!(
     MaxFixedLenByteArrayDataPageStatsIterator,
     max_values_iter,
-    ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray,
-    |m| FixedLenByteArray::from(m.to_owned())
+    FixedLenByteArray
 );
 
 make_data_page_stats_iterator!(
     MinFixedLenByteArrayDataPageStatsIterator,
     min_values_iter,
-    ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY,
-    FixedLenByteArray,
-    |m| FixedLenByteArray::from(m.to_owned())
+    FixedLenByteArray
 );
 
 macro_rules! get_decimal_page_stats_iterator {

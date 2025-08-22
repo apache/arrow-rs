@@ -20,7 +20,10 @@
 //! [`ColumnIndex`]: crate::format::ColumnIndex
 //!
 
-use crate::errors::Result;
+use crate::{
+    data_type::{ByteArray, FixedLenByteArray},
+    errors::Result,
+};
 use std::ops::Deref;
 
 use crate::{
@@ -512,3 +515,55 @@ impl ColumnIndexMetaData {
         colidx_enum_func!(self, is_null_page, idx)
     }
 }
+
+/// Provides iterators over min and max values of a [`ColumnIndexMetaData`]
+pub trait ColumnIndexIterators {
+    /// Can be one of `bool`, `i32`, `i64`, `Int96`, `f32`, `f64`, [`ByteArray`],
+    /// or [`FixedLenByteArray`]
+    type Item;
+
+    /// Return iterator over the min values for the index
+    fn min_values_iter(colidx: &ColumnIndexMetaData) -> impl Iterator<Item = Option<Self::Item>>;
+
+    /// Return iterator over the max values for the index
+    fn max_values_iter(colidx: &ColumnIndexMetaData) -> impl Iterator<Item = Option<Self::Item>>;
+}
+
+macro_rules! column_index_iters {
+    ($item: ident, $variant: ident, $conv:expr) => {
+        impl ColumnIndexIterators for $item {
+            type Item = $item;
+
+            fn min_values_iter(
+                colidx: &ColumnIndexMetaData,
+            ) -> impl Iterator<Item = Option<Self::Item>> {
+                if let ColumnIndexMetaData::$variant(index) = colidx {
+                    index.min_values_iter().map($conv)
+                } else {
+                    panic!(concat!("Wrong type for ", stringify!($item), " iterator"))
+                }
+            }
+
+            fn max_values_iter(
+                colidx: &ColumnIndexMetaData,
+            ) -> impl Iterator<Item = Option<Self::Item>> {
+                if let ColumnIndexMetaData::$variant(index) = colidx {
+                    index.max_values_iter().map($conv)
+                } else {
+                    panic!(concat!("Wrong type for ", stringify!($item), " iterator"))
+                }
+            }
+        }
+    };
+}
+
+column_index_iters!(bool, BOOLEAN, |v| v.copied());
+column_index_iters!(i32, INT32, |v| v.copied());
+column_index_iters!(i64, INT64, |v| v.copied());
+column_index_iters!(Int96, INT96, |v| v.copied());
+column_index_iters!(f32, FLOAT, |v| v.copied());
+column_index_iters!(f64, DOUBLE, |v| v.copied());
+column_index_iters!(ByteArray, BYTE_ARRAY, |v| v
+    .map(|v| ByteArray::from(v.to_owned())));
+column_index_iters!(FixedLenByteArray, FIXED_LEN_BYTE_ARRAY, |v| v
+    .map(|v| FixedLenByteArray::from(v.to_owned())));
