@@ -552,8 +552,12 @@ fn convert_union(
         let value_offset = union_array.value_offset(i);
 
         if let Some(child_variant_array) = child_variant_arrays.get(&type_id) {
-            let value = child_variant_array.value(value_offset);
-            builder.append_variant(value);
+            if child_variant_array.is_null(value_offset) {
+                builder.append_null();
+            } else {
+                let value = child_variant_array.value(value_offset);
+                builder.append_variant(value);
+            }
         } else {
             // This should not happen in a valid union, but handle gracefully
             builder.append_null();
@@ -1670,10 +1674,10 @@ mod tests {
     #[test]
     fn test_cast_to_variant_union_sparse() {
         // Create a sparse union array with mixed types (int, float, string)
-        let int_array = Int32Array::from(vec![Some(1), None, None, None, Some(34)]);
-        let float_array = Float64Array::from(vec![None, Some(3.2), None, Some(32.5), None]);
-        let string_array = StringArray::from(vec![None, None, Some("hello"), None, None]);
-        let type_ids = [0, 1, 2, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let int_array = Int32Array::from(vec![Some(1), None, None, None, Some(34), None]);
+        let float_array = Float64Array::from(vec![None, Some(3.2), None, Some(32.5), None, None]);
+        let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
+        let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
 
         let union_fields = UnionFields::new(
             vec![0, 1, 2],
@@ -1706,6 +1710,7 @@ mod tests {
                 Some(Variant::from("hello")),
                 Some(Variant::Double(32.5)),
                 Some(Variant::Int32(34)),
+                None,
             ],
         );
     }
@@ -1713,11 +1718,13 @@ mod tests {
     #[test]
     fn test_cast_to_variant_union_dense() {
         // Create a dense union array with mixed types (int, float, string)
-        let int_array = Int32Array::from(vec![1, 34]);
+        let int_array = Int32Array::from(vec![Some(1), Some(34), None]);
         let float_array = Float64Array::from(vec![3.2, 32.5]);
         let string_array = StringArray::from(vec!["hello"]);
-        let type_ids = [0, 1, 2, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
-        let offsets = [0, 0, 0, 1, 1].into_iter().collect::<ScalarBuffer<i32>>();
+        let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 0, 1, 1, 2]
+            .into_iter()
+            .collect::<ScalarBuffer<i32>>();
 
         let union_fields = UnionFields::new(
             vec![0, 1, 2],
@@ -1750,6 +1757,7 @@ mod tests {
                 Some(Variant::from("hello")),
                 Some(Variant::Double(32.5)),
                 Some(Variant::Int32(34)),
+                None,
             ],
         );
     }
