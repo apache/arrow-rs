@@ -22,6 +22,7 @@ use arrow::array::{
     Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray,
 };
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{
     i256, ArrowNativeType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
     Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
@@ -250,7 +251,6 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Boolean => {
             non_generic_conversion!(as_boolean, |v| v, input, builder);
         }
-
         DataType::Binary => {
             generic_conversion!(BinaryType, as_bytes, |v| v, input, builder);
         }
@@ -535,6 +535,88 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(value);
             }
         }
+        DataType::List(_) => {
+            let list_array = input.as_list::<i32>();
+            let values = list_array.values();
+            let offsets = list_array.offsets();
+
+            let first_offset = offsets.first().expect("There should be an offset");
+            let length = offsets.last().expect("There should be an offset") - first_offset;
+            let sliced_values = values.slice(*first_offset as usize, length as usize);
+
+            let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
+            let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
+                offsets.iter().map(|o| o - first_offset),
+            ));
+
+            for i in 0..list_array.len() {
+                if list_array.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+
+                let start = new_offsets[i] as usize;
+                let end = new_offsets[i + 1] as usize;
+
+                // Start building the inner VariantList
+                let mut variant_builder = VariantBuilder::new();
+                let mut list_builder = variant_builder.new_list();
+
+                // Add all values from the slice
+                for j in start..end {
+                    list_builder.append_value(values_variant_array.value(j));
+                }
+
+                list_builder.finish();
+
+                let (metadata, value) = variant_builder.finish();
+                let variant = Variant::new(&metadata, &value);
+                let variant_list = variant.as_list().expect("Variant should be list");
+                builder.append_variant(Variant::List(variant_list.clone()))
+            }
+        }
+
+        DataType::LargeList(_) => {
+            let large_list_array = input.as_list::<i64>();
+            let values = large_list_array.values();
+            let offsets = large_list_array.offsets();
+
+            let first_offset = offsets.first().expect("There should be an offset");
+            let length = offsets.last().expect("There should be an offset") - first_offset;
+            let sliced_values = values.slice(*first_offset as usize, length as usize);
+
+            let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
+            let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
+                offsets.iter().map(|o| o - first_offset),
+            ));
+
+            for i in 0..large_list_array.len() {
+                if large_list_array.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+
+                let start = new_offsets[i] as usize; // What if the system is 32bit and offset is > usize::MAX?
+                let end = new_offsets[i + 1] as usize;
+
+                // Start building the inner VariantList
+                let mut variant_builder = VariantBuilder::new();
+                let mut list_builder = variant_builder.new_list();
+
+                // Add all values from the slice
+                for j in start..end {
+                    list_builder.append_value(values_variant_array.value(j));
+                }
+
+                list_builder.finish();
+
+                let (metadata, value) = variant_builder.finish();
+                let variant = Variant::new(&metadata, &value);
+                let variant_list = variant.as_list().expect("Variant should be list");
+                builder.append_variant(Variant::List(variant_list.clone()))
+            }
+        }
+
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
@@ -590,10 +672,10 @@ mod tests {
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
         Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, FixedSizeBinaryBuilder,
         Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder,
-        Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeStringArray,
-        NullArray, StringArray, StringRunBuilder, StringViewArray, StructArray,
-        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeListArray,
+        LargeStringArray, ListArray, NullArray, StringArray, StringRunBuilder, StringViewArray,
+        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow_schema::{Field, Fields};
@@ -1980,6 +2062,101 @@ mod tests {
                 Some(Variant::from("c")),
                 Some(Variant::from("a")),
             ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_list() {
+        // List Array
+        let data = vec![Some(vec![Some(0), Some(1), Some(2)]), None];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0);
+            list.append_value(1);
+            list.append_value(2);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(Arc::new(list_array), vec![Some(variant), None]);
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_list() {
+        // List Array
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+            None,
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3);
+            list.append_value(4);
+            list.append_value(5);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(Arc::new(list_array.slice(1, 2)), vec![Some(variant), None]);
+    }
+
+    #[test]
+    fn test_cast_to_variant_large_list() {
+        // Large List Array
+        let data = vec![Some(vec![Some(0), Some(1), Some(2)]), None];
+        let large_list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0i64);
+            list.append_value(1i64);
+            list.append_value(2i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(Arc::new(large_list_array), vec![Some(variant), None]);
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_large_list() {
+        // List Array
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+            None,
+        ];
+        let large_list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i64);
+            list.append_value(4i64);
+            list.append_value(5i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(large_list_array.slice(1, 2)),
+            vec![Some(variant), None],
         );
     }
 
