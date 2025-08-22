@@ -87,94 +87,83 @@ impl OutputBuilder for VariantOutputBuilder<'_> {
     ) -> arrow::error::Result<ArrayRef> {
         // TODO(perf): avoid builders entirely (and write the raw variant directly as we know the metadata is the same)
         match typed_value.data_type() {
-            DataType::Int8 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Int8Type,
-                    DataType::Int8
-                )
-            }
-            DataType::Int16 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Int16Type,
-                    DataType::Int16
-                )
-            }
-            DataType::Int32 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Int32Type,
-                    DataType::Int32
-                )
-            }
-            DataType::Int64 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Int64Type,
-                    DataType::Int64
-                )
-            }
-            DataType::UInt8 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    UInt8Type,
-                    DataType::UInt8
-                )
-            }
-            DataType::UInt16 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    UInt16Type,
-                    DataType::Int16
-                )
-            }
-            DataType::UInt32 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    UInt32Type,
-                    DataType::UInt32
-                )
-            }
-            DataType::UInt64 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    UInt64Type,
-                    DataType::UInt64
-                )
-            }
-            DataType::Float16 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Float16Type,
-                    DataType::Float16
-                )
-            }
-            DataType::Float32 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Float32Type,
-                    DataType::Float32
-                )
-            }
-            DataType::Float64 => {
-                cast_partially_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Float64Type,
-                    DataType::Float64
-                )
-            }
+            DataType::Int8 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int8Type,
+                DataType::Int8
+            ),
+
+            DataType::Int16 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int16Type,
+                DataType::Int16
+            ),
+
+            DataType::Int32 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int32Type,
+                DataType::Int32
+            ),
+
+            DataType::Int64 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int64Type,
+                DataType::Int64
+            ),
+
+            DataType::UInt8 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt8Type,
+                DataType::UInt8
+            ),
+
+            DataType::UInt16 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt16Type,
+                DataType::Int16
+            ),
+
+            DataType::UInt32 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt32Type,
+                DataType::UInt32
+            ),
+
+            DataType::UInt64 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt64Type,
+                DataType::UInt64
+            ),
+
+            DataType::Float16 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float16Type,
+                DataType::Float16
+            ),
+
+            DataType::Float32 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float32Type,
+                DataType::Float32
+            ),
+
+            DataType::Float64 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float64Type,
+                DataType::Float64
+            ),
+
             dt => {
                 // https://github.com/apache/arrow-rs/issues/8086
                 Err(ArrowError::NotYetImplemented(format!(
@@ -193,94 +182,83 @@ impl OutputBuilder for VariantOutputBuilder<'_> {
     ) -> arrow::error::Result<ArrayRef> {
         // TODO(perf): avoid builders entirely (and write the raw variant directly as we know the metadata is the same)
         match typed_value.data_type() {
-            DataType::Int8 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Int8Type,
-                    DataType::Int8
-                )
-            }
-            DataType::Int16 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Int16Type,
-                    DataType::Int16
-                )
-            }
-            DataType::Int32 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Int32Type,
-                    DataType::Int32
-                )
-            }
-            DataType::Int64 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Int64Type,
-                    DataType::Int64
-                )
-            }
-            DataType::UInt8 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    UInt8Type,
-                    DataType::UInt8
-                )
-            }
-            DataType::UInt16 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    UInt16Type,
-                    DataType::Int16
-                )
-            }
-            DataType::UInt32 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    UInt32Type,
-                    DataType::UInt32
-                )
-            }
-            DataType::UInt64 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    UInt64Type,
-                    DataType::UInt64
-                )
-            }
-            DataType::Float16 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Float16Type,
-                    DataType::Float16
-                )
-            }
-            DataType::Float32 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Float32Type,
-                    DataType::Float32
-                )
-            }
-            DataType::Float64 => {
-                cast_perfectly_shredded_primitive!(
-                    typed_value,
-                    variant_array,
-                    Float64Type,
-                    DataType::Float64
-                )
-            }
+            DataType::Int8 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int8Type,
+                DataType::Int8
+            ),
+
+            DataType::Int16 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int16Type,
+                DataType::Int16
+            ),
+
+            DataType::Int32 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int32Type,
+                DataType::Int32
+            ),
+
+            DataType::Int64 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int64Type,
+                DataType::Int64
+            ),
+
+            DataType::UInt8 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt8Type,
+                DataType::UInt8
+            ),
+
+            DataType::UInt16 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt16Type,
+                DataType::Int16
+            ),
+
+            DataType::UInt32 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt32Type,
+                DataType::UInt32
+            ),
+
+            DataType::UInt64 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt64Type,
+                DataType::UInt64
+            ),
+
+            DataType::Float16 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float16Type,
+                DataType::Float16
+            ),
+
+            DataType::Float32 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float32Type,
+                DataType::Float32
+            ),
+
+            DataType::Float64 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float64Type,
+                DataType::Float64
+            ),
+
             dt => {
                 // https://github.com/apache/arrow-rs/issues/8087
                 Err(ArrowError::NotYetImplemented(format!(
