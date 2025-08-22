@@ -201,7 +201,7 @@ impl ColumnIndex {
 
 /// Column index for primitive types
 #[derive(Debug, Clone, PartialEq)]
-pub struct PrimitiveColumnIndex<T: ParquetValueType> {
+pub struct PrimitiveColumnIndex<T> {
     pub(crate) column_index: ColumnIndex,
     pub(crate) min_values: Vec<T>,
     pub(crate) max_values: Vec<T>,
@@ -241,6 +241,37 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
         })
     }
 
+    pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
+        let min_values = self
+            .min_values
+            .iter()
+            .map(|x| x.as_bytes().to_vec())
+            .collect::<Vec<_>>();
+
+        let max_values = self
+            .max_values
+            .iter()
+            .map(|x| x.as_bytes().to_vec())
+            .collect::<Vec<_>>();
+
+        let null_counts = self.null_counts.clone();
+        let repetition_level_histograms = self.repetition_level_histograms.clone();
+        let definition_level_histograms = self.definition_level_histograms.clone();
+        let null_pages = self.null_pages.clone();
+
+        crate::format::ColumnIndex::new(
+            null_pages,
+            min_values,
+            max_values,
+            self.boundary_order.into(),
+            null_counts,
+            repetition_level_histograms,
+            definition_level_histograms,
+        )
+    }
+}
+
+impl<T> PrimitiveColumnIndex<T> {
     /// Returns an array containing the min values for each page.
     ///
     /// Values in the returned slice are only valid if [`ColumnIndex::is_null_page()`]
@@ -304,38 +335,9 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
             Some(&self.max_values[idx])
         }
     }
-
-    pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
-        let min_values = self
-            .min_values
-            .iter()
-            .map(|x| x.as_bytes().to_vec())
-            .collect::<Vec<_>>();
-
-        let max_values = self
-            .max_values
-            .iter()
-            .map(|x| x.as_bytes().to_vec())
-            .collect::<Vec<_>>();
-
-        let null_counts = self.null_counts.clone();
-        let repetition_level_histograms = self.repetition_level_histograms.clone();
-        let definition_level_histograms = self.definition_level_histograms.clone();
-        let null_pages = self.null_pages.clone();
-
-        crate::format::ColumnIndex::new(
-            null_pages,
-            min_values,
-            max_values,
-            self.boundary_order.into(),
-            null_counts,
-            repetition_level_histograms,
-            definition_level_histograms,
-        )
-    }
 }
 
-impl<T: ParquetValueType> Deref for PrimitiveColumnIndex<T> {
+impl<T> Deref for PrimitiveColumnIndex<T> {
     type Target = ColumnIndex;
 
     fn deref(&self) -> &Self::Target {
@@ -437,7 +439,7 @@ impl ByteArrayColumnIndex {
     ///
     /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
     pub fn min_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
-        (0..self.num_pages() as usize).into_iter().map(|i| {
+        (0..self.num_pages() as usize).map(|i| {
             if self.is_null_page(i) {
                 None
             } else {
@@ -450,7 +452,7 @@ impl ByteArrayColumnIndex {
     ///
     /// Values may be `None` when [`ColumnIndex::is_null_page()`] is `true`.
     pub fn max_values_iter(&self) -> impl Iterator<Item = Option<&[u8]>> {
-        (0..self.num_pages() as usize).into_iter().map(|i| {
+        (0..self.num_pages() as usize).map(|i| {
             if self.is_null_page(i) {
                 None
             } else {
@@ -462,12 +464,12 @@ impl ByteArrayColumnIndex {
     pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
         let mut min_values = Vec::with_capacity(self.num_pages() as usize);
         for i in 0..self.num_pages() as usize {
-            min_values.push(self.min_value(i).unwrap_or(&vec![]).to_owned());
+            min_values.push(self.min_value(i).unwrap_or(&[]).to_owned());
         }
 
         let mut max_values = Vec::with_capacity(self.num_pages() as usize);
         for i in 0..self.num_pages() as usize {
-            max_values.push(self.max_value(i).unwrap_or(&vec![]).to_owned());
+            max_values.push(self.max_value(i).unwrap_or(&[]).to_owned());
         }
 
         let null_counts = self.null_counts.clone();

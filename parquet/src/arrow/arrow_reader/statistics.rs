@@ -654,42 +654,42 @@ make_data_page_stats_iterator!(
     min_values_iter,
     ColumnIndexMetaData::BOOLEAN,
     bool,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MaxBooleanDataPageStatsIterator,
     max_values_iter,
     ColumnIndexMetaData::BOOLEAN,
     bool,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MinInt32DataPageStatsIterator,
     min_values_iter,
     ColumnIndexMetaData::INT32,
     i32,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MaxInt32DataPageStatsIterator,
     max_values_iter,
     ColumnIndexMetaData::INT32,
     i32,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MinInt64DataPageStatsIterator,
     min_values_iter,
     ColumnIndexMetaData::INT64,
     i64,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MaxInt64DataPageStatsIterator,
     max_values_iter,
     ColumnIndexMetaData::INT64,
     i64,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MinFloat16DataPageStatsIterator,
@@ -710,28 +710,28 @@ make_data_page_stats_iterator!(
     min_values_iter,
     ColumnIndexMetaData::FLOAT,
     f32,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MaxFloat32DataPageStatsIterator,
     max_values_iter,
     ColumnIndexMetaData::FLOAT,
     f32,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MinFloat64DataPageStatsIterator,
     min_values_iter,
     ColumnIndexMetaData::DOUBLE,
     f64,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MaxFloat64DataPageStatsIterator,
     max_values_iter,
     ColumnIndexMetaData::DOUBLE,
     f64,
-    |m| m.clone()
+    |m| *m
 );
 make_data_page_stats_iterator!(
     MinByteArrayDataPageStatsIterator,
