@@ -22,6 +22,7 @@ use arrow::array::{
     Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray,
 };
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{
     i256, ArrowNativeType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
     Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
@@ -536,8 +537,17 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         }
         DataType::List(_) => {
             let list_array = input.as_list::<i32>();
-            let values_variant_array = cast_to_variant(list_array.values().as_ref())?;
+            let values = list_array.values();
             let offsets = list_array.offsets();
+
+            let first_offset = offsets.first().expect("There should be an offset");
+            let length = offsets.last().expect("There should be an offset") - first_offset;
+            let sliced_values = values.slice(*first_offset as usize, length as usize);
+
+            let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
+            let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
+                offsets.iter().map(|o| o - first_offset),
+            ));
 
             for i in 0..list_array.len() {
                 if list_array.is_null(i) {
@@ -545,8 +555,8 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                     continue;
                 }
 
-                let start = offsets[i] as usize;
-                let end = offsets[i + 1] as usize;
+                let start = new_offsets[i] as usize;
+                let end = new_offsets[i + 1] as usize;
 
                 // Start building the inner VariantList
                 let mut variant_builder = VariantBuilder::new();
@@ -568,8 +578,17 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 
         DataType::LargeList(_) => {
             let large_list_array = input.as_list::<i64>();
-            let values_variant_array = cast_to_variant(large_list_array.values().as_ref())?;
+            let values = large_list_array.values();
             let offsets = large_list_array.offsets();
+
+            let first_offset = offsets.first().expect("There should be an offset");
+            let length = offsets.last().expect("There should be an offset") - first_offset;
+            let sliced_values = values.slice(*first_offset as usize, length as usize);
+
+            let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
+            let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
+                offsets.iter().map(|o| o - first_offset),
+            ));
 
             for i in 0..large_list_array.len() {
                 if large_list_array.is_null(i) {
@@ -577,8 +596,8 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                     continue;
                 }
 
-                let start = offsets[i] as usize; // What if the system is 32bit and offset is > usize::MAX?
-                let end = offsets[i + 1] as usize;
+                let start = new_offsets[i] as usize; // What if the system is 32bit and offset is > usize::MAX?
+                let end = new_offsets[i + 1] as usize;
 
                 // Start building the inner VariantList
                 let mut variant_builder = VariantBuilder::new();
@@ -2068,6 +2087,31 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_to_variant_sliced_list() {
+        // List Array
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+            None,
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3);
+            list.append_value(4);
+            list.append_value(5);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(Arc::new(list_array.slice(1, 2)), vec![Some(variant), None]);
+    }
+
+    #[test]
     fn test_cast_to_variant_large_list() {
         // Large List Array
         let data = vec![Some(vec![Some(0), Some(1), Some(2)]), None];
@@ -2086,6 +2130,34 @@ mod tests {
         let variant = Variant::new(&metadata, &value);
 
         run_test(Arc::new(large_list_array), vec![Some(variant), None]);
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_large_list() {
+        // List Array
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+            None,
+        ];
+        let large_list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i64);
+            list.append_value(4i64);
+            list.append_value(5i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(large_list_array.slice(1, 2)),
+            vec![Some(variant), None],
+        );
     }
 
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
