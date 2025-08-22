@@ -3342,4 +3342,67 @@ mod tests {
 
         assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
     }
+
+    #[test]
+    fn test_read_only_metadata_builder() {
+        // First create some metadata with a few field names
+        let mut default_builder = VariantBuilder::new();
+        default_builder.add_field_name("name");
+        default_builder.add_field_name("age");
+        default_builder.add_field_name("active");
+        let (metadata_bytes, _) = default_builder.finish();
+
+        // Use the metadata to build new variant values
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata);
+        let mut value_builder = ValueBuilder::new();
+
+        {
+            let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
+            let mut obj = ObjectBuilder::new(state, false);
+            // These should succeed because the fields exist in the metadata
+            obj.insert("name", "Alice");
+            obj.insert("age", 30i8);
+            obj.insert("active", true);
+            obj.finish().unwrap();
+        }
+
+        let value = value_builder.into_inner();
+
+        // Verify the variant was built correctly
+        let variant = Variant::try_new(&metadata_bytes, &value).unwrap();
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.get("name"), Some(Variant::from("Alice")));
+        assert_eq!(obj.get("age"), Some(Variant::Int8(30)));
+        assert_eq!(obj.get("active"), Some(Variant::from(true)));
+    }
+
+    #[test]
+    fn test_read_only_metadata_builder_fails_on_unknown_field() {
+        // Create metadata with only one field
+        let mut default_builder = VariantBuilder::new();
+        default_builder.add_field_name("known_field");
+        let (metadata_bytes, _) = default_builder.finish();
+
+        // Use the metadata to build new variant values
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata);
+        let mut value_builder = ValueBuilder::new();
+
+        {
+            let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
+            let mut obj = ObjectBuilder::new(state, false);
+
+            // This should succeed
+            obj.insert("known_field", "value");
+
+            // This should fail because "unknown_field" is not in the metadata
+            let result = obj.try_insert("unknown_field", "value");
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Field name 'unknown_field' not found"));
+        }
+    }
 }
