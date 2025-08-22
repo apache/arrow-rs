@@ -184,7 +184,6 @@ impl OutputBuilder for VariantOutputBuilder<'_> {
             DataType::Float64 => {
                 primitive_conversion_array!(Float64Type, typed_value, array_builder)
             }
-
             dt => {
                 // https://github.com/apache/arrow-rs/issues/8087
                 return Err(ArrowError::NotYetImplemented(format!(
