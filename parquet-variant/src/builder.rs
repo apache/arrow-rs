@@ -497,11 +497,11 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
             return Ok(*field_id);
         }
 
-        let (field_id, field_name) = self.metadata.get_entry(field_name).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
+        let Some((field_id, field_name)) = self.metadata.get_entry(field_name) else {
+            return Err(ArrowError::InvalidArgumentError(format!(
                 "Field name '{field_name}' not found in metadata dictionary"
-            ))
-        })?;
+            )))
+        };
 
         self.known_field_names.insert(field_name, field_id);
         Ok(field_id)
@@ -3360,6 +3360,7 @@ mod tests {
         {
             let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
             let mut obj = ObjectBuilder::new(state, false);
+
             // These should succeed because the fields exist in the metadata
             obj.insert("name", "Alice");
             obj.insert("age", 30i8);
