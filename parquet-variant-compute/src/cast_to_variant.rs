@@ -654,15 +654,18 @@ mod tests {
     use super::*;
     use arrow::array::{
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, DurationMillisecondArray,
+        Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, DurationMicrosecondArray,
+        DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray,
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
         GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
-        IntervalYearMonthArray, LargeListArray, LargeStringArray, ListArray, MapArray, NullArray,
-        StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array, UnionArray,
+        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray,
+        LargeStringArray, ListArray, MapArray, NullArray, StringArray, StringRunBuilder,
+        StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+        UInt8Array, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::{DataType, Field, Fields, UnionFields};
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -1062,32 +1065,53 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_to_variant_duration_error() {
-        let array = DurationMillisecondArray::from(vec![Some(12), None, Some(-6)]);
-        let result = cast_to_variant(&array);
+    fn test_cast_to_variant_duration_or_interval_errors() {
+        let arrays: Vec<Box<dyn Array>> = vec![
+            // Duration types
+            Box::new(DurationSecondArray::from(vec![Some(10), None, Some(-5)])),
+            Box::new(DurationMillisecondArray::from(vec![
+                Some(10),
+                None,
+                Some(-5),
+            ])),
+            Box::new(DurationMicrosecondArray::from(vec![
+                Some(10),
+                None,
+                Some(-5),
+            ])),
+            Box::new(DurationNanosecondArray::from(vec![
+                Some(10),
+                None,
+                Some(-5),
+            ])),
+            // Interval types
+            Box::new(IntervalYearMonthArray::from(vec![Some(12), None, Some(-6)])),
+            Box::new(IntervalDayTimeArray::from(vec![
+                Some(IntervalDayTime::new(12, 0)),
+                None,
+                Some(IntervalDayTime::new(-6, 0)),
+            ])),
+            Box::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano::new(12, 0, 0)),
+                None,
+                Some(IntervalMonthDayNano::new(-6, 0, 0)),
+            ])),
+        ];
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ArrowError::InvalidArgumentError(msg) => {
-                assert!(msg.contains("Casting duration/interval types to Variant is not supported"));
-                assert!(msg.contains("The Variant format does not define duration/interval types"));
+        for array in arrays {
+            let result = cast_to_variant(array.as_ref());
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                ArrowError::InvalidArgumentError(msg) => {
+                    assert!(
+                        msg.contains("Casting duration/interval types to Variant is not supported")
+                    );
+                    assert!(
+                        msg.contains("The Variant format does not define duration/interval types")
+                    );
+                }
+                _ => panic!("Expected InvalidArgumentError"),
             }
-            _ => panic!("Expected InvalidArgumentError"),
-        }
-    }
-
-    #[test]
-    fn test_cast_to_variant_interval_error() {
-        let array = IntervalYearMonthArray::from(vec![Some(12), None, Some(-6)]);
-        let result = cast_to_variant(&array);
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ArrowError::InvalidArgumentError(msg) => {
-                assert!(msg.contains("Casting duration/interval types to Variant is not supported"));
-                assert!(msg.contains("The Variant format does not define duration/interval types"));
-            }
-            _ => panic!("Expected InvalidArgumentError"),
         }
     }
 
