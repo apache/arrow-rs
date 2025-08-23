@@ -23,7 +23,7 @@ use crate::variant_get::output::variant::VariantOutputBuilder;
 use crate::variant_get::GetOptions;
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray};
-use arrow::datatypes::Int32Type;
+use arrow::datatypes::{Int16Type, Int32Type};
 use arrow::error::Result;
 use arrow_schema::{ArrowError, DataType};
 
@@ -83,6 +83,11 @@ pub(crate) fn instantiate_output_builder<'a>(
     // handle typed output
     match as_type.data_type() {
         DataType::Int32 => Ok(Box::new(PrimitiveOutputBuilder::<Int32Type>::new(
+            path,
+            as_type,
+            cast_options,
+        ))),
+        DataType::Int16 => Ok(Box::new(PrimitiveOutputBuilder::<Int16Type>::new(
             path,
             as_type,
             cast_options,
