@@ -18,10 +18,51 @@
 use crate::variant_get::output::OutputBuilder;
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray};
-use arrow::datatypes::Int32Type;
+use arrow::datatypes::{
+    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
+};
 use arrow_schema::{ArrowError, DataType};
 use parquet_variant::{Variant, VariantPath};
 use std::sync::Arc;
+
+macro_rules! cast_perfectly_shredded_primitive {
+    ($typed_value:expr, $variant_array:expr, $arrow_type:ty, $data_type:expr) => {{
+        let mut array_builder = VariantArrayBuilder::new($variant_array.len());
+        let primitive_array = $typed_value.as_primitive::<$arrow_type>();
+        for i in 0..$variant_array.len() {
+            if primitive_array.is_null(i) {
+                array_builder.append_null();
+            } else {
+                let value = primitive_array.value(i);
+                array_builder.append_variant(Variant::from(value));
+            }
+        }
+        Ok(Arc::new(array_builder.build()))
+    }};
+}
+
+macro_rules! cast_partially_shredded_primitive {
+    ($typed_value:expr, $variant_array:expr, $arrow_type:ty, $data_type:expr) => {{
+        let mut array_builder = VariantArrayBuilder::new($variant_array.len());
+        let primitive_array = $typed_value.as_primitive::<$arrow_type>();
+        for i in 0..$variant_array.len() {
+            if $variant_array.is_null(i) {
+                array_builder.append_null();
+            } else if $typed_value.is_null(i) {
+                // fall back to the value (variant) field
+                // (TODO could copy the variant bytes directly)
+                let value = $variant_array.value(i);
+                array_builder.append_variant(value);
+            } else {
+                // otherwise we have a typed value, so we can use it directly
+                let value = primitive_array.value(i);
+                array_builder.append_variant(Variant::from(value));
+            }
+        }
+        Ok(Arc::new(array_builder.build()))
+    }};
+}
 
 /// Outputs VariantArrays
 pub(super) struct VariantOutputBuilder<'a> {
@@ -44,40 +85,92 @@ impl OutputBuilder for VariantOutputBuilder<'_> {
         _value_field: &BinaryViewArray,
         typed_value: &ArrayRef,
     ) -> arrow::error::Result<ArrayRef> {
-        // in this case dispatch on the typed_value and
-        // TODO macro'ize this using downcast! to handle all other primitive types
         // TODO(perf): avoid builders entirely (and write the raw variant directly as we know the metadata is the same)
-        let mut array_builder = VariantArrayBuilder::new(variant_array.len());
         match typed_value.data_type() {
-            DataType::Int32 => {
-                let primitive_array = typed_value.as_primitive::<Int32Type>();
-                for i in 0..variant_array.len() {
-                    if variant_array.is_null(i) {
-                        array_builder.append_null();
-                        continue;
-                    }
+            DataType::Int8 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int8Type,
+                DataType::Int8
+            ),
 
-                    if typed_value.is_null(i) {
-                        // fall back to the value (variant) field
-                        // (TODO could copy the variant bytes directly)
-                        let value = variant_array.value(i);
-                        array_builder.append_variant(value);
-                        continue;
-                    }
+            DataType::Int16 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int16Type,
+                DataType::Int16
+            ),
 
-                    // otherwise we have a typed value, so we can use it directly
-                    let int_value = primitive_array.value(i);
-                    array_builder.append_variant(Variant::from(int_value));
-                }
-            }
+            DataType::Int32 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int32Type,
+                DataType::Int32
+            ),
+
+            DataType::Int64 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int64Type,
+                DataType::Int64
+            ),
+
+            DataType::UInt8 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt8Type,
+                DataType::UInt8
+            ),
+
+            DataType::UInt16 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt16Type,
+                DataType::Int16
+            ),
+
+            DataType::UInt32 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt32Type,
+                DataType::UInt32
+            ),
+
+            DataType::UInt64 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt64Type,
+                DataType::UInt64
+            ),
+
+            DataType::Float16 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float16Type,
+                DataType::Float16
+            ),
+
+            DataType::Float32 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float32Type,
+                DataType::Float32
+            ),
+
+            DataType::Float64 => cast_partially_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float64Type,
+                DataType::Float64
+            ),
+
             dt => {
                 // https://github.com/apache/arrow-rs/issues/8086
-                return Err(ArrowError::NotYetImplemented(format!(
-                    "variant_get fully_shredded with typed_value={dt} is not implemented yet",
-                )));
+                Err(ArrowError::NotYetImplemented(format!(
+                    "variant_get partially shredded with typed_value={dt} is not implemented yet",
+                )))
             }
-        };
-        Ok(Arc::new(array_builder.build()))
+        }
     }
 
     fn typed(
@@ -87,31 +180,92 @@ impl OutputBuilder for VariantOutputBuilder<'_> {
         _metadata: &BinaryViewArray,
         typed_value: &ArrayRef,
     ) -> arrow::error::Result<ArrayRef> {
-        // in this case dispatch on the typed_value and
-        // TODO macro'ize this using downcast! to handle all other primitive types
         // TODO(perf): avoid builders entirely (and write the raw variant directly as we know the metadata is the same)
-        let mut array_builder = VariantArrayBuilder::new(variant_array.len());
         match typed_value.data_type() {
-            DataType::Int32 => {
-                let primitive_array = typed_value.as_primitive::<Int32Type>();
-                for i in 0..variant_array.len() {
-                    if primitive_array.is_null(i) {
-                        array_builder.append_null();
-                        continue;
-                    }
+            DataType::Int8 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int8Type,
+                DataType::Int8
+            ),
 
-                    let int_value = primitive_array.value(i);
-                    array_builder.append_variant(Variant::from(int_value));
-                }
-            }
+            DataType::Int16 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int16Type,
+                DataType::Int16
+            ),
+
+            DataType::Int32 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int32Type,
+                DataType::Int32
+            ),
+
+            DataType::Int64 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Int64Type,
+                DataType::Int64
+            ),
+
+            DataType::UInt8 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt8Type,
+                DataType::UInt8
+            ),
+
+            DataType::UInt16 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt16Type,
+                DataType::Int16
+            ),
+
+            DataType::UInt32 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt32Type,
+                DataType::UInt32
+            ),
+
+            DataType::UInt64 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                UInt64Type,
+                DataType::UInt64
+            ),
+
+            DataType::Float16 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float16Type,
+                DataType::Float16
+            ),
+
+            DataType::Float32 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float32Type,
+                DataType::Float32
+            ),
+
+            DataType::Float64 => cast_perfectly_shredded_primitive!(
+                typed_value,
+                variant_array,
+                Float64Type,
+                DataType::Float64
+            ),
+
             dt => {
                 // https://github.com/apache/arrow-rs/issues/8087
-                return Err(ArrowError::NotYetImplemented(format!(
-                    "variant_get fully_shredded with typed_value={dt} is not implemented yet",
-                )));
+                Err(ArrowError::NotYetImplemented(format!(
+                    "variant_get perfectly shredded with typed_value={dt} is not implemented yet",
+                )))
             }
-        };
-        Ok(Arc::new(array_builder.build()))
+        }
     }
 
     fn unshredded(
