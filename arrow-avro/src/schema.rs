@@ -1790,12 +1790,12 @@ mod tests {
             Schema::Complex(ComplexType::Record(_)) => {}
             other => panic!("expected record schema, got: {:?}", other),
         }
-        // Avro->Arrow conversion should succeed
+        // Avro to Arrow conversion
         let field = crate::codec::AvroField::try_from(&schema)
             .expect("Avro->Arrow conversion should succeed");
         let arrow_field = field.field();
 
-        // Build expected Arrow field precisely
+        // Build expected Arrow field
         let expected_list_item = ArrowField::new(
             arrow_schema::Field::LIST_FIELD_DEFAULT_NAME,
             DataType::Int64,
