@@ -86,24 +86,12 @@ fn append_packed_u32(dest: &mut Vec<u8>, value: u32, value_size: usize) {
 ///
 /// You can reuse an existing `Vec<u8>` by using the `from` impl
 #[derive(Debug, Default)]
-struct ValueBuilder(Vec<u8>);
+pub struct ValueBuilder(Vec<u8>);
 
 impl ValueBuilder {
     /// Construct a ValueBuffer that will write to a new underlying `Vec`
-    fn new() -> Self {
+    pub fn new() -> Self {
         Default::default()
-    }
-}
-
-impl From<Vec<u8>> for ValueBuilder {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
-    }
-}
-
-impl From<ValueBuilder> for Vec<u8> {
-    fn from(value_buffer: ValueBuilder) -> Self {
-        value_buffer.0
     }
 }
 
@@ -120,8 +108,9 @@ impl ValueBuilder {
         self.0.push(primitive_header(primitive_type));
     }
 
-    fn into_inner(self) -> Vec<u8> {
-        self.into()
+    /// Returns the underlying buffer, consuming self
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
     }
 
     fn inner_mut(&mut self) -> &mut Vec<u8> {
@@ -292,7 +281,8 @@ impl ValueBuilder {
         Ok(())
     }
 
-    fn offset(&self) -> usize {
+    /// Returns the current size of the underlying buffer
+    pub fn offset(&self) -> usize {
         self.0.len()
     }
 
@@ -302,7 +292,7 @@ impl ValueBuilder {
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
-    fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
+    pub fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
         let builder = state.value_builder();
         match variant {
             Variant::Null => builder.append_null(),
@@ -437,7 +427,7 @@ impl ValueBuilder {
 ///
 /// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
 #[derive(Default, Debug)]
-struct MetadataBuilder {
+pub struct MetadataBuilder {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 
@@ -446,16 +436,6 @@ struct MetadataBuilder {
 
     /// Output buffer. Metadata is written to the end of this buffer
     metadata_buffer: Vec<u8>,
-}
-
-/// Create a new MetadataBuilder that will write to the specified metadata buffer
-impl From<Vec<u8>> for MetadataBuilder {
-    fn from(metadata_buffer: Vec<u8>) -> Self {
-        Self {
-            metadata_buffer,
-            ..Default::default()
-        }
-    }
 }
 
 impl MetadataBuilder {
@@ -475,6 +455,11 @@ impl MetadataBuilder {
         }
 
         id as u32
+    }
+
+    /// The current length of the underlying metadata buffer
+    pub fn offset(&self) -> usize {
+        self.metadata_buffer.len()
     }
 
     /// Returns the number of field names stored in the metadata builder.
@@ -498,17 +483,18 @@ impl MetadataBuilder {
         self.field_names.iter().map(|k| k.len()).sum()
     }
 
-    fn finish(self) -> Vec<u8> {
+    /// Finalizes the metadata dictionary and appends its serialized bytes to the underlying buffer,
+    /// returning the resulting [`Self::offset`]. The builder state is reset and ready to start
+    /// building a new metadata dictionary.
+    pub fn finish(&mut self) -> usize {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
         let total_dict_size: usize = self.metadata_size();
 
-        let Self {
-            field_names,
-            is_sorted,
-            mut metadata_buffer,
-        } = self;
+        let metadata_buffer = &mut self.metadata_buffer;
+        let is_sorted = std::mem::take(&mut self.is_sorted);
+        let field_names = std::mem::take(&mut self.field_names);
 
         // Determine appropriate offset size based on the larger of dict size or total string size
         let max_offset = std::cmp::max(total_dict_size, nkeys);
@@ -524,27 +510,27 @@ impl MetadataBuilder {
         metadata_buffer.push(0x01 | (is_sorted as u8) << 4 | ((offset_size - 1) << 6));
 
         // Write dictionary size
-        write_offset(&mut metadata_buffer, nkeys, offset_size);
+        write_offset(metadata_buffer, nkeys, offset_size);
 
         // Write offsets
         let mut cur_offset = 0;
         for key in field_names.iter() {
-            write_offset(&mut metadata_buffer, cur_offset, offset_size);
+            write_offset(metadata_buffer, cur_offset, offset_size);
             cur_offset += key.len();
         }
         // Write final offset
-        write_offset(&mut metadata_buffer, cur_offset, offset_size);
+        write_offset(metadata_buffer, cur_offset, offset_size);
 
         // Write string data
         for key in field_names {
             metadata_buffer.extend_from_slice(key.as_bytes());
         }
 
-        metadata_buffer
+        metadata_buffer.len()
     }
 
-    /// Return the inner buffer, without finalizing any in progress metadata.
-    pub(crate) fn into_inner(self) -> Vec<u8> {
+    /// Returns the inner buffer, consuming self without finalizing any in progress metadata.
+    pub fn into_inner(self) -> Vec<u8> {
         self.metadata_buffer
     }
 }
@@ -585,7 +571,7 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// treat the variants as a union, so that accessing a `value_builder` or `metadata_builder` is
 /// branch-free.
 #[derive(Debug)]
-enum ParentState<'a> {
+pub enum ParentState<'a> {
     Variant {
         value_builder: &'a mut ValueBuilder,
         saved_value_builder_offset: usize,
@@ -614,7 +600,10 @@ enum ParentState<'a> {
 }
 
 impl<'a> ParentState<'a> {
-    fn variant(
+    /// Creates a new instance suitable for a top-level variant builder
+    /// (e.g. [`VariantBuilder`]). The value and metadata builder state is checkpointed and will
+    /// roll back on drop, unless [`Self::finish`] is called.
+    pub fn variant(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
     ) -> Self {
@@ -627,7 +616,10 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn list(
+    /// Creates a new instance suitable for a [`ListBuilder`]. The value and metadata builder state
+    /// is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The new
+    /// element's offset is also captured eagerly and will also roll back if not finished.
+    pub fn list(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
         offsets: &'a mut Vec<usize>,
@@ -651,7 +643,12 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn try_object(
+    /// Creates a new instance suitable for an [`ObjectBuilder`]. The value and metadata builder state
+    /// is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The new
+    /// field's name and offset are also captured eagerly and will also roll back if not finished.
+    ///
+    /// The call fails if the field name is invalid (e.g. because it duplicates an existing field).
+    pub fn try_object(
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
@@ -717,8 +714,8 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    // Mark the insertion as having succeeded.
-    fn finish(&mut self) {
+    /// Mark the insertion as having succeeded. Internal state will no longer roll back on drop.
+    pub fn finish(&mut self) {
         *self.is_finished() = true
     }
 
@@ -778,7 +775,7 @@ impl<'a> ParentState<'a> {
 
     /// Return mutable references to the value and metadata builders that this
     /// parent state is using.
-    fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut MetadataBuilder) {
+    pub fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut MetadataBuilder) {
         match self {
             ParentState::Variant {
                 value_builder,
@@ -986,41 +983,6 @@ impl Drop for ParentState<'_> {
 /// );
 ///
 /// ```
-/// # Example: Reusing Buffers
-///
-/// You can use the [`VariantBuilder`] to write into existing buffers (for
-/// example to write multiple variants back to back in the same buffer)
-///
-/// ```
-/// // we will write two variants back to back
-/// use parquet_variant::{Variant, VariantBuilder};
-/// // Append 12345
-/// let mut builder = VariantBuilder::new();
-/// builder.append_value(12345);
-/// let (metadata, value) = builder.finish();
-/// // remember where the first variant ends
-/// let (first_meta_offset, first_meta_len) = (0, metadata.len());
-/// let (first_value_offset, first_value_len) = (0, value.len());
-///
-/// // now, append a second variant to the same buffers
-/// let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-/// builder.append_value("Foo");
-/// let (metadata, value) = builder.finish();
-///
-/// // The variants can be referenced in their appropriate location
-/// let variant1 = Variant::new(
-///   &metadata[first_meta_offset..first_meta_len],
-///   &value[first_value_offset..first_value_len]
-///  );
-/// assert_eq!(variant1, Variant::Int32(12345));
-///
-/// let variant2 = Variant::new(
-///   &metadata[first_meta_len..],
-///   &value[first_value_len..]
-///  );
-/// assert_eq!(variant2, Variant::from("Foo"));
-/// ```
-///
 /// # Example: Unique Field Validation
 ///
 /// This example shows how enabling unique field validation will cause an error
@@ -1098,16 +1060,6 @@ impl VariantBuilder {
         self.metadata_builder.extend(metadata.iter());
 
         self
-    }
-
-    /// Create a new VariantBuilder that will write the metadata and values to
-    /// the specified buffers.
-    pub fn new_with_buffers(metadata_buffer: Vec<u8>, value_buffer: Vec<u8>) -> Self {
-        Self {
-            value_builder: ValueBuilder::from(value_buffer),
-            metadata_builder: MetadataBuilder::from(metadata_buffer),
-            validate_unique_fields: false,
-        }
     }
 
     /// Enables validation of unique field keys in nested objects.
@@ -1215,19 +1167,8 @@ impl VariantBuilder {
     }
 
     /// Finish the builder and return the metadata and value buffers.
-    pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
-        (
-            self.metadata_builder.finish(),
-            self.value_builder.into_inner(),
-        )
-    }
-
-    /// Return the inner metadata buffers and value buffer.
-    ///
-    /// This can be used to get the underlying buffers provided via
-    /// [`VariantBuilder::new_with_buffers`] without finalizing the metadata or
-    /// values (for rolling back changes).
-    pub fn into_buffers(self) -> (Vec<u8>, Vec<u8>) {
+    pub fn finish(mut self) -> (Vec<u8>, Vec<u8>) {
+        self.metadata_builder.finish();
         (
             self.metadata_builder.into_inner(),
             self.value_builder.into_inner(),
@@ -1246,7 +1187,8 @@ pub struct ListBuilder<'a> {
 }
 
 impl<'a> ListBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    /// Creates a new list builder, nested on top of the given parent state.
+    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             offsets: vec![],
@@ -1388,7 +1330,8 @@ pub struct ObjectBuilder<'a> {
 }
 
 impl<'a> ObjectBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    /// Creates a new object builder, nested on top of the given parent state.
+    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             fields: IndexMap::new(),
@@ -1589,18 +1532,27 @@ impl<'a> ObjectBuilder<'a> {
 /// Allows users to append values to a [`VariantBuilder`], [`ListBuilder`] or
 /// [`ObjectBuilder`]. using the same interface.
 pub trait VariantBuilderExt {
+    /// Appends a new variant value to this builder. See e.g. [`VariantBuilder::append_value`].
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
+    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Panics if the nested
+    /// builder cannot be created, see e.g. [`ObjectBuilder::new_list`].
     fn new_list(&mut self) -> ListBuilder<'_> {
         self.try_new_list().unwrap()
     }
 
+    /// Creates a nested object builder. See e.g. [`VariantBuilder::new_object`]. Panics if the
+    /// nested builder cannot be created, see e.g. [`ObjectBuilder::new_object`].
     fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.try_new_object().unwrap()
     }
 
+    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Returns an error if
+    /// the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_list`].
     fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
 
+    /// Creates a nested object builder. See e.g. [`VariantBuilder::new_object`]. Returns an error
+    /// if the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_object`].
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
 }
 
@@ -2777,81 +2729,6 @@ mod tests {
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
         let metadata = MetadataBuilder::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
-    }
-
-    /// Test reusing buffers with nested objects
-    #[test]
-    fn test_with_existing_buffers_nested() {
-        let mut builder = VariantBuilder::new();
-        append_test_list(&mut builder);
-        let (m1, v1) = builder.finish();
-        let variant1 = Variant::new(&m1, &v1);
-
-        let mut builder = VariantBuilder::new();
-        append_test_object(&mut builder);
-        let (m2, v2) = builder.finish();
-        let variant2 = Variant::new(&m2, &v2);
-
-        let mut builder = VariantBuilder::new();
-        builder.append_value("This is a string");
-        let (m3, v3) = builder.finish();
-        let variant3 = Variant::new(&m3, &v3);
-
-        // Now, append those three variants to the a new buffer that is reused
-        let mut builder = VariantBuilder::new();
-        append_test_list(&mut builder);
-        let (metadata, value) = builder.finish();
-        let (meta1_offset, meta1_end) = (0, metadata.len());
-        let (value1_offset, value1_end) = (0, value.len());
-
-        // reuse same buffer
-        let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-        append_test_object(&mut builder);
-        let (metadata, value) = builder.finish();
-        let (meta2_offset, meta2_end) = (meta1_end, metadata.len());
-        let (value2_offset, value2_end) = (value1_end, value.len());
-
-        // Append a string
-        let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-        builder.append_value("This is a string");
-        let (metadata, value) = builder.finish();
-        let (meta3_offset, meta3_end) = (meta2_end, metadata.len());
-        let (value3_offset, value3_end) = (value2_end, value.len());
-
-        // verify we can read the variants back correctly
-        let roundtrip1 = Variant::new(
-            &metadata[meta1_offset..meta1_end],
-            &value[value1_offset..value1_end],
-        );
-        assert_eq!(roundtrip1, variant1,);
-
-        let roundtrip2 = Variant::new(
-            &metadata[meta2_offset..meta2_end],
-            &value[value2_offset..value2_end],
-        );
-        assert_eq!(roundtrip2, variant2,);
-
-        let roundtrip3 = Variant::new(
-            &metadata[meta3_offset..meta3_end],
-            &value[value3_offset..value3_end],
-        );
-        assert_eq!(roundtrip3, variant3);
-    }
-
-    /// append a simple List variant
-    fn append_test_list(builder: &mut VariantBuilder) {
-        builder
-            .new_list()
-            .with_value(1234)
-            .with_value("a string value")
-            .finish();
-    }
-
-    /// append an object variant
-    fn append_test_object(builder: &mut VariantBuilder) {
-        let mut obj = builder.new_object();
-        obj.insert("a", true);
-        obj.finish().unwrap();
     }
 
     #[test]
