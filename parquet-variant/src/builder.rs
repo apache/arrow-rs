@@ -1016,7 +1016,7 @@ impl Drop for ParentState<'_> {
 /// obj.insert("name", "Alice");
 /// obj.insert("age", 30);
 /// obj.insert("score", 95.5);
-/// obj.finish().unwrap();
+/// obj.finish();
 ///
 /// let (metadata, value) = builder.finish();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1034,7 +1034,7 @@ impl Drop for ParentState<'_> {
 /// obj.insert("name", "Bob"); // field id = 3
 /// obj.insert("age", 25);
 /// obj.insert("score", 88.0);
-/// obj.finish().unwrap();
+/// obj.finish();
 ///
 /// let (metadata, value) = builder.finish();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();

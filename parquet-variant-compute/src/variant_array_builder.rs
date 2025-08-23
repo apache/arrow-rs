@@ -50,8 +50,7 @@ use std::sync::Arc;
 /// let mut vb = builder.variant_builder();
 /// vb.new_object()
 ///   .with_field("foo", "bar")
-///   .finish()
-///   .unwrap();
+///   .finish();
 ///  vb.finish(); // must call finish to write the variant to the buffers
 ///
 /// // create the final VariantArray
@@ -172,8 +171,7 @@ impl VariantArrayBuilder {
     /// variant_builder
     ///     .new_object()
     ///     .with_field("my_field", 42i64)
-    ///     .finish()
-    ///     .unwrap();
+    ///     .finish();
     /// variant_builder.finish();
     ///
     /// // finalize the array
