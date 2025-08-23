@@ -17,6 +17,10 @@
 
 use std::sync::Arc;
 
+use crate::type_conversion::{
+    decimal_to_variant_decimal, generic_conversion_array, non_generic_conversion_array,
+    primitive_conversion_array,
+};
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
     Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
@@ -37,59 +41,9 @@ use arrow::temporal_conversions::{
 };
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-use half::f16;
 use parquet_variant::{
     Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
-
-/// Convert the input array of a specific primitive type to a `VariantArray`
-/// row by row
-macro_rules! primitive_conversion {
-    ($t:ty, $input:expr, $builder:expr) => {{
-        let array = $input.as_primitive::<$t>();
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            $builder.append_variant(Variant::from(array.value(i)));
-        }
-    }};
-}
-
-/// Convert the input array to a `VariantArray` row by row, using `method`
-/// requiring a generic type to downcast the generic array to a specific
-/// array type and `cast_fn` to transform each element to a type compatible with Variant
-macro_rules! generic_conversion {
-    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.$method::<$t>();
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
-    }};
-}
-
-/// Convert the input array to a `VariantArray` row by row, using `method`
-/// not requiring a generic type to downcast the generic array to a specific
-/// array type and `cast_fn` to transform each element to a type compatible with Variant
-macro_rules! non_generic_conversion {
-    ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.$method();
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
-    }};
-}
 
 fn convert_timestamp(
     time_unit: &TimeUnit,
@@ -159,61 +113,6 @@ fn convert_timestamp(
     }
 }
 
-/// Convert a decimal value to a `VariantDecimal`
-macro_rules! decimal_to_variant_decimal {
-    ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {
-        if *$scale < 0 {
-            // For negative scale, we need to multiply the value by 10^|scale|
-            // For example: 123 with scale -2 becomes 12300
-            let multiplier = (10 as $value_type).pow((-*$scale) as u32);
-            // Check for overflow
-            if $v > 0 && $v > <$value_type>::MAX / multiplier {
-                return Variant::Null;
-            }
-            if $v < 0 && $v < <$value_type>::MIN / multiplier {
-                return Variant::Null;
-            }
-            <$variant_type>::try_new($v * multiplier, 0)
-                .map(|v| v.into())
-                .unwrap_or(Variant::Null)
-        } else {
-            <$variant_type>::try_new($v, *$scale as u8)
-                .map(|v| v.into())
-                .unwrap_or(Variant::Null)
-        }
-    };
-}
-
-/// Convert arrays that don't need generic type parameters
-macro_rules! cast_conversion_nongeneric {
-    ($method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.$method();
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
-    }};
-}
-
-/// Convert string arrays using the offset size as the type parameter
-macro_rules! cast_conversion_string {
-    ($offset_type:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        let array = $input.$method::<$offset_type>();
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
-    }};
-}
-
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
 /// need to convert a specific data type
 ///
@@ -250,58 +149,52 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // todo: handle other types like Boolean, Date, Timestamp, etc.
     match input_type {
         DataType::Boolean => {
-            non_generic_conversion!(as_boolean, |v| v, input, builder);
+            non_generic_conversion_array!(input.as_boolean(), |v| v, builder);
         }
         DataType::Binary => {
-            generic_conversion!(BinaryType, as_bytes, |v| v, input, builder);
+            generic_conversion_array!(BinaryType, as_bytes, |v| v, input, builder);
         }
         DataType::LargeBinary => {
-            generic_conversion!(LargeBinaryType, as_bytes, |v| v, input, builder);
+            generic_conversion_array!(LargeBinaryType, as_bytes, |v| v, input, builder);
         }
         DataType::BinaryView => {
-            generic_conversion!(BinaryViewType, as_byte_view, |v| v, input, builder);
+            generic_conversion_array!(BinaryViewType, as_byte_view, |v| v, input, builder);
         }
         DataType::Int8 => {
-            primitive_conversion!(Int8Type, input, builder);
+            primitive_conversion_array!(Int8Type, input, builder);
         }
         DataType::Int16 => {
-            primitive_conversion!(Int16Type, input, builder);
+            primitive_conversion_array!(Int16Type, input, builder);
         }
         DataType::Int32 => {
-            primitive_conversion!(Int32Type, input, builder);
+            primitive_conversion_array!(Int32Type, input, builder);
         }
         DataType::Int64 => {
-            primitive_conversion!(Int64Type, input, builder);
+            primitive_conversion_array!(Int64Type, input, builder);
         }
         DataType::UInt8 => {
-            primitive_conversion!(UInt8Type, input, builder);
+            primitive_conversion_array!(UInt8Type, input, builder);
         }
         DataType::UInt16 => {
-            primitive_conversion!(UInt16Type, input, builder);
+            primitive_conversion_array!(UInt16Type, input, builder);
         }
         DataType::UInt32 => {
-            primitive_conversion!(UInt32Type, input, builder);
+            primitive_conversion_array!(UInt32Type, input, builder);
         }
         DataType::UInt64 => {
-            primitive_conversion!(UInt64Type, input, builder);
+            primitive_conversion_array!(UInt64Type, input, builder);
         }
         DataType::Float16 => {
-            generic_conversion!(
-                Float16Type,
-                as_primitive,
-                |v: f16| -> f32 { v.into() },
-                input,
-                builder
-            );
+            generic_conversion_array!(Float16Type, as_primitive, f32::from, input, builder);
         }
         DataType::Float32 => {
-            primitive_conversion!(Float32Type, input, builder);
+            primitive_conversion_array!(Float32Type, input, builder);
         }
         DataType::Float64 => {
-            primitive_conversion!(Float64Type, input, builder);
+            primitive_conversion_array!(Float64Type, input, builder);
         }
         DataType::Decimal32(_, scale) => {
-            generic_conversion!(
+            generic_conversion_array!(
                 Decimal32Type,
                 as_primitive,
                 |v| decimal_to_variant_decimal!(v, scale, i32, VariantDecimal4),
@@ -310,7 +203,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::Decimal64(_, scale) => {
-            generic_conversion!(
+            generic_conversion_array!(
                 Decimal64Type,
                 as_primitive,
                 |v| decimal_to_variant_decimal!(v, scale, i64, VariantDecimal8),
@@ -319,7 +212,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::Decimal128(_, scale) => {
-            generic_conversion!(
+            generic_conversion_array!(
                 Decimal128Type,
                 as_primitive,
                 |v| decimal_to_variant_decimal!(v, scale, i128, VariantDecimal16),
@@ -328,7 +221,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::Decimal256(_, scale) => {
-            generic_conversion!(
+            generic_conversion_array!(
                 Decimal256Type,
                 as_primitive,
                 |v: i256| {
@@ -346,7 +239,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::FixedSizeBinary(_) => {
-            non_generic_conversion!(as_fixed_size_binary, |v| v, input, builder);
+            non_generic_conversion_array!(input.as_fixed_size_binary(), |v| v, builder);
         }
         DataType::Null => {
             for _ in 0..input.len() {
@@ -359,7 +252,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Time32(unit) => {
             match *unit {
                 TimeUnit::Second => {
-                    generic_conversion!(
+                    generic_conversion_array!(
                         Time32SecondType,
                         as_primitive,
                         // nano second are always 0
@@ -369,7 +262,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                     );
                 }
                 TimeUnit::Millisecond => {
-                    generic_conversion!(
+                    generic_conversion_array!(
                         Time32MillisecondType,
                         as_primitive,
                         |v| NaiveTime::from_num_seconds_from_midnight_opt(
@@ -392,7 +285,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Time64(unit) => {
             match *unit {
                 TimeUnit::Microsecond => {
-                    generic_conversion!(
+                    generic_conversion_array!(
                         Time64MicrosecondType,
                         as_primitive,
                         |v| NaiveTime::from_num_seconds_from_midnight_opt(
@@ -405,7 +298,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                     );
                 }
                 TimeUnit::Nanosecond => {
-                    generic_conversion!(
+                    generic_conversion_array!(
                         Time64NanosecondType,
                         as_primitive,
                         |v| NaiveTime::from_num_seconds_from_midnight_opt(
@@ -433,13 +326,13 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             ));
         }
         DataType::Utf8 => {
-            cast_conversion_string!(i32, as_string, |v| v, input, builder);
+            generic_conversion_array!(i32, as_string, |v| v, input, builder);
         }
         DataType::LargeUtf8 => {
-            cast_conversion_string!(i64, as_string, |v| v, input, builder);
+            generic_conversion_array!(i64, as_string, |v| v, input, builder);
         }
         DataType::Utf8View => {
-            cast_conversion_nongeneric!(as_string_view, |v| v, input, builder);
+            non_generic_conversion_array!(input.as_string_view(), |v| v, builder);
         }
         DataType::Struct(_) => {
             let struct_array = input.as_struct();
@@ -487,7 +380,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             }
         }
         DataType::Date32 => {
-            generic_conversion!(
+            generic_conversion_array!(
                 Date32Type,
                 as_primitive,
                 |v: i32| -> NaiveDate { Date32Type::to_naive_date(v) },
@@ -496,7 +389,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
             );
         }
         DataType::Date64 => {
-            generic_conversion!(
+            generic_conversion_array!(
                 Date64Type,
                 as_primitive,
                 |v: i64| { Date64Type::to_naive_date_opt(v).unwrap() },
@@ -723,6 +616,7 @@ mod tests {
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
+    use half::f16;
     use parquet_variant::{Variant, VariantDecimal16};
     use std::{sync::Arc, vec};
 

@@ -107,7 +107,10 @@ impl<'a> GetOptions<'a> {
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{Array, ArrayRef, BinaryViewArray, Int32Array, StringArray, StructArray};
+    use arrow::array::{
+        Array, ArrayRef, BinaryViewArray, Int16Array, Int32Array, PrimitiveArray, StringArray,
+        StructArray,
+    };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow_schema::{DataType, Field, FieldRef, Fields};
@@ -258,7 +261,8 @@ mod test {
     /// Perfect Shredding: extract the typed value as a VariantArray
     #[test]
     fn get_variant_perfectly_shredded_int32_as_variant() {
-        let array = perfectly_shredded_int32_variant_array();
+        let array =
+            perfectly_shredded_variant_array(Int32Array::from(vec![Some(1), Some(2), Some(3)]));
         let options = GetOptions::new();
         let result = variant_get(&array, options).unwrap();
 
@@ -276,7 +280,8 @@ mod test {
     #[test]
     fn get_variant_perfectly_shredded_int32_as_int32() {
         // Extract the typed value as Int32Array
-        let array = perfectly_shredded_int32_variant_array();
+        let array =
+            perfectly_shredded_variant_array(Int32Array::from(vec![Some(1), Some(2), Some(3)]));
         // specify we want the typed value as Int32
         let field = Field::new("typed_value", DataType::Int32, true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
@@ -319,14 +324,38 @@ mod test {
         assert_eq!(&result, &expected)
     }
 
+    #[test]
+    fn get_variant_perfectly_shredded_int16_as_variant() {
+        let array =
+            perfectly_shredded_variant_array(Int16Array::from(vec![Some(1), Some(2), Some(3)]));
+        let options = GetOptions::new();
+        let result = variant_get(&array, options).unwrap();
+
+        // expect the result is a VariantArray
+        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result.len(), 3);
+
+        // Expect the values are the same as the original values
+        assert_eq!(result.value(0), Variant::Int16(1));
+        assert_eq!(result.value(1), Variant::Int16(2));
+        assert_eq!(result.value(2), Variant::Int16(3));
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_int16_as_int16() {
+        // Extract the typed value as Int16Array
+        let array =
+            perfectly_shredded_variant_array(Int16Array::from(vec![Some(1), Some(2), Some(3)]));
+        // specify we want the typed value as Int16
+        let field = Field::new("typed_value", DataType::Int16, true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&array, options).unwrap();
+        let expected: ArrayRef = Arc::new(Int16Array::from(vec![Some(1), Some(2), Some(3)]));
+        assert_eq!(&result, &expected)
+    }
+
     /// Return a VariantArray that represents a perfectly "shredded" variant
-    /// for the following example (3 Variant::Int32 values):
-    ///
-    /// ```text
-    /// 1
-    /// 2
-    /// 3
-    /// ```
+    /// for the given typed value.
     ///
     /// The schema of the corresponding `StructArray` would look like this:
     ///
@@ -336,13 +365,16 @@ mod test {
     ///   typed_value: Int32Array,
     /// }
     /// ```
-    fn perfectly_shredded_int32_variant_array() -> ArrayRef {
+    fn perfectly_shredded_variant_array<T>(typed_value: PrimitiveArray<T>) -> ArrayRef
+    where
+        T: arrow::datatypes::ArrowPrimitiveType,
+    {
         // At the time of writing, the `VariantArrayBuilder` does not support shredding.
         // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
         let (metadata, _value) = { parquet_variant::VariantBuilder::new().finish() };
 
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
-        let typed_value = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, typed_value.len()));
 
         let struct_array = StructArrayBuilder::new()
             .with_field("metadata", Arc::new(metadata))
