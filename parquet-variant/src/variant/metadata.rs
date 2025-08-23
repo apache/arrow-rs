@@ -544,7 +544,7 @@ mod tests {
         o.insert("a", false);
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, _) = b.finish();
 
@@ -579,7 +579,7 @@ mod tests {
         o.insert("a", false);
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, _) = b.finish();
 

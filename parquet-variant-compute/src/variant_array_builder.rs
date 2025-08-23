@@ -319,11 +319,7 @@ mod test {
 
         // let's make a sub-object in the next row
         let mut sub_builder = builder.variant_builder();
-        sub_builder
-            .new_object()
-            .with_field("foo", "bar")
-            .finish()
-            .unwrap();
+        sub_builder.new_object().with_field("foo", "bar").finish();
         sub_builder.finish(); // must call finish to write the variant to the buffers
 
         // append a new list
@@ -357,29 +353,17 @@ mod test {
 
         // make a sub-object in the first row
         let mut sub_builder = builder.variant_builder();
-        sub_builder
-            .new_object()
-            .with_field("foo", 1i32)
-            .finish()
-            .unwrap();
+        sub_builder.new_object().with_field("foo", 1i32).finish();
         sub_builder.finish(); // must call finish to write the variant to the buffers
 
         // start appending an object but don't finish
         let mut sub_builder = builder.variant_builder();
-        sub_builder
-            .new_object()
-            .with_field("bar", 2i32)
-            .finish()
-            .unwrap();
+        sub_builder.new_object().with_field("bar", 2i32).finish();
         drop(sub_builder); // drop the sub builder without finishing it
 
         // make a third sub-object (this should reset the previous unfinished object)
         let mut sub_builder = builder.variant_builder();
-        sub_builder
-            .new_object()
-            .with_field("baz", 3i32)
-            .finish()
-            .unwrap();
+        sub_builder.new_object().with_field("baz", 3i32).finish();
         sub_builder.finish(); // must call finish to write the variant to the buffers
 
         let variant_array = builder.build();
