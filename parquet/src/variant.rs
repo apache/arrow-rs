@@ -19,7 +19,7 @@
 //!
 //! This is a 🚧 Work In Progress
 //!
-//! Note: Requires the `variant` feature of the `parquet` crate to be enabled.
+//! Note: Requires the `variant_experimental` feature of the `parquet` crate to be enabled.
 //!
 //! # Features
 //! * [`Variant`] represents variant value, which can be an object, list, or primitive.
