@@ -443,6 +443,9 @@ pub trait MetadataBuilder: std::fmt::Debug {
 
     /// Reverts the field names to a previous size, discarding any newly out of bounds field ids.
     fn truncate_field_names(&mut self, new_size: usize);
+
+    /// Finishes the current metadata dictionary, returning the new size of the underlying buffer.
+    fn finish(&mut self) -> usize;
 }
 
 impl MetadataBuilder for BasicMetadataBuilder {
@@ -458,6 +461,9 @@ impl MetadataBuilder for BasicMetadataBuilder {
     fn truncate_field_names(&mut self, new_size: usize) {
         self.field_names.truncate(new_size)
     }
+    fn finish(&mut self) -> usize {
+        self.finish()
+    }
 }
 
 /// A metadata builder that cannot register new field names, and merely returns the field id
@@ -465,6 +471,9 @@ impl MetadataBuilder for BasicMetadataBuilder {
 /// metadata column is fixed and -- per variant shredding spec -- already contains all field names
 /// from the typed_value column. It is also useful when projecting a subset of fields from a variant
 /// object value, since the bytes can be copied across directly without re-encoding their field ids.
+///
+/// NOTE: [`Self::finish`] is a no-op. If the intent is to make a copy of the underlying bytes each
+/// time `finish` is called, a different trait impl will be needed.
 #[derive(Debug)]
 pub struct ReadOnlyMetadataBuilder<'m> {
     metadata: VariantMetadata<'m>,
@@ -504,6 +513,9 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
     }
     fn truncate_field_names(&mut self, new_size: usize) {
         debug_assert_eq!(self.metadata.len(), new_size);
+    }
+    fn finish(&mut self) -> usize {
+        self.metadata.bytes.len()
     }
 }
 
