@@ -448,7 +448,7 @@ pub trait MetadataBuilder: std::fmt::Debug {
     fn finish(&mut self) -> usize;
 }
 
-impl MetadataBuilder for BasicMetadataBuilder {
+impl MetadataBuilder for WritableMetadataBuilder {
     fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
         Ok(self.upsert_field_name(field_name))
     }
@@ -477,6 +477,8 @@ impl MetadataBuilder for BasicMetadataBuilder {
 #[derive(Debug)]
 pub struct ReadOnlyMetadataBuilder<'m> {
     metadata: VariantMetadata<'m>,
+    // A cache that tracks field names this builder has already seen, because finding the field id
+    // for a given field name is expensive -- O(n) for a large and unsorted metadata dictionary.
     known_field_names: HashMap<&'m str, u32>,
 }
 
@@ -525,7 +527,7 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
 ///
 /// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
 #[derive(Default, Debug)]
-pub struct BasicMetadataBuilder {
+pub struct WritableMetadataBuilder {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 
@@ -536,7 +538,7 @@ pub struct BasicMetadataBuilder {
     metadata_buffer: Vec<u8>,
 }
 
-impl BasicMetadataBuilder {
+impl WritableMetadataBuilder {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
@@ -633,7 +635,7 @@ impl BasicMetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> FromIterator<S> for BasicMetadataBuilder {
+impl<S: AsRef<str>> FromIterator<S> for WritableMetadataBuilder {
     fn from_iter<T: IntoIterator<Item = S>>(iter: T) -> Self {
         let mut this = Self::default();
         this.extend(iter);
@@ -642,7 +644,7 @@ impl<S: AsRef<str>> FromIterator<S> for BasicMetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> Extend<S> for BasicMetadataBuilder {
+impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
     fn extend<T: IntoIterator<Item = S>>(&mut self, iter: T) {
         let iter = iter.into_iter();
         let (min, _) = iter.size_hint();
@@ -1137,7 +1139,7 @@ impl Drop for ParentState<'_> {
 #[derive(Default, Debug)]
 pub struct VariantBuilder {
     value_builder: ValueBuilder,
-    metadata_builder: BasicMetadataBuilder,
+    metadata_builder: WritableMetadataBuilder,
     validate_unique_fields: bool,
 }
 
@@ -1146,7 +1148,7 @@ impl VariantBuilder {
     pub fn new() -> Self {
         Self {
             value_builder: ValueBuilder::new(),
-            metadata_builder: BasicMetadataBuilder::default(),
+            metadata_builder: WritableMetadataBuilder::default(),
             validate_unique_fields: false,
         }
     }
@@ -2751,28 +2753,28 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_from_iter() {
-        let metadata = BasicMetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
+        let metadata = WritableMetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "apple");
         assert_eq!(metadata.field_name(1), "banana");
         assert_eq!(metadata.field_name(2), "cherry");
         assert!(metadata.is_sorted);
 
-        let metadata = BasicMetadataBuilder::from_iter(["zebra", "apple", "banana"]);
+        let metadata = WritableMetadataBuilder::from_iter(["zebra", "apple", "banana"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "zebra");
         assert_eq!(metadata.field_name(1), "apple");
         assert_eq!(metadata.field_name(2), "banana");
         assert!(!metadata.is_sorted);
 
-        let metadata = BasicMetadataBuilder::from_iter(Vec::<&str>::new());
+        let metadata = WritableMetadataBuilder::from_iter(Vec::<&str>::new());
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
     }
 
     #[test]
     fn test_metadata_builder_extend() {
-        let mut metadata = BasicMetadataBuilder::default();
+        let mut metadata = WritableMetadataBuilder::default();
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
 
@@ -2797,7 +2799,7 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_extend_sort_order() {
-        let mut metadata = BasicMetadataBuilder::default();
+        let mut metadata = WritableMetadataBuilder::default();
 
         metadata.extend(["middle"]);
         assert!(metadata.is_sorted);
@@ -2813,11 +2815,11 @@ mod tests {
     #[test]
     fn test_metadata_builder_from_iter_with_string_types() {
         // &str
-        let metadata = BasicMetadataBuilder::from_iter(["a", "b", "c"]);
+        let metadata = WritableMetadataBuilder::from_iter(["a", "b", "c"]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // string
-        let metadata = BasicMetadataBuilder::from_iter(vec![
+        let metadata = WritableMetadataBuilder::from_iter(vec![
             "a".to_string(),
             "b".to_string(),
             "c".to_string(),
@@ -2826,7 +2828,7 @@ mod tests {
 
         // mixed types (anything that implements AsRef<str>)
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
-        let metadata = BasicMetadataBuilder::from_iter(field_names);
+        let metadata = WritableMetadataBuilder::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
     }
 
