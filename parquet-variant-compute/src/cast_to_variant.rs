@@ -23,6 +23,7 @@ use arrow::array::{
     TimestampSecondArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::compute::kernels::cast;
 use arrow::datatypes::{
     i256, ArrowNativeType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
     Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
@@ -535,6 +536,46 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(value);
             }
         }
+
+        DataType::Map(field, _) => match field.data_type() {
+            DataType::Struct(_) => {
+                let map_array = input.as_map();
+                let keys = cast(map_array.keys(), &DataType::Utf8)?;
+                let key_strings = keys.as_string::<i32>();
+                let values = cast_to_variant(map_array.values())?;
+                let offsets = map_array.offsets();
+
+                let mut start_offset = offsets[0];
+                for end_offset in offsets.iter().skip(1) {
+                    if start_offset >= *end_offset {
+                        builder.append_null();
+                        continue;
+                    }
+
+                    let length = (end_offset - start_offset) as usize;
+
+                    let mut variant_builder = VariantBuilder::new();
+                    let mut object_builder = variant_builder.new_object();
+
+                    for i in start_offset..*end_offset {
+                        let value = values.value(i as usize);
+                        object_builder.insert(key_strings.value(i as usize), value);
+                    }
+                    object_builder.finish()?;
+                    let (metadata, value) = variant_builder.finish();
+                    let variant = Variant::try_new(&metadata, &value)?;
+
+                    builder.append_variant(variant);
+
+                    start_offset += length as i32;
+                }
+            }
+            _ => {
+                return Err(ArrowError::CastError(format!(
+                    "Unsupported map field type for casting to Variant: {field:?}",
+                )));
+            }
+        },
         DataType::List(_) => {
             let list_array = input.as_list::<i32>();
             let values = list_array.values();
@@ -575,7 +616,6 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(Variant::List(variant_list.clone()))
             }
         }
-
         DataType::LargeList(_) => {
             let large_list_array = input.as_list::<i64>();
             let values = large_list_array.values();
@@ -673,11 +713,12 @@ mod tests {
         Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, FixedSizeBinaryBuilder,
         Float16Array, Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder,
         Int16Array, Int32Array, Int64Array, Int8Array, IntervalYearMonthArray, LargeListArray,
-        LargeStringArray, ListArray, NullArray, StringArray, StringRunBuilder, StringViewArray,
-        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-        Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        LargeStringArray, ListArray, MapArray, NullArray, StringArray, StringRunBuilder,
+        StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+        UInt8Array,
     };
-    use arrow::buffer::NullBuffer;
+    use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow_schema::{Field, Fields};
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -2062,6 +2103,103 @@ mod tests {
                 Some(Variant::from("c")),
                 Some(Variant::from("a")),
             ],
+        );
+    }
+
+    #[test]
+    fn test_cast_map_to_variant_object() {
+        let keys = vec!["key1", "key2", "key3"];
+        let values_data = Int32Array::from(vec![1, 2, 3]);
+        let entry_offsets = vec![0, 1, 3];
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
+
+        let result = cast_to_variant(&map_array).unwrap();
+        // [{"key1":1}]
+        let variant1 = result.value(0);
+        assert_eq!(
+            variant1.as_object().unwrap().get("key1").unwrap(),
+            Variant::from(1)
+        );
+
+        // [{"key2":2},{"key3":3}]
+        let variant2 = result.value(1);
+        assert_eq!(
+            variant2.as_object().unwrap().get("key2").unwrap(),
+            Variant::from(2)
+        );
+        assert_eq!(
+            variant2.as_object().unwrap().get("key3").unwrap(),
+            Variant::from(3)
+        );
+    }
+
+    #[test]
+    fn test_cast_map_to_variant_object_with_nulls() {
+        let keys = vec!["key1", "key2", "key3"];
+        let values_data = Int32Array::from(vec![1, 2, 3]);
+        let entry_offsets = vec![0, 1, 1, 3];
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
+
+        let result = cast_to_variant(&map_array).unwrap();
+        // [{"key1":1}]
+        let variant1 = result.value(0);
+        assert_eq!(
+            variant1.as_object().unwrap().get("key1").unwrap(),
+            Variant::from(1)
+        );
+
+        // None
+        assert!(result.is_null(1));
+
+        // [{"key2":2},{"key3":3}]
+        let variant2 = result.value(2);
+        assert_eq!(
+            variant2.as_object().unwrap().get("key2").unwrap(),
+            Variant::from(2)
+        );
+        assert_eq!(
+            variant2.as_object().unwrap().get("key3").unwrap(),
+            Variant::from(3)
+        );
+    }
+
+    #[test]
+    fn test_cast_map_with_non_string_keys_to_variant_object() {
+        let offsets = OffsetBuffer::new(vec![0, 1, 3].into());
+        let fields = Fields::from(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("values", DataType::Int32, false),
+        ]);
+        let columns = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+        ];
+
+        let entries = StructArray::new(fields.clone(), columns, None);
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+
+        let map_array = MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
+
+        let result = cast_to_variant(&map_array).unwrap();
+
+        let variant1 = result.value(0);
+        assert_eq!(
+            variant1.as_object().unwrap().get("1").unwrap(),
+            Variant::from(1)
+        );
+
+        let variant2 = result.value(1);
+        assert_eq!(
+            variant2.as_object().unwrap().get("2").unwrap(),
+            Variant::from(2)
+        );
+        assert_eq!(
+            variant2.as_object().unwrap().get("3").unwrap(),
+            Variant::from(3)
         );
     }
 
