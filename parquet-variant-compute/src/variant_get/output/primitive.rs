@@ -24,7 +24,7 @@ use arrow::array::{
     NullBufferBuilder, PrimitiveArray,
 };
 use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::Int32Type;
+use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_schema::{ArrowError, FieldRef};
 use parquet_variant::{Variant, VariantPath};
 use std::marker::PhantomData;
@@ -174,5 +174,11 @@ impl<T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'_, T> {
 impl ArrowPrimitiveVariant for Int32Type {
     fn from_variant(variant: &Variant) -> Option<Self::Native> {
         variant.as_int32()
+    }
+}
+
+impl ArrowPrimitiveVariant for Int16Type {
+    fn from_variant(variant: &Variant) -> Option<Self::Native> {
+        variant.as_int16()
     }
 }
