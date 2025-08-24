@@ -110,6 +110,52 @@ pub fn substring(
                 UInt64: UInt64Type
             )
         }
+        DataType::RunEndEncoded(run_field, _) => {
+            let ree = match run_field.data_type() {
+                DataType::Int64 => AnyRunArray::new(array, DataType::Int64),
+                DataType::Int32 => AnyRunArray::new(array, DataType::Int32),
+                DataType::Int16 => AnyRunArray::new(array, DataType::Int16),
+                _ => return Err(ArrowError::ComputeError("Invalid run end type".to_string())),
+            };
+            if let Some(ree) = ree {
+                let new_values = substring(ree.values().as_ref(), start, length)?;
+                match run_field.data_type() {
+                    DataType::Int64 => {
+                        let new_run_array = RunArray::<Int64Type>::try_new(
+                            ree.run_ends()
+                                .as_any()
+                                .downcast_ref::<Int64Array>()
+                                .unwrap(),
+                            &new_values,
+                        )?;
+                        Ok(Arc::new(new_run_array))
+                    }
+                    DataType::Int32 => {
+                        let new_run_array = RunArray::<Int32Type>::try_new(
+                            ree.run_ends()
+                                .as_any()
+                                .downcast_ref::<Int32Array>()
+                                .unwrap(),
+                            &new_values,
+                        )?;
+                        Ok(Arc::new(new_run_array))
+                    }
+                    DataType::Int16 => {
+                        let new_run_array = RunArray::<Int16Type>::try_new(
+                            ree.run_ends()
+                                .as_any()
+                                .downcast_ref::<Int16Array>()
+                                .unwrap(),
+                            &new_values,
+                        )?;
+                        Ok(Arc::new(new_run_array))
+                    }
+                    _ => return Err(ArrowError::ComputeError("Invalid run end type".to_string())),
+                }
+            } else {
+                Err(ArrowError::ComputeError("Invalid run end type".to_string()))
+            }
+        }
         DataType::LargeBinary => byte_substring(
             array
                 .as_any()
@@ -975,5 +1021,260 @@ mod tests {
         let expected_bytes: &[u8] = &[0xE4, 0xBD, 0xA0, 0xE5, 0xA5];
         let expected = BinaryArray::from(vec![Some(expected_bytes)]);
         assert_eq!(expected, *actual);
+    }
+    #[cfg(test)]
+    mod tests_ree {
+        use super::substring;
+        use arrow_array::{
+            array::{RunArray, StringArray},
+            types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
+            Array, Int32Array,
+        };
+        use arrow_buffer::{ArrowNativeType, ScalarBuffer};
+
+        #[test]
+        fn test_substring_ree_basic() {
+            // logical : [hello,hello,world,world]
+            let run_ends = Int32Array::from(vec![2, 4]);
+            let values = StringArray::from(vec![Some("hello"), Some("world")]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![2, 4]);
+            let expected_values = StringArray::from(vec![Some("ell"), Some("orl")]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values).unwrap();
+
+            let result = substring(&run_array, 1, Some(3)).unwrap();
+            let result = result
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .unwrap();
+            assert_eq!(result.values(), expected_run_array.values());
+            assert_eq!(
+                result.run_ends().values(),
+                expected_run_array.run_ends().values()
+            );
+        }
+        #[test]
+        fn test_substring_ree_all_nulls() {
+            let run_ends = Int32Array::from(vec![1, 4]);
+            let values = StringArray::from(vec![Some(""), None]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![1, 4]);
+            let expected_values = StringArray::from(vec![Some(""), None]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values).unwrap();
+
+            let result = substring(&run_array, 1, Some(3)).unwrap();
+            let result = result
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .unwrap();
+
+            assert_eq!(result.values(), expected_run_array.values());
+            assert_eq!(
+                result.run_ends().values(),
+                expected_run_array.run_ends().values()
+            );
+        }
+        // Review this before Pushing
+        #[test]
+        fn test_substring_ree_mixed_values() {
+            // logical: ["abc", NULL, NULL, "xyz", "xyz", "xyz"]
+            let run_ends = Int32Array::from(vec![1, 3, 6]);
+            let values = StringArray::from(vec![Some("abc"), None, Some("xyz")]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![1, 3, 6]);
+            let expected_values = StringArray::from(vec![Some("bc"), None, Some("yz")]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values).unwrap();
+
+            let result = substring(&run_array, 1, Some(2)).unwrap();
+            let result = result
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .unwrap();
+
+            assert_eq!(result.values(), expected_run_array.values());
+            assert_eq!(
+                result.run_ends().values(),
+                expected_run_array.run_ends().values()
+            );
+        }
+        // Review this before Pushing
+        #[test]
+        fn test_substring_ree_empty_strings() {
+            let run_ends = Int32Array::from(vec![3]);
+            let values = StringArray::from(vec![Some("")]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![3]);
+            let expected_values = StringArray::from(vec![Some("")]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values).unwrap();
+
+            let result = substring(&run_array, 0, Some(3)).unwrap();
+            let result = result
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .unwrap();
+
+            assert_eq!(result.values(), expected_run_array.values());
+            assert_eq!(
+                result.run_ends().values(),
+                expected_run_array.run_ends().values()
+            );
+        }
+        // Review before pushing PR
+        #[test]
+        fn test_substring_ree_start_beyond_length() {
+            let run_ends = Int32Array::from(vec![2]);
+            let values = StringArray::from(vec![Some("hi")]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let expected_run_ends = Int32Array::from(vec![2]);
+            let expected_values = StringArray::from(vec![Some("")]);
+            let expected_run_array =
+                RunArray::<Int32Type>::try_new(&expected_run_ends, &expected_values).unwrap();
+
+            let result = substring(&run_array, 10, Some(3)).unwrap();
+            let result = result
+                .as_any()
+                .downcast_ref::<RunArray<Int32Type>>()
+                .unwrap();
+
+            assert_eq!(result.values(), expected_run_array.values());
+            assert_eq!(
+                result.run_ends().values(),
+                expected_run_array.run_ends().values()
+            );
+        }
+        fn run_substring_ree_generic<R: RunEndIndexType>() {
+            use arrow_array::{PrimitiveArray, RunArray};
+
+            let run_ends: PrimitiveArray<R> = PrimitiveArray::new(
+                ScalarBuffer::from(vec![
+                    R::Native::from_usize(2).unwrap(),
+                    R::Native::from_usize(4).unwrap(),
+                ]),
+                None,
+            );
+            let values = StringArray::from(vec![Some("abcde"), Some("fghij")]);
+            let run_array = RunArray::<R>::try_new(&run_ends, &values).unwrap();
+
+            let expected_values = StringArray::from(vec![Some("bc"), Some("gh")]);
+            let expected_run_array = RunArray::<R>::try_new(&run_ends, &expected_values).unwrap();
+
+            let result = substring(&run_array, 1, Some(2)).unwrap();
+            let result = result.as_any().downcast_ref::<RunArray<R>>().unwrap();
+
+            assert_eq!(result.values(), expected_run_array.values());
+            assert_eq!(
+                result.run_ends().values(),
+                expected_run_array.run_ends().values()
+            );
+        }
+        fn test_substring_ree_with_expected<R: RunEndIndexType>(
+            start: i64,
+            length: Option<u64>,
+            expected_values: Vec<Option<&str>>,
+        ) {
+            use arrow_array::{PrimitiveArray, RunArray, StringArray};
+            use arrow_buffer::ScalarBuffer;
+            println!("Run_index type: {:?}", std::any::type_name::<R>());
+            // We know run ends arent affected by substring so this test ignores them entirely and focuses on working with different
+            // run end types and substring offsets/values
+
+            // Simulate a 7-element logical array:
+            // ["abcde", "abcde", "null", "null", "fghij", "klmno", "klmno"]
+            // Compressed as 4 runs:
+            // run_ends = [2, 4, 5, 7] => total 7 logical elements
+            // values   = ["abcde", None, "fghij", "klmno"]
+            let run_ends: PrimitiveArray<R> = PrimitiveArray::new(
+                ScalarBuffer::from(vec![
+                    R::Native::from_usize(2).unwrap(),
+                    R::Native::from_usize(4).unwrap(),
+                    R::Native::from_usize(5).unwrap(),
+                    R::Native::from_usize(7).unwrap(),
+                ]),
+                None,
+            );
+
+            let values = StringArray::from(vec![
+                Some("abcde"), // Run 1 (2 items)
+                None,          // Run 2 (2 items)
+                Some("fghij"), // Run 3 (1 item)
+                Some("klmno"), // Run 4 (2 items)
+            ]);
+
+            let run_array = RunArray::<R>::try_new(&run_ends, &values).unwrap();
+            let result = substring(&run_array, start, length).unwrap();
+            let result_ree = result.as_any().downcast_ref::<RunArray<R>>().unwrap();
+
+            let result_values = result_ree
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+
+            for (i, actual) in result_values.iter().enumerate() {
+                assert_eq!(
+                    actual, expected_values[i],
+                    "Mismatch at run value index {}: expected {:?}, got {:?}",
+                    i, expected_values[i], actual
+                );
+            }
+
+            // Optionally also check that run ends remain unchanged
+            assert_eq!(
+                result_ree.run_ends().values(),
+                run_array.run_ends().values()
+            );
+        }
+
+        #[test]
+        fn test_substring_all_run_index_types() {
+            run_substring_ree_generic::<Int16Type>();
+            run_substring_ree_generic::<Int32Type>();
+            run_substring_ree_generic::<Int64Type>();
+        }
+        #[test]
+        fn test_substring_ree_with_expected_different_run_end_types() {
+            test_substring_ree_with_expected::<Int16Type>(
+                1,
+                Some(2),
+                vec![Some("bc"), None, Some("gh"), Some("lm")],
+            );
+            test_substring_ree_with_expected::<Int32Type>(
+                1,
+                Some(2),
+                vec![Some("bc"), None, Some("gh"), Some("lm")],
+            );
+            test_substring_ree_with_expected::<Int64Type>(
+                1,
+                Some(2),
+                vec![Some("bc"), None, Some("gh"), Some("lm")],
+            );
+        }
+        #[test]
+        fn test_substring_ree_with_expected_different_start_and_length() {
+            let expected = vec![Some("abc"), None, Some("fgh"), Some("klm")];
+            test_substring_ree_with_expected::<Int32Type>(0, Some(3), expected);
+            //
+            // Full slice (start = 0, no length): returns full strings
+            let expected = vec![Some("abcde"), None, Some("fghij"), Some("klmno")];
+            test_substring_ree_with_expected::<Int64Type>(0, None, expected);
+            //
+            // start = -2, len = 2 → gets last 2 characters
+            // "abcde" → "de", "fghij" → "ij", "klmno" → "no"
+            let expected = vec![Some("de"), None, Some("ij"), Some("no")];
+            test_substring_ree_with_expected::<Int16Type>(-2, Some(2), expected);
+            //
+            // start = 10, beyond all string lengths → returns empty strings
+            let expected = vec![Some(""), None, Some(""), Some("")];
+            test_substring_ree_with_expected::<Int32Type>(10, Some(5), expected);
+        }
     }
 }
