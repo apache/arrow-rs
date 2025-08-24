@@ -25,7 +25,7 @@ use crate::{
     thrift_struct,
 };
 
-/*thrift_struct!(
+thrift_struct!(
 /// Page location information for [`OffsetIndexMetaData`]
 pub struct PageLocation {
   /// Offset of the page in the file
@@ -37,67 +37,7 @@ pub struct PageLocation {
   /// (repetition_level = 0).
   3: required i64 first_row_index
 }
-);*/
-
-// hand coding this one because it is very time critical
-
-/// Page location information for [`OffsetIndexMetaData`]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PageLocation {
-    /// Offset of the page in the file
-    pub offset: i64,
-    /// Size of the page, including header. Sum of compressed_page_size and header
-    pub compressed_page_size: i32,
-    /// Index within the RowGroup of the first row of the page. When an
-    /// OffsetIndex is present, pages must begin on row boundaries
-    /// (repetition_level = 0).
-    pub first_row_index: i64,
-}
-
-// Note: this will fail if the fields are either out of order, or if a suboptimal
-// encoder doesn't use field deltas. If that ever occurs, remove this code and
-// revert to the commented out thrift_struct!() implementation above.
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for PageLocation {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        // there are 3 fields, all mandatory, so all field deltas should be 1
-        let (field_type, delta) = prot.read_field_header()?;
-        if delta != 1 || field_type != FieldType::I64 as u8 {
-            return Err(general_err!("error reading PageLocation::offset"));
-        }
-        let offset = prot.read_i64()?;
-
-        let (field_type, delta) = prot.read_field_header()?;
-        if delta != 1 || field_type != FieldType::I32 as u8 {
-            return Err(general_err!(
-                "error reading PageLocation::compressed_page_size"
-            ));
-        }
-        let compressed_page_size = prot.read_i32()?;
-
-        let (field_type, delta) = prot.read_field_header()?;
-        if delta != 1 || field_type != FieldType::I64 as u8 {
-            return Err(general_err!("error reading PageLocation::first_row_index"));
-        }
-        let first_row_index = prot.read_i64()?;
-
-        // This loop slows things down a bit, but it's an acceptible price to allow
-        // forwards compatibility. We could instead assert the next field is Stop.
-        loop {
-            let (field_type, _) = prot.read_field_header()?;
-            if field_type == FieldType::Stop as u8 {
-                break;
-            }
-            prot.skip(FieldType::try_from(field_type)?)?;
-        }
-
-        Ok(Self {
-            offset,
-            compressed_page_size,
-            first_row_index,
-        })
-    }
-}
+);
 
 impl From<&crate::format::PageLocation> for PageLocation {
     fn from(value: &crate::format::PageLocation) -> Self {
@@ -164,4 +104,96 @@ impl OffsetIndexMetaData {
             self.unencoded_byte_array_data_bytes.clone(),
         )
     }
+}
+
+// hand coding this one because it is very time critical
+
+// Note: this will fail if the fields are either out of order, or if a suboptimal
+// encoder doesn't use field deltas.
+fn read_page_location<'a>(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<PageLocation> {
+    // there are 3 fields, all mandatory, so all field deltas should be 1
+    let (field_type, delta) = prot.read_field_header()?;
+    if delta != 1 || field_type != FieldType::I64 as u8 {
+        return Err(general_err!("error reading PageLocation::offset"));
+    }
+    let offset = prot.read_i64()?;
+
+    let (field_type, delta) = prot.read_field_header()?;
+    if delta != 1 || field_type != FieldType::I32 as u8 {
+        return Err(general_err!(
+            "error reading PageLocation::compressed_page_size"
+        ));
+    }
+    let compressed_page_size = prot.read_i32()?;
+
+    let (field_type, delta) = prot.read_field_header()?;
+    if delta != 1 || field_type != FieldType::I64 as u8 {
+        return Err(general_err!("error reading PageLocation::first_row_index"));
+    }
+    let first_row_index = prot.read_i64()?;
+
+    // read end of struct...return error if there are unknown fields present
+    let (field_type, _) = prot.read_field_header()?;
+    if field_type != FieldType::Stop as u8 {
+        return Err(general_err!("unexpected field in PageLocation"));
+    }
+
+    Ok(PageLocation {
+        offset,
+        compressed_page_size,
+        first_row_index,
+    })
+}
+
+// Fast-path read of offset index. this all works because we expect all field deltas to be 1,
+// and there's no nesting beyond PageLocation, so no need to save the last field id. Like
+// read_page_locations(), this will fail if absolute field id's are used.
+pub(super) fn read_offset_index<'a>(
+    prot: &mut ThriftCompactInputProtocol<'a>,
+) -> Result<OffsetIndexMetaData> {
+    // Offset index is a struct with 2 fields. First field is an array of PageLocations,
+    // the second an optional array of i64.
+
+    // read field 1 header, then list header, then vec of PageLocations
+    let (field_type, delta) = prot.read_field_header()?;
+    if delta != 1 || field_type != FieldType::List as u8 {
+        return Err(general_err!("error reading OffsetIndex::page_locations"));
+    }
+    let list_ident = prot.read_list_begin()?;
+    let mut page_locations = Vec::with_capacity(list_ident.size as usize);
+    for _ in 0..list_ident.size {
+        page_locations.push(read_page_location(prot)?);
+    }
+
+    let mut unencoded_byte_array_data_bytes: Option<Vec<i64>> = None;
+
+    // read second field...if it's Stop we're done
+    let (mut field_type, delta) = prot.read_field_header()?;
+    if field_type == FieldType::List as u8 {
+        if delta != 1 {
+            return Err(general_err!(
+                "encountered unknown field while reading OffsetIndex"
+            ));
+        }
+        let list_ident = prot.read_list_begin()?;
+        let mut vec = Vec::with_capacity(list_ident.size as usize);
+        for _ in 0..list_ident.size {
+            vec.push(prot.read_i64()?);
+        }
+        unencoded_byte_array_data_bytes = Some(vec);
+
+        // this one should be Stop
+        (field_type, _) = prot.read_field_header()?;
+    }
+
+    if field_type != FieldType::Stop as u8 {
+        return Err(general_err!(
+            "encountered unknown field while reading OffsetIndex"
+        ));
+    }
+
+    Ok(OffsetIndexMetaData {
+        page_locations,
+        unencoded_byte_array_data_bytes,
+    })
 }
