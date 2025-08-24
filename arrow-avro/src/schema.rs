@@ -216,7 +216,7 @@ pub struct Field<'a> {
     pub r#type: Schema<'a>,
     /// Optional default value for this field
     #[serde(default)]
-    pub default: Option<serde_json::Value>,
+    pub default: Option<Value>,
 }
 
 /// An enumeration
