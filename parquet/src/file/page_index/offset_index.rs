@@ -117,6 +117,8 @@ impl OffsetIndexMetaData {
         if delta != 1 || field_type != FieldType::List as u8 {
             return Err(general_err!("error reading OffsetIndex::page_locations"));
         }
+
+        // we have to do this manually because we want to use the fast PageLocation decoder
         let list_ident = prot.read_list_begin()?;
         let mut page_locations = Vec::with_capacity(list_ident.size as usize);
         for _ in 0..list_ident.size {
@@ -133,11 +135,7 @@ impl OffsetIndexMetaData {
                     "encountered unknown field while reading OffsetIndex"
                 ));
             }
-            let list_ident = prot.read_list_begin()?;
-            let mut vec = Vec::with_capacity(list_ident.size as usize);
-            for _ in 0..list_ident.size {
-                vec.push(prot.read_i64()?);
-            }
+            let vec = Vec::<i64>::try_from(&mut *prot)?;
             unencoded_byte_array_data_bytes = Some(vec);
 
             // this one should be Stop
