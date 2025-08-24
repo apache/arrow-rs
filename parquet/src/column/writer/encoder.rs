@@ -63,6 +63,7 @@ pub struct DataPageValues<T> {
     pub encoding: Encoding,
     pub min_value: Option<T>,
     pub max_value: Option<T>,
+    pub nan_count: Option<u64>,
     pub variable_length_bytes: Option<i64>,
 }
 
@@ -131,6 +132,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     statistics_enabled: EnabledStatistics,
     min_value: Option<T::T>,
     max_value: Option<T::T>,
+    nan_count: Option<u64>,
     bloom_filter: Option<Sbbf>,
     variable_length_bytes: Option<i64>,
 }
@@ -148,6 +150,17 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
             // INTERVAL has undefined sort order, so don't write min/max stats for it
             && self.descr.converted_type() != ConvertedType::INTERVAL
         {
+            // Count NaN values for floating point types
+            if matches!(T::T::PHYSICAL_TYPE, Type::FLOAT | Type::DOUBLE)
+                || (T::T::PHYSICAL_TYPE == Type::FIXED_LEN_BYTE_ARRAY
+                    && self.descr.logical_type() == Some(LogicalType::Float16))
+            {
+                let nan_count = slice.iter().filter(|v| is_nan(&self.descr, *v)).count() as u64;
+                if nan_count > 0 {
+                    *self.nan_count.get_or_insert(0) += nan_count;
+                }
+            }
+
             if let Some((min, max)) = self.min_max(slice, None) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
@@ -210,6 +223,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             bloom_filter,
             min_value: None,
             max_value: None,
+            nan_count: None,
             variable_length_bytes: None,
         })
     }
@@ -304,6 +318,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             num_values: std::mem::take(&mut self.num_values),
             min_value: self.min_value.take(),
             max_value: self.max_value.take(),
+            nan_count: self.nan_count.take(),
             variable_length_bytes: self.variable_length_bytes.take(),
         })
     }
