@@ -24,7 +24,7 @@ use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::column_index::{
     ByteArrayColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
 };
-use crate::file::page_index::offset_index::{read_offset_index, OffsetIndexMetaData};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
 use crate::thrift_struct;
@@ -134,9 +134,9 @@ pub fn read_offset_indexes<R: ChunkReader>(
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
     let mut prot = ThriftCompactInputProtocol::new(data);
 
-    // Try to read fast-path index first. If that fails, fall back to slower but more robust
-    // reader
-    match read_offset_index(&mut prot) {
+    // Try to read fast-path first. If that fails, fall back to slower but more robust
+    // decoder.
+    match OffsetIndexMetaData::try_from_fast(&mut prot) {
         Ok(offset_index) => Ok(offset_index),
         Err(_) => {
             prot = ThriftCompactInputProtocol::new(data);
