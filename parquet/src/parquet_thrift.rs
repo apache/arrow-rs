@@ -804,7 +804,6 @@ where
 }
 
 #[cfg(test)]
-#[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
 pub(crate) mod tests {
     use crate::basic::{TimeUnit, Type};
 
