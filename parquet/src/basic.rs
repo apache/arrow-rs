@@ -196,6 +196,13 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ConvertedType {
     }
 }
 
+impl<W: Write> WriteThrift<W> for ConvertedType {
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        // because we've added NONE, the variant values are off by 1, so correct that here
+        writer.write_i32(*self as i32 - 1)
+    }
+}
+
 // ----------------------------------------------------------------------
 // Mirrors thrift union `crate::format::TimeUnit`
 
@@ -450,6 +457,35 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
         }
         prot.read_struct_end()?;
         Ok(ret)
+    }
+}
+
+impl<W: Write> WriteThrift<W> for LogicalType {
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        match *self {
+            Self::String => {
+                writer.write_field_begin(FieldType::Struct, 1, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Map => {
+                writer.write_field_begin(FieldType::Struct, 2, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::List => {
+                writer.write_field_begin(FieldType::Struct, 3, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Enum => {
+                writer.write_field_begin(FieldType::Struct, 4, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Decimal { scale, precision } => {
+                writer.write_field_begin(FieldType::Struct, 4, 0)?;
+                DecimalType { scale, precision }.write_thrift(writer)?;
+            }
+            _ => return Err(nyi_err!("logical type")),
+        }
+        writer.write_struct_end()
     }
 }
 
@@ -996,6 +1032,20 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
     }
 }
 
+impl<W: Write> WriteThrift<W> for ColumnOrder {
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        match *self {
+            Self::TYPE_DEFINED_ORDER(_) => {
+                writer.write_field_begin(FieldType::Struct, 1, 0)?;
+                writer.write_struct_end()?;
+            }
+            _ => return Err(general_err!("Attempt to write undefined ColumnOrder")),
+        }
+        // write end of struct for this union
+        writer.write_struct_end()
+    }
+}
+
 // ----------------------------------------------------------------------
 // Display handlers
 
@@ -1445,6 +1495,7 @@ impl str::FromStr for LogicalType {
 #[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {
     use super::*;
+    use crate::parquet_thrift::tests::test_roundtrip;
 
     #[test]
     fn test_display_type() {
@@ -1550,6 +1601,32 @@ mod tests {
                 .unwrap(),
             Type::FIXED_LEN_BYTE_ARRAY
         );
+    }
+
+    #[test]
+    fn test_converted_type_roundtrip() {
+        test_roundtrip(ConvertedType::UTF8);
+        test_roundtrip(ConvertedType::MAP);
+        test_roundtrip(ConvertedType::MAP_KEY_VALUE);
+        test_roundtrip(ConvertedType::LIST);
+        test_roundtrip(ConvertedType::ENUM);
+        test_roundtrip(ConvertedType::DECIMAL);
+        test_roundtrip(ConvertedType::DATE);
+        test_roundtrip(ConvertedType::TIME_MILLIS);
+        test_roundtrip(ConvertedType::TIME_MICROS);
+        test_roundtrip(ConvertedType::TIMESTAMP_MILLIS);
+        test_roundtrip(ConvertedType::TIMESTAMP_MICROS);
+        test_roundtrip(ConvertedType::UINT_8);
+        test_roundtrip(ConvertedType::UINT_16);
+        test_roundtrip(ConvertedType::UINT_32);
+        test_roundtrip(ConvertedType::UINT_64);
+        test_roundtrip(ConvertedType::INT_8);
+        test_roundtrip(ConvertedType::INT_16);
+        test_roundtrip(ConvertedType::INT_32);
+        test_roundtrip(ConvertedType::INT_64);
+        test_roundtrip(ConvertedType::JSON);
+        test_roundtrip(ConvertedType::BSON);
+        test_roundtrip(ConvertedType::INTERVAL);
     }
 
     #[test]
@@ -2412,6 +2489,12 @@ mod tests {
             "TYPE_DEFINED_ORDER(UNDEFINED)"
         );
         assert_eq!(ColumnOrder::UNDEFINED.to_string(), "UNDEFINED");
+    }
+
+    #[test]
+    fn test_column_order_roundtrip() {
+        // SortOrder::SIGNED is the default on read.
+        test_roundtrip(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED))
     }
 
     #[test]
