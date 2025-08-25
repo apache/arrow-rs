@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["instantiate_output_builder"],"mod":["primitive","variant"],"trait":["OutputBuilder"]};
