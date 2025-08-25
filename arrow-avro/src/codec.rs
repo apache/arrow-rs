@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::schema::{
-    Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, Type, TypeName,
+    Attributes, AvroSchema, ComplexType, Enum, PrimitiveType, Record, Schema, Type, TypeName,
     AVRO_ENUM_SYMBOLS_METADATA_KEY,
 };
 use arrow_schema::{
@@ -48,7 +48,7 @@ pub(crate) enum ResolutionInfo {
     Promotion(Promotion),
     /// Indicates that a default value should be used for a field. (Implemented in a Follow-up PR)
     DefaultValue(AvroLiteral),
-    /// Provides mapping information for resolving enums. (Implemented in a Follow-up PR)
+    /// Provides mapping information for resolving enums.
     EnumMapping(EnumMapping),
     /// Provides resolution information for record fields. (Implemented in a Follow-up PR)
     Record(ResolvedRecord),
@@ -848,6 +848,10 @@ impl<'a> Maker<'a> {
                 Schema::Complex(ComplexType::Record(writer_record)),
                 Schema::Complex(ComplexType::Record(reader_record)),
             ) => self.resolve_records(writer_record, reader_record, namespace),
+            (
+                Schema::Complex(ComplexType::Enum(writer_enum)),
+                Schema::Complex(ComplexType::Enum(reader_enum)),
+            ) => self.resolve_enums(writer_enum, reader_enum, namespace),
             (Schema::Union(writer_variants), Schema::Union(reader_variants)) => {
                 self.resolve_nullable_union(writer_variants, reader_variants, namespace)
             }
@@ -928,6 +932,69 @@ impl<'a> Maker<'a> {
         }
     }
 
+    fn resolve_enums(
+        &mut self,
+        writer_enum: &Enum<'a>,
+        reader_enum: &Enum<'a>,
+        namespace: Option<&'a str>,
+    ) -> Result<AvroDataType, ArrowError> {
+        let names_match = writer_enum.name == reader_enum.name
+            || reader_enum.aliases.contains(&writer_enum.name)
+            || writer_enum.aliases.contains(&reader_enum.name);
+        if !names_match {
+            return Err(ArrowError::ParseError(format!(
+                "Enum name mismatch writer={}, reader={}",
+                writer_enum.name, reader_enum.name
+            )));
+        }
+        let reader_index: HashMap<&str, usize> = reader_enum
+            .symbols
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| (s, i))
+            .collect();
+        let default_index: i32 = match reader_enum.default {
+            Some(symbol) => match reader_index.get(symbol) {
+                Some(&idx) => idx as i32,
+                None => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Reader enum '{}' default symbol '{symbol}' not found in symbols list",
+                        reader_enum.name,
+                    )))
+                }
+            },
+            None => -1,
+        };
+        let mapping: Vec<i32> = writer_enum
+            .symbols
+            .iter()
+            .map(|&w_symbol| match reader_index.get(w_symbol) {
+                Some(&idx) => idx as i32,
+                None if default_index >= 0 => default_index,
+                None => -1,
+            })
+            .collect();
+        let reader_ns = reader_enum.namespace.or(namespace);
+        let symbols_arc: Arc<[String]> = reader_enum
+            .symbols
+            .iter()
+            .map(|&symbol| symbol.to_string())
+            .collect();
+        let mut metadata = reader_enum.attributes.field_metadata();
+        let symbols_json = serde_json::to_string(&reader_enum.symbols).map_err(|e| {
+            ArrowError::ParseError(format!("Failed to serialize enum symbols: {e}"))
+        })?;
+        metadata.insert(AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(), symbols_json);
+        let mut dt = AvroDataType::new(Codec::Enum(symbols_arc), metadata, None);
+        dt.resolution = Some(ResolutionInfo::EnumMapping(EnumMapping {
+            mapping: Arc::from(mapping),
+            default_index,
+        }));
+        self.resolver
+            .register(reader_enum.name, reader_ns, dt.clone());
+        Ok(dt)
+    }
+
     fn resolve_records(
         &mut self,
         writer_record: &Record<'a>,
@@ -960,7 +1027,7 @@ impl<'a> Maker<'a> {
         // Build reader fields and mapping
         for (reader_idx, r_field) in reader_record.fields.iter().enumerate() {
             if let Some(&writer_idx) = writer_index_map.get(r_field.name) {
-                // Field exists in writer: resolve types (including promotions and union-of-null)
+                // Field exists in a writer: resolve types (including promotions and union-of-null)
                 let w_schema = &writer_record.fields[writer_idx].r#type;
                 let resolved_dt =
                     self.make_data_type(w_schema, Some(&r_field.r#type), reader_ns)?;
