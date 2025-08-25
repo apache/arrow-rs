@@ -357,7 +357,7 @@ impl ValueBuilder {
         Ok(())
     }
 
-    /// Appends a variant to the buffer by copying the underlying byte slice for objects and lists.
+    /// Appends a variant to the buffer by copying raw bytes when possible.
     ///
     /// For objects and lists, this directly copies their underlying byte representation instead of
     /// performing a logical copy and without touching the metadata builder. For other variant
@@ -1275,7 +1275,7 @@ impl VariantBuilder {
         ValueBuilder::try_append_variant(state, value.into())
     }
 
-    /// Appends a variant value to the builder by copying the underlying byte slice for objects and lists.
+    /// Appends a variant value to the builder by copying raw bytes when possible.
     ///
     /// For objects and lists, this directly copies their underlying byte representation instead of
     /// performing a logical copy and without touching the metadata builder. For other variant
@@ -1376,7 +1376,7 @@ impl<'a> ListBuilder<'a> {
         ValueBuilder::try_append_variant(state, value.into())
     }
 
-    /// Appends a variant value to this list by copying the underlying byte slice for objects and lists.
+    /// Appends a variant value to this list by copying raw bytes when possible.
     ///
     /// For objects and lists, this directly copies their underlying byte representation instead of
     /// performing a logical copy. For other variant types, this falls back to the standard append
@@ -1508,10 +1508,10 @@ impl<'a> ObjectBuilder<'a> {
         ValueBuilder::try_append_variant(state, value.into())
     }
 
-    /// Add a field with key and value to the object by copying the underlying byte slice for objects and lists.
+    /// Add a field with key and value to the object by copying raw bytes when possible.
     ///
     /// For objects and lists, this directly copies their underlying byte representation instead of
-    /// performing a logical copy and without touching the metadata builder. For other variant
+    /// performing a logical copy, and without touching the metadata builder. For other variant
     /// types, this falls back to the standard append behavior.
     ///
     /// The caller must ensure that the metadata dictionary is already built and correct for
@@ -1525,10 +1525,10 @@ impl<'a> ObjectBuilder<'a> {
         self.try_insert_bytes(key, value).unwrap()
     }
 
-    /// Add a field with key and value to the object by copying the underlying byte slice for objects and lists.
+    /// Add a field with key and value to the object by copying raw bytes when possible.
     ///
     /// For objects and lists, this directly copies their underlying byte representation instead of
-    /// performing a logical copy and without touching the metadata builder. For other variant
+    /// performing a logical copy, and without touching the metadata builder. For other variant
     /// types, this falls back to the standard append behavior.
     ///
     /// The caller must ensure that the metadata dictionary is already built and correct for
@@ -3374,6 +3374,7 @@ mod tests {
                 .contains("Field name 'unknown_field' not found"));
         }
     }
+
     #[test]
     fn test_append_variant_bytes_round_trip() {
         // Create a complex variant with the normal builder
@@ -3397,13 +3398,16 @@ mod tests {
             }
             obj.finish().unwrap();
         }
-        let (metadata1, value1) = builder.finish();
-        let variant1 = Variant::try_new(&metadata1, &value1).unwrap();
+        let (metadata, value1) = builder.finish();
+        let variant1 = Variant::try_new(&metadata, &value1).unwrap();
 
         // Copy using the new bytes API
-        let mut builder2 = VariantBuilder::new();
-        builder2.append_value_bytes(variant1.clone());
-        let (_metadata2, value2) = builder2.finish();
+        let metadata = VariantMetadata::new(&metadata);
+        let mut metadata = ReadOnlyMetadataBuilder::new(metadata);
+        let mut builder2 = ValueBuilder::new();
+        let state = ParentState::variant(&mut builder2, &mut metadata);
+        ValueBuilder::append_variant_bytes(state, variant1.clone());
+        let value2 = builder2.into_inner();
 
         // The bytes should be identical, we merely copied them across.
         assert_eq!(value1, value2);
@@ -3421,14 +3425,17 @@ mod tests {
             obj.insert("field4", "value4");
             obj.finish().unwrap();
         }
-        let (metadata, value) = builder.finish();
-        let original_variant = Variant::try_new(&metadata, &value).unwrap();
+        let (metadata1, value1) = builder.finish();
+        let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
         let original_obj = original_variant.as_object().unwrap();
 
         // Create a new object copying subset of fields interleaved with new ones
-        let mut builder2 = VariantBuilder::new();
+        let metadata2 = VariantMetadata::new(&metadata1);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut builder2 = ValueBuilder::new();
+        let state = ParentState::variant(&mut builder2, &mut metadata2);
         {
-            let mut obj = builder2.new_object();
+            let mut obj = ObjectBuilder::new(state, true);
 
             // Copy field1 using bytes API
             obj.insert_bytes("field1", original_obj.get("field1").unwrap());
@@ -3447,8 +3454,8 @@ mod tests {
 
             obj.finish().unwrap();
         }
-        let (metadata2, value2) = builder2.finish();
-        let result_variant = Variant::try_new(&metadata2, &value2).unwrap();
+        let value2 = builder2.into_inner();
+        let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
         let result_obj = result_variant.as_object().unwrap();
 
         // Verify the object contains expected fields
@@ -3482,14 +3489,17 @@ mod tests {
             list.append_value(1.234f64);
             list.finish();
         }
-        let (metadata, value) = builder.finish();
-        let original_variant = Variant::try_new(&metadata, &value).unwrap();
+        let (metadata1, value1) = builder.finish();
+        let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
         let original_list = original_variant.as_list().unwrap();
 
         // Create a new list copying subset of elements interleaved with new ones
-        let mut builder2 = VariantBuilder::new();
+        let metadata2 = VariantMetadata::new(&metadata1);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut builder2 = ValueBuilder::new();
+        let state = ParentState::variant(&mut builder2, &mut metadata2);
         {
-            let mut list = builder2.new_list();
+            let mut list = ListBuilder::new(state, true);
 
             // Copy first element using bytes API
             list.append_value_bytes(original_list.get(0).unwrap());
@@ -3508,8 +3518,8 @@ mod tests {
 
             list.finish();
         }
-        let (metadata2, value2) = builder2.finish();
-        let result_variant = Variant::try_new(&metadata2, &value2).unwrap();
+        let value2 = builder2.into_inner();
+        let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
         let result_list = result_variant.as_list().unwrap();
 
         // Verify the list contains expected elements
@@ -3523,8 +3533,16 @@ mod tests {
 
     #[test]
     fn test_complex_nested_filtering_injection() {
-        // Create a complex nested structure: object -> list -> objects
-        let mut builder = VariantBuilder::new();
+        // Create a complex nested structure: object -> list -> objects. Make sure to pre-register
+        // the extra field names we'll need later while manipulating variant bytes.
+        let mut builder = VariantBuilder::new().with_field_names([
+            "active_count",
+            "active_users",
+            "computed_score",
+            "processed_at",
+            "status",
+        ]);
+
         {
             let mut root_obj = builder.new_object();
             root_obj.insert("metadata", "original");
@@ -3565,16 +3583,19 @@ mod tests {
             root_obj.insert("total_count", 3i32);
             root_obj.finish().unwrap();
         }
-        let (metadata, value) = builder.finish();
-        let original_variant = Variant::try_new(&metadata, &value).unwrap();
+        let (metadata1, value1) = builder.finish();
+        let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
         let original_obj = original_variant.as_object().unwrap();
         let original_users = original_obj.get("users").unwrap();
         let original_users = original_users.as_list().unwrap();
 
         // Create filtered/modified version: only copy active users and inject new data
-        let mut builder2 = VariantBuilder::new();
+        let metadata2 = VariantMetadata::new(&metadata1);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut builder2 = ValueBuilder::new();
+        let state = ParentState::variant(&mut builder2, &mut metadata2);
         {
-            let mut root_obj = builder2.new_object();
+            let mut root_obj = ObjectBuilder::new(state, true);
 
             // Copy metadata using bytes API
             root_obj.insert_bytes("metadata", original_obj.get("metadata").unwrap());
@@ -3627,8 +3648,8 @@ mod tests {
 
             root_obj.finish().unwrap();
         }
-        let (metadata2, value2) = builder2.finish();
-        let result_variant = Variant::try_new(&metadata2, &value2).unwrap();
+        let value2 = builder2.into_inner();
+        let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
         let result_obj = result_variant.as_object().unwrap();
 
         // Verify the filtered/modified structure
