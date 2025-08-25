@@ -644,13 +644,13 @@ impl<W: Write> WriteThrift<W> for i64 {
 
 #[cfg(test)]
 #[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
-mod tests {
+pub(crate) mod tests {
     use crate::basic::{TimeUnit, Type};
 
     use super::*;
     use std::fmt::Debug;
 
-    fn test_roundtrip<T>(val: T)
+    pub(crate) fn test_roundtrip<T>(val: T)
     where
         T: for<'a> TryFrom<&'a mut ThriftCompactInputProtocol<'a>>
             + WriteThrift<Vec<u8>>
