@@ -20,7 +20,7 @@
 // to not allocate byte arrays or strings.
 #![allow(dead_code)]
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, io::Write};
 
 use crate::errors::{ParquetError, Result};
 
@@ -537,5 +537,152 @@ where
         }
 
         Ok(res)
+    }
+}
+
+/////////////////////////
+// thrift compact output
+
+pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
+    writer: W,
+}
+
+impl<W: Write> ThriftCompactOutputProtocol<W> {
+    pub(crate) fn new(writer: W) -> Self {
+        Self { writer }
+    }
+
+    pub(crate) fn inner(&self) -> &W {
+        &self.writer
+    }
+
+    fn write_byte(&mut self, b: u8) -> Result<()> {
+        self.writer.write_all(&[b])?;
+        Ok(())
+    }
+
+    fn write_vlq(&mut self, val: u64) -> Result<()> {
+        let mut v = val;
+        while v > 0x7f {
+            self.write_byte(v as u8 | 0x80)?;
+            v >>= 7;
+        }
+        self.write_byte(v as u8)
+    }
+
+    fn write_zig_zag(&mut self, val: i64) -> Result<()> {
+        let s = (val < 0) as i64;
+        self.write_vlq((((val ^ -s) << 1) + s) as u64)
+    }
+
+    pub(crate) fn write_field_begin(
+        &mut self,
+        field_type: FieldType,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<()> {
+        let mut delta = field_id - last_field_id;
+        if delta > 0xf || delta < 0 {
+            delta = 0;
+        }
+        if delta > 0 {
+            self.write_byte((delta as u8) << 4 | field_type as u8)
+        } else {
+            self.write_byte(field_type as u8)?;
+            self.write_i16(delta)
+        }
+    }
+
+    pub(crate) fn write_struct_end(&mut self) -> Result<()> {
+        self.write_byte(0)
+    }
+
+    pub(crate) fn write_i8(&mut self, val: i8) -> Result<()> {
+        self.write_byte(val as u8)
+    }
+
+    pub(crate) fn write_i16(&mut self, val: i16) -> Result<()> {
+        self.write_zig_zag(val as _)
+    }
+
+    pub(crate) fn write_i32(&mut self, val: i32) -> Result<()> {
+        self.write_zig_zag(val as _)
+    }
+
+    pub(crate) fn write_i64(&mut self, val: i64) -> Result<()> {
+        self.write_zig_zag(val as _)
+    }
+}
+
+pub(crate) trait WriteThrift<W: Write> {
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()>;
+}
+
+impl<W: Write> WriteThrift<W> for i8 {
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i8(*self)
+    }
+}
+
+impl<W: Write> WriteThrift<W> for i16 {
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i16(*self)
+    }
+}
+
+impl<W: Write> WriteThrift<W> for i32 {
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i32(*self)
+    }
+}
+
+impl<W: Write> WriteThrift<W> for i64 {
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i64(*self)
+    }
+}
+
+#[cfg(test)]
+#[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
+mod tests {
+    use crate::basic::{TimeUnit, Type};
+
+    use super::*;
+    use std::fmt::Debug;
+
+    fn test_roundtrip<T>(val: T)
+    where
+        T: for<'a> TryFrom<&'a mut ThriftCompactInputProtocol<'a>>
+            + WriteThrift<Vec<u8>>
+            + PartialEq
+            + Debug,
+        for<'a> <T as TryFrom<&'a mut ThriftCompactInputProtocol<'a>>>::Error: Debug,
+    {
+        let buf = Vec::<u8>::new();
+        let mut writer = ThriftCompactOutputProtocol::new(buf);
+        val.write_thrift(&mut writer).unwrap();
+
+        let mut prot = ThriftCompactInputProtocol::new(writer.inner());
+        let read_val = T::try_from(&mut prot).unwrap();
+        assert_eq!(val, read_val);
+    }
+
+    #[test]
+    fn test_enum_roundtrip() {
+        test_roundtrip(Type::BOOLEAN);
+        test_roundtrip(Type::INT32);
+        test_roundtrip(Type::INT64);
+        test_roundtrip(Type::INT96);
+        test_roundtrip(Type::FLOAT);
+        test_roundtrip(Type::DOUBLE);
+        test_roundtrip(Type::BYTE_ARRAY);
+        test_roundtrip(Type::FIXED_LEN_BYTE_ARRAY);
+    }
+
+    #[test]
+    fn test_union_all_empty_roundtrip() {
+        test_roundtrip(TimeUnit::MILLIS);
+        test_roundtrip(TimeUnit::MICROS);
+        test_roundtrip(TimeUnit::NANOS);
     }
 }

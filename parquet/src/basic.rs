@@ -20,11 +20,14 @@
 //! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift)
 //! file to see raw definitions.
 
+use std::io::Write;
 use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
-use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::parquet_thrift::{
+    FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
+};
 use crate::{thrift_enum, thrift_struct, thrift_union_all_empty};
 
 use crate::errors::{ParquetError, Result};

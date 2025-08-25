@@ -51,6 +51,12 @@ macro_rules! thrift_enum {
             }
         }
 
+        impl<W: Write> WriteThrift<W> for $identifier {
+            fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                (*self as i32).write_thrift(writer)
+            }
+        }
+
         // TODO: remove when we finally get rid of the format module
         impl TryFrom<crate::format::$identifier> for $identifier {
             type Error = ParquetError;
@@ -116,6 +122,18 @@ macro_rules! thrift_union_all_empty {
                 }
                 prot.read_struct_end()?;
                 Ok(ret)
+            }
+        }
+
+        impl<W: Write> WriteThrift<W> for $identifier {
+            fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                match *self {
+                    $(Self::$field_name => writer.write_field_begin(FieldType::Struct, $field_id, 0)?,)*
+                }
+                // write end of struct for empty struct
+                writer.write_struct_end()?;
+                // write end of struct for this union
+                writer.write_struct_end()
             }
         }
 
