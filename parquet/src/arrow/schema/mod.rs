@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow_ipc::writer;
 #[cfg(feature = "arrow_canonical_extension_types")]
-use arrow_schema::extension::{Json, Uuid};
+use arrow_schema::extension::{Geography, Geometry, Json, Uuid};
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
 use crate::basic::{
@@ -399,9 +399,32 @@ pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field
     }
     #[cfg(feature = "arrow_canonical_extension_types")]
     if let Some(logical_type) = basic_info.logical_type() {
+        use arrow_schema::extension::Geography;
+
         match logical_type {
             LogicalType::Uuid => ret.try_with_extension_type(Uuid)?,
             LogicalType::Json => ret.try_with_extension_type(Json::default())?,
+            LogicalType::Geometry { crs } => ret.try_with_extension_type(Geometry::new(crs))?,
+            LogicalType::Geography { crs, algorithm } => {
+                use arrow_schema::extension::GeographyAlgorithm;
+
+                use crate::format::EdgeInterpolationAlgorithm;
+
+                let algorithm = match algorithm {
+                    Some(EdgeInterpolationAlgorithm::ANDOYER) => Some(GeographyAlgorithm::ANDOYER),
+                    Some(EdgeInterpolationAlgorithm::KARNEY) => Some(GeographyAlgorithm::KARNEY),
+                    Some(EdgeInterpolationAlgorithm::SPHERICAL) => {
+                        Some(GeographyAlgorithm::SPHERICAL)
+                    }
+                    Some(EdgeInterpolationAlgorithm::THOMAS) => Some(GeographyAlgorithm::THOMAS),
+                    Some(EdgeInterpolationAlgorithm::VINCENTY) => {
+                        Some(GeographyAlgorithm::VINCENTY)
+                    }
+                    None => None,
+                    _ => None,
+                };
+                ret.try_with_extension_type(Geography::new(crs, algorithm))?
+            }
             _ => {}
         }
     }
@@ -606,6 +629,39 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
                 .with_repetition(repetition)
                 .with_id(id)
+                .with_logical_type(
+                    #[cfg(feature = "arrow_canonical_extension_types")]
+                    if let Ok(t) = field.try_extension_type::<Geometry>() {
+                        Some(LogicalType::Geometry {
+                            crs: t.crs().map(|s| s.to_string()),
+                        })
+                    } else if let Ok(t) = field.try_extension_type::<Geography>() {
+                        Some(LogicalType::Geography {
+                            crs: t.crs().map(|s| s.to_string()),
+                            algorithm: t.algorithm().map(|alg| match alg {
+                                arrow_schema::extension::GeographyAlgorithm::ANDOYER => {
+                                    crate::format::EdgeInterpolationAlgorithm::ANDOYER
+                                }
+                                arrow_schema::extension::GeographyAlgorithm::KARNEY => {
+                                    crate::format::EdgeInterpolationAlgorithm::KARNEY
+                                }
+                                arrow_schema::extension::GeographyAlgorithm::SPHERICAL => {
+                                    crate::format::EdgeInterpolationAlgorithm::SPHERICAL
+                                }
+                                arrow_schema::extension::GeographyAlgorithm::THOMAS => {
+                                    crate::format::EdgeInterpolationAlgorithm::THOMAS
+                                }
+                                arrow_schema::extension::GeographyAlgorithm::VINCENTY => {
+                                    crate::format::EdgeInterpolationAlgorithm::VINCENTY
+                                }
+                            }),
+                        })
+                    } else {
+                        None
+                    },
+                    #[cfg(not(feature = "arrow_canonical_extension_types"))]
+                    None,
+                )
                 .build()
         }
         DataType::FixedSizeBinary(length) => {
