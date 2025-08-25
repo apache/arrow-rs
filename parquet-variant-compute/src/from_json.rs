@@ -102,7 +102,7 @@ mod test {
             let mut vb = VariantBuilder::new();
             let mut ob = vb.new_object();
             ob.insert("a", Variant::Int8(32));
-            ob.finish()?;
+            ob.finish();
             let (object_metadata, object_value) = vb.finish();
             let expected = Variant::new(&object_metadata, &object_value);
             assert_eq!(variant_array.value(2), expected);
@@ -151,7 +151,7 @@ mod test {
             let mut vb = VariantBuilder::new();
             let mut ob = vb.new_object();
             ob.insert("a", Variant::Int8(32));
-            ob.finish()?;
+            ob.finish();
             let (object_metadata, object_value) = vb.finish();
             let expected = Variant::new(&object_metadata, &object_value);
             assert_eq!(variant_array.value(2), expected);
@@ -200,7 +200,7 @@ mod test {
             let mut vb = VariantBuilder::new();
             let mut ob = vb.new_object();
             ob.insert("a", Variant::Int8(32));
-            ob.finish()?;
+            ob.finish();
             let (object_metadata, object_value) = vb.finish();
             let expected = Variant::new(&object_metadata, &object_value);
             assert_eq!(variant_array.value(2), expected);

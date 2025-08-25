@@ -374,7 +374,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                     // to match Arrow struct semantics where null fields are omitted
                 }
 
-                object_builder.finish()?;
+                object_builder.finish();
                 let (metadata, value) = variant_builder.finish();
                 let variant = Variant::try_new(&metadata, &value)?;
                 builder.append_variant(variant);
@@ -440,7 +440,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                         let value = values.value(i as usize);
                         object_builder.insert(key_strings.value(i as usize), value);
                     }
-                    object_builder.finish()?;
+                    object_builder.finish();
                     let (metadata, value) = variant_builder.finish();
                     let variant = Variant::try_new(&metadata, &value)?;
 

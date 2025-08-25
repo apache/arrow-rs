@@ -40,9 +40,9 @@ fn generate_large_object() -> (Vec<u8>, Vec<u8>) {
             }
             list_builder.finish();
         }
-        inner_object.finish().unwrap();
+        inner_object.finish();
     }
-    outer_object.finish().unwrap();
+    outer_object.finish();
 
     variant_builder.finish()
 }
@@ -72,9 +72,9 @@ fn generate_complex_object() -> (Vec<u8>, Vec<u8>) {
         let key = format!("{}", 1024 - i);
         inner_object_builder.insert(&key, i);
     }
-    inner_object_builder.finish().unwrap();
+    inner_object_builder.finish();
 
-    object_builder.finish().unwrap();
+    object_builder.finish();
 
     variant_builder.finish()
 }

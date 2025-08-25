@@ -697,7 +697,7 @@ mod tests {
             // list3 (10..20)
             let (metadata3, value3) = make_listi32(10i32..20i32);
             object_builder.insert("list3", Variant::new(&metadata3, &value3));
-            object_builder.finish().unwrap();
+            object_builder.finish();
             builder.finish()
         };
 

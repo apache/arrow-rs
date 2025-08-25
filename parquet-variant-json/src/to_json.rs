@@ -966,8 +966,7 @@ mod tests {
             .with_field("age", 30i32)
             .with_field("active", true)
             .with_field("score", 95.5f64)
-            .finish()
-            .unwrap();
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -997,7 +996,7 @@ mod tests {
 
         {
             let obj = builder.new_object();
-            obj.finish().unwrap();
+            obj.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -1022,8 +1021,7 @@ mod tests {
             .with_field("message", "Hello \"World\"\nWith\tTabs")
             .with_field("path", "C:\\Users\\Alice\\Documents")
             .with_field("unicode", "😀 Smiley")
-            .finish()
-            .unwrap();
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
@@ -1135,7 +1133,7 @@ mod tests {
             obj.insert("zebra", "last");
             obj.insert("alpha", "first");
             obj.insert("beta", "second");
-            obj.finish().unwrap();
+            obj.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -1202,7 +1200,7 @@ mod tests {
             obj.insert("float_field", 2.71f64);
             obj.insert("null_field", ());
             obj.insert("long_field", 999i64);
-            obj.finish().unwrap();
+            obj.finish();
         }
 
         let (metadata, value) = builder.finish();
