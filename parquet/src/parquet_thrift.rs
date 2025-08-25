@@ -581,15 +581,21 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         field_id: i16,
         last_field_id: i16,
     ) -> Result<()> {
-        let mut delta = field_id - last_field_id;
-        if delta > 0xf || delta < 0 {
-            delta = 0;
-        }
-        if delta > 0 {
+        let delta = field_id.wrapping_sub(last_field_id);
+        if delta > 0 && delta <= 0xf {
             self.write_byte((delta as u8) << 4 | field_type as u8)
         } else {
             self.write_byte(field_type as u8)?;
-            self.write_i16(delta)
+            self.write_i16(field_id)
+        }
+    }
+
+    pub(crate) fn write_list_begin(&mut self, element_type: ElementType, len: usize) -> Result<()> {
+        if len < 15 {
+            self.write_byte((len as u8) << 4 | element_type as u8)
+        } else {
+            self.write_byte(0xf0u8 | element_type as u8)?;
+            self.write_vlq(len as _)
         }
     }
 
@@ -628,8 +634,65 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
 }
 
 pub(crate) trait WriteThrift<W: Write> {
+    const ELEMENT_TYPE: ElementType;
+
     // used to write generated enums and structs
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()>;
+}
+
+impl<T, W: Write> WriteThrift<W> for Vec<T>
+where
+    T: WriteThrift<W>,
+{
+    const ELEMENT_TYPE: ElementType = ElementType::List;
+
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_list_begin(T::ELEMENT_TYPE, self.len())?;
+        for i in 0..self.len() {
+            self[i].write_thrift(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl<W: Write> WriteThrift<W> for bool {
+    const ELEMENT_TYPE: ElementType = ElementType::Bool;
+
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_bool(*self)
+    }
+}
+
+impl<W: Write> WriteThrift<W> for i8 {
+    const ELEMENT_TYPE: ElementType = ElementType::Byte;
+
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i8(*self)
+    }
+}
+
+impl<W: Write> WriteThrift<W> for i16 {
+    const ELEMENT_TYPE: ElementType = ElementType::I16;
+
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i16(*self)
+    }
+}
+
+impl<W: Write> WriteThrift<W> for i32 {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i32(*self)
+    }
+}
+
+impl<W: Write> WriteThrift<W> for i64 {
+    const ELEMENT_TYPE: ElementType = ElementType::I64;
+
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i64(*self)
+    }
 }
 
 pub(crate) trait WriteThriftField<W: Write> {
@@ -724,6 +787,22 @@ impl<W: Write> WriteThriftField<W> for &str {
     }
 }
 
+impl<T, W: Write> WriteThriftField<W> for Vec<T>
+where
+    T: WriteThrift<W>,
+{
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::List, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
 #[cfg(test)]
 #[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
 pub(crate) mod tests {
@@ -743,6 +822,8 @@ pub(crate) mod tests {
         let buf = Vec::<u8>::new();
         let mut writer = ThriftCompactOutputProtocol::new(buf);
         val.write_thrift(&mut writer).unwrap();
+
+        //println!("serialized: {:x?}", writer.inner());
 
         let mut prot = ThriftCompactInputProtocol::new(writer.inner());
         let read_val = T::try_from(&mut prot).unwrap();

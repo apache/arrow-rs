@@ -52,6 +52,8 @@ macro_rules! thrift_enum {
         }
 
         impl<W: Write> WriteThrift<W> for $identifier {
+            const ELEMENT_TYPE: ElementType = ElementType::I32;
+
             fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 writer.write_i32(*self as i32)
             }
@@ -134,6 +136,8 @@ macro_rules! thrift_union_all_empty {
         }
 
         impl<W: Write> WriteThrift<W> for $identifier {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
             fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 match *self {
                     $(Self::$field_name => writer.write_field_begin(FieldType::Struct, $field_id, 0)?,)*

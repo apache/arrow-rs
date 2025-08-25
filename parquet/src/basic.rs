@@ -26,7 +26,7 @@ use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::parquet_thrift::{
-    FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
+    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
     WriteThriftField,
 };
 use crate::{thrift_enum, thrift_struct, thrift_union_all_empty};
@@ -198,6 +198,8 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ConvertedType {
 }
 
 impl<W: Write> WriteThrift<W> for ConvertedType {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         // because we've added NONE, the variant values are off by 1, so correct that here
         writer.write_i32(*self as i32 - 1)
@@ -229,6 +231,8 @@ struct DecimalType {
 );
 
 impl<W: Write> WriteThrift<W> for DecimalType {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
     #[allow(unused_assignments)]
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
@@ -261,6 +265,8 @@ struct TimestampType {
 );
 
 impl<W: Write> WriteThrift<W> for TimestampType {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
     #[allow(unused_assignments)]
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
@@ -296,6 +302,8 @@ struct IntType {
 );
 
 impl<W: Write> WriteThrift<W> for IntType {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
     #[allow(unused_assignments)]
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
@@ -331,6 +339,8 @@ struct VariantType {
 );
 
 impl<W: Write> WriteThrift<W> for VariantType {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
     #[allow(unused_assignments)]
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
@@ -364,6 +374,8 @@ struct GeometryType<'a> {
 );
 
 impl<'a, W: Write> WriteThrift<W> for GeometryType<'a> {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
     #[allow(unused_assignments)]
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
@@ -398,6 +410,8 @@ struct GeographyType<'a> {
 );
 
 impl<'a, W: Write> WriteThrift<W> for GeographyType<'a> {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
     #[allow(unused_assignments)]
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
@@ -627,6 +641,8 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
 }
 
 impl<W: Write> WriteThrift<W> for LogicalType {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         match self {
             Self::String => {
@@ -1277,6 +1293,8 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
 }
 
 impl<W: Write> WriteThrift<W> for ColumnOrder {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         match *self {
             Self::TYPE_DEFINED_ORDER(_) => {
@@ -2439,6 +2457,77 @@ mod tests {
         test_roundtrip(LogicalType::Decimal {
             scale: 0,
             precision: 20,
+        });
+        test_roundtrip(LogicalType::Date);
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MICROS,
+        });
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::MILLIS,
+        });
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::NANOS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::MICROS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MILLIS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::NANOS,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 8,
+            is_signed: true,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 16,
+            is_signed: false,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 32,
+            is_signed: true,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 64,
+            is_signed: false,
+        });
+        test_roundtrip(LogicalType::Json);
+        test_roundtrip(LogicalType::Bson);
+        test_roundtrip(LogicalType::Uuid);
+        test_roundtrip(LogicalType::Float16);
+        test_roundtrip(LogicalType::Variant {
+            specification_version: Some(1),
+        });
+        test_roundtrip(LogicalType::Variant {
+            specification_version: None,
+        });
+        test_roundtrip(LogicalType::Geometry {
+            crs: Some("foo".to_owned()),
+        });
+        test_roundtrip(LogicalType::Geometry { crs: None });
+        test_roundtrip(LogicalType::Geography {
+            crs: Some("foo".to_owned()),
+            algorithm: Some(EdgeInterpolationAlgorithm::ANDOYER),
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: None,
+            algorithm: Some(EdgeInterpolationAlgorithm::KARNEY),
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: Some("foo".to_owned()),
+            algorithm: None,
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: None,
+            algorithm: None,
         });
     }
 
