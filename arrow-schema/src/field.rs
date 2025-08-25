@@ -547,7 +547,7 @@ impl Field {
     /// # Error
     ///
     /// Returns an error if
-    /// - this field does have a canonical extension type (mismatch or missing)
+    /// - this field does not have a canonical extension type (mismatch or missing)
     /// - the canonical extension is not supported
     /// - the construction of the extension type fails
     #[cfg(feature = "canonical_extension_types")]
