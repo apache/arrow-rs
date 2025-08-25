@@ -365,7 +365,7 @@ impl ValueBuilder {
     ///
     /// The caller must ensure that the metadata dictionary is already built and correct for
     /// any objects or lists being appended.
-    fn append_variant_bytes(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
+    pub fn append_variant_bytes(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
         let builder = state.value_builder();
         variant_append_value!(
             builder,
