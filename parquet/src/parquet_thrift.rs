@@ -597,6 +597,19 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         self.write_byte(0)
     }
 
+    pub(crate) fn write_bytes(&mut self, val: &[u8]) -> Result<()> {
+        self.write_vlq(val.len() as u64)?;
+        self.writer.write_all(val)?;
+        Ok(())
+    }
+
+    pub(crate) fn write_bool(&mut self, val: bool) -> Result<()> {
+        match val {
+            true => self.write_byte(1),
+            false => self.write_byte(2),
+        }
+    }
+
     pub(crate) fn write_i8(&mut self, val: i8) -> Result<()> {
         self.write_byte(val as u8)
     }
@@ -615,30 +628,99 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
 }
 
 pub(crate) trait WriteThrift<W: Write> {
+    // used to write generated enums and structs
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()>;
 }
 
-impl<W: Write> WriteThrift<W> for i8 {
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        writer.write_i8(*self)
+pub(crate) trait WriteThriftField<W: Write> {
+    // used to write struct fields (which may be basic types or generated types).
+    // write the field header and field value. returns `field_id`.
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16>;
+}
+
+impl<W: Write> WriteThriftField<W> for bool {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        // boolean only writes the field header
+        match *self {
+            true => writer.write_field_begin(FieldType::BooleanTrue, field_id, last_field_id)?,
+            false => writer.write_field_begin(FieldType::BooleanFalse, field_id, last_field_id)?,
+        }
+        Ok(field_id)
     }
 }
 
-impl<W: Write> WriteThrift<W> for i16 {
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        writer.write_i16(*self)
+impl<W: Write> WriteThriftField<W> for i8 {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Byte, field_id, last_field_id)?;
+        writer.write_i8(*self)?;
+        Ok(field_id)
     }
 }
 
-impl<W: Write> WriteThrift<W> for i32 {
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        writer.write_i32(*self)
+impl<W: Write> WriteThriftField<W> for i16 {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I16, field_id, last_field_id)?;
+        writer.write_i16(*self)?;
+        Ok(field_id)
     }
 }
 
-impl<W: Write> WriteThrift<W> for i64 {
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        writer.write_i64(*self)
+impl<W: Write> WriteThriftField<W> for i32 {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+        writer.write_i32(*self)?;
+        Ok(field_id)
+    }
+}
+
+impl<W: Write> WriteThriftField<W> for i64 {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I64, field_id, last_field_id)?;
+        writer.write_i64(*self)?;
+        Ok(field_id)
+    }
+}
+
+impl<W: Write> WriteThriftField<W> for &str {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Binary, field_id, last_field_id)?;
+        writer.write_bytes(self.as_bytes())?;
+        Ok(field_id)
     }
 }
 

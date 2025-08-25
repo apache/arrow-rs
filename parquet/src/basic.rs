@@ -27,6 +27,7 @@ use std::{fmt, str};
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::parquet_thrift::{
     FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
+    WriteThriftField,
 };
 use crate::{thrift_enum, thrift_struct, thrift_union_all_empty};
 
@@ -227,12 +228,62 @@ struct DecimalType {
 }
 );
 
+impl<W: Write> WriteThrift<W> for DecimalType {
+    #[allow(unused_assignments)]
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let mut last_field_id = 0i16;
+        last_field_id = self.scale.write_thrift_field(writer, 1, last_field_id)?;
+        last_field_id = self
+            .precision
+            .write_thrift_field(writer, 2, last_field_id)?;
+        writer.write_struct_end()
+    }
+}
+
+impl<W: Write> WriteThriftField<W> for DecimalType {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
 thrift_struct!(
 struct TimestampType {
   1: required bool is_adjusted_to_u_t_c
   2: required TimeUnit unit
 }
 );
+
+impl<W: Write> WriteThrift<W> for TimestampType {
+    #[allow(unused_assignments)]
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let mut last_field_id = 0i16;
+        last_field_id = self
+            .is_adjusted_to_u_t_c
+            .write_thrift_field(writer, 1, last_field_id)?;
+        last_field_id = self.unit.write_thrift_field(writer, 2, last_field_id)?;
+        writer.write_struct_end()
+    }
+}
+
+impl<W: Write> WriteThriftField<W> for TimestampType {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
 
 // they are identical
 use TimestampType as TimeType;
@@ -244,6 +295,33 @@ struct IntType {
 }
 );
 
+impl<W: Write> WriteThrift<W> for IntType {
+    #[allow(unused_assignments)]
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let mut last_field_id = 0i16;
+        last_field_id = self
+            .bit_width
+            .write_thrift_field(writer, 1, last_field_id)?;
+        last_field_id = self
+            .is_signed
+            .write_thrift_field(writer, 2, last_field_id)?;
+        writer.write_struct_end()
+    }
+}
+
+impl<W: Write> WriteThriftField<W> for IntType {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
 thrift_struct!(
 struct VariantType {
   // The version of the variant specification that the variant was
@@ -252,11 +330,65 @@ struct VariantType {
 }
 );
 
+impl<W: Write> WriteThrift<W> for VariantType {
+    #[allow(unused_assignments)]
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let mut last_field_id = 0i16;
+        if self.specification_version.is_some() {
+            last_field_id =
+                self.specification_version
+                    .unwrap()
+                    .write_thrift_field(writer, 1, last_field_id)?;
+        }
+        writer.write_struct_end()
+    }
+}
+
+impl<W: Write> WriteThriftField<W> for VariantType {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
 thrift_struct!(
 struct GeometryType<'a> {
   1: optional string<'a> crs;
 }
 );
+
+impl<'a, W: Write> WriteThrift<W> for GeometryType<'a> {
+    #[allow(unused_assignments)]
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let mut last_field_id = 0i16;
+        if self.crs.is_some() {
+            last_field_id = self
+                .crs
+                .unwrap()
+                .write_thrift_field(writer, 1, last_field_id)?;
+        }
+        writer.write_struct_end()
+    }
+}
+
+impl<'a, W: Write> WriteThriftField<W> for GeometryType<'a> {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
 
 thrift_struct!(
 struct GeographyType<'a> {
@@ -264,6 +396,40 @@ struct GeographyType<'a> {
   2: optional EdgeInterpolationAlgorithm algorithm;
 }
 );
+
+impl<'a, W: Write> WriteThrift<W> for GeographyType<'a> {
+    #[allow(unused_assignments)]
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let mut last_field_id = 0i16;
+        if self.crs.is_some() {
+            last_field_id = self
+                .crs
+                .unwrap()
+                .write_thrift_field(writer, 1, last_field_id)?;
+        }
+        if self.algorithm.is_some() {
+            last_field_id =
+                self.algorithm
+                    .as_ref()
+                    .unwrap()
+                    .write_thrift_field(writer, 2, last_field_id)?;
+        }
+        writer.write_struct_end()
+    }
+}
+
+impl<'a, W: Write> WriteThriftField<W> for GeographyType<'a> {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
 
 /// Logical types used by version 2.4.0+ of the Parquet format.
 ///
@@ -462,7 +628,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
 
 impl<W: Write> WriteThrift<W> for LogicalType {
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        match *self {
+        match self {
             Self::String => {
                 writer.write_field_begin(FieldType::Struct, 1, 0)?;
                 writer.write_struct_end()?;
@@ -480,8 +646,86 @@ impl<W: Write> WriteThrift<W> for LogicalType {
                 writer.write_struct_end()?;
             }
             Self::Decimal { scale, precision } => {
-                writer.write_field_begin(FieldType::Struct, 4, 0)?;
-                DecimalType { scale, precision }.write_thrift(writer)?;
+                DecimalType {
+                    scale: *scale,
+                    precision: *precision,
+                }
+                .write_thrift_field(writer, 5, 0)?;
+            }
+            Self::Date => {
+                writer.write_field_begin(FieldType::Struct, 6, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Time {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
+                TimeType {
+                    is_adjusted_to_u_t_c: *is_adjusted_to_u_t_c,
+                    unit: *unit,
+                }
+                .write_thrift_field(writer, 7, 0)?;
+            }
+            Self::Timestamp {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
+                TimestampType {
+                    is_adjusted_to_u_t_c: *is_adjusted_to_u_t_c,
+                    unit: *unit,
+                }
+                .write_thrift_field(writer, 8, 0)?;
+            }
+            Self::Integer {
+                bit_width,
+                is_signed,
+            } => {
+                IntType {
+                    bit_width: *bit_width,
+                    is_signed: *is_signed,
+                }
+                .write_thrift_field(writer, 10, 0)?;
+            }
+            Self::Unknown => {
+                writer.write_field_begin(FieldType::Struct, 11, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Json => {
+                writer.write_field_begin(FieldType::Struct, 12, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Bson => {
+                writer.write_field_begin(FieldType::Struct, 13, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Uuid => {
+                writer.write_field_begin(FieldType::Struct, 14, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Float16 => {
+                writer.write_field_begin(FieldType::Struct, 15, 0)?;
+                writer.write_struct_end()?;
+            }
+            Self::Variant {
+                specification_version,
+            } => {
+                VariantType {
+                    specification_version: *specification_version,
+                }
+                .write_thrift_field(writer, 16, 0)?;
+            }
+            Self::Geometry { crs } => {
+                GeometryType {
+                    crs: crs.as_ref().map(|s| s.as_str()),
+                }
+                .write_thrift_field(writer, 17, 0)?;
+            }
+            Self::Geography { crs, algorithm } => {
+                GeographyType {
+                    crs: crs.as_ref().map(|s| s.as_str()),
+                    algorithm: *algorithm,
+                }
+                .write_thrift_field(writer, 18, 0)?;
             }
             _ => return Err(nyi_err!("logical type")),
         }
@@ -2184,6 +2428,18 @@ mod tests {
             ConvertedType::from(Some(LogicalType::Unknown)),
             ConvertedType::NONE
         );
+    }
+
+    #[test]
+    fn test_logical_type_roundtrip() {
+        test_roundtrip(LogicalType::String);
+        test_roundtrip(LogicalType::Map);
+        test_roundtrip(LogicalType::List);
+        test_roundtrip(LogicalType::Enum);
+        test_roundtrip(LogicalType::Decimal {
+            scale: 0,
+            precision: 20,
+        });
     }
 
     #[test]

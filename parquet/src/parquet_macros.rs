@@ -53,7 +53,15 @@ macro_rules! thrift_enum {
 
         impl<W: Write> WriteThrift<W> for $identifier {
             fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-                (*self as i32).write_thrift(writer)
+                writer.write_i32(*self as i32)
+            }
+        }
+
+        impl<W: Write> WriteThriftField<W> for $identifier {
+            fn write_thrift_field(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
             }
         }
 
@@ -134,6 +142,14 @@ macro_rules! thrift_union_all_empty {
                 writer.write_struct_end()?;
                 // write end of struct for this union
                 writer.write_struct_end()
+            }
+        }
+
+        impl<W: Write> WriteThriftField<W> for $identifier {
+            fn write_thrift_field(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
             }
         }
 
