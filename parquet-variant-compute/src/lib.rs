@@ -20,8 +20,8 @@
 //! ## Main APIs
 //! - [`VariantArray`] : Represents an array of `Variant` values.
 //! - [`VariantArrayBuilder`]: For building [`VariantArray`]
-//! - [`batch_json_string_to_variant`]: Function to convert a batch of JSON strings to a `VariantArray`.
-//! - [`batch_variant_to_json_string`]: Function to convert a `VariantArray` to a batch of JSON strings.
+//! - [`json_to_variant`]: Function to convert a batch of JSON strings to a `VariantArray`.
+//! - [`variant_to_json`]: Function to convert a `VariantArray` to a batch of JSON strings.
 //! - [`cast_to_variant`]: Module to cast other Arrow arrays to `VariantArray`.
 //! - [`variant_get`]: Module to get values from a `VariantArray` using a specified [`VariantPath`]
 //!
@@ -38,6 +38,7 @@
 pub mod cast_to_variant;
 mod from_json;
 mod to_json;
+mod type_conversion;
 mod variant_array;
 mod variant_array_builder;
 pub mod variant_get;
@@ -45,5 +46,5 @@ pub mod variant_get;
 pub use variant_array::{ShreddingState, VariantArray};
 pub use variant_array_builder::{VariantArrayBuilder, VariantArrayVariantBuilder};
 
-pub use from_json::batch_json_string_to_variant;
-pub use to_json::batch_variant_to_json_string;
+pub use from_json::json_to_variant;
+pub use to_json::variant_to_json;

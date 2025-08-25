@@ -20,11 +20,11 @@ use crate::VariantArray;
 use arrow::error::Result;
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, BinaryViewArray, NullBufferBuilder,
-    PrimitiveArray,
+    new_null_array, Array, ArrayRef, ArrowPrimitiveType, AsArray, BinaryViewArray,
+    NullBufferBuilder, PrimitiveArray,
 };
 use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::Int32Type;
+use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_schema::{ArrowError, FieldRef};
 use parquet_variant::{Variant, VariantPath};
 use std::marker::PhantomData;
@@ -157,10 +157,28 @@ impl<T: ArrowPrimitiveVariant> OutputBuilder for PrimitiveOutputBuilder<'_, T> {
             "variant_get unshredded to primitive types is not implemented yet",
         )))
     }
+
+    fn all_null(
+        &self,
+        variant_array: &VariantArray,
+        _metadata: &BinaryViewArray,
+    ) -> Result<ArrayRef> {
+        // For all-null case, create a primitive array with all null values
+        Ok(Arc::new(new_null_array(
+            self.as_type.data_type(),
+            variant_array.len(),
+        )))
+    }
 }
 
 impl ArrowPrimitiveVariant for Int32Type {
     fn from_variant(variant: &Variant) -> Option<Self::Native> {
         variant.as_int32()
+    }
+}
+
+impl ArrowPrimitiveVariant for Int16Type {
+    fn from_variant(variant: &Variant) -> Option<Self::Native> {
+        variant.as_int16()
     }
 }

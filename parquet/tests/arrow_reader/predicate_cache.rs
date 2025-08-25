@@ -32,7 +32,7 @@ use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilt
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
 use std::ops::Range;
 use std::sync::Arc;
@@ -269,8 +269,9 @@ impl AsyncFileReader for TestReader {
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
-        let metadata_reader =
-            ParquetMetaDataReader::new().with_page_indexes(options.is_some_and(|o| o.page_index()));
+        let metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(
+            PageIndexPolicy::from(options.is_some_and(|o| o.page_index())),
+        );
         self.metadata = Some(Arc::new(
             metadata_reader.parse_and_finish(&self.data).unwrap(),
         ));

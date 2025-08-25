@@ -21,7 +21,7 @@ use arrow_schema::ArrowError;
 use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
 use serde_json::{Number, Value};
 
-/// Converts a JSON string to Variant to a [`VariantBuilderExt`], such as
+/// Converts a JSON string to Variant using a [`VariantBuilderExt`], such as
 /// [`VariantBuilder`].
 ///
 /// The resulting `value` and `metadata` buffers can be
@@ -29,9 +29,6 @@ use serde_json::{Number, Value};
 ///
 /// # Arguments
 /// * `json` - The JSON string to parse as Variant.
-/// * `variant_builder` - Object of type `VariantBuilder` used to build the variant from the JSON
-///   string
-///
 ///
 /// # Returns
 ///
@@ -42,25 +39,23 @@ use serde_json::{Number, Value};
 ///
 /// ```rust
 /// # use parquet_variant::VariantBuilder;
-/// # use parquet_variant_json::{
-/// #   json_to_variant, variant_to_json_string, variant_to_json, variant_to_json_value
-/// # };
+/// # use parquet_variant_json::{JsonToVariant, VariantToJson};
 ///
 /// let mut variant_builder = VariantBuilder::new();
 /// let person_string = "{\"name\":\"Alice\", \"age\":30, ".to_string()
 /// + "\"email\":\"alice@example.com\", \"is_active\": true, \"score\": 95.7,"
 /// + "\"additional_info\": null}";
-/// json_to_variant(&person_string, &mut variant_builder)?;
+/// variant_builder.append_json(&person_string)?;
 ///
 /// let (metadata, value) = variant_builder.finish();
 ///
 /// let variant = parquet_variant::Variant::try_new(&metadata, &value)?;
 ///
-/// let json_result = variant_to_json_string(&variant)?;
-/// let json_value = variant_to_json_value(&variant)?;
+/// let json_result = variant.to_json_string()?;
+/// let json_value = variant.to_json_value()?;
 ///
 /// let mut buffer = Vec::new();
-/// variant_to_json(&mut buffer, &variant)?;
+/// variant.to_json(&mut buffer)?;
 /// let buffer_result = String::from_utf8(buffer)?;
 /// assert_eq!(json_result, "{\"additional_info\":null,\"age\":30,".to_string() +
 /// "\"email\":\"alice@example.com\",\"is_active\":true,\"name\":\"Alice\",\"score\":95.7}");
@@ -68,17 +63,19 @@ use serde_json::{Number, Value};
 /// assert_eq!(json_result, serde_json::to_string(&json_value)?);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn json_to_variant(json: &str, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-    let json: Value = serde_json::from_str(json)
-        .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
-
-    build_json(&json, builder)?;
-    Ok(())
+pub trait JsonToVariant {
+    /// Create a Variant from a JSON string
+    fn append_json(&mut self, json: &str) -> Result<(), ArrowError>;
 }
 
-fn build_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-    append_json(json, builder)?;
-    Ok(())
+impl<T: VariantBuilderExt> JsonToVariant for T {
+    fn append_json(&mut self, json: &str) -> Result<(), ArrowError> {
+        let json: Value = serde_json::from_str(json)
+            .map_err(|e| ArrowError::InvalidArgumentError(format!("JSON format error: {e}")))?;
+
+        append_json(&json, self)?;
+        Ok(())
+    }
 }
 
 fn variant_from_number<'m, 'v>(n: &Number) -> Result<Variant<'m, 'v>, ArrowError> {
@@ -114,14 +111,14 @@ fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(),
         }
         Value::String(s) => builder.append_value(s.as_str()),
         Value::Array(arr) => {
-            let mut list_builder = builder.new_list();
+            let mut list_builder = builder.try_new_list()?;
             for val in arr {
                 append_json(val, &mut list_builder)?;
             }
             list_builder.finish();
         }
         Value::Object(obj) => {
-            let mut obj_builder = builder.new_object();
+            let mut obj_builder = builder.try_new_object()?;
             for (key, value) in obj.iter() {
                 let mut field_builder = ObjectFieldBuilder {
                     key,
@@ -145,19 +142,19 @@ impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
         self.builder.insert(self.key, value);
     }
 
-    fn new_list(&mut self) -> ListBuilder<'_> {
-        self.builder.new_list(self.key)
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        self.builder.try_new_list(self.key)
     }
 
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
-        self.builder.new_object(self.key)
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        self.builder.try_new_object(self.key)
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::variant_to_json_string;
+    use crate::VariantToJson;
     use arrow_schema::ArrowError;
     use parquet_variant::{
         ShortString, Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
@@ -171,7 +168,7 @@ mod test {
     impl JsonToVariantTest<'_> {
         fn run(self) -> Result<(), ArrowError> {
             let mut variant_builder = VariantBuilder::new();
-            json_to_variant(self.json, &mut variant_builder)?;
+            variant_builder.append_json(self.json)?;
             let (metadata, value) = variant_builder.finish();
             let variant = Variant::try_new(&metadata, &value)?;
             assert_eq!(variant, self.expected);
@@ -622,18 +619,18 @@ mod test {
         );
         // Manually verify raw JSON value size
         let mut variant_builder = VariantBuilder::new();
-        json_to_variant(&json, &mut variant_builder)?;
+        variant_builder.append_json(&json)?;
         let (metadata, value) = variant_builder.finish();
         let v = Variant::try_new(&metadata, &value)?;
-        let output_string = variant_to_json_string(&v)?;
+        let output_string = v.to_json_string()?;
         assert_eq!(output_string, json);
         // Verify metadata size = 1 + 2 + 2 * 497 + 3 * 496
         assert_eq!(metadata.len(), 2485);
         // Verify value size.
-        // Size of innermost_list: 1 + 1 + 258 + 256 = 516
-        // Size of inner object: 1 + 4 + 256 + 257 * 3 + 256 * 516 = 133128
-        // Size of json: 1 + 4 + 512 + 1028 + 256 * 133128 = 34082313
-        assert_eq!(value.len(), 34082313);
+        // Size of innermost_list: 1 + 1 + 2*(128 + 1) + 2*128 = 516
+        // Size of inner object: 1 + 4 + 2*256 + 3*(256 + 1) + 256 * 516 = 133384
+        // Size of json: 1 + 4 + 2*256 + 4*(256 + 1) + 256 * 133384 = 34147849
+        assert_eq!(value.len(), 34147849);
 
         let mut variant_builder = VariantBuilder::new();
         let mut object_builder = variant_builder.new_object();
@@ -663,10 +660,10 @@ mod test {
     fn test_json_to_variant_unicode() -> Result<(), ArrowError> {
         let json = "{\"爱\":\"अ\",\"a\":1}";
         let mut variant_builder = VariantBuilder::new();
-        json_to_variant(json, &mut variant_builder)?;
+        variant_builder.append_json(json)?;
         let (metadata, value) = variant_builder.finish();
         let v = Variant::try_new(&metadata, &value)?;
-        let output_string = variant_to_json_string(&v)?;
+        let output_string = v.to_json_string()?;
         assert_eq!(output_string, "{\"a\":1,\"爱\":\"अ\"}");
         let mut variant_builder = VariantBuilder::new();
         let mut object_builder = variant_builder.new_object();
