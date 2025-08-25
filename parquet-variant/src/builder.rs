@@ -365,10 +365,7 @@ impl ValueBuilder {
     ///
     /// The caller must ensure that the metadata dictionary is already built and correct for
     /// any objects or lists being appended.
-    fn append_variant_bytes(
-        mut state: ParentState<'_>,
-        variant: Variant<'_, '_>,
-    ) {
+    fn append_variant_bytes(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
         let builder = state.value_builder();
         variant_append_value!(
             builder,
@@ -1190,7 +1187,7 @@ impl VariantBuilder {
     /// You can use this to pre-populate a [`VariantBuilder`] with a sorted dictionary if you
     /// know the field names beforehand. Sorted dictionaries can accelerate field access when
     /// reading [`Variant`]s.
-    pub fn with_field_names<'a>(mut self, field_names: impl Iterator<Item = &'a str>) -> Self {
+    pub fn with_field_names<'a>(mut self, field_names: impl IntoIterator<Item = &'a str>) -> Self {
         self.metadata_builder.extend(field_names);
 
         self
@@ -1540,7 +1537,11 @@ impl<'a> ObjectBuilder<'a> {
     /// # Note
     /// When inserting duplicate keys, the new value overwrites the previous mapping,
     /// but the old value remains in the buffer, resulting in a larger variant
-    pub fn try_insert_bytes<'m, 'd>(&mut self, key: &str, value: impl Into<Variant<'m, 'd>>) -> Result<(), ArrowError> {
+    pub fn try_insert_bytes<'m, 'd>(
+        &mut self,
+        key: &str,
+        value: impl Into<Variant<'m, 'd>>,
+    ) -> Result<(), ArrowError> {
         let (state, _) = self.parent_state(key)?;
         ValueBuilder::append_variant_bytes(state, value.into());
         Ok(())
@@ -2691,7 +2692,7 @@ mod tests {
     #[test]
     fn test_sorted_dictionary() {
         // check if variant metadatabuilders are equivalent from different ways of constructing them
-        let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"].into_iter());
+        let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"]);
 
         let mut variant2 = {
             let mut builder = VariantBuilder::new();
@@ -2741,7 +2742,7 @@ mod tests {
     #[test]
     fn test_object_sorted_dictionary() {
         // predefine the list of field names
-        let mut variant1 = VariantBuilder::new().with_field_names(["a", "b", "c"].into_iter());
+        let mut variant1 = VariantBuilder::new().with_field_names(["a", "b", "c"]);
         let mut obj = variant1.new_object();
 
         obj.insert("c", true);
@@ -2775,7 +2776,7 @@ mod tests {
     #[test]
     fn test_object_not_sorted_dictionary() {
         // predefine the list of field names
-        let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"].into_iter());
+        let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"]);
         let mut obj = variant1.new_object();
 
         obj.insert("c", true);
@@ -2817,12 +2818,12 @@ mod tests {
         assert!(builder.metadata_builder.is_sorted);
         assert_eq!(builder.metadata_builder.num_field_names(), 1);
 
-        let builder = builder.with_field_names(["b", "c", "d"].into_iter());
+        let builder = builder.with_field_names(["b", "c", "d"]);
 
         assert!(builder.metadata_builder.is_sorted);
         assert_eq!(builder.metadata_builder.num_field_names(), 4);
 
-        let builder = builder.with_field_names(["z", "y"].into_iter());
+        let builder = builder.with_field_names(["z", "y"]);
         assert!(!builder.metadata_builder.is_sorted);
         assert_eq!(builder.metadata_builder.num_field_names(), 6);
     }
@@ -3457,10 +3458,7 @@ mod tests {
             "value1"
         );
         assert_eq!(result_obj.get("field2").unwrap().as_int32().unwrap(), 42);
-        assert_eq!(
-            result_obj.get("field3").unwrap().as_boolean().unwrap(),
-            true
-        );
+        assert!(result_obj.get("field3").unwrap().as_boolean().unwrap());
         assert_eq!(
             result_obj.get("new_field").unwrap().as_string().unwrap(),
             "new_value"
@@ -3518,7 +3516,7 @@ mod tests {
         assert_eq!(result_list.len(), 5);
         assert_eq!(result_list.get(0).unwrap().as_string().unwrap(), "item1");
         assert_eq!(result_list.get(1).unwrap().as_string().unwrap(), "new_item");
-        assert_eq!(result_list.get(2).unwrap().as_boolean().unwrap(), true);
+        assert!(result_list.get(2).unwrap().as_boolean().unwrap());
         assert_eq!(result_list.get(3).unwrap().as_int32().unwrap(), 99);
         assert_eq!(result_list.get(4).unwrap().as_f64().unwrap(), 1.234);
     }
