@@ -21,7 +21,7 @@ use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
-use parquet_variant::{MetadataBuilder, ParentState, ValueBuilder};
+use parquet_variant::{ParentState, ValueBuilder, WritableMetadataBuilder};
 use std::sync::Arc;
 
 /// A builder for [`VariantArray`]
@@ -74,7 +74,7 @@ pub struct VariantArrayBuilder {
     /// Nulls
     nulls: NullBufferBuilder,
     /// builder for all the metadata
-    metadata_builder: MetadataBuilder,
+    metadata_builder: WritableMetadataBuilder,
     /// ending offset for each serialized metadata dictionary in the buffer
     metadata_offsets: Vec<usize>,
     /// builder for values
@@ -96,7 +96,7 @@ impl VariantArrayBuilder {
 
         Self {
             nulls: NullBufferBuilder::new(row_capacity),
-            metadata_builder: MetadataBuilder::default(),
+            metadata_builder: WritableMetadataBuilder::default(),
             metadata_offsets: Vec::with_capacity(row_capacity),
             value_builder: ValueBuilder::new(),
             value_offsets: Vec::with_capacity(row_capacity),
