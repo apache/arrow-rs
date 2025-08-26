@@ -27,13 +27,36 @@ use crate::errors::Result;
 // ----------------------------------------------------------------------
 // Bounding Box
 
-/// Represents a 2D/3D bounding box with optional M-coordinate support.
+/// A geospatial instance has at least two coordinate dimensions: X and Y for 2D coordinates of each point.
+/// X represents longitude/easting and Y represents latitude/northing. A geospatial instance can optionally
+/// have Z and/or M values associated with each point.
 /// 
-/// A bounding box defines the spatial extent of geospatial data by specifying
-/// minimum and maximum coordinates along each axis. This struct supports:
-/// - 2D coordinates (x, y) which are always required
-/// - Optional 3D coordinates (z) for elevation/height data
-/// - Optional M-coordinates for measured values (e.g., distance along a route)
+/// The Z values introduce the third dimension coordinate, typically used to indicate height or elevation.
+///
+/// M values allow tracking a value in a fourth dimension. These can represent:
+/// - Linear reference values (e.g., highway milepost)
+/// - Timestamps
+/// - Other values defined by the CRS
+///
+/// The bounding box is defined as min/max value pairs of coordinates from each axis. X and Y values are
+/// always present, while Z and M are omitted for 2D geospatial instances.
+///
+/// When calculating a bounding box:
+/// - Null or NaN values in a coordinate dimension are skipped
+/// - If a dimension has only null/NaN values, that dimension is omitted
+/// - If either X or Y dimension is missing, no bounding box is produced
+/// - Example: POINT (1 NaN) contributes to X but not to Y, Z, or M dimensions
+///
+/// Special cases:
+/// - For X values only, xmin may exceed xmax. In this case, a point matches if x >= xmin OR x <= xmax
+/// - This wraparound occurs when the bounding box crosses the antimeridian line
+/// - In geographic terms: xmin=westernmost, xmax=easternmost, ymin=southernmost, ymax=northernmost
+///
+/// For GEOGRAPHY types:
+/// - X values must be within [-180, 180] (longitude)
+/// - Y values must be within [-90, 90] (latitude)
+/// 
+/// Derived from the parquet format spec: https://github.com/apache/parquet-format/blob/ae39061f28d7c508a97af58a3c0a567352c8ea41/Geospatial.md#bounding-box
 /// 
 /// # Examples
 /// 
