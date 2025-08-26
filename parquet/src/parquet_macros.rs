@@ -272,7 +272,7 @@ macro_rules! thrift_struct {
             fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 let mut last_field_id = 0i16;
                 $($crate::__thrift_write_required_or_optional_field!($required_or_optional $field_name, $field_id, $field_type, self, writer, last_field_id);)*
-                Ok(())
+                writer.write_struct_end()
             }
         }
 

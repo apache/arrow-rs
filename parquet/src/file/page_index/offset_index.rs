@@ -44,23 +44,6 @@ pub struct PageLocation {
 }
 );
 
-/*impl<W: Write> WriteThrift<W> for PageLocation {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    #[allow(unused_assignments)]
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let mut last_field_id = 0i16;
-        last_field_id = self.offset.write_thrift_field(writer, 1, last_field_id)?;
-        last_field_id = self
-            .compressed_page_size
-            .write_thrift_field(writer, 2, last_field_id)?;
-        last_field_id = self
-            .first_row_index
-            .write_thrift_field(writer, 3, last_field_id)?;
-        writer.write_struct_end()
-    }
-}*/
-
 impl From<&crate::format::PageLocation> for PageLocation {
     fn from(value: &crate::format::PageLocation) -> Self {
         Self {
@@ -94,29 +77,6 @@ pub struct OffsetIndexMetaData {
   2: optional list<i64> unencoded_byte_array_data_bytes
 }
 );
-
-/*impl<W: Write> WriteThrift<W> for OffsetIndexMetaData {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    #[allow(unused_assignments)]
-    fn write_thrift(
-        &self,
-        writer: &mut crate::parquet_thrift::ThriftCompactOutputProtocol<W>,
-    ) -> Result<()> {
-        let mut last_field_id = 0i16;
-        last_field_id = self
-            .page_locations
-            .write_thrift_field(writer, 1, last_field_id)?;
-        if self.unencoded_byte_array_data_bytes.is_some() {
-            last_field_id = self
-                .unencoded_byte_array_data_bytes
-                .as_ref()
-                .unwrap()
-                .write_thrift_field(writer, 2, last_field_id)?;
-        }
-        writer.write_struct_end()
-    }
-}*/
 
 impl OffsetIndexMetaData {
     /// Creates a new [`OffsetIndexMetaData`] from an [`OffsetIndex`].
