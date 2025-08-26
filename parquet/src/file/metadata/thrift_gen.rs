@@ -595,14 +595,57 @@ fn row_group_from_encrypted_thrift(
 }
 
 #[cfg(feature = "encryption")]
-pub(crate) fn parquet_metadata_with_encryption<'a>(
-    prot: &mut ThriftCompactInputProtocol<'a>,
-    mut file_decryptor: Option<FileDecryptor>,
+pub(crate) fn parquet_metadata_with_encryption(
     file_decryption_properties: Option<&FileDecryptionProperties>,
     encrypted_footer: bool,
     buf: &[u8],
 ) -> Result<ParquetMetaData> {
-    let file_meta = super::thrift_gen::FileMetaData::try_from(prot)
+    let mut prot = ThriftCompactInputProtocol::new(buf);
+    let mut file_decryptor = None;
+    let decrypted_fmd_buf;
+
+    if encrypted_footer {
+        if let Some(file_decryption_properties) = file_decryption_properties {
+            let t_file_crypto_metadata: FileCryptoMetaData =
+                FileCryptoMetaData::try_from(&mut prot)
+                    .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+            let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
+                EncryptionAlgorithm::AES_GCM_V1(algo) => algo.supply_aad_prefix,
+                _ => Some(false),
+            }
+            .unwrap_or(false);
+            if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
+                return Err(general_err!(
+                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
+                        but no AAD prefix was provided in the file decryption properties"
+                    ));
+            }
+            let decryptor = get_file_decryptor(
+                t_file_crypto_metadata.encryption_algorithm,
+                t_file_crypto_metadata.key_metadata,
+                file_decryption_properties,
+            )?;
+            let footer_decryptor = decryptor.get_footer_decryptor();
+            let aad_footer = crate::encryption::modules::create_footer_aad(decryptor.file_aad())?;
+
+            decrypted_fmd_buf = footer_decryptor?
+                .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
+                .map_err(|_| {
+                    general_err!(
+                        "Provided footer key and AAD were unable to decrypt parquet footer"
+                    )
+                })?;
+            prot = ThriftCompactInputProtocol::new(decrypted_fmd_buf.as_ref());
+
+            file_decryptor = Some(decryptor);
+        } else {
+            return Err(general_err!(
+                "Parquet file has an encrypted footer but decryption properties were not provided"
+            ));
+        }
+    }
+
+    let file_meta = super::thrift_gen::FileMetaData::try_from(&mut prot)
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
 
     let version = file_meta.version;
@@ -617,9 +660,9 @@ pub(crate) fn parquet_metadata_with_encryption<'a>(
         (file_meta.encryption_algorithm, file_decryption_properties)
     {
         // File has a plaintext footer but encryption algorithm is set
-        let file_decryptor_value = crate::file::metadata::reader::get_file_decryptor(
+        let file_decryptor_value = get_file_decryptor(
             algo,
-            file_meta.footer_signing_key_metadata.as_deref(),
+            file_meta.footer_signing_key_metadata,
             file_decryption_properties,
         )?;
         if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
@@ -675,6 +718,37 @@ pub(crate) fn parquet_metadata_with_encryption<'a>(
     metadata.with_file_decryptor(file_decryptor);
 
     Ok(metadata)
+}
+
+#[cfg(feature = "encryption")]
+pub(super) fn get_file_decryptor(
+    encryption_algorithm: EncryptionAlgorithm,
+    footer_key_metadata: Option<&[u8]>,
+    file_decryption_properties: &FileDecryptionProperties,
+) -> Result<FileDecryptor> {
+    match encryption_algorithm {
+        EncryptionAlgorithm::AES_GCM_V1(algo) => {
+            let aad_file_unique = algo
+                .aad_file_unique
+                .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
+            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
+                aad_prefix.clone()
+            } else {
+                algo.aad_prefix.map(|v| v.to_vec()).unwrap_or_default()
+            };
+            let aad_file_unique = aad_file_unique.to_vec();
+
+            FileDecryptor::new(
+                file_decryption_properties,
+                footer_key_metadata,
+                aad_file_unique,
+                aad_prefix,
+            )
+        }
+        EncryptionAlgorithm::AES_GCM_CTR_V1(_) => Err(nyi_err!(
+            "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
+        )),
+    }
 }
 
 /// Create ParquetMetaData from thrift input. Note that this only decodes the file metadata in
@@ -772,7 +846,7 @@ mod tests {
             ymax: 128.5.into(),
             zmin: Some(11.0.into()),
             zmax: Some(1300.0.into()),
-            mmin: Some(3.14.into()),
+            mmin: Some(3.7.into()),
             mmax: Some(42.0.into()),
         });
     }

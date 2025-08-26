@@ -17,15 +17,9 @@
 
 use std::{io::Read, ops::Range};
 
-use crate::parquet_thrift::ThriftCompactInputProtocol;
 #[cfg(feature = "encryption")]
-use crate::{
-    encryption::{
-        decrypt::{CryptoContext, FileDecryptionProperties, FileDecryptor},
-        modules::create_footer_aad,
-    },
-    file::metadata::thrift_gen::EncryptionAlgorithm,
-};
+use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
+use crate::parquet_thrift::ThriftCompactInputProtocol;
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
@@ -953,56 +947,7 @@ impl ParquetMetaDataReader {
         encrypted_footer: bool,
         file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<ParquetMetaData> {
-        use crate::file::metadata::thrift_gen::parquet_metadata_with_encryption;
-
-        let mut prot = ThriftCompactInputProtocol::new(buf);
-        let mut file_decryptor = None;
-        let decrypted_fmd_buf;
-
-        if encrypted_footer {
-            if let Some(file_decryption_properties) = file_decryption_properties {
-                use crate::file::metadata::thrift_gen::{EncryptionAlgorithm, FileCryptoMetaData};
-
-                let t_file_crypto_metadata: FileCryptoMetaData =
-                    FileCryptoMetaData::try_from(&mut prot)
-                        .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
-                let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
-                    EncryptionAlgorithm::AES_GCM_V1(algo) => algo.supply_aad_prefix,
-                    _ => Some(false),
-                }
-                .unwrap_or(false);
-                if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
-                    return Err(general_err!(
-                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
-                        but no AAD prefix was provided in the file decryption properties"
-                    ));
-                }
-                let decryptor = get_file_decryptor(
-                    t_file_crypto_metadata.encryption_algorithm,
-                    t_file_crypto_metadata.key_metadata.as_deref(),
-                    file_decryption_properties,
-                )?;
-                let footer_decryptor = decryptor.get_footer_decryptor();
-                let aad_footer = create_footer_aad(decryptor.file_aad())?;
-
-                decrypted_fmd_buf = footer_decryptor?
-                    .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
-                    .map_err(|_| {
-                        general_err!(
-                            "Provided footer key and AAD were unable to decrypt parquet footer"
-                        )
-                    })?;
-                prot = ThriftCompactInputProtocol::new(decrypted_fmd_buf.as_ref());
-
-                file_decryptor = Some(decryptor);
-            } else {
-                return Err(general_err!("Parquet file has an encrypted footer but decryption properties were not provided"));
-            }
-        }
-
-        parquet_metadata_with_encryption(
-            &mut prot,
-            file_decryptor,
+        super::thrift_gen::parquet_metadata_with_encryption(
             file_decryption_properties,
             encrypted_footer,
             buf,
@@ -1020,50 +965,12 @@ impl ParquetMetaDataReader {
         let mut prot = ThriftCompactInputProtocol::new(buf);
         ParquetMetaData::try_from(&mut prot)
     }
-
-    /// create meta data from thrift encoded bytes
-    pub fn decode_file_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        let mut prot = ThriftCompactInputProtocol::new(buf);
-        ParquetMetaData::try_from(&mut prot)
-    }
-}
-
-#[cfg(feature = "encryption")]
-pub(super) fn get_file_decryptor(
-    encryption_algorithm: EncryptionAlgorithm,
-    footer_key_metadata: Option<&[u8]>,
-    file_decryption_properties: &FileDecryptionProperties,
-) -> Result<FileDecryptor> {
-    match encryption_algorithm {
-        EncryptionAlgorithm::AES_GCM_V1(algo) => {
-            let aad_file_unique = algo
-                .aad_file_unique
-                .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
-            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
-                aad_prefix.clone()
-            } else {
-                algo.aad_prefix.map(|v| v.to_vec()).unwrap_or_default()
-            };
-            let aad_file_unique = aad_file_unique.to_vec();
-
-            FileDecryptor::new(
-                file_decryption_properties,
-                footer_key_metadata,
-                aad_file_unique,
-                aad_prefix,
-            )
-        }
-        EncryptionAlgorithm::AES_GCM_CTR_V1(_) => Err(nyi_err!(
-            "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
-        )),
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use zstd::zstd_safe::WriteBuf;
 
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
@@ -1209,27 +1116,6 @@ mod tests {
             reader_result.to_string(),
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
-    }
-
-    #[test]
-    fn test_new_decoder() {
-        let file = get_test_file("alltypes_tiny_pages.parquet");
-        let len = file.len();
-
-        // read entire file
-        let bytes = file.get_bytes(0, len as usize).unwrap();
-        let mut footer = [0u8; FOOTER_SIZE];
-        footer.copy_from_slice(bytes.slice(len as usize - FOOTER_SIZE..).as_slice());
-        let tail = ParquetMetaDataReader::decode_footer_tail(&footer).unwrap();
-        let meta_len = tail.metadata_length();
-        let metadata_bytes = bytes.slice(len as usize - FOOTER_SIZE - meta_len..);
-
-        // get ParquetMetaData
-        let m = ParquetMetaDataReader::decode_file_metadata(&metadata_bytes).unwrap();
-        let m2 = ParquetMetaDataReader::decode_metadata(&metadata_bytes).unwrap();
-
-        // check that metadatas are equivalent
-        assert_eq!(m, m2);
     }
 }
 

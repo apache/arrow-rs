@@ -665,8 +665,8 @@ where
 
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_list_begin(T::ELEMENT_TYPE, self.len())?;
-        for i in 0..self.len() {
-            self[i].write_thrift(writer)?;
+        for item in self {
+            item.write_thrift(writer)?;
         }
         Ok(())
     }
