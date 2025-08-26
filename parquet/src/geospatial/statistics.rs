@@ -30,7 +30,7 @@ use crate::errors::{ParquetError, Result};
 /// A geospatial instance has at least two coordinate dimensions: X and Y for 2D coordinates of each point.
 /// X represents longitude/easting and Y represents latitude/northing. A geospatial instance can optionally
 /// have Z and/or M values associated with each point.
-/// 
+///
 /// The Z values introduce the third dimension coordinate, typically used to indicate height or elevation.
 ///
 /// M values allow tracking a value in a fourth dimension. These can represent:
@@ -148,36 +148,16 @@ impl BoundingBox {
 /// let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0, None, None, None, None);
 /// let stats = GeospatialStatistics::new(Some(bbox), Some(vec![1, 2, 3]));
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct GeospatialStatistics {
     /// Optional bounding box encompassing all geospatial data
     bbox: Option<BoundingBox>,
     /// Optional list of geospatial geometry type identifiers
-    /// 
-    /// Common values include:
-    /// - 1: Point
-    /// - 2: LineString  
-    /// - 3: Polygon
-    /// - 4: MultiPoint
-    /// - 5: MultiLineString
-    /// - 6: MultiPolygon
-    /// - 7: GeometryCollection
+    /// as specified in https://github.com/apache/parquet-format/blob/ae39061f28d7c508a97af58a3c0a567352c8ea41/Geospatial.md#geospatial-types
     geospatial_types: Option<Vec<i32>>,
 }
 
 impl GeospatialStatistics {
-    /// Creates a new empty geospatial statistics instance.
-    /// 
-    /// This is useful when no spatial information is available or when
-    /// creating a placeholder for statistics that will be populated later.
-    /// 
-    /// # Returns
-    /// 
-    /// A `GeospatialStatistics` instance with no bounding box or type information.
-    pub fn new_empty() -> Self {
-        Self { bbox: None, geospatial_types: None }
-    }
-
     /// Creates a new geospatial statistics instance with the specified data.
     /// 
     /// # Arguments
@@ -218,10 +198,10 @@ pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Opti
         Some(geo_stats) => {
             let bbox = if let Some(bbox) = geo_stats.bbox {
                 let mut new_bbox = BoundingBox::new(
-                    bbox.xmin.into(), 
-                    bbox.ymin.into(), 
-                    bbox.xmax.into(), 
-                    bbox.ymax.into(), 
+                    bbox.xmin.into(),
+                    bbox.ymin.into(),
+                    bbox.xmax.into(),
+                    bbox.ymax.into(),
                 );
 
                 if bbox.zmin.is_some() && bbox.zmax.is_some() {
@@ -313,7 +293,7 @@ mod tests {
     #[test]
     fn test_from_thrift() {
         assert_eq!(from_thrift(None).unwrap(), None);
-        assert_eq!(from_thrift(Some(TGeospatialStatistics::new(None, None))).unwrap(), Some(GeospatialStatistics::new_empty()));
+        assert_eq!(from_thrift(Some(TGeospatialStatistics::new(None, None))).unwrap(), Some(GeospatialStatistics::default()));
     }
 
     /// Tests the conversion from Thrift format with actual geospatial data.
