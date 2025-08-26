@@ -21,7 +21,9 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::{
-    basic::{ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, Type},
+    basic::{
+        ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, PageType, Repetition, Type,
+    },
     data_type::{ByteArray, FixedLenByteArray, Int96},
     errors::{ParquetError, Result},
     file::{
@@ -61,6 +63,102 @@ pub(crate) struct SchemaElement<'a> {
   8: optional i32 precision
   9: optional i32 field_id;
   10: optional LogicalType logical_type
+}
+);
+
+thrift_struct!(
+pub(crate) struct DataPageHeader {
+  /// Number of values, including NULLs, in this data page.
+  ///
+  /// If a OffsetIndex is present, a page must begin at a row
+  /// boundary (repetition_level = 0). Otherwise, pages may begin
+  /// within a row (repetition_level > 0).
+  1: required i32 num_values
+
+  /// Encoding used for this data page
+  2: required Encoding encoding
+
+  /// Encoding used for definition levels
+  3: required Encoding definition_level_encoding;
+
+  /// Encoding used for repetition levels
+  4: required Encoding repetition_level_encoding;
+
+  // Optional statistics for the data in this page
+  // page stats are pretty useless...lets ignore them
+  //5: optional Statistics statistics;
+}
+);
+
+thrift_struct!(
+    pub(crate) struct IndexPageHeader {}
+);
+
+thrift_struct!(
+pub(crate) struct DictionaryPageHeader {
+  /// Number of values in the dictionary
+  1: required i32 num_values;
+
+  /// Encoding using this dictionary page
+  2: required Encoding encoding
+
+  /// If true, the entries in the dictionary are sorted in ascending order
+  3: optional bool is_sorted;
+}
+);
+
+thrift_struct!(
+pub(crate) struct DataPageHeaderV2 {
+  /// Number of values, including NULLs, in this data page.
+  1: required i32 num_values
+  /// Number of NULL values, in this data page.
+  /// Number of non-null = num_values - num_nulls which is also the number of values in the data section
+  2: required i32 num_nulls
+  /// Number of rows in this data page. Every page must begin at a
+  /// row boundary (repetition_level = 0): rows must **not** be
+  /// split across page boundaries when using V2 data pages.
+  3: required i32 num_rows
+  /// Encoding used for data in this page
+  4: required Encoding encoding
+
+  // repetition levels and definition levels are always using RLE (without size in it)
+
+  /// Length of the definition levels
+  5: required i32 definition_levels_byte_length;
+  /// Length of the repetition levels
+  6: required i32 repetition_levels_byte_length;
+
+  /// Whether the values are compressed.
+  /// Which means the section of the page between
+  /// definition_levels_byte_length + repetition_levels_byte_length + 1 and compressed_page_size (included)
+  /// is compressed with the compression_codec.
+  /// If missing it is considered compressed
+  7: optional bool is_compressed = true;
+
+  // Optional statistics for the data in this page
+  //8: optional Statistics statistics;
+}
+);
+
+thrift_struct!(
+pub(crate) struct PageHeader {
+  /// the type of the page: indicates which of the *_header fields is set
+  1: required PageType type_
+
+  /// Uncompressed page size in bytes (not including this header)
+  2: required i32 uncompressed_page_size
+
+  /// Compressed (and potentially encrypted) page size in bytes, not including this header
+  3: required i32 compressed_page_size
+
+  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
+  4: optional i32 crc
+
+  // Headers for page specific data.  One only will be set.
+  5: optional DataPageHeader data_page_header;
+  6: optional IndexPageHeader index_page_header;
+  7: optional DictionaryPageHeader dictionary_page_header;
+  8: optional DataPageHeaderV2 data_page_header_v2;
 }
 );
 
@@ -226,7 +324,7 @@ struct SizeStatistics {
 );
 
 thrift_struct!(
-struct Statistics<'a> {
+pub(crate) struct Statistics<'a> {
    1: optional binary<'a> max;
    2: optional binary<'a> min;
    3: optional i64 null_count;
@@ -358,7 +456,7 @@ fn convert_column(
     Ok(result)
 }
 
-fn convert_stats(
+pub(crate) fn convert_stats(
     physical_type: Type,
     thrift_stats: Option<Statistics>,
 ) -> Result<Option<crate::file::statistics::Statistics>> {
