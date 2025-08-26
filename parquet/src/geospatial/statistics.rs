@@ -22,7 +22,7 @@
 
 use crate::format as parquet;
 use crate::format::GeospatialStatistics as TGeospatialStatistics;
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 
 // ----------------------------------------------------------------------
 // Bounding Box
@@ -64,10 +64,10 @@ use crate::errors::Result;
 /// use parquet::geospatial::statistics::BoundingBox;
 /// 
 /// // 2D bounding box
-/// let bbox_2d = BoundingBox::new(0.0, 0.0, 100.0, 100.0, None, None, None, None);
+/// let bbox_2d = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
 /// 
 /// // 3D bounding box with elevation
-/// let bbox_3d = BoundingBox::new(0.0, 0.0, 100.0, 100.0, Some(0.0), Some(1000.0), None, None);
+/// let bbox_3d = BoundingBox::new(0.0, 0.0, 100.0, 100.0).with_zrange(0.0, 1000.0);
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundingBox {
@@ -98,16 +98,32 @@ impl BoundingBox {
     /// * `ymin` - Minimum Y coordinate  
     /// * `xmax` - Maximum X coordinate
     /// * `ymax` - Maximum Y coordinate
-    /// * `zmin` - Optional minimum Z coordinate
-    /// * `zmax` - Optional maximum Z coordinate
-    /// * `mmin` - Optional minimum M coordinate
-    /// * `mmax` - Optional maximum M coordinate
     /// 
     /// # Returns
     /// 
     /// A new `BoundingBox` instance with the specified coordinates.
-    pub fn new(xmin: f64, ymin: f64, xmax: f64, ymax: f64, zmin: Option<f64>, zmax: Option<f64>, mmin: Option<f64>, mmax: Option<f64>) -> Self {
-        Self { xmin, ymin, xmax, ymax, zmin, zmax, mmin, mmax }
+    pub fn new(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Self {
+        Self { xmin, ymin, xmax, ymax, zmin: None, zmax: None, mmin: None, mmax: None }
+    }
+
+    /// Creates a new bounding box with the specified Z-coordinate range.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `zmin` - Minimum Z coordinate
+    /// * `zmax` - Maximum Z coordinate
+    pub fn with_zrange(self, zmin: f64, zmax: f64) -> Self {
+        Self { zmin: Some(zmin), zmax: Some(zmax), ..self }
+    }
+
+    /// Creates a new bounding box with the specified M-coordinate range.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `mmin` - Minimum M coordinate
+    /// * `mmax` - Maximum M coordinate
+    pub fn with_mrange(self, mmin: f64, mmax: f64) -> Self {
+        Self { mmin: Some(mmin), mmax: Some(mmax), ..self }
     }
 }
 
@@ -201,15 +217,26 @@ pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Opti
     Ok(match geo_statistics {
         Some(geo_stats) => {
             let bbox = if let Some(bbox) = geo_stats.bbox {
-                Some(BoundingBox::new(
+                let mut new_bbox = BoundingBox::new(
                     bbox.xmin.into(), 
                     bbox.ymin.into(), 
                     bbox.xmax.into(), 
                     bbox.ymax.into(), 
-                if let Some(zmin) = bbox.zmin { Some(zmin.into()) } else { None },
-                if let Some(zmax) = bbox.zmax { Some(zmax.into()) } else { None },
-                if let Some(mmin) = bbox.mmin { Some(mmin.into()) } else { None },
-                if let Some(mmax) = bbox.mmax { Some(mmax.into()) } else { None }))
+                );
+
+                if bbox.zmin.is_some() && bbox.zmax.is_some() {
+                    new_bbox = new_bbox.with_zrange(bbox.zmin.unwrap().into(), bbox.zmax.unwrap().into());
+                } else if bbox.zmin.is_some() != bbox.zmax.is_some() {
+                    return Err(ParquetError::General(format!("Z-coordinate values mismatch: {:?} and {:?}", bbox.zmin, bbox.zmax)));
+                }
+
+                if bbox.mmin.is_some() && bbox.mmax.is_some() {
+                    new_bbox = new_bbox.with_mrange(bbox.mmin.unwrap().into(), bbox.mmax.unwrap().into());
+                } else if bbox.mmin.is_some() != bbox.mmax.is_some() {
+                    return Err(ParquetError::General(format!("M-coordinate values mismatch: {:?} and {:?}", bbox.mmin, bbox.mmax)));
+                }
+
+                Some(new_bbox)
             } else {
                 None    
             };
@@ -292,14 +319,14 @@ mod tests {
     /// Tests the conversion from Thrift format with actual geospatial data.
     #[test]
     fn test_geo_statistics_from_thrift() {
-        let stats = GeospatialStatistics::new(Some(BoundingBox::new(0.0, 0.0, 100.0, 100.0, None, None, None, None)), Some(vec![1, 2, 3]));
+        let stats = GeospatialStatistics::new(Some(BoundingBox::new(0.0, 0.0, 100.0, 100.0)), Some(vec![1, 2, 3]));
         let thrift_stats = to_thrift(Some(&stats));
         assert_eq!(from_thrift(thrift_stats).unwrap(), Some(stats));
     }
 
     #[test]
     fn test_bounding_box() {
-        let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0, None, None, None, None);
+        let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
         let thrift_bbox: parquet::BoundingBox = bbox.into();
         assert_eq!(thrift_bbox.xmin, 0.0f64);
         assert_eq!(thrift_bbox.ymin, 0.0f64);
