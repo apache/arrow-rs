@@ -3315,7 +3315,7 @@ mod tests {
             obj.insert("name", "Alice");
             obj.insert("age", 30i8);
             obj.insert("active", true);
-            obj.finish().unwrap();
+            obj.finish();
         }
 
         let value = value_builder.into_inner();
@@ -3376,9 +3376,9 @@ mod tests {
                 let mut address = obj.new_object("address");
                 address.insert("street", "123 Main St");
                 address.insert("city", "Anytown");
-                address.finish().unwrap();
+                address.finish();
             }
-            obj.finish().unwrap();
+            obj.finish();
         }
         let (metadata, value1) = builder.finish();
         let variant1 = Variant::try_new(&metadata, &value1).unwrap();
@@ -3405,7 +3405,7 @@ mod tests {
             obj.insert("field2", 42i32);
             obj.insert("field3", true);
             obj.insert("field4", "value4");
-            obj.finish().unwrap();
+            obj.finish();
         }
         let (metadata1, value1) = builder.finish();
         let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
@@ -3434,7 +3434,7 @@ mod tests {
             // Copy field2 using bytes API
             obj.insert_bytes("field2", original_obj.get("field2").unwrap());
 
-            obj.finish().unwrap();
+            obj.finish();
         }
         let value2 = builder2.into_inner();
         let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
@@ -3538,7 +3538,7 @@ mod tests {
                     user1.insert("id", 1i32);
                     user1.insert("name", "Alice");
                     user1.insert("active", true);
-                    user1.finish().unwrap();
+                    user1.finish();
                 }
 
                 // User 2
@@ -3547,7 +3547,7 @@ mod tests {
                     user2.insert("id", 2i32);
                     user2.insert("name", "Bob");
                     user2.insert("active", false);
-                    user2.finish().unwrap();
+                    user2.finish();
                 }
 
                 // User 3
@@ -3556,14 +3556,14 @@ mod tests {
                     user3.insert("id", 3i32);
                     user3.insert("name", "Charlie");
                     user3.insert("active", true);
-                    user3.finish().unwrap();
+                    user3.finish();
                 }
 
                 users_list.finish();
             }
 
             root_obj.insert("total_count", 3i32);
-            root_obj.finish().unwrap();
+            root_obj.finish();
         }
         let (metadata1, value1) = builder.finish();
         let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
@@ -3607,7 +3607,7 @@ mod tests {
                             // Add status transformation (don't copy the 'active' field)
                             new_user.insert("status", "verified");
 
-                            new_user.finish().unwrap();
+                            new_user.finish();
                         }
                     }
                 }
@@ -3619,7 +3619,7 @@ mod tests {
                     new_user.insert("name", "System User");
                     new_user.insert("computed_score", 0i32);
                     new_user.insert("status", "system");
-                    new_user.finish().unwrap();
+                    new_user.finish();
                 }
 
                 filtered_users.finish();
@@ -3628,7 +3628,7 @@ mod tests {
             // Update count
             root_obj.insert("active_count", 3i32); // 2 active + 1 new
 
-            root_obj.finish().unwrap();
+            root_obj.finish();
         }
         let value2 = builder2.into_inner();
         let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
