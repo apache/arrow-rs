@@ -96,18 +96,18 @@ impl core::fmt::Debug for MetadataVersion {
 impl<'a> flatbuffers::Follow<'a> for MetadataVersion {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for MetadataVersion {
     type Output = MetadataVersion;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for MetadataVersion {
@@ -218,18 +218,18 @@ impl core::fmt::Debug for Feature {
 impl<'a> flatbuffers::Follow<'a> for Feature {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i64>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for Feature {
     type Output = Feature;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i64>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for Feature {
@@ -307,18 +307,18 @@ impl core::fmt::Debug for UnionMode {
 impl<'a> flatbuffers::Follow<'a> for UnionMode {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for UnionMode {
     type Output = UnionMode;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for UnionMode {
@@ -399,18 +399,18 @@ impl core::fmt::Debug for Precision {
 impl<'a> flatbuffers::Follow<'a> for Precision {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for Precision {
     type Output = Precision;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for Precision {
@@ -488,18 +488,18 @@ impl core::fmt::Debug for DateUnit {
 impl<'a> flatbuffers::Follow<'a> for DateUnit {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for DateUnit {
     type Output = DateUnit;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for DateUnit {
@@ -591,18 +591,18 @@ impl core::fmt::Debug for TimeUnit {
 impl<'a> flatbuffers::Follow<'a> for TimeUnit {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for TimeUnit {
     type Output = TimeUnit;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for TimeUnit {
@@ -687,18 +687,18 @@ impl core::fmt::Debug for IntervalUnit {
 impl<'a> flatbuffers::Follow<'a> for IntervalUnit {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for IntervalUnit {
     type Output = IntervalUnit;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for IntervalUnit {
@@ -885,18 +885,18 @@ impl core::fmt::Debug for Type {
 impl<'a> flatbuffers::Follow<'a> for Type {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for Type {
     type Output = Type;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<u8>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for Type {
@@ -979,18 +979,18 @@ impl core::fmt::Debug for DictionaryKind {
 impl<'a> flatbuffers::Follow<'a> for DictionaryKind {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for DictionaryKind {
     type Output = DictionaryKind;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for DictionaryKind {
@@ -1070,18 +1070,18 @@ impl core::fmt::Debug for Endianness {
 impl<'a> flatbuffers::Follow<'a> for Endianness {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
         Self(b)
-    }
+    }}
 }
 
 impl flatbuffers::Push for Endianness {
     type Output = Endianness;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }
+    }}
 }
 
 impl flatbuffers::EndianScalar for Endianness {
@@ -1134,24 +1134,24 @@ impl flatbuffers::SimpleToVerifyInSlice for Buffer {}
 impl<'a> flatbuffers::Follow<'a> for Buffer {
     type Inner = &'a Buffer;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         <&'a Buffer>::follow(buf, loc)
-    }
+    }}
 }
 impl<'a> flatbuffers::Follow<'a> for &'a Buffer {
     type Inner = &'a Buffer;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         flatbuffers::follow_cast_ref::<Buffer>(buf, loc)
-    }
+    }}
 }
 impl<'b> flatbuffers::Push for Buffer {
     type Output = Buffer;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
         let src = ::core::slice::from_raw_parts(self as *const Buffer as *const u8, Self::size());
         dst.copy_from_slice(src);
-    }
+    }}
     #[inline]
     fn alignment() -> flatbuffers::PushAlignment {
         flatbuffers::PushAlignment::new(8)
@@ -1255,11 +1255,11 @@ pub struct Null<'a> {
 impl<'a> flatbuffers::Follow<'a> for Null<'a> {
     type Inner = Null<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Null<'a> {
@@ -1335,11 +1335,11 @@ pub struct Struct_<'a> {
 impl<'a> flatbuffers::Follow<'a> for Struct_<'a> {
     type Inner = Struct_<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Struct_<'a> {
@@ -1412,11 +1412,11 @@ pub struct List<'a> {
 impl<'a> flatbuffers::Follow<'a> for List<'a> {
     type Inner = List<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> List<'a> {
@@ -1491,11 +1491,11 @@ pub struct LargeList<'a> {
 impl<'a> flatbuffers::Follow<'a> for LargeList<'a> {
     type Inner = LargeList<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> LargeList<'a> {
@@ -1571,11 +1571,11 @@ pub struct ListView<'a> {
 impl<'a> flatbuffers::Follow<'a> for ListView<'a> {
     type Inner = ListView<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> ListView<'a> {
@@ -1650,11 +1650,11 @@ pub struct LargeListView<'a> {
 impl<'a> flatbuffers::Follow<'a> for LargeListView<'a> {
     type Inner = LargeListView<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> LargeListView<'a> {
@@ -1729,11 +1729,11 @@ pub struct FixedSizeList<'a> {
 impl<'a> flatbuffers::Follow<'a> for FixedSizeList<'a> {
     type Inner = FixedSizeList<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> FixedSizeList<'a> {
@@ -1859,11 +1859,11 @@ pub struct Map<'a> {
 impl<'a> flatbuffers::Follow<'a> for Map<'a> {
     type Inner = Map<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Map<'a> {
@@ -1966,11 +1966,11 @@ pub struct Union<'a> {
 impl<'a> flatbuffers::Follow<'a> for Union<'a> {
     type Inner = Union<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Union<'a> {
@@ -2100,11 +2100,11 @@ pub struct Int<'a> {
 impl<'a> flatbuffers::Follow<'a> for Int<'a> {
     type Inner = Int<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Int<'a> {
@@ -2221,11 +2221,11 @@ pub struct FloatingPoint<'a> {
 impl<'a> flatbuffers::Follow<'a> for FloatingPoint<'a> {
     type Inner = FloatingPoint<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> FloatingPoint<'a> {
@@ -2328,11 +2328,11 @@ pub struct Utf8<'a> {
 impl<'a> flatbuffers::Follow<'a> for Utf8<'a> {
     type Inner = Utf8<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Utf8<'a> {
@@ -2406,11 +2406,11 @@ pub struct Binary<'a> {
 impl<'a> flatbuffers::Follow<'a> for Binary<'a> {
     type Inner = Binary<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Binary<'a> {
@@ -2485,11 +2485,11 @@ pub struct LargeUtf8<'a> {
 impl<'a> flatbuffers::Follow<'a> for LargeUtf8<'a> {
     type Inner = LargeUtf8<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> LargeUtf8<'a> {
@@ -2564,11 +2564,11 @@ pub struct LargeBinary<'a> {
 impl<'a> flatbuffers::Follow<'a> for LargeBinary<'a> {
     type Inner = LargeBinary<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> LargeBinary<'a> {
@@ -2650,11 +2650,11 @@ pub struct Utf8View<'a> {
 impl<'a> flatbuffers::Follow<'a> for Utf8View<'a> {
     type Inner = Utf8View<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Utf8View<'a> {
@@ -2734,11 +2734,11 @@ pub struct BinaryView<'a> {
 impl<'a> flatbuffers::Follow<'a> for BinaryView<'a> {
     type Inner = BinaryView<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> BinaryView<'a> {
@@ -2813,11 +2813,11 @@ pub struct FixedSizeBinary<'a> {
 impl<'a> flatbuffers::Follow<'a> for FixedSizeBinary<'a> {
     type Inner = FixedSizeBinary<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> FixedSizeBinary<'a> {
@@ -2918,11 +2918,11 @@ pub struct Bool<'a> {
 impl<'a> flatbuffers::Follow<'a> for Bool<'a> {
     type Inner = Bool<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Bool<'a> {
@@ -3000,11 +3000,11 @@ pub struct RunEndEncoded<'a> {
 impl<'a> flatbuffers::Follow<'a> for RunEndEncoded<'a> {
     type Inner = RunEndEncoded<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> RunEndEncoded<'a> {
@@ -3083,11 +3083,11 @@ pub struct Decimal<'a> {
 impl<'a> flatbuffers::Follow<'a> for Decimal<'a> {
     type Inner = Decimal<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Decimal<'a> {
@@ -3236,11 +3236,11 @@ pub struct Date<'a> {
 impl<'a> flatbuffers::Follow<'a> for Date<'a> {
     type Inner = Date<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Date<'a> {
@@ -3354,11 +3354,11 @@ pub struct Time<'a> {
 impl<'a> flatbuffers::Follow<'a> for Time<'a> {
     type Inner = Time<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Time<'a> {
@@ -3580,11 +3580,11 @@ pub struct Timestamp<'a> {
 impl<'a> flatbuffers::Follow<'a> for Timestamp<'a> {
     type Inner = Timestamp<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Timestamp<'a> {
@@ -3721,11 +3721,11 @@ pub struct Interval<'a> {
 impl<'a> flatbuffers::Follow<'a> for Interval<'a> {
     type Inner = Interval<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Interval<'a> {
@@ -3825,11 +3825,11 @@ pub struct Duration<'a> {
 impl<'a> flatbuffers::Follow<'a> for Duration<'a> {
     type Inner = Duration<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Duration<'a> {
@@ -3932,11 +3932,11 @@ pub struct KeyValue<'a> {
 impl<'a> flatbuffers::Follow<'a> for KeyValue<'a> {
     type Inner = KeyValue<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> KeyValue<'a> {
@@ -4060,11 +4060,11 @@ pub struct DictionaryEncoding<'a> {
 impl<'a> flatbuffers::Follow<'a> for DictionaryEncoding<'a> {
     type Inner = DictionaryEncoding<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> DictionaryEncoding<'a> {
@@ -4259,11 +4259,11 @@ pub struct Field<'a> {
 impl<'a> flatbuffers::Follow<'a> for Field<'a> {
     type Inner = Field<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Field<'a> {
@@ -5324,11 +5324,11 @@ pub struct Schema<'a> {
 impl<'a> flatbuffers::Follow<'a> for Schema<'a> {
     type Inner = Schema<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
         Self {
             _tab: flatbuffers::Table::new(buf, loc),
         }
-    }
+    }}
 }
 
 impl<'a> Schema<'a> {
@@ -5577,16 +5577,16 @@ pub fn size_prefixed_root_as_schema_with_opts<'b, 'o>(
 /// Assumes, without verification, that a buffer of bytes contains a Schema and returns it.
 /// # Safety
 /// Callers must trust the given bytes do indeed contain a valid `Schema`.
-pub unsafe fn root_as_schema_unchecked(buf: &[u8]) -> Schema {
+pub unsafe fn root_as_schema_unchecked(buf: &[u8]) -> Schema { unsafe {
     flatbuffers::root_unchecked::<Schema>(buf)
-}
+}}
 #[inline]
 /// Assumes, without verification, that a buffer of bytes contains a size prefixed Schema and returns it.
 /// # Safety
 /// Callers must trust the given bytes do indeed contain a valid size prefixed `Schema`.
-pub unsafe fn size_prefixed_root_as_schema_unchecked(buf: &[u8]) -> Schema {
+pub unsafe fn size_prefixed_root_as_schema_unchecked(buf: &[u8]) -> Schema { unsafe {
     flatbuffers::size_prefixed_root_unchecked::<Schema>(buf)
-}
+}}
 #[inline]
 pub fn finish_schema_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
     fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,

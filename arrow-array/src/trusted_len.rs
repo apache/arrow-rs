@@ -28,7 +28,7 @@ where
     T: ArrowNativeType,
     P: std::borrow::Borrow<Option<T>>,
     I: Iterator<Item = P>,
-{
+{ unsafe {
     let (_, upper) = iterator.size_hint();
     let upper = upper.expect("trusted_len_unzip requires an upper limit");
     let len = upper * std::mem::size_of::<T>();
@@ -55,7 +55,7 @@ where
     );
     buffer.set_len(len);
     (null.into(), buffer.into())
-}
+}}
 
 #[cfg(test)]
 mod tests {

@@ -67,7 +67,7 @@ unsafe impl Send for FFI_ArrowArray {}
 unsafe impl Sync for FFI_ArrowArray {}
 
 // callback used to drop [FFI_ArrowArray] when it is exported
-unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
+unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) { unsafe {
     if array.is_null() {
         return;
     }
@@ -83,7 +83,7 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
     }
 
     array.release = None;
-}
+}}
 
 /// Aligns the provided `nulls` to the provided `data_offset`
 ///
@@ -221,9 +221,9 @@ impl FFI_ArrowArray {
     ///
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
-    pub unsafe fn from_raw(array: *mut FFI_ArrowArray) -> Self {
+    pub unsafe fn from_raw(array: *mut FFI_ArrowArray) -> Self { unsafe {
         std::ptr::replace(array, Self::empty())
-    }
+    }}
 
     /// create an empty `FFI_ArrowArray`, which can be used to import data into
     pub fn empty() -> Self {

@@ -282,7 +282,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     ///
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
-    pub unsafe fn value_unchecked(&self, i: usize) -> &T::Native {
+    pub unsafe fn value_unchecked(&self, i: usize) -> &T::Native { unsafe {
         let end = *self.value_offsets().get_unchecked(i + 1);
         let start = *self.value_offsets().get_unchecked(i);
 
@@ -305,7 +305,7 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         // SAFETY:
         // ArrayData is valid
         T::Native::from_bytes_unchecked(b)
-    }
+    }}
 
     /// Returns the element at index `i`
     ///
@@ -508,9 +508,9 @@ impl<'a, T: ByteArrayType> ArrayAccessor for &'a GenericByteArray<T> {
         GenericByteArray::value(self, index)
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
         GenericByteArray::value_unchecked(self, index)
-    }
+    }}
 }
 
 impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {

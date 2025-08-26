@@ -129,7 +129,7 @@ pub unsafe fn export_array_into_raw(
     src: ArrayRef,
     out_array: *mut FFI_ArrowArray,
     out_schema: *mut FFI_ArrowSchema,
-) -> Result<()> {
+) -> Result<()> { unsafe {
     let data = src.to_data();
     let array = FFI_ArrowArray::new(&data);
     let schema = FFI_ArrowSchema::try_from(data.data_type())?;
@@ -138,7 +138,7 @@ pub unsafe fn export_array_into_raw(
     std::ptr::write_unaligned(out_schema, schema);
 
     Ok(())
-}
+}}
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
@@ -244,13 +244,13 @@ unsafe fn create_buffer(
     array: &FFI_ArrowArray,
     index: usize,
     len: usize,
-) -> Option<Buffer> {
+) -> Option<Buffer> { unsafe {
     if array.num_buffers() == 0 {
         return None;
     }
     NonNull::new(array.buffer(index) as _)
         .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
-}
+}}
 
 /// Export to the C Data Interface
 pub fn to_ffi(data: &ArrayData) -> Result<(FFI_ArrowArray, FFI_ArrowSchema)> {

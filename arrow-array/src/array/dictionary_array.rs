@@ -946,7 +946,7 @@ where
         unsafe { self.value_unchecked(index) }
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
         let val = self.dictionary.keys.value_unchecked(index);
         let value_idx = val.as_usize();
 
@@ -956,7 +956,7 @@ where
             true => self.values.value_unchecked(value_idx),
             false => Default::default(),
         }
-    }
+    }}
 }
 
 /// A [`DictionaryArray`] with the key type erased

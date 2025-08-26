@@ -151,7 +151,7 @@ impl UnionArray {
         type_ids: ScalarBuffer<i8>,
         offsets: Option<ScalarBuffer<i32>>,
         children: Vec<ArrayRef>,
-    ) -> Self {
+    ) -> Self { unsafe {
         let mode = if offsets.is_some() {
             UnionMode::Dense
         } else {
@@ -169,7 +169,7 @@ impl UnionArray {
             None => builder.build_unchecked(),
         };
         Self::from(data)
-    }
+    }}
 
     /// Attempts to create a new `UnionArray`, validating the inputs provided.
     ///

@@ -323,7 +323,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///
     /// Caller is responsible for ensuring that the index is within the bounds
     /// of the array
-    pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
+    pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native { unsafe {
         let v = self.views.get_unchecked(idx);
         let len = *v as u32;
         let b = if len <= MAX_INLINE_VIEW_LEN {
@@ -335,7 +335,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             data.get_unchecked(offset..offset + len as usize)
         };
         T::Native::from_bytes_unchecked(b)
-    }
+    }}
 
     /// Returns the first `len` bytes the inline value of the view.
     ///
@@ -343,10 +343,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// - The `view` must be a valid element from `Self::views()` that adheres to the view layout.
     /// - The `len` must be the length of the inlined value. It should never be larger than [`MAX_INLINE_VIEW_LEN`].
     #[inline(always)]
-    pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] {
+    pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] { unsafe {
         debug_assert!(len <= MAX_INLINE_VIEW_LEN as usize);
         std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
-    }
+    }}
 
     /// Constructs a new iterator for iterating over the values of this array
     pub fn iter(&self) -> ArrayIter<&Self> {
@@ -539,7 +539,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///   `buffer_index` reset to `0` and its `offset` updated so that it points
     ///   into the bytes just appended at the end of `data_buf`.
     #[inline(always)]
-    unsafe fn copy_view_to_buffer(&self, i: usize, data_buf: &mut Vec<u8>) -> u128 {
+    unsafe fn copy_view_to_buffer(&self, i: usize, data_buf: &mut Vec<u8>) -> u128 { unsafe {
         // SAFETY: `i < self.len()` ensures this is in‑bounds.
         let raw_view = *self.views().get_unchecked(i);
         let mut bv = ByteView::from(raw_view);
@@ -563,7 +563,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             bv.offset = new_offset;
             bv.into()
         }
-    }
+    }}
 
     /// Returns the total number of bytes used by all non inlined views in all
     /// buffers.
@@ -623,7 +623,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         left_idx: usize,
         right: &GenericByteViewArray<T>,
         right_idx: usize,
-    ) -> Ordering {
+    ) -> Ordering { unsafe {
         let l_view = left.views().get_unchecked(left_idx);
         let l_byte_view = ByteView::from(*l_view);
 
@@ -654,7 +654,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
 
         l_full_data.cmp(r_full_data)
-    }
+    }}
 
     /// Builds a 128-bit composite key for an inline value:
     ///
@@ -852,9 +852,9 @@ impl<'a, T: ByteViewType + ?Sized> ArrayAccessor for &'a GenericByteViewArray<T>
         GenericByteViewArray::value(self, index)
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
         GenericByteViewArray::value_unchecked(self, index)
-    }
+    }}
 }
 
 impl<'a, T: ByteViewType + ?Sized> IntoIterator for &'a GenericByteViewArray<T> {
@@ -998,9 +998,9 @@ impl BinaryViewArray {
     /// Convert the [`BinaryViewArray`] to [`StringViewArray`]
     /// # Safety
     /// Caller is responsible for ensuring that items in array are utf8 data.
-    pub unsafe fn to_string_view_unchecked(self) -> StringViewArray {
+    pub unsafe fn to_string_view_unchecked(self) -> StringViewArray { unsafe {
         StringViewArray::new_unchecked(self.views, self.buffers, self.nulls)
-    }
+    }}
 }
 
 impl From<Vec<&[u8]>> for BinaryViewArray {

@@ -1145,7 +1145,7 @@ fn build_tree<'a>(
             )));
             leaf_to_base.push(root_idx);
         }
-        Type::GroupType { ref fields, .. } => {
+        Type::GroupType { fields, .. } => {
             for f in fields {
                 build_tree(
                     f,

@@ -167,14 +167,14 @@ impl FixedSizeBinaryArray {
     ///
     /// Caller is responsible for ensuring that the index is within the bounds
     /// of the array
-    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
+    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] { unsafe {
         let offset = i + self.offset();
         let pos = self.value_offset_at(offset);
         std::slice::from_raw_parts(
             self.value_data.as_ptr().offset(pos as isize),
             (self.value_offset_at(offset + 1) - pos) as usize,
         )
-    }
+    }}
 
     /// Returns the offset for the element at index `i`.
     ///
@@ -653,9 +653,9 @@ impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
         FixedSizeBinaryArray::value(self, index)
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
         FixedSizeBinaryArray::value_unchecked(self, index)
-    }
+    }}
 }
 
 impl<'a> IntoIterator for &'a FixedSizeBinaryArray {

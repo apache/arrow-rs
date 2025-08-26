@@ -932,13 +932,13 @@ impl RowConverter {
         &self,
         rows: &mut [&[u8]],
         validate_utf8: bool,
-    ) -> Result<Vec<ArrayRef>, ArrowError> {
+    ) -> Result<Vec<ArrayRef>, ArrowError> { unsafe {
         self.fields
             .iter()
             .zip(&self.codecs)
             .map(|(field, codec)| decode_column(field, rows, codec, validate_utf8))
             .collect()
-    }
+    }}
 
     /// Returns a [`RowParser`] that can be used to parse [`Row`] from bytes
     pub fn parser(&self) -> RowParser {
@@ -1671,7 +1671,7 @@ unsafe fn decode_column(
     rows: &mut [&[u8]],
     codec: &Codec,
     validate_utf8: bool,
-) -> Result<ArrayRef, ArrowError> {
+) -> Result<ArrayRef, ArrowError> { unsafe {
     let options = field.options;
 
     let array: ArrayRef = match codec {
@@ -1767,7 +1767,7 @@ unsafe fn decode_column(
         },
     };
     Ok(array)
-}
+}}
 
 #[cfg(test)]
 mod tests {

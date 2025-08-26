@@ -111,7 +111,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     field: &SortField,
     validate_utf8: bool,
-) -> Result<GenericListArray<O>, ArrowError> {
+) -> Result<GenericListArray<O>, ArrowError> { unsafe {
     let opts = field.options;
 
     let mut values_bytes = 0;
@@ -205,7 +205,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         .add_child_data(child_data);
 
     Ok(GenericListArray::from(unsafe { builder.build_unchecked() }))
-}
+}}
 
 pub fn compute_lengths_fixed_size_list(
     tracker: &mut LengthTracker,
@@ -272,7 +272,7 @@ pub unsafe fn decode_fixed_size_list(
     field: &SortField,
     validate_utf8: bool,
     value_length: usize,
-) -> Result<FixedSizeListArray, ArrowError> {
+) -> Result<FixedSizeListArray, ArrowError> { unsafe {
     let list_type = &field.data_type;
     let element_type = match list_type {
         DataType::FixedSizeList(element_field, _) => element_field.data_type(),
@@ -320,4 +320,4 @@ pub unsafe fn decode_fixed_size_list(
         .child_data(child_data);
 
     Ok(FixedSizeListArray::from(builder.build_unchecked()))
-}
+}}

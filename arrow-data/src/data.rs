@@ -278,7 +278,7 @@ impl ArrayData {
         offset: usize,
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
-    ) -> Self {
+    ) -> Self { unsafe {
         let mut skip_validation = UnsafeFlag::new();
         // SAFETY: caller responsible for ensuring data is valid
         skip_validation.set(true);
@@ -297,7 +297,7 @@ impl ArrayData {
         }
         .build()
         .unwrap()
-    }
+    }}
 
     /// Create a new ArrayData, validating that the provided buffers form a valid
     /// Arrow array of the specified data type.
@@ -1998,9 +1998,9 @@ impl ArrayDataBuilder {
     ///
     /// The same caveats as [`ArrayData::new_unchecked`]
     /// apply.
-    pub unsafe fn build_unchecked(self) -> ArrayData {
+    pub unsafe fn build_unchecked(self) -> ArrayData { unsafe {
         self.skip_validation(true).build().unwrap()
-    }
+    }}
 
     /// Creates an `ArrayData`, consuming `self`
     ///
@@ -2097,10 +2097,10 @@ impl ArrayDataBuilder {
     ///
     /// If validation is skipped, the buffers must form a valid Arrow array,
     /// otherwise undefined behavior will result
-    pub unsafe fn skip_validation(mut self, skip_validation: bool) -> Self {
+    pub unsafe fn skip_validation(mut self, skip_validation: bool) -> Self { unsafe {
         self.skip_validation.set(skip_validation);
         self
-    }
+    }}
 }
 
 impl From<ArrayData> for ArrayDataBuilder {

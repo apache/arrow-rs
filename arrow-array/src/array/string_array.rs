@@ -47,9 +47,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
-    ) -> impl Iterator<Item = Option<&'a str>> {
+    ) -> impl Iterator<Item = Option<&'a str>> { unsafe {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
-    }
+    }}
 
     /// Fallibly creates a [`GenericStringArray`] from a [`GenericBinaryArray`] returning
     /// an error if [`GenericBinaryArray`] contains invalid UTF-8 data

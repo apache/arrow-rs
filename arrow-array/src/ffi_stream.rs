@@ -101,7 +101,7 @@ pub struct FFI_ArrowArrayStream {
 unsafe impl Send for FFI_ArrowArrayStream {}
 
 // callback used to drop [FFI_ArrowArrayStream] when it is exported.
-unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
+unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) { unsafe {
     if stream.is_null() {
         return;
     }
@@ -115,7 +115,7 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
     drop(private_data);
 
     stream.release = None;
-}
+}}
 
 struct StreamPrivateData {
     batch_reader: Box<dyn RecordBatchReader + Send>,
@@ -187,9 +187,9 @@ impl FFI_ArrowArrayStream {
     ///
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
-    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self {
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self { unsafe {
         std::ptr::replace(raw_stream, Self::empty())
-    }
+    }}
 
     /// Creates a new empty [FFI_ArrowArrayStream]. Used to import from the C Stream Interface.
     pub fn empty() -> Self {
@@ -329,9 +329,9 @@ impl ArrowArrayStreamReader {
     /// # Safety
     ///
     /// See [`FFI_ArrowArrayStream::from_raw`]
-    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> { unsafe {
         Self::try_new(FFI_ArrowArrayStream::from_raw(raw_stream))
-    }
+    }}
 
     /// Get the last error from `ArrowArrayStreamReader`
     fn get_stream_last_error(&mut self) -> Option<String> {

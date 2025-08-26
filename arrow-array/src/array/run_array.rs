@@ -639,10 +639,10 @@ where
         unsafe { self.value_unchecked(logical_index) }
     }
 
-    unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
+    unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item { unsafe {
         let physical_index = self.run_array.get_physical_index(logical_index);
         self.values().value_unchecked(physical_index)
-    }
+    }}
 }
 
 impl<'a, R, V> IntoIterator for TypedRunArray<'a, R, V>

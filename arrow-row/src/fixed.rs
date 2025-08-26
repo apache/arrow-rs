@@ -437,7 +437,7 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
     rows: &mut [&[u8]],
     data_type: DataType,
     options: SortOptions,
-) -> ArrayData {
+) -> ArrayData { unsafe {
     let len = rows.len();
 
     let mut values = BufferBuilder::<T>::new(len);
@@ -457,7 +457,7 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
 
     // SAFETY: Buffers correct length
     builder.build_unchecked()
-}
+}}
 
 /// Decodes a `PrimitiveArray` from rows
 pub fn decode_primitive<T: ArrowPrimitiveType>(

@@ -95,7 +95,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
     rows: &mut [&[u8]],
     field: &SortField,
     validate_utf8: bool,
-) -> Result<RunArray<R>, ArrowError> {
+) -> Result<RunArray<R>, ArrowError> { unsafe {
     if rows.is_empty() {
         let values = converter.convert_raw(&mut [], validate_utf8)?;
         let run_ends_array = PrimitiveArray::<R>::new(ScalarBuffer::from(vec![]), None);
@@ -153,7 +153,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
 
     // Create the RunEndEncodedArray
     RunArray::<R>::try_new(&run_ends_array, &values[0])
-}
+}}
 
 #[cfg(test)]
 mod tests {

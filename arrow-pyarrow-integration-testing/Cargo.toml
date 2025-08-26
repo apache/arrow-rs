@@ -24,7 +24,7 @@ repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = ["arrow"]
-edition = "2021"
+edition = "2024"
 rust-version = "1.85"
 publish = false
 

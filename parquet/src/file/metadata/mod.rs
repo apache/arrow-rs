@@ -99,7 +99,7 @@ use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::FileDecryptor,
-    modules::{create_module_aad, ModuleType},
+    modules::{ModuleType, create_module_aad},
 };
 use crate::errors::{ParquetError, Result};
 #[cfg(feature = "encryption")]
@@ -1582,12 +1582,12 @@ impl ColumnIndexBuilder {
         if !self.valid {
             return;
         }
-        if let Some(ref rep_lvl_hist) = repetition_level_histogram {
+        if let Some(rep_lvl_hist) = repetition_level_histogram {
             let hist = self.repetition_level_histograms.get_or_insert(Vec::new());
             hist.reserve(rep_lvl_hist.len());
             hist.extend(rep_lvl_hist.values());
         }
-        if let Some(ref def_lvl_hist) = definition_level_histogram {
+        if let Some(def_lvl_hist) = definition_level_histogram {
             let hist = self.definition_level_histograms.get_or_insert(Vec::new());
             hist.reserve(def_lvl_hist.len());
             hist.extend(def_lvl_hist.values());
@@ -1993,7 +1993,7 @@ mod tests {
             .set_row_groups(row_group_meta)
             .set_column_index(Some(vec![vec![Index::BOOLEAN(native_index)]]))
             .set_offset_index(Some(vec![vec![
-                OffsetIndexMetaData::try_new(offset_index).unwrap()
+                OffsetIndexMetaData::try_new(offset_index).unwrap(),
             ]]))
             .build();
 

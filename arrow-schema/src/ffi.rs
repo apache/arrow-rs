@@ -94,7 +94,7 @@ struct SchemaPrivateData {
 }
 
 // callback used to drop [FFI_ArrowSchema] when it is exported.
-unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
+unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) { unsafe {
     if schema.is_null() {
         return;
     }
@@ -118,7 +118,7 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
     }
 
     schema.release = None;
-}
+}}
 
 impl FFI_ArrowSchema {
     /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
@@ -241,9 +241,9 @@ impl FFI_ArrowSchema {
     ///
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
-    pub unsafe fn from_raw(schema: *mut FFI_ArrowSchema) -> Self {
+    pub unsafe fn from_raw(schema: *mut FFI_ArrowSchema) -> Self { unsafe {
         std::ptr::replace(schema, Self::empty())
-    }
+    }}
 
     /// Create an empty [`FFI_ArrowSchema`]
     pub fn empty() -> Self {

@@ -289,11 +289,11 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
-    pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
+    pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef { unsafe {
         let offset = self.value_offsets().get_unchecked(i).as_usize();
         let length = self.value_sizes().get_unchecked(i).as_usize();
         self.values.slice(offset, length)
-    }
+    }}
 
     /// Returns ith value of this list view array.
     ///
@@ -365,9 +365,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListViewArray<Offset
         GenericListViewArray::value(self, index)
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
         GenericListViewArray::value_unchecked(self, index)
-    }
+    }}
 }
 
 impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {

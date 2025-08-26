@@ -815,7 +815,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
         DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => Arc::new(FixedSizeListArray::from(data)) as ArrayRef,
-        DataType::Dictionary(ref key_type, _) => match key_type.as_ref() {
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
             DataType::Int8 => Arc::new(DictionaryArray::<Int8Type>::from(data)) as ArrayRef,
             DataType::Int16 => Arc::new(DictionaryArray::<Int16Type>::from(data)) as ArrayRef,
             DataType::Int32 => Arc::new(DictionaryArray::<Int32Type>::from(data)) as ArrayRef,
@@ -826,7 +826,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             DataType::UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef,
             dt => panic!("Unexpected dictionary key type {dt:?}"),
         },
-        DataType::RunEndEncoded(ref run_ends_type, _) => match run_ends_type.data_type() {
+        DataType::RunEndEncoded(run_ends_type, _) => match run_ends_type.data_type() {
             DataType::Int16 => Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef,
             DataType::Int32 => Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef,
             DataType::Int64 => Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef,

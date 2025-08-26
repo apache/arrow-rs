@@ -333,11 +333,11 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
-    pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
+    pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef { unsafe {
         let end = self.value_offsets().get_unchecked(i + 1).as_usize();
         let start = self.value_offsets().get_unchecked(i).as_usize();
         self.values.slice(start, end - start)
-    }
+    }}
 
     /// Returns ith value of this list array.
     ///
