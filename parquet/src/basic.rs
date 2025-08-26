@@ -605,7 +605,8 @@ enum FieldRepetitionType {
 }
 );
 
-pub(crate) type Repetition = FieldRepetitionType;
+/// Type alias for thrift `FieldRepetitionType`
+pub type Repetition = FieldRepetitionType;
 
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::Encoding`
