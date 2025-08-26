@@ -215,8 +215,8 @@ pub struct Field<'a> {
     #[serde(borrow)]
     pub r#type: Schema<'a>,
     /// Optional default value for this field
-    #[serde(borrow, default)]
-    pub default: Option<&'a str>,
+    #[serde(default)]
+    pub default: Option<Value>,
 }
 
 /// An enumeration
@@ -1769,5 +1769,76 @@ mod tests {
         let schema = single_field_schema(ArrowField::new("metrics", map_dt, false));
         let avro = AvroSchema::try_from(&schema).unwrap();
         assert_json_contains(&avro.json_string, "\"arrowDurationUnit\":\"second\"");
+    }
+
+    #[test]
+    fn test_schema_with_non_string_defaults_decodes_successfully() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "R",
+            "fields": [
+                {"name": "a", "type": "int", "default": 0},
+                {"name": "b", "type": {"type": "array", "items": "long"}, "default": [1, 2, 3]},
+                {"name": "c", "type": {"type": "map", "values": "double"}, "default": {"x": 1.5, "y": 2.5}},
+                {"name": "inner", "type": {"type": "record", "name": "Inner", "fields": [
+                    {"name": "flag", "type": "boolean", "default": true},
+                    {"name": "name", "type": "string", "default": "hi"}
+                ]}, "default": {"flag": false, "name": "d"}},
+                {"name": "u", "type": ["int", "null"], "default": 42}
+            ]
+        }"#;
+
+        let schema: Schema = serde_json::from_str(schema_json).expect("schema should parse");
+        match &schema {
+            Schema::Complex(ComplexType::Record(_)) => {}
+            other => panic!("expected record schema, got: {:?}", other),
+        }
+        // Avro to Arrow conversion
+        let field = crate::codec::AvroField::try_from(&schema)
+            .expect("Avro->Arrow conversion should succeed");
+        let arrow_field = field.field();
+
+        // Build expected Arrow field
+        let expected_list_item = ArrowField::new(
+            arrow_schema::Field::LIST_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        );
+        let expected_b = ArrowField::new("b", DataType::List(Arc::new(expected_list_item)), false);
+
+        let expected_map_value = ArrowField::new("value", DataType::Float64, false);
+        let expected_entries = ArrowField::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                ArrowField::new("key", DataType::Utf8, false),
+                expected_map_value,
+            ])),
+            false,
+        );
+        let expected_c =
+            ArrowField::new("c", DataType::Map(Arc::new(expected_entries), false), false);
+
+        let expected_inner = ArrowField::new(
+            "inner",
+            DataType::Struct(Fields::from(vec![
+                ArrowField::new("flag", DataType::Boolean, false),
+                ArrowField::new("name", DataType::Utf8, false),
+            ])),
+            false,
+        );
+
+        let expected = ArrowField::new(
+            "R",
+            DataType::Struct(Fields::from(vec![
+                ArrowField::new("a", DataType::Int32, false),
+                expected_b,
+                expected_c,
+                expected_inner,
+                ArrowField::new("u", DataType::Int32, true),
+            ])),
+            false,
+        );
+
+        assert_eq!(arrow_field, expected);
     }
 }
