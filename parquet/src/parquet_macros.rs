@@ -140,10 +140,8 @@ macro_rules! thrift_union_all_empty {
 
             fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
                 match *self {
-                    $(Self::$field_name => writer.write_field_begin(FieldType::Struct, $field_id, 0)?,)*
-                }
-                // write end of struct for empty struct
-                writer.write_struct_end()?;
+                    $(Self::$field_name => writer.write_empty_struct($field_id, 0)?,)*
+                };
                 // write end of struct for this union
                 writer.write_struct_end()
             }
@@ -266,7 +264,87 @@ macro_rules! thrift_struct {
                 })
             }
         }
+
+        impl<$($lt,)? W: Write> WriteThrift<W> for $identifier $(<$lt>)? {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+            #[allow(unused_assignments)]
+            fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                let mut last_field_id = 0i16;
+                $($crate::__thrift_write_required_or_optional_field!($required_or_optional $field_name, $field_id, $field_type, self, writer, last_field_id);)*
+                Ok(())
+            }
+        }
+
+        impl<$($lt,)? W: Write> WriteThriftField<W> for $identifier $(<$lt>)? {
+            fn write_thrift_field(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
     }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_required_or_optional_field {
+    (required $field_name:ident, $field_id:literal, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
+        $crate::__thrift_write_required_field!(
+            $field_type,
+            $field_name,
+            $field_id,
+            $self,
+            $writer,
+            $last_id
+        )
+    };
+    (optional $field_name:ident, $field_id:literal, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
+        $crate::__thrift_write_optional_field!(
+            $field_type,
+            $field_name,
+            $field_id,
+            $self,
+            $writer,
+            $last_id
+        )
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_required_field {
+    (binary, $field_name:ident, $field_id:literal, $self:ident, $writer:ident, $last_id:ident) => {
+        $writer.write_field_begin(FieldType::Binary, $field_id, $last_id)?;
+        $writer.write_bytes($self.$field_name)?;
+        $last_id = $field_id;
+    };
+    ($field_type:ident, $field_name:ident, $field_id:literal, $self:ident, $writer:ident, $last_id:ident) => {
+        $last_id = $self
+            .$field_name
+            .write_thrift_field($writer, $field_id, $last_id)?;
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_optional_field {
+    (binary, $field_name:ident, $field_id:literal, $self:ident, $writer:tt, $last_id:tt) => {
+        if $self.$field_name.is_some() {
+            $writer.write_field_begin(FieldType::Binary, $field_id, $last_id)?;
+            $writer.write_bytes($self.$field_name.as_ref().unwrap())?;
+            $last_id = $field_id;
+        }
+    };
+    ($field_type:ident, $field_name:ident, $field_id:literal, $self:ident, $writer:tt, $last_id:tt) => {
+        if $self.$field_name.is_some() {
+            $last_id = $self
+                .$field_name
+                .as_ref()
+                .unwrap()
+                .write_thrift_field($writer, $field_id, $last_id)?;
+        }
+    };
 }
 
 /// macro to use when decoding struct fields

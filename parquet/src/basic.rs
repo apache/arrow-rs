@@ -206,6 +206,19 @@ impl<W: Write> WriteThrift<W> for ConvertedType {
     }
 }
 
+impl<W: Write> WriteThriftField<W> for ConvertedType {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
 // ----------------------------------------------------------------------
 // Mirrors thrift union `crate::format::TimeUnit`
 
@@ -230,66 +243,12 @@ struct DecimalType {
 }
 );
 
-impl<W: Write> WriteThrift<W> for DecimalType {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    #[allow(unused_assignments)]
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let mut last_field_id = 0i16;
-        last_field_id = self.scale.write_thrift_field(writer, 1, last_field_id)?;
-        last_field_id = self
-            .precision
-            .write_thrift_field(writer, 2, last_field_id)?;
-        writer.write_struct_end()
-    }
-}
-
-impl<W: Write> WriteThriftField<W> for DecimalType {
-    fn write_thrift_field(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
-
 thrift_struct!(
 struct TimestampType {
   1: required bool is_adjusted_to_u_t_c
   2: required TimeUnit unit
 }
 );
-
-impl<W: Write> WriteThrift<W> for TimestampType {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    #[allow(unused_assignments)]
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let mut last_field_id = 0i16;
-        last_field_id = self
-            .is_adjusted_to_u_t_c
-            .write_thrift_field(writer, 1, last_field_id)?;
-        last_field_id = self.unit.write_thrift_field(writer, 2, last_field_id)?;
-        writer.write_struct_end()
-    }
-}
-
-impl<W: Write> WriteThriftField<W> for TimestampType {
-    fn write_thrift_field(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
 
 // they are identical
 use TimestampType as TimeType;
@@ -301,35 +260,6 @@ struct IntType {
 }
 );
 
-impl<W: Write> WriteThrift<W> for IntType {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    #[allow(unused_assignments)]
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let mut last_field_id = 0i16;
-        last_field_id = self
-            .bit_width
-            .write_thrift_field(writer, 1, last_field_id)?;
-        last_field_id = self
-            .is_signed
-            .write_thrift_field(writer, 2, last_field_id)?;
-        writer.write_struct_end()
-    }
-}
-
-impl<W: Write> WriteThriftField<W> for IntType {
-    fn write_thrift_field(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
-
 thrift_struct!(
 struct VariantType {
   // The version of the variant specification that the variant was
@@ -338,69 +268,11 @@ struct VariantType {
 }
 );
 
-impl<W: Write> WriteThrift<W> for VariantType {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    #[allow(unused_assignments)]
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let mut last_field_id = 0i16;
-        if self.specification_version.is_some() {
-            last_field_id =
-                self.specification_version
-                    .unwrap()
-                    .write_thrift_field(writer, 1, last_field_id)?;
-        }
-        writer.write_struct_end()
-    }
-}
-
-impl<W: Write> WriteThriftField<W> for VariantType {
-    fn write_thrift_field(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
-
 thrift_struct!(
 struct GeometryType<'a> {
   1: optional string<'a> crs;
 }
 );
-
-impl<'a, W: Write> WriteThrift<W> for GeometryType<'a> {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    #[allow(unused_assignments)]
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let mut last_field_id = 0i16;
-        if self.crs.is_some() {
-            last_field_id = self
-                .crs
-                .unwrap()
-                .write_thrift_field(writer, 1, last_field_id)?;
-        }
-        writer.write_struct_end()
-    }
-}
-
-impl<'a, W: Write> WriteThriftField<W> for GeometryType<'a> {
-    fn write_thrift_field(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
 
 thrift_struct!(
 struct GeographyType<'a> {
@@ -408,42 +280,6 @@ struct GeographyType<'a> {
   2: optional EdgeInterpolationAlgorithm algorithm;
 }
 );
-
-impl<'a, W: Write> WriteThrift<W> for GeographyType<'a> {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    #[allow(unused_assignments)]
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let mut last_field_id = 0i16;
-        if self.crs.is_some() {
-            last_field_id = self
-                .crs
-                .unwrap()
-                .write_thrift_field(writer, 1, last_field_id)?;
-        }
-        if self.algorithm.is_some() {
-            last_field_id =
-                self.algorithm
-                    .as_ref()
-                    .unwrap()
-                    .write_thrift_field(writer, 2, last_field_id)?;
-        }
-        writer.write_struct_end()
-    }
-}
-
-impl<'a, W: Write> WriteThriftField<W> for GeographyType<'a> {
-    fn write_thrift_field(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
 
 /// Logical types used by version 2.4.0+ of the Parquet format.
 ///
@@ -646,20 +482,16 @@ impl<W: Write> WriteThrift<W> for LogicalType {
     fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         match self {
             Self::String => {
-                writer.write_field_begin(FieldType::Struct, 1, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(1, 0)?;
             }
             Self::Map => {
-                writer.write_field_begin(FieldType::Struct, 2, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(2, 0)?;
             }
             Self::List => {
-                writer.write_field_begin(FieldType::Struct, 3, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(3, 0)?;
             }
             Self::Enum => {
-                writer.write_field_begin(FieldType::Struct, 4, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(4, 0)?;
             }
             Self::Decimal { scale, precision } => {
                 DecimalType {
@@ -669,8 +501,7 @@ impl<W: Write> WriteThrift<W> for LogicalType {
                 .write_thrift_field(writer, 5, 0)?;
             }
             Self::Date => {
-                writer.write_field_begin(FieldType::Struct, 6, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(6, 0)?;
             }
             Self::Time {
                 is_adjusted_to_u_t_c,
@@ -703,24 +534,19 @@ impl<W: Write> WriteThrift<W> for LogicalType {
                 .write_thrift_field(writer, 10, 0)?;
             }
             Self::Unknown => {
-                writer.write_field_begin(FieldType::Struct, 11, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(11, 0)?;
             }
             Self::Json => {
-                writer.write_field_begin(FieldType::Struct, 12, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(12, 0)?;
             }
             Self::Bson => {
-                writer.write_field_begin(FieldType::Struct, 13, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(13, 0)?;
             }
             Self::Uuid => {
-                writer.write_field_begin(FieldType::Struct, 14, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(14, 0)?;
             }
             Self::Float16 => {
-                writer.write_field_begin(FieldType::Struct, 15, 0)?;
-                writer.write_struct_end()?;
+                writer.write_empty_struct(15, 0)?;
             }
             Self::Variant {
                 specification_version,
@@ -749,35 +575,37 @@ impl<W: Write> WriteThrift<W> for LogicalType {
     }
 }
 
+impl<W: Write> WriteThriftField<W> for LogicalType {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::FieldRepetitionType`
 //
 // Cannot use macro since the name is changed
 
+thrift_enum!(
 /// Representation of field types in schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum Repetition {
-    /// Field is required (can not be null) and each record has exactly 1 value.
-    REQUIRED,
-    /// Field is optional (can be null) and each record has 0 or 1 values.
-    OPTIONAL,
-    /// Field is repeated and can contain 0 or more values.
-    REPEATED,
+enum FieldRepetitionType {
+  /// This field is required (can not be null) and each row has exactly 1 value.
+  REQUIRED = 0;
+  /// The field is optional (can be null) and each row has 0 or 1 values.
+  OPTIONAL = 1;
+  /// The field is repeated and can contain 0 or more values.
+  REPEATED = 2;
 }
+);
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Repetition {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        let val = prot.read_i32()?;
-        Ok(match val {
-            0 => Self::REQUIRED,
-            1 => Self::OPTIONAL,
-            2 => Self::REPEATED,
-            _ => return Err(general_err!("Unexpected FieldRepetitionType {}", val)),
-        })
-    }
-}
+pub(crate) type Repetition = FieldRepetitionType;
 
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::Encoding`
@@ -942,6 +770,39 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Compression {
             7 => Self::LZ4_RAW,
             _ => return Err(general_err!("Unexpected CompressionCodec {}", val)),
         })
+    }
+}
+
+// FIXME
+// ugh...why did we add compression level to some variants if we don't use them????
+impl<W: Write> WriteThrift<W> for Compression {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+
+    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let id: i32 = match *self {
+            Self::UNCOMPRESSED => 0,
+            Self::SNAPPY => 1,
+            Self::GZIP(_) => 2,
+            Self::LZO => 3,
+            Self::BROTLI(_) => 4,
+            Self::LZ4 => 5,
+            Self::ZSTD(_) => 6,
+            Self::LZ4_RAW => 7,
+        };
+        writer.write_i32(id)
+    }
+}
+
+impl<W: Write> WriteThriftField<W> for Compression {
+    fn write_thrift_field(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
     }
 }
 
@@ -1317,12 +1178,6 @@ impl fmt::Display for ConvertedType {
     }
 }
 
-impl fmt::Display for Repetition {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
 impl fmt::Display for Compression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
@@ -1570,37 +1425,6 @@ impl From<Option<LogicalType>> for ConvertedType {
                 | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
-// crate::format::FieldRepetitionType <=> Repetition conversion
-
-impl TryFrom<crate::format::FieldRepetitionType> for Repetition {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::FieldRepetitionType) -> Result<Self> {
-        Ok(match value {
-            crate::format::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
-            crate::format::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
-            crate::format::FieldRepetitionType::REPEATED => Repetition::REPEATED,
-            _ => {
-                return Err(general_err!(
-                    "unexpected parquet repetition type: {}",
-                    value.0
-                ))
-            }
-        })
-    }
-}
-
-impl From<Repetition> for crate::format::FieldRepetitionType {
-    fn from(value: Repetition) -> Self {
-        match value {
-            Repetition::REQUIRED => crate::format::FieldRepetitionType::REQUIRED,
-            Repetition::OPTIONAL => crate::format::FieldRepetitionType::OPTIONAL,
-            Repetition::REPEATED => crate::format::FieldRepetitionType::REPEATED,
         }
     }
 }

@@ -44,7 +44,7 @@ pub struct PageLocation {
 }
 );
 
-impl<W: Write> WriteThrift<W> for PageLocation {
+/*impl<W: Write> WriteThrift<W> for PageLocation {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     #[allow(unused_assignments)]
@@ -59,7 +59,7 @@ impl<W: Write> WriteThrift<W> for PageLocation {
             .write_thrift_field(writer, 3, last_field_id)?;
         writer.write_struct_end()
     }
-}
+}*/
 
 impl From<&crate::format::PageLocation> for PageLocation {
     fn from(value: &crate::format::PageLocation) -> Self {
@@ -95,7 +95,7 @@ pub struct OffsetIndexMetaData {
 }
 );
 
-impl<W: Write> WriteThrift<W> for OffsetIndexMetaData {
+/*impl<W: Write> WriteThrift<W> for OffsetIndexMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     #[allow(unused_assignments)]
@@ -116,7 +116,7 @@ impl<W: Write> WriteThrift<W> for OffsetIndexMetaData {
         }
         writer.write_struct_end()
     }
-}
+}*/
 
 impl OffsetIndexMetaData {
     /// Creates a new [`OffsetIndexMetaData`] from an [`OffsetIndex`].

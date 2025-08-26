@@ -17,6 +17,7 @@
 
 // a collection of generated structs used to parse thrift metadata
 
+use std::io::Write;
 use std::sync::Arc;
 
 #[cfg(feature = "encryption")]
@@ -33,7 +34,10 @@ use crate::{
         page_encoding_stats::PageEncodingStats,
         statistics::ValueStatistics,
     },
-    parquet_thrift::{FieldType, ThriftCompactInputProtocol},
+    parquet_thrift::{
+        ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+        WriteThrift, WriteThriftField,
+    },
     schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor},
     thrift_struct,
     util::bit_util::FromBytes,
