@@ -515,7 +515,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ParquetMetaData {
 #[cfg(test)]
 mod tests {
     use crate::file::metadata::thrift_gen::BoundingBox;
-    use crate::parquet_thrift::{tests::test_roundtrip, OrderedF64};
+    use crate::parquet_thrift::tests::test_roundtrip;
 
     #[test]
     fn test_bounding_box_roundtrip() {
