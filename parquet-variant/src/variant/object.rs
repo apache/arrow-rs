@@ -397,8 +397,8 @@ impl<'m, 'v> VariantObject<'m, 'v> {
         // NOTE: This does not require a sorted metadata dictionary, because the variant spec
         // requires object field ids to be lexically sorted by their corresponding string values,
         // and probing the dictionary for a field id is always O(1) work.
-        let i = try_binary_search_range_by(0..self.len(), &name, |i| self.field_name(i))?.ok()?;
-
+        let cmp = |i| Some(self.field_name(i)?.cmp(name));
+        let i = try_binary_search_range_by(0..self.len(), cmp)?.ok()?;
         self.field(i)
     }
 }
@@ -904,7 +904,7 @@ mod tests {
 
         // create another object pre-filled with field names, b and a
         // but insert the fields in the order of a, b
-        let mut b = VariantBuilder::new().with_field_names(["b", "a"].into_iter());
+        let mut b = VariantBuilder::new().with_field_names(["b", "a"]);
         let mut o = b.new_object();
 
         o.insert("a", ());
@@ -939,7 +939,7 @@ mod tests {
         assert!(v1.metadata().unwrap().is_sorted());
 
         // create a second object with different insertion order
-        let mut b = VariantBuilder::new().with_field_names(["d", "c", "b", "a"].into_iter());
+        let mut b = VariantBuilder::new().with_field_names(["d", "c", "b", "a"]);
         let mut o = b.new_object();
 
         o.insert("b", 4.3);
