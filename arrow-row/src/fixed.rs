@@ -20,8 +20,8 @@ use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
-    bit_util, i256, ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, IntervalMonthDayNano,
-    MutableBuffer, NullBuffer,
+    ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
+    NullBuffer, bit_util, i256,
 };
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, SortOptions};
@@ -437,27 +437,29 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
     rows: &mut [&[u8]],
     data_type: DataType,
     options: SortOptions,
-) -> ArrayData { unsafe {
-    let len = rows.len();
+) -> ArrayData {
+    unsafe {
+        let len = rows.len();
 
-    let mut values = BufferBuilder::<T>::new(len);
-    let (null_count, nulls) = decode_nulls(rows);
+        let mut values = BufferBuilder::<T>::new(len);
+        let (null_count, nulls) = decode_nulls(rows);
 
-    for row in rows {
-        let i = split_off(row, T::ENCODED_LEN);
-        let value = T::Encoded::from_slice(&i[1..], options.descending);
-        values.append(T::decode(value));
+        for row in rows {
+            let i = split_off(row, T::ENCODED_LEN);
+            let value = T::Encoded::from_slice(&i[1..], options.descending);
+            values.append(T::decode(value));
+        }
+
+        let builder = ArrayDataBuilder::new(data_type)
+            .len(len)
+            .null_count(null_count)
+            .add_buffer(values.finish())
+            .null_bit_buffer(Some(nulls));
+
+        // SAFETY: Buffers correct length
+        builder.build_unchecked()
     }
-
-    let builder = ArrayDataBuilder::new(data_type)
-        .len(len)
-        .null_count(null_count)
-        .add_buffer(values.finish())
-        .null_bit_buffer(Some(nulls));
-
-    // SAFETY: Buffers correct length
-    builder.build_unchecked()
-}}
+}
 
 /// Decodes a `PrimitiveArray` from rows
 pub fn decode_primitive<T: ArrowPrimitiveType>(

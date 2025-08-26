@@ -780,7 +780,7 @@ impl TryFrom<Option<parquet::ConvertedType>> for ConvertedType {
                     return Err(general_err!(
                         "unexpected parquet converted type: {}",
                         value.0
-                    ))
+                    ));
                 }
             },
         })
@@ -972,7 +972,7 @@ impl TryFrom<parquet::FieldRepetitionType> for Repetition {
                 return Err(general_err!(
                     "unexpected parquet repetition type: {}",
                     value.0
-                ))
+                ));
             }
         })
     }
@@ -1048,7 +1048,7 @@ impl TryFrom<parquet::CompressionCodec> for Compression {
                 return Err(general_err!(
                     "unexpected parquet compression codec: {}",
                     value.0
-                ))
+                ));
             }
         })
     }

@@ -20,8 +20,8 @@ use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
 use crate::types::*;
 use crate::{
-    make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, PrimitiveArray, Scalar,
-    StringArray,
+    Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, PrimitiveArray, Scalar, StringArray,
+    make_array,
 };
 use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
@@ -946,17 +946,19 @@ where
         unsafe { self.value_unchecked(index) }
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
-        let val = self.dictionary.keys.value_unchecked(index);
-        let value_idx = val.as_usize();
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        unsafe {
+            let val = self.dictionary.keys.value_unchecked(index);
+            let value_idx = val.as_usize();
 
-        // As dictionary keys are only verified for non-null indexes
-        // we must check the value is within bounds
-        match value_idx < self.values.len() {
-            true => self.values.value_unchecked(value_idx),
-            false => Default::default(),
+            // As dictionary keys are only verified for non-null indexes
+            // we must check the value is within bounds
+            match value_idx < self.values.len() {
+                true => self.values.value_unchecked(value_idx),
+                false => Default::default(),
+            }
         }
-    }}
+    }
 }
 
 /// A [`DictionaryArray`] with the key type erased
@@ -1051,7 +1053,7 @@ impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
 mod tests {
     use super::*;
     use crate::cast::as_dictionary_array;
-    use crate::{Int16Array, Int32Array, Int8Array, RunArray};
+    use crate::{Int8Array, Int16Array, Int32Array, RunArray};
     use arrow_buffer::{Buffer, ToByteSlice};
 
     #[test]

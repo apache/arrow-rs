@@ -406,15 +406,14 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     return Err(general_err!(
                         "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
                         self.name
-                    ))
+                    ));
                 }
-                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    if self.length == 2 => {}
+                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 2 => {}
                 (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
                     return Err(general_err!(
                         "FLOAT16 cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(2) field",
                         self.name
-                    ))
+                    ));
                 }
                 (a, b) => {
                     return Err(general_err!(
@@ -422,7 +421,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         a,
                         b,
                         self.name
-                    ))
+                    ));
                 }
             }
         }
@@ -2067,9 +2066,11 @@ mod tests {
         let f2 = test_new_group_type(
             "f",
             Repetition::REPEATED,
-            vec![Type::primitive_type_builder("f2", PhysicalType::INT64)
-                .build()
-                .unwrap()],
+            vec![
+                Type::primitive_type_builder("f2", PhysicalType::INT64)
+                    .build()
+                    .unwrap(),
+            ],
         );
         assert!(f1.check_contains(&f2));
 
@@ -2132,9 +2133,11 @@ mod tests {
         let f2 = test_new_group_type(
             "f",
             Repetition::REPEATED,
-            vec![Type::primitive_type_builder("f3", PhysicalType::INT32)
-                .build()
-                .unwrap()],
+            vec![
+                Type::primitive_type_builder("f3", PhysicalType::INT32)
+                    .build()
+                    .unwrap(),
+            ],
         );
         assert!(!f1.check_contains(&f2));
     }
@@ -2153,9 +2156,11 @@ mod tests {
         let f1 = test_new_group_type(
             "f",
             Repetition::REPEATED,
-            vec![Type::primitive_type_builder("f1", PhysicalType::INT32)
-                .build()
-                .unwrap()],
+            vec![
+                Type::primitive_type_builder("f1", PhysicalType::INT32)
+                    .build()
+                    .unwrap(),
+            ],
         );
         let f2 = Type::primitive_type_builder("f1", PhysicalType::INT32)
             .build()
@@ -2171,9 +2176,11 @@ mod tests {
                 test_new_group_type(
                     "b",
                     Repetition::REPEATED,
-                    vec![Type::primitive_type_builder("c", PhysicalType::INT32)
-                        .build()
-                        .unwrap()],
+                    vec![
+                        Type::primitive_type_builder("c", PhysicalType::INT32)
+                            .build()
+                            .unwrap(),
+                    ],
                 ),
                 Type::primitive_type_builder("d", PhysicalType::INT64)
                     .build()
@@ -2189,9 +2196,11 @@ mod tests {
             vec![test_new_group_type(
                 "b",
                 Repetition::REPEATED,
-                vec![Type::primitive_type_builder("c", PhysicalType::INT32)
-                    .build()
-                    .unwrap()],
+                vec![
+                    Type::primitive_type_builder("c", PhysicalType::INT32)
+                        .build()
+                        .unwrap(),
+                ],
             )],
         );
         assert!(f1.check_contains(&f2)); // should match

@@ -978,10 +978,12 @@ impl FileDecoder {
     ///
     /// For example, some programs may wish to trust reading IPC files written
     /// by the same process that created the files.
-    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self { unsafe {
-        self.skip_validation.set(skip_validation);
-        self
-    }}
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        unsafe {
+            self.skip_validation.set(skip_validation);
+            self
+        }
+    }
 
     fn read_message<'a>(&self, buf: &'a [u8]) -> Result<Message::Message<'a>, ArrowError> {
         let message = parse_message(buf)?;
@@ -1359,10 +1361,12 @@ impl<R: Read + Seek> FileReader<R> {
     /// # Safety
     ///
     /// See [`FileDecoder::with_skip_validation`]
-    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self { unsafe {
-        self.decoder = self.decoder.with_skip_validation(skip_validation);
-        self
-    }}
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        unsafe {
+            self.decoder = self.decoder.with_skip_validation(skip_validation);
+            self
+        }
+    }
 }
 
 impl<R: Read + Seek> Iterator for FileReader<R> {
@@ -1672,10 +1676,12 @@ impl<R: Read> StreamReader<R> {
     /// # Safety
     ///
     /// See [`FileDecoder::with_skip_validation`]
-    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self { unsafe {
-        self.skip_validation.set(skip_validation);
-        self
-    }}
+    pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
+        unsafe {
+            self.skip_validation.set(skip_validation);
+            self
+        }
+    }
 }
 
 impl<R: Read> Iterator for StreamReader<R> {

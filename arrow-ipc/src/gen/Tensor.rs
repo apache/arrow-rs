@@ -38,11 +38,13 @@ pub struct TensorDim<'a> {
 impl<'a> flatbuffers::Follow<'a> for TensorDim<'a> {
     type Inner = TensorDim<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> TensorDim<'a> {
@@ -162,11 +164,13 @@ pub struct Tensor<'a> {
 impl<'a> flatbuffers::Follow<'a> for Tensor<'a> {
     type Inner = Tensor<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> Tensor<'a> {
@@ -1181,16 +1185,16 @@ pub fn size_prefixed_root_as_tensor_with_opts<'b, 'o>(
 /// Assumes, without verification, that a buffer of bytes contains a Tensor and returns it.
 /// # Safety
 /// Callers must trust the given bytes do indeed contain a valid `Tensor`.
-pub unsafe fn root_as_tensor_unchecked(buf: &[u8]) -> Tensor { unsafe {
-    flatbuffers::root_unchecked::<Tensor>(buf)
-}}
+pub unsafe fn root_as_tensor_unchecked(buf: &[u8]) -> Tensor {
+    unsafe { flatbuffers::root_unchecked::<Tensor>(buf) }
+}
 #[inline]
 /// Assumes, without verification, that a buffer of bytes contains a size prefixed Tensor and returns it.
 /// # Safety
 /// Callers must trust the given bytes do indeed contain a valid size prefixed `Tensor`.
-pub unsafe fn size_prefixed_root_as_tensor_unchecked(buf: &[u8]) -> Tensor { unsafe {
-    flatbuffers::size_prefixed_root_unchecked::<Tensor>(buf)
-}}
+pub unsafe fn size_prefixed_root_as_tensor_unchecked(buf: &[u8]) -> Tensor {
+    unsafe { flatbuffers::size_prefixed_root_unchecked::<Tensor>(buf) }
+}
 #[inline]
 pub fn finish_tensor_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
     fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,

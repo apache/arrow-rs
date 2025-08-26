@@ -78,18 +78,22 @@ impl core::fmt::Debug for SparseMatrixCompressedAxis {
 impl<'a> flatbuffers::Follow<'a> for SparseMatrixCompressedAxis {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
-        Self(b)
-    }}
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+            Self(b)
+        }
+    }
 }
 
 impl flatbuffers::Push for SparseMatrixCompressedAxis {
     type Output = SparseMatrixCompressedAxis;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
-    }}
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe {
+            flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        }
+    }
 }
 
 impl flatbuffers::EndianScalar for SparseMatrixCompressedAxis {
@@ -181,18 +185,22 @@ impl core::fmt::Debug for SparseTensorIndex {
 impl<'a> flatbuffers::Follow<'a> for SparseTensorIndex {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
-        Self(b)
-    }}
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            Self(b)
+        }
+    }
 }
 
 impl flatbuffers::Push for SparseTensorIndex {
     type Output = SparseTensorIndex;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-        flatbuffers::emplace_scalar::<u8>(dst, self.0);
-    }}
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe {
+            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+        }
+    }
 }
 
 impl flatbuffers::EndianScalar for SparseTensorIndex {
@@ -265,11 +273,13 @@ pub struct SparseTensorIndexCOO<'a> {
 impl<'a> flatbuffers::Follow<'a> for SparseTensorIndexCOO<'a> {
     type Inner = SparseTensorIndexCOO<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> SparseTensorIndexCOO<'a> {
@@ -477,11 +487,13 @@ pub struct SparseMatrixIndexCSX<'a> {
 impl<'a> flatbuffers::Follow<'a> for SparseMatrixIndexCSX<'a> {
     type Inner = SparseMatrixIndexCSX<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> SparseMatrixIndexCSX<'a> {
@@ -748,11 +760,13 @@ pub struct SparseTensorIndexCSF<'a> {
 impl<'a> flatbuffers::Follow<'a> for SparseTensorIndexCSF<'a> {
     type Inner = SparseTensorIndexCSF<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> SparseTensorIndexCSF<'a> {
@@ -1076,11 +1090,13 @@ pub struct SparseTensor<'a> {
 impl<'a> flatbuffers::Follow<'a> for SparseTensor<'a> {
     type Inner = SparseTensor<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> SparseTensor<'a> {
@@ -2262,16 +2278,16 @@ pub fn size_prefixed_root_as_sparse_tensor_with_opts<'b, 'o>(
 /// Assumes, without verification, that a buffer of bytes contains a SparseTensor and returns it.
 /// # Safety
 /// Callers must trust the given bytes do indeed contain a valid `SparseTensor`.
-pub unsafe fn root_as_sparse_tensor_unchecked(buf: &[u8]) -> SparseTensor { unsafe {
-    flatbuffers::root_unchecked::<SparseTensor>(buf)
-}}
+pub unsafe fn root_as_sparse_tensor_unchecked(buf: &[u8]) -> SparseTensor {
+    unsafe { flatbuffers::root_unchecked::<SparseTensor>(buf) }
+}
 #[inline]
 /// Assumes, without verification, that a buffer of bytes contains a size prefixed SparseTensor and returns it.
 /// # Safety
 /// Callers must trust the given bytes do indeed contain a valid size prefixed `SparseTensor`.
-pub unsafe fn size_prefixed_root_as_sparse_tensor_unchecked(buf: &[u8]) -> SparseTensor { unsafe {
-    flatbuffers::size_prefixed_root_unchecked::<SparseTensor>(buf)
-}}
+pub unsafe fn size_prefixed_root_as_sparse_tensor_unchecked(buf: &[u8]) -> SparseTensor {
+    unsafe { flatbuffers::size_prefixed_root_unchecked::<SparseTensor>(buf) }
+}
 #[inline]
 pub fn finish_sparse_tensor_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
     fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,

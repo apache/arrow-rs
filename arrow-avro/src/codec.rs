@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::schema::{
-    Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, Type, TypeName,
-    AVRO_ENUM_SYMBOLS_METADATA_KEY,
+    AVRO_ENUM_SYMBOLS_METADATA_KEY, Attributes, AvroSchema, ComplexType, PrimitiveType, Record,
+    Schema, Type, TypeName,
 };
 use arrow_schema::{
-    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE,
+    ArrowError, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Fields,
+    IntervalUnit, TimeUnit,
 };
 use serde_json::Value;
 use std::borrow::Cow;
@@ -878,7 +878,7 @@ impl<'a> Maker<'a> {
             _ => {
                 return Err(ArrowError::ParseError(format!(
                     "Illegal promotion {write_primitive:?} to {read_primitive:?}"
-                )))
+                )));
             }
         };
         let mut datatype = self.parse_type(reader_schema, None)?;

@@ -89,9 +89,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
-    ) -> impl Iterator<Item = Option<&'a [u8]>> { unsafe {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
-    }}
+    ) -> impl Iterator<Item = Option<&'a [u8]>> {
+        unsafe { indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index))) }
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&[u8]>>> for GenericBinaryArray<OffsetSize> {

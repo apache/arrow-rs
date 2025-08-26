@@ -112,7 +112,7 @@ use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
-pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions, NullableEncoder};
+pub use encoder::{Encoder, EncoderFactory, EncoderOptions, NullableEncoder, make_encoder};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -450,18 +450,18 @@ where
 mod tests {
     use core::str;
     use std::collections::HashMap;
-    use std::fs::{read_to_string, File};
+    use std::fs::{File, read_to_string};
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::LineDelimited;
     use super::{Encoder, WriterBuilder};
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_buffer::{i256, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, ToByteSlice};
+    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, ToByteSlice, i256};
     use arrow_data::ArrayData;
 
     use crate::reader::*;

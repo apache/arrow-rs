@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util};
 
 /// Creates two [`Buffer`]s from an iterator of `Option`.
 /// The first buffer corresponds to a bitmap buffer, the second one
@@ -28,34 +28,36 @@ where
     T: ArrowNativeType,
     P: std::borrow::Borrow<Option<T>>,
     I: Iterator<Item = P>,
-{ unsafe {
-    let (_, upper) = iterator.size_hint();
-    let upper = upper.expect("trusted_len_unzip requires an upper limit");
-    let len = upper * std::mem::size_of::<T>();
+{
+    unsafe {
+        let (_, upper) = iterator.size_hint();
+        let upper = upper.expect("trusted_len_unzip requires an upper limit");
+        let len = upper * std::mem::size_of::<T>();
 
-    let mut null = MutableBuffer::from_len_zeroed(upper.saturating_add(7) / 8);
-    let mut buffer = MutableBuffer::new(len);
+        let mut null = MutableBuffer::from_len_zeroed(upper.saturating_add(7) / 8);
+        let mut buffer = MutableBuffer::new(len);
 
-    let dst_null = null.as_mut_ptr();
-    let mut dst = buffer.as_mut_ptr() as *mut T;
-    for (i, item) in iterator.enumerate() {
-        let item = item.borrow();
-        if let Some(item) = item {
-            std::ptr::write(dst, *item);
-            bit_util::set_bit_raw(dst_null, i);
-        } else {
-            std::ptr::write(dst, T::default());
+        let dst_null = null.as_mut_ptr();
+        let mut dst = buffer.as_mut_ptr() as *mut T;
+        for (i, item) in iterator.enumerate() {
+            let item = item.borrow();
+            if let Some(item) = item {
+                std::ptr::write(dst, *item);
+                bit_util::set_bit_raw(dst_null, i);
+            } else {
+                std::ptr::write(dst, T::default());
+            }
+            dst = dst.add(1);
         }
-        dst = dst.add(1);
+        assert_eq!(
+            dst.offset_from(buffer.as_ptr() as *mut T) as usize,
+            upper,
+            "Trusted iterator length was not accurately reported"
+        );
+        buffer.set_len(len);
+        (null.into(), buffer.into())
     }
-    assert_eq!(
-        dst.offset_from(buffer.as_ptr() as *mut T) as usize,
-        upper,
-        "Trusted iterator length was not accurately reported"
-    );
-    buffer.set_len(len);
-    (null.into(), buffer.into())
-}}
+}
 
 #[cfg(test)]
 mod tests {

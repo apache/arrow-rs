@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
 use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray, Scalar};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -167,14 +167,16 @@ impl FixedSizeBinaryArray {
     ///
     /// Caller is responsible for ensuring that the index is within the bounds
     /// of the array
-    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] { unsafe {
-        let offset = i + self.offset();
-        let pos = self.value_offset_at(offset);
-        std::slice::from_raw_parts(
-            self.value_data.as_ptr().offset(pos as isize),
-            (self.value_offset_at(offset + 1) - pos) as usize,
-        )
-    }}
+    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
+        unsafe {
+            let offset = i + self.offset();
+            let pos = self.value_offset_at(offset);
+            std::slice::from_raw_parts(
+                self.value_data.as_ptr().offset(pos as isize),
+                (self.value_offset_at(offset + 1) - pos) as usize,
+            )
+        }
+    }
 
     /// Returns the offset for the element at index `i`.
     ///
@@ -653,9 +655,9 @@ impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
         FixedSizeBinaryArray::value(self, index)
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
-        FixedSizeBinaryArray::value_unchecked(self, index)
-    }}
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        unsafe { FixedSizeBinaryArray::value_unchecked(self, index) }
+    }
 }
 
 impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
@@ -996,6 +998,9 @@ mod tests {
 
         let nulls = NullBuffer::new_null(3);
         let err = FixedSizeBinaryArray::try_new(2, buffer, Some(nulls)).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for FixedSizeBinaryArray, expected 5 got 3");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for FixedSizeBinaryArray, expected 5 got 3"
+        );
     }
 }

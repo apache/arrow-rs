@@ -27,7 +27,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
-use arrow::array::{make_array, Array, ArrayData, ArrayRef, Int64Array};
+use arrow::array::{Array, ArrayData, ArrayRef, Int64Array, make_array};
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;

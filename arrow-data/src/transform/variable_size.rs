@@ -21,7 +21,7 @@ use num::traits::AsPrimitive;
 use num::{CheckedAdd, Integer};
 
 use super::{
-    Extend, _MutableArrayData,
+    _MutableArrayData, Extend,
     utils::{extend_offsets, get_last_offset},
 };
 

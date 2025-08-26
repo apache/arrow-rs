@@ -187,16 +187,18 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// (1) The block must have been added using [`Self::append_block`]
     /// (2) The range `offset..offset+length` must be within the bounds of the block
     /// (3) The data in the block must be valid of type `T`
-    pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) { unsafe {
-        let b = self.completed.get_unchecked(block as usize);
-        let start = offset as usize;
-        let end = start.saturating_add(len as usize);
-        let b = b.get_unchecked(start..end);
+    pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
+        unsafe {
+            let b = self.completed.get_unchecked(block as usize);
+            let start = offset as usize;
+            let end = start.saturating_add(len as usize);
+            let b = b.get_unchecked(start..end);
 
-        let view = make_view(b, block, offset);
-        self.views_buffer.push(view);
-        self.null_buffer_builder.append_non_null();
-    }}
+            let view = make_view(b, block, offset);
+            self.views_buffer.push(view);
+            self.null_buffer_builder.append_non_null();
+        }
+    }
 
     /// Appends an array to the builder.
     /// This will flush any in-progress block and append the data buffers

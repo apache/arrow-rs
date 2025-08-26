@@ -17,14 +17,14 @@
 
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::util::test_util::seedable_rng;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use parquet_variant::{Variant, VariantBuilder};
-use parquet_variant_compute::variant_get::{variant_get, GetOptions};
-use parquet_variant_compute::{json_to_variant, VariantArray, VariantArrayBuilder};
-use rand::distr::Alphanumeric;
-use rand::rngs::StdRng;
+use parquet_variant_compute::variant_get::{GetOptions, variant_get};
+use parquet_variant_compute::{VariantArray, VariantArrayBuilder, json_to_variant};
 use rand::Rng;
 use rand::SeedableRng;
+use rand::distr::Alphanumeric;
+use rand::rngs::StdRng;
 use std::fmt::Write;
 use std::sync::Arc;
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {

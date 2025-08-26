@@ -64,7 +64,7 @@ use std::{
 };
 
 use arrow_data::ffi::FFI_ArrowArray;
-use arrow_schema::{ffi::FFI_ArrowSchema, ArrowError, Schema, SchemaRef};
+use arrow_schema::{ArrowError, Schema, SchemaRef, ffi::FFI_ArrowSchema};
 
 use crate::array::Array;
 use crate::array::StructArray;
@@ -101,21 +101,23 @@ pub struct FFI_ArrowArrayStream {
 unsafe impl Send for FFI_ArrowArrayStream {}
 
 // callback used to drop [FFI_ArrowArrayStream] when it is exported.
-unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) { unsafe {
-    if stream.is_null() {
-        return;
+unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
+    unsafe {
+        if stream.is_null() {
+            return;
+        }
+        let stream = &mut *stream;
+
+        stream.get_schema = None;
+        stream.get_next = None;
+        stream.get_last_error = None;
+
+        let private_data = Box::from_raw(stream.private_data as *mut StreamPrivateData);
+        drop(private_data);
+
+        stream.release = None;
     }
-    let stream = &mut *stream;
-
-    stream.get_schema = None;
-    stream.get_next = None;
-    stream.get_last_error = None;
-
-    let private_data = Box::from_raw(stream.private_data as *mut StreamPrivateData);
-    drop(private_data);
-
-    stream.release = None;
-}}
+}
 
 struct StreamPrivateData {
     batch_reader: Box<dyn RecordBatchReader + Send>,
@@ -187,9 +189,9 @@ impl FFI_ArrowArrayStream {
     ///
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
-    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self { unsafe {
-        std::ptr::replace(raw_stream, Self::empty())
-    }}
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self {
+        unsafe { std::ptr::replace(raw_stream, Self::empty()) }
+    }
 
     /// Creates a new empty [FFI_ArrowArrayStream]. Used to import from the C Stream Interface.
     pub fn empty() -> Self {
@@ -329,9 +331,9 @@ impl ArrowArrayStreamReader {
     /// # Safety
     ///
     /// See [`FFI_ArrowArrayStream::from_raw`]
-    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> { unsafe {
-        Self::try_new(FFI_ArrowArrayStream::from_raw(raw_stream))
-    }}
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
+        unsafe { Self::try_new(FFI_ArrowArrayStream::from_raw(raw_stream)) }
+    }
 
     /// Get the last error from `ArrowArrayStreamReader`
     fn get_stream_last_error(&mut self) -> Option<String> {

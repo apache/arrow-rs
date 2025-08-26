@@ -694,7 +694,7 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 mod tests {
     use super::*;
     use crate::format::PageLocation;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_from_filters() {

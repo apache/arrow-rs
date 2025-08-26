@@ -38,8 +38,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
-use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_data::ArrayDataBuilder;
+use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
 
@@ -549,7 +549,10 @@ mod tests {
             &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32).");
+        assert_eq!(
+            re.unwrap_err().to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32)."
+        );
     }
 
     #[test]
@@ -572,7 +575,10 @@ mod tests {
             &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32).");
+        assert_eq!(
+            re.unwrap_err().to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32)."
+        );
     }
 
     #[test]
@@ -596,7 +602,10 @@ mod tests {
             &PrimitiveArray::<Float64Type>::from(vec![Some(1.0), Some(2.0), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).");
+        assert_eq!(
+            re.unwrap_err().to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...)."
+        );
     }
 
     #[test]
@@ -622,7 +631,10 @@ mod tests {
             &BooleanArray::from(vec![Some(true), Some(false), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).");
+        assert_eq!(
+            re.unwrap_err().to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...)."
+        );
     }
 
     #[test]
@@ -1154,12 +1166,14 @@ mod tests {
         // Verify pointer equality check succeeds, and therefore the
         // dictionaries are not merged. A single values buffer should be reused
         // in this case.
-        assert!(dict.values().to_data().ptr_eq(
-            &result_same_dictionary
-                .as_dictionary::<Int8Type>()
-                .values()
-                .to_data()
-        ));
+        assert!(
+            dict.values().to_data().ptr_eq(
+                &result_same_dictionary
+                    .as_dictionary::<Int8Type>()
+                    .values()
+                    .to_data()
+            )
+        );
         assert_eq!(
             result_same_dictionary
                 .as_dictionary::<Int8Type>()
@@ -1222,10 +1236,12 @@ mod tests {
         );
 
         // Should have reused the dictionary
-        assert!(array
-            .values()
-            .to_data()
-            .ptr_eq(&combined.values().to_data()));
+        assert!(
+            array
+                .values()
+                .to_data()
+                .ptr_eq(&combined.values().to_data())
+        );
         assert!(copy.values().to_data().ptr_eq(&combined.values().to_data()));
 
         let new: DictionaryArray<Int8Type> = vec!["d"].into_iter().collect();
@@ -1316,7 +1332,10 @@ mod tests {
         .unwrap();
 
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Utf8).");
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Utf8)."
+        );
     }
 
     #[test]
@@ -1487,7 +1506,6 @@ mod tests {
         K: ArrowDictionaryKeyType,
         V: Sync + Send + 'static,
         &'a V: ArrayAccessor + IntoIterator,
-
         <&'a V as ArrayAccessor>::Item: Default + Clone + PartialEq + Debug + Ord,
         <&'a V as IntoIterator>::Item: Clone + PartialEq + Debug + Ord,
     {

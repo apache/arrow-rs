@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
@@ -183,9 +183,9 @@ impl BooleanArray {
     ///
     /// # Safety
     /// This doesn't check bounds, the caller must ensure that index < self.len()
-    pub unsafe fn value_unchecked(&self, i: usize) -> bool { unsafe {
-        self.values.value_unchecked(i)
-    }}
+    pub unsafe fn value_unchecked(&self, i: usize) -> bool {
+        unsafe { self.values.value_unchecked(i) }
+    }
 
     /// Returns the boolean value at index `i`.
     ///
@@ -221,9 +221,9 @@ impl BooleanArray {
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
-    ) -> impl Iterator<Item = Option<bool>> + 'a { unsafe {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
-    }}
+    ) -> impl Iterator<Item = Option<bool>> + 'a {
+        unsafe { indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index))) }
+    }
 
     /// Create a [`BooleanArray`] by evaluating the operation for
     /// each element of the provided array
@@ -354,9 +354,9 @@ impl ArrayAccessor for &BooleanArray {
         BooleanArray::value(self, index)
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
-        BooleanArray::value_unchecked(self, index)
-    }}
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        unsafe { BooleanArray::value_unchecked(self, index) }
+    }
 }
 
 impl From<Vec<bool>> for BooleanArray {
@@ -486,7 +486,7 @@ impl From<BooleanBuffer> for BooleanArray {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_boolean_fmt_debug() {

@@ -47,9 +47,9 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
-    ) -> impl Iterator<Item = Option<&'a str>> { unsafe {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
-    }}
+    ) -> impl Iterator<Item = Option<&'a str>> {
+        unsafe { indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index))) }
+    }
 
     /// Fallibly creates a [`GenericStringArray`] from a [`GenericBinaryArray`] returning
     /// an error if [`GenericBinaryArray`] contains invalid UTF-8 data
@@ -156,9 +156,9 @@ pub type LargeStringArray = GenericStringArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Array;
     use crate::builder::{ListBuilder, PrimitiveBuilder, StringBuilder};
     use crate::types::UInt8Type;
-    use crate::Array;
     use arrow_buffer::Buffer;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};

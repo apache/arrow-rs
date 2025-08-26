@@ -77,18 +77,22 @@ impl core::fmt::Debug for CompressionType {
 impl<'a> flatbuffers::Follow<'a> for CompressionType {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-        Self(b)
-    }}
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
 }
 
 impl flatbuffers::Push for CompressionType {
     type Output = CompressionType;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }}
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
 }
 
 impl flatbuffers::EndianScalar for CompressionType {
@@ -175,18 +179,22 @@ impl core::fmt::Debug for BodyCompressionMethod {
 impl<'a> flatbuffers::Follow<'a> for BodyCompressionMethod {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
-        Self(b)
-    }}
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            let b = flatbuffers::read_scalar_at::<i8>(buf, loc);
+            Self(b)
+        }
+    }
 }
 
 impl flatbuffers::Push for BodyCompressionMethod {
     type Output = BodyCompressionMethod;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-        flatbuffers::emplace_scalar::<i8>(dst, self.0);
-    }}
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe {
+            flatbuffers::emplace_scalar::<i8>(dst, self.0);
+        }
+    }
 }
 
 impl flatbuffers::EndianScalar for BodyCompressionMethod {
@@ -294,18 +302,22 @@ impl core::fmt::Debug for MessageHeader {
 impl<'a> flatbuffers::Follow<'a> for MessageHeader {
     type Inner = Self;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
-        Self(b)
-    }}
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+            Self(b)
+        }
+    }
 }
 
 impl flatbuffers::Push for MessageHeader {
     type Output = MessageHeader;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-        flatbuffers::emplace_scalar::<u8>(dst, self.0);
-    }}
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe {
+            flatbuffers::emplace_scalar::<u8>(dst, self.0);
+        }
+    }
 }
 
 impl flatbuffers::EndianScalar for MessageHeader {
@@ -367,25 +379,27 @@ impl flatbuffers::SimpleToVerifyInSlice for FieldNode {}
 impl<'a> flatbuffers::Follow<'a> for FieldNode {
     type Inner = &'a FieldNode;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        <&'a FieldNode>::follow(buf, loc)
-    }}
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe { <&'a FieldNode>::follow(buf, loc) }
+    }
 }
 impl<'a> flatbuffers::Follow<'a> for &'a FieldNode {
     type Inner = &'a FieldNode;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        flatbuffers::follow_cast_ref::<FieldNode>(buf, loc)
-    }}
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe { flatbuffers::follow_cast_ref::<FieldNode>(buf, loc) }
+    }
 }
 impl<'b> flatbuffers::Push for FieldNode {
     type Output = FieldNode;
     #[inline]
-    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) { unsafe {
-        let src =
-            ::core::slice::from_raw_parts(self as *const FieldNode as *const u8, Self::size());
-        dst.copy_from_slice(src);
-    }}
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe {
+            let src =
+                ::core::slice::from_raw_parts(self as *const FieldNode as *const u8, Self::size());
+            dst.copy_from_slice(src);
+        }
+    }
     #[inline]
     fn alignment() -> flatbuffers::PushAlignment {
         flatbuffers::PushAlignment::new(8)
@@ -489,11 +503,13 @@ pub struct BodyCompression<'a> {
 impl<'a> flatbuffers::Follow<'a> for BodyCompression<'a> {
     type Inner = BodyCompression<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> BodyCompression<'a> {
@@ -632,11 +648,13 @@ pub struct RecordBatch<'a> {
 impl<'a> flatbuffers::Follow<'a> for RecordBatch<'a> {
     type Inner = RecordBatch<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> RecordBatch<'a> {
@@ -899,11 +917,13 @@ pub struct DictionaryBatch<'a> {
 impl<'a> flatbuffers::Follow<'a> for DictionaryBatch<'a> {
     type Inner = DictionaryBatch<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> DictionaryBatch<'a> {
@@ -1055,11 +1075,13 @@ pub struct Message<'a> {
 impl<'a> flatbuffers::Follow<'a> for Message<'a> {
     type Inner = Message<'a>;
     #[inline]
-    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner { unsafe {
-        Self {
-            _tab: flatbuffers::Table::new(buf, loc),
+    unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+        unsafe {
+            Self {
+                _tab: flatbuffers::Table::new(buf, loc),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> Message<'a> {
@@ -1473,16 +1495,16 @@ pub fn size_prefixed_root_as_message_with_opts<'b, 'o>(
 /// Assumes, without verification, that a buffer of bytes contains a Message and returns it.
 /// # Safety
 /// Callers must trust the given bytes do indeed contain a valid `Message`.
-pub unsafe fn root_as_message_unchecked(buf: &[u8]) -> Message { unsafe {
-    flatbuffers::root_unchecked::<Message>(buf)
-}}
+pub unsafe fn root_as_message_unchecked(buf: &[u8]) -> Message {
+    unsafe { flatbuffers::root_unchecked::<Message>(buf) }
+}
 #[inline]
 /// Assumes, without verification, that a buffer of bytes contains a size prefixed Message and returns it.
 /// # Safety
 /// Callers must trust the given bytes do indeed contain a valid size prefixed `Message`.
-pub unsafe fn size_prefixed_root_as_message_unchecked(buf: &[u8]) -> Message { unsafe {
-    flatbuffers::size_prefixed_root_unchecked::<Message>(buf)
-}}
+pub unsafe fn size_prefixed_root_as_message_unchecked(buf: &[u8]) -> Message {
+    unsafe { flatbuffers::size_prefixed_root_unchecked::<Message>(buf) }
+}
 #[inline]
 pub fn finish_message_buffer<'a, 'b, A: flatbuffers::Allocator + 'a>(
     fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,

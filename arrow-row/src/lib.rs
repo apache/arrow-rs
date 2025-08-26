@@ -932,13 +932,15 @@ impl RowConverter {
         &self,
         rows: &mut [&[u8]],
         validate_utf8: bool,
-    ) -> Result<Vec<ArrayRef>, ArrowError> { unsafe {
-        self.fields
-            .iter()
-            .zip(&self.codecs)
-            .map(|(field, codec)| decode_column(field, rows, codec, validate_utf8))
-            .collect()
-    }}
+    ) -> Result<Vec<ArrayRef>, ArrowError> {
+        unsafe {
+            self.fields
+                .iter()
+                .zip(&self.codecs)
+                .map(|(field, codec)| decode_column(field, rows, codec, validate_utf8))
+                .collect()
+        }
+    }
 
     /// Returns a [`RowParser`] that can be used to parse [`Row`] from bytes
     pub fn parser(&self) -> RowParser {
@@ -1671,115 +1673,117 @@ unsafe fn decode_column(
     rows: &mut [&[u8]],
     codec: &Codec,
     validate_utf8: bool,
-) -> Result<ArrayRef, ArrowError> { unsafe {
-    let options = field.options;
+) -> Result<ArrayRef, ArrowError> {
+    unsafe {
+        let options = field.options;
 
-    let array: ArrayRef = match codec {
-        Codec::Stateless => {
-            let data_type = field.data_type.clone();
-            downcast_primitive! {
-                data_type => (decode_primitive_helper, rows, data_type, options),
-                DataType::Null => Arc::new(NullArray::new(rows.len())),
-                DataType::Boolean => Arc::new(decode_bool(rows, options)),
-                DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
-                DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
-                DataType::BinaryView => Arc::new(decode_binary_view(rows, options)),
-                DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
-                DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
-                DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
-                DataType::Utf8View => Arc::new(decode_string_view(rows, options, validate_utf8)),
-                _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
+        let array: ArrayRef = match codec {
+            Codec::Stateless => {
+                let data_type = field.data_type.clone();
+                downcast_primitive! {
+                    data_type => (decode_primitive_helper, rows, data_type, options),
+                    DataType::Null => Arc::new(NullArray::new(rows.len())),
+                    DataType::Boolean => Arc::new(decode_bool(rows, options)),
+                    DataType::Binary => Arc::new(decode_binary::<i32>(rows, options)),
+                    DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
+                    DataType::BinaryView => Arc::new(decode_binary_view(rows, options)),
+                    DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
+                    DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
+                    DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
+                    DataType::Utf8View => Arc::new(decode_string_view(rows, options, validate_utf8)),
+                    _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
+                }
             }
-        }
-        Codec::Dictionary(converter, _) => {
-            let cols = converter.convert_raw(rows, validate_utf8)?;
-            cols.into_iter().next().unwrap()
-        }
-        Codec::Struct(converter, _) => {
-            let (null_count, nulls) = fixed::decode_nulls(rows);
-            rows.iter_mut().for_each(|row| *row = &row[1..]);
-            let children = converter.convert_raw(rows, validate_utf8)?;
+            Codec::Dictionary(converter, _) => {
+                let cols = converter.convert_raw(rows, validate_utf8)?;
+                cols.into_iter().next().unwrap()
+            }
+            Codec::Struct(converter, _) => {
+                let (null_count, nulls) = fixed::decode_nulls(rows);
+                rows.iter_mut().for_each(|row| *row = &row[1..]);
+                let children = converter.convert_raw(rows, validate_utf8)?;
 
-            let child_data: Vec<ArrayData> = children.iter().map(|c| c.to_data()).collect();
-            // Since RowConverter flattens certain data types (i.e. Dictionary),
-            // we need to use updated data type instead of original field
-            let corrected_fields: Vec<Field> = match &field.data_type {
-                DataType::Struct(struct_fields) => struct_fields
-                    .iter()
-                    .zip(child_data.iter())
-                    .map(|(orig_field, child_array)| {
-                        orig_field
-                            .as_ref()
-                            .clone()
-                            .with_data_type(child_array.data_type().clone())
-                    })
-                    .collect(),
-                _ => unreachable!("Only Struct types should be corrected here"),
-            };
-            let corrected_struct_type = DataType::Struct(corrected_fields.into());
-            let builder = ArrayDataBuilder::new(corrected_struct_type)
-                .len(rows.len())
-                .null_count(null_count)
-                .null_bit_buffer(Some(nulls))
-                .child_data(child_data);
+                let child_data: Vec<ArrayData> = children.iter().map(|c| c.to_data()).collect();
+                // Since RowConverter flattens certain data types (i.e. Dictionary),
+                // we need to use updated data type instead of original field
+                let corrected_fields: Vec<Field> = match &field.data_type {
+                    DataType::Struct(struct_fields) => struct_fields
+                        .iter()
+                        .zip(child_data.iter())
+                        .map(|(orig_field, child_array)| {
+                            orig_field
+                                .as_ref()
+                                .clone()
+                                .with_data_type(child_array.data_type().clone())
+                        })
+                        .collect(),
+                    _ => unreachable!("Only Struct types should be corrected here"),
+                };
+                let corrected_struct_type = DataType::Struct(corrected_fields.into());
+                let builder = ArrayDataBuilder::new(corrected_struct_type)
+                    .len(rows.len())
+                    .null_count(null_count)
+                    .null_bit_buffer(Some(nulls))
+                    .child_data(child_data);
 
-            Arc::new(StructArray::from(builder.build_unchecked()))
-        }
-        Codec::List(converter) => match &field.data_type {
-            DataType::List(_) => {
-                Arc::new(list::decode::<i32>(converter, rows, field, validate_utf8)?)
+                Arc::new(StructArray::from(builder.build_unchecked()))
             }
-            DataType::LargeList(_) => {
-                Arc::new(list::decode::<i64>(converter, rows, field, validate_utf8)?)
-            }
-            DataType::FixedSizeList(_, value_length) => Arc::new(list::decode_fixed_size_list(
-                converter,
-                rows,
-                field,
-                validate_utf8,
-                value_length.as_usize(),
-            )?),
-            _ => unreachable!(),
-        },
-        Codec::RunEndEncoded(converter) => match &field.data_type {
-            DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-                DataType::Int16 => Arc::new(run::decode::<Int16Type>(
+            Codec::List(converter) => match &field.data_type {
+                DataType::List(_) => {
+                    Arc::new(list::decode::<i32>(converter, rows, field, validate_utf8)?)
+                }
+                DataType::LargeList(_) => {
+                    Arc::new(list::decode::<i64>(converter, rows, field, validate_utf8)?)
+                }
+                DataType::FixedSizeList(_, value_length) => Arc::new(list::decode_fixed_size_list(
                     converter,
                     rows,
                     field,
                     validate_utf8,
-                )?),
-                DataType::Int32 => Arc::new(run::decode::<Int32Type>(
-                    converter,
-                    rows,
-                    field,
-                    validate_utf8,
-                )?),
-                DataType::Int64 => Arc::new(run::decode::<Int64Type>(
-                    converter,
-                    rows,
-                    field,
-                    validate_utf8,
+                    value_length.as_usize(),
                 )?),
                 _ => unreachable!(),
             },
-            _ => unreachable!(),
-        },
-    };
-    Ok(array)
-}}
+            Codec::RunEndEncoded(converter) => match &field.data_type {
+                DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+                    DataType::Int16 => Arc::new(run::decode::<Int16Type>(
+                        converter,
+                        rows,
+                        field,
+                        validate_utf8,
+                    )?),
+                    DataType::Int32 => Arc::new(run::decode::<Int32Type>(
+                        converter,
+                        rows,
+                        field,
+                        validate_utf8,
+                    )?),
+                    DataType::Int64 => Arc::new(run::decode::<Int64Type>(
+                        converter,
+                        rows,
+                        field,
+                        validate_utf8,
+                    )?),
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            },
+        };
+        Ok(array)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
-    use arrow_buffer::{i256, NullBuffer};
     use arrow_buffer::{Buffer, OffsetBuffer};
+    use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_ord::sort::{LexicographicalComparator, SortColumn};
 

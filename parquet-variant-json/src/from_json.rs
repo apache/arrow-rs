@@ -157,7 +157,7 @@ mod test {
     use crate::VariantToJson;
     use arrow_schema::ArrowError;
     use parquet_variant::{
-        ShortString, Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+        ShortString, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16,
     };
 
     struct JsonToVariantTest<'a> {
@@ -675,7 +675,9 @@ mod test {
 
         assert_eq!(
             value,
-            &[2u8, 2u8, 0u8, 1u8, 0u8, 2u8, 6u8, 12u8, 1u8, 13u8, 0xe0u8, 0xa4u8, 0x85u8]
+            &[
+                2u8, 2u8, 0u8, 1u8, 0u8, 2u8, 6u8, 12u8, 1u8, 13u8, 0xe0u8, 0xa4u8, 0x85u8
+            ]
         );
         assert_eq!(
             metadata,

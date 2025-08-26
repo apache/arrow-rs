@@ -18,8 +18,8 @@
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
-use arrow_buffer::bit_util::ceil;
 use arrow_buffer::MutableBuffer;
+use arrow_buffer::bit_util::ceil;
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
@@ -344,22 +344,24 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     options: SortOptions,
     validate_utf8: bool,
-) -> GenericStringArray<I> { unsafe {
-    let decoded = decode_binary::<I>(rows, options);
+) -> GenericStringArray<I> {
+    unsafe {
+        let decoded = decode_binary::<I>(rows, options);
 
-    if validate_utf8 {
-        return GenericStringArray::from(decoded);
+        if validate_utf8 {
+            return GenericStringArray::from(decoded);
+        }
+
+        let builder = decoded
+            .into_data()
+            .into_builder()
+            .data_type(GenericStringArray::<I>::DATA_TYPE);
+
+        // SAFETY:
+        // Row data must have come from a valid UTF-8 array
+        GenericStringArray::from(builder.build_unchecked())
     }
-
-    let builder = decoded
-        .into_data()
-        .into_builder()
-        .data_type(GenericStringArray::<I>::DATA_TYPE);
-
-    // SAFETY:
-    // Row data must have come from a valid UTF-8 array
-    GenericStringArray::from(builder.build_unchecked())
-}}
+}
 
 /// Decodes a string view array from `rows` with the provided `options`
 ///
@@ -370,7 +372,9 @@ pub unsafe fn decode_string_view(
     rows: &mut [&[u8]],
     options: SortOptions,
     validate_utf8: bool,
-) -> StringViewArray { unsafe {
-    let view = decode_binary_view_inner(rows, options, validate_utf8);
-    view.to_string_view_unchecked()
-}}
+) -> StringViewArray {
+    unsafe {
+        let view = decode_binary_view_inner(rows, options, validate_utf8);
+        view.to_string_view_unchecked()
+    }
+}

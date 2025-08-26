@@ -20,9 +20,9 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::BufferBuilder;
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
 #[cfg(feature = "pool")]
@@ -171,24 +171,26 @@ impl Buffer {
         ptr: NonNull<u8>,
         len: usize,
         owner: Arc<dyn Allocation>,
-    ) -> Self { unsafe {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len))
-    }}
+    ) -> Self {
+        unsafe { Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len)) }
+    }
 
     /// Auxiliary method to create a new Buffer
     unsafe fn build_with_arguments(
         ptr: NonNull<u8>,
         len: usize,
         deallocation: Deallocation,
-    ) -> Self { unsafe {
-        let bytes = Bytes::new(ptr, len, deallocation);
-        let ptr = bytes.as_ptr();
-        Buffer {
-            ptr,
-            data: Arc::new(bytes),
-            length: len,
+    ) -> Self {
+        unsafe {
+            let bytes = Bytes::new(ptr, len, deallocation);
+            let ptr = bytes.as_ptr();
+            Buffer {
+                ptr,
+                data: Arc::new(bytes),
+                length: len,
+            }
         }
-    }}
+    }
 
     /// Returns the number of bytes in the buffer
     #[inline]
@@ -560,9 +562,9 @@ impl Buffer {
     #[inline]
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
-    ) -> Self { unsafe {
-        MutableBuffer::from_trusted_len_iter(iterator).into()
-    }}
+    ) -> Self {
+        unsafe { MutableBuffer::from_trusted_len_iter(iterator).into() }
+    }
 
     /// Creates a [`Buffer`] from an [`Iterator`] with a trusted (upper) length or errors
     /// if any of the items of the iterator is an error.
@@ -577,9 +579,9 @@ impl Buffer {
         I: Iterator<Item = Result<T, E>>,
     >(
         iterator: I,
-    ) -> Result<Self, E> { unsafe {
-        Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into())
-    }}
+    ) -> Result<Self, E> {
+        unsafe { Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into()) }
+    }
 }
 
 impl<T: ArrowNativeType> FromIterator<T> for Buffer {

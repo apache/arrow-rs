@@ -22,9 +22,9 @@ use crate::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use bytes::Bytes;
-use futures::{future::BoxFuture, FutureExt, TryFutureExt};
-use object_store::{path::Path, ObjectStore};
+use futures::{FutureExt, TryFutureExt, future::BoxFuture};
 use object_store::{GetOptions, GetRange};
+use object_store::{ObjectStore, path::Path};
 use tokio::runtime::Handle;
 
 /// Reads Parquet files in object storage using [`ObjectStore`].
@@ -224,14 +224,14 @@ impl AsyncFileReader for ParquetObjectReader {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     use futures::TryStreamExt;
 
-    use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
     use crate::arrow::ParquetRecordBatchStreamBuilder;
+    use crate::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
     use crate::errors::ParquetError;
     use arrow::util::test_util::parquet_test_data;
     use futures::FutureExt;

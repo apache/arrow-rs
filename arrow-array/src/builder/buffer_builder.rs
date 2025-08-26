@@ -110,8 +110,8 @@ pub type DurationNanosecondBufferBuilder =
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::{ArrayBuilder, Int32BufferBuilder, Int8Builder, UInt8BufferBuilder};
     use crate::Array;
+    use crate::builder::{ArrayBuilder, Int8Builder, Int32BufferBuilder, UInt8BufferBuilder};
 
     #[test]
     fn test_builder_i32_empty() {
