@@ -857,7 +857,7 @@ mod test {
                         {
                             let vals : Vec < _ > = records . iter ( ) . map ( | rec | rec . counter as i64 ) . collect ( );
 
-                            if let ColumnWriter::Int64ColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                            if let ColumnWriter::Int64ColumnWriter ( typed ) = column_writer.untyped() {
                                 typed . write_batch ( & vals [ .. ] , None , None ) ?;
                             }  else {
                                 panic!("Schema and struct disagree on type for {}" , stringify!{ counter } )
@@ -924,14 +924,14 @@ mod test {
                 let definition_levels : Vec < i16 > = self . iter ( ) . map ( | rec | if rec . optional_str . is_some ( ) { 1 } else { 0 } ) . collect ( ) ;
 
                 let vals: Vec <_> = records.iter().filter_map( |rec| {
-                    if let Some ( ref inner ) = rec . optional_str {
+                    if let Some ( inner ) = &rec . optional_str {
                         Some ( (&inner[..]).into() )
                     } else {
                         None
                     }
                 }).collect();
 
-                if let ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                if let ColumnWriter::ByteArrayColumnWriter ( typed ) = column_writer.untyped() {
                     typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify ! { optional_str } )
@@ -948,14 +948,14 @@ mod test {
                         let definition_levels : Vec < i16 > = self . iter ( ) . map ( | rec | if rec . optional_string . is_some ( ) { 1 } else { 0 } ) . collect ( ) ;
 
                         let vals: Vec <_> = records.iter().filter_map( |rec| {
-                            if let Some ( ref inner ) = rec . optional_string {
+                            if let Some ( inner ) = &rec . optional_string {
                                 Some ( (&inner[..]).into() )
                             } else {
                                 None
                             }
                         }).collect();
 
-                        if let ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                        if let ColumnWriter::ByteArrayColumnWriter ( typed ) = column_writer.untyped() {
                             typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                         } else {
                             panic!("Schema and struct disagree on type for {}" , stringify ! { optional_string } )
@@ -978,7 +978,7 @@ mod test {
                             }
                         }).collect();
 
-                        if let ColumnWriter::Int32ColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                        if let ColumnWriter::Int32ColumnWriter ( typed ) = column_writer.untyped() {
                             typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                         }  else {
                             panic!("Schema and struct disagree on type for {}" , stringify ! { optional_dumb_int } )
@@ -1261,7 +1261,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.henceforth.timestamp_millis() ).collect();
-                if let ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int64ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ henceforth })
@@ -1281,7 +1281,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int64ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_happened })
@@ -1335,7 +1335,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.henceforth.signed_duration_since(::chrono::NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32).collect();
-                if let ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int32ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ henceforth })
@@ -1355,7 +1355,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int32ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_happened })
@@ -1409,7 +1409,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.unique_id.as_bytes().to_vec().into() ).collect();
-                if let ColumnWriter::FixedLenByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::FixedLenByteArrayColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ unique_id })
@@ -1422,14 +1422,14 @@ mod test {
             {
                 let definition_levels : Vec<i16> = self.iter().map(|rec| if rec.maybe_unique_id.is_some() { 1 } else { 0 }).collect();
                 let vals : Vec<_> = records.iter().filter_map(|rec| {
-                    if let Some(ref inner) = rec.maybe_unique_id {
+                    if let Some(inner) = &rec.maybe_unique_id {
                         Some((&inner.to_string()[..]).into())
                     } else {
                         None
                     }
                 }).collect();
 
-                if let ColumnWriter::FixedLenByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::FixedLenByteArrayColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_unique_id })
