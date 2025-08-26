@@ -219,7 +219,49 @@ macro_rules! thrift_union {
                 Ok(ret)
             }
         }
+
+        impl<W: Write> WriteThrift<W> for $identifier {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+            fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                match self {
+                    $($crate::__thrift_write_variant_lhs!($field_name $($field_type)?, variant_val) =>
+                      $crate::__thrift_write_variant_rhs!($field_id $($field_type)?, writer, variant_val),)*
+                };
+                writer.write_struct_end()
+            }
+        }
+
+        impl<W: Write> WriteThriftField<W> for $identifier {
+            fn write_thrift_field(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
     }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_variant_lhs {
+    ($field_name:ident $field_type:ident, $val:tt) => {
+        Self::$field_name($val)
+    };
+    ($field_name:ident, $val:tt) => {
+        Self::$field_name
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_variant_rhs {
+    ($field_id:literal $field_type:ident, $writer:tt, $val:ident) => {
+        $val.write_thrift_field($writer, $field_id, 0)?
+    };
+    ($field_id:literal, $writer:tt, $val:tt) => {
+        $writer.write_empty_struct($field_id, 0)?
+    };
 }
 
 /// macro to generate rust structs from a thrift struct definition
@@ -344,14 +386,6 @@ macro_rules! __thrift_write_optional_field {
                 .unwrap()
                 .write_thrift_field($writer, $field_id, $last_id)?;
         }
-    };
-}
-
-/// macro to use when decoding struct fields
-#[macro_export]
-macro_rules! thrift_read_field {
-    ($field_name:ident, $prot:tt, $field_type:ident) => {
-        $field_name = Some($crate::__thrift_read_field!($prot, $field_type));
     };
 }
 

@@ -53,36 +53,6 @@ union ColumnCryptoMetaData {
 }
 );
 
-// TODO: need to get this into the thrift_union macro
-impl<W: Write> WriteThrift<W> for ColumnCryptoMetaData {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        match self {
-            Self::ENCRYPTION_WITH_FOOTER_KEY => {
-                writer.write_empty_struct(1, 0)?;
-            }
-            Self::ENCRYPTION_WITH_COLUMN_KEY(key) => {
-                key.write_thrift_field(writer, 2, 0)?;
-            }
-        }
-        writer.write_struct_end()
-    }
-}
-
-impl<W: Write> WriteThriftField<W> for ColumnCryptoMetaData {
-    fn write_thrift_field(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
-
 /// Converts Thrift definition into `ColumnCryptoMetadata`.
 pub fn try_from_thrift(
     thrift_column_crypto_metadata: &TColumnCryptoMetaData,
@@ -119,6 +89,7 @@ pub fn to_thrift(column_crypto_metadata: &ColumnCryptoMetaData) -> TColumnCrypto
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parquet_thrift::tests::test_roundtrip;
 
     #[test]
     fn test_encryption_with_footer_key_from_thrift() {
@@ -135,5 +106,25 @@ mod tests {
         });
 
         assert_eq!(try_from_thrift(&to_thrift(&metadata)).unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_column_crypto_roundtrip() {
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY);
+
+        let path_in_schema = vec!["foo".to_owned(), "bar".to_owned(), "really".to_owned()];
+        let key_metadata = vec![1u8; 32];
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(
+            EncryptionWithColumnKey {
+                path_in_schema: path_in_schema.clone(),
+                key_metadata: None,
+            },
+        ));
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(
+            EncryptionWithColumnKey {
+                path_in_schema,
+                key_metadata: Some(key_metadata),
+            },
+        ));
     }
 }
