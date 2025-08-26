@@ -20,8 +20,6 @@
 use std::io::Write;
 use std::sync::Arc;
 
-#[cfg(feature = "encryption")]
-use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 use crate::{
     basic::{ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, Type},
     data_type::{ByteArray, FixedLenByteArray, Int96},
@@ -39,8 +37,14 @@ use crate::{
         WriteThrift, WriteThriftField,
     },
     schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor},
-    thrift_struct,
+    thrift_struct, thrift_union,
     util::bit_util::FromBytes,
+};
+#[cfg(feature = "encryption")]
+use crate::{
+    encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
+    file::column_crypto_metadata::ColumnCryptoMetaData,
+    schema::types::SchemaDescPtr,
 };
 
 // this needs to be visible to the schema conversion code
@@ -60,6 +64,56 @@ pub(crate) struct SchemaElement<'a> {
 }
 );
 
+thrift_struct!(
+pub(crate) struct AesGcmV1<'a> {
+  /// AAD prefix
+  1: optional binary<'a> aad_prefix
+
+  /// Unique file identifier part of AAD suffix
+  2: optional binary<'a> aad_file_unique
+
+  /// In files encrypted with AAD prefix without storing it,
+  /// readers must supply the prefix
+  3: optional bool supply_aad_prefix
+}
+);
+
+thrift_struct!(
+pub(crate) struct AesGcmCtrV1<'a> {
+  /// AAD prefix
+  1: optional binary<'a> aad_prefix
+
+  /// Unique file identifier part of AAD suffix
+  2: optional binary<'a> aad_file_unique
+
+  /// In files encrypted with AAD prefix without storing it,
+  /// readers must supply the prefix
+  3: optional bool supply_aad_prefix
+}
+);
+
+thrift_union!(
+union EncryptionAlgorithm<'a> {
+  1: (AesGcmV1<'a>) AES_GCM_V1
+  2: (AesGcmCtrV1<'a>) AES_GCM_CTR_V1
+}
+);
+
+#[cfg(feature = "encryption")]
+thrift_struct!(
+/// Crypto metadata for files with encrypted footer
+pub(crate) struct FileCryptoMetaData<'a> {
+  /// Encryption algorithm. This field is only used for files
+  /// with encrypted footer. Files with plaintext footer store algorithm id
+  /// inside footer (FileMetaData structure).
+  1: required EncryptionAlgorithm<'a> encryption_algorithm
+
+  /** Retrieval metadata of key used for encryption of footer,
+   *  and (possibly) columns **/
+  2: optional binary<'a> key_metadata
+}
+);
+
 // the following are only used internally so are private
 thrift_struct!(
 struct FileMetaData<'a> {
@@ -71,8 +125,8 @@ struct FileMetaData<'a> {
   5: optional list<KeyValue> key_value_metadata
   6: optional string created_by
   7: optional list<ColumnOrder> column_orders;
-  //8: optional EncryptionAlgorithm encryption_algorithm
-  //9: optional binary footer_signing_key_metadata
+  8: optional EncryptionAlgorithm<'a> encryption_algorithm
+  9: optional binary<'a> footer_signing_key_metadata
 }
 );
 
@@ -451,6 +505,176 @@ fn convert_stats(
         }
         None => None,
     })
+}
+
+#[cfg(feature = "encryption")]
+fn row_group_from_encrypted_thrift(
+    mut rg: RowGroup,
+    schema_descr: SchemaDescPtr,
+    decryptor: Option<&FileDecryptor>,
+) -> Result<RowGroupMetaData> {
+    if schema_descr.num_columns() != rg.columns.len() {
+        return Err(general_err!(
+            "Column count mismatch. Schema has {} columns while Row Group has {}",
+            schema_descr.num_columns(),
+            rg.columns.len()
+        ));
+    }
+    let total_byte_size = rg.total_byte_size;
+    let num_rows = rg.num_rows;
+    let mut columns = vec![];
+
+    for (i, (mut c, d)) in rg
+        .columns
+        .drain(0..)
+        .zip(schema_descr.columns())
+        .enumerate()
+    {
+        // Read encrypted metadata if it's present and we have a decryptor.
+        if let (true, Some(decryptor)) = (c.encrypted_column_metadata.is_some(), decryptor) {
+            let column_decryptor = match c.crypto_metadata.as_ref() {
+                None => {
+                    return Err(general_err!(
+                        "No crypto_metadata is set for column '{}', which has encrypted metadata",
+                        d.path().string()
+                    ));
+                }
+                Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(crypto_metadata)) => {
+                    let column_name = crypto_metadata.path_in_schema.join(".");
+                    decryptor.get_column_metadata_decryptor(
+                        column_name.as_str(),
+                        crypto_metadata.key_metadata.as_deref(),
+                    )?
+                }
+                Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY) => {
+                    decryptor.get_footer_decryptor()?
+                }
+            };
+
+            let column_aad = crate::encryption::modules::create_module_aad(
+                decryptor.file_aad(),
+                crate::encryption::modules::ModuleType::ColumnMetaData,
+                rg.ordinal.unwrap() as usize,
+                i,
+                None,
+            )?;
+
+            let buf = c.encrypted_column_metadata.unwrap();
+            let decrypted_cc_buf =
+                column_decryptor
+                    .decrypt(buf, column_aad.as_ref())
+                    .map_err(|_| {
+                        general_err!(
+                            "Unable to decrypt column '{}', perhaps the column key is wrong?",
+                            d.path().string()
+                        )
+                    })?;
+
+            let mut prot = ThriftCompactInputProtocol::new(decrypted_cc_buf.as_slice());
+            let col_meta = ColumnMetaData::try_from(&mut prot)?;
+            c.meta_data = Some(col_meta);
+            columns.push(convert_column(c, d.clone())?);
+        } else {
+            columns.push(convert_column(c, d.clone())?);
+        }
+    }
+
+    let sorting_columns = rg.sorting_columns;
+    let file_offset = rg.file_offset;
+    let ordinal = rg.ordinal;
+
+    Ok(RowGroupMetaData {
+        columns,
+        num_rows,
+        sorting_columns,
+        total_byte_size,
+        schema_descr,
+        file_offset,
+        ordinal,
+    })
+}
+
+#[cfg(feature = "encryption")]
+pub(crate) fn parquet_metadata_with_encryption<'a>(
+    prot: &mut ThriftCompactInputProtocol<'a>,
+    mut file_decryptor: Option<FileDecryptor>,
+    file_decryption_properties: Option<&FileDecryptionProperties>,
+    encrypted_footer: bool,
+    buf: &[u8],
+) -> Result<ParquetMetaData> {
+    let file_meta = super::thrift_gen::FileMetaData::try_from(prot)
+        .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
+
+    let version = file_meta.version;
+    let num_rows = file_meta.num_rows;
+    let created_by = file_meta.created_by.map(|c| c.to_owned());
+    let key_value_metadata = file_meta.key_value_metadata;
+
+    let val = parquet_schema_from_array(file_meta.schema)?;
+    let schema_descr = Arc::new(SchemaDescriptor::new(val));
+
+    if let (Some(algo), Some(file_decryption_properties)) =
+        (file_meta.encryption_algorithm, file_decryption_properties)
+    {
+        // File has a plaintext footer but encryption algorithm is set
+        let file_decryptor_value = crate::file::metadata::reader::get_file_decryptor(
+            algo,
+            file_meta.footer_signing_key_metadata.as_deref(),
+            file_decryption_properties,
+        )?;
+        if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
+            file_decryptor_value.verify_plaintext_footer_signature(buf)?;
+        }
+        file_decryptor = Some(file_decryptor_value);
+    }
+
+    // decrypt column chunk info
+    let mut row_groups = Vec::with_capacity(file_meta.row_groups.len());
+    for rg in file_meta.row_groups {
+        let r = row_group_from_encrypted_thrift(rg, schema_descr.clone(), file_decryptor.as_ref())?;
+        row_groups.push(r);
+    }
+
+    // need to map read column orders to actual values based on the schema
+    if file_meta
+        .column_orders
+        .as_ref()
+        .is_some_and(|cos| cos.len() != schema_descr.num_columns())
+    {
+        return Err(general_err!("Column order length mismatch"));
+    }
+
+    let column_orders = file_meta.column_orders.map(|cos| {
+        let mut res = Vec::with_capacity(cos.len());
+        for (i, column) in schema_descr.columns().iter().enumerate() {
+            match cos[i] {
+                ColumnOrder::TYPE_DEFINED_ORDER(_) => {
+                    let sort_order = ColumnOrder::get_sort_order(
+                        column.logical_type(),
+                        column.converted_type(),
+                        column.physical_type(),
+                    );
+                    res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
+                }
+                _ => res.push(cos[i]),
+            }
+        }
+        res
+    });
+
+    let fmd = crate::file::metadata::FileMetaData::new(
+        version,
+        num_rows,
+        created_by,
+        key_value_metadata,
+        schema_descr,
+        column_orders,
+    );
+    let mut metadata = ParquetMetaData::new(fmd, row_groups);
+
+    metadata.with_file_decryptor(file_decryptor);
+
+    Ok(metadata)
 }
 
 /// Create ParquetMetaData from thrift input. Note that this only decodes the file metadata in

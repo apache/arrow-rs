@@ -1877,7 +1877,7 @@ mod tests {
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
         assert_eq!(
             ret.err().unwrap().to_string(),
-            "Parquet error: Could not parse metadata: bad data"
+            "Parquet error: Could not parse metadata: Parquet error: Received empty union from remote ColumnOrder"
         );
     }
 

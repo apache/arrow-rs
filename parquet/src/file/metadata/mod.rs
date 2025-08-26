@@ -97,10 +97,7 @@ pub(crate) mod thrift_gen;
 mod writer;
 
 #[cfg(feature = "encryption")]
-use crate::encryption::{
-    decrypt::FileDecryptor,
-    modules::{create_module_aad, ModuleType},
-};
+use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
@@ -117,8 +114,6 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
-#[cfg(feature = "encryption")]
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 use crate::{
     basic::BoundaryOrder,
     errors::{ParquetError, Result},
@@ -682,93 +677,6 @@ impl RowGroupMetaData {
     #[inline(always)]
     pub fn file_offset(&self) -> Option<i64> {
         self.file_offset
-    }
-
-    /// Method to convert from encrypted Thrift.
-    #[cfg(feature = "encryption")]
-    fn from_encrypted_thrift(
-        schema_descr: SchemaDescPtr,
-        mut rg: crate::format::RowGroup,
-        decryptor: Option<&FileDecryptor>,
-    ) -> Result<RowGroupMetaData> {
-        if schema_descr.num_columns() != rg.columns.len() {
-            return Err(general_err!(
-                "Column count mismatch. Schema has {} columns while Row Group has {}",
-                schema_descr.num_columns(),
-                rg.columns.len()
-            ));
-        }
-        let total_byte_size = rg.total_byte_size;
-        let num_rows = rg.num_rows;
-        let mut columns = vec![];
-
-        for (i, (mut c, d)) in rg
-            .columns
-            .drain(0..)
-            .zip(schema_descr.columns())
-            .enumerate()
-        {
-            // Read encrypted metadata if it's present and we have a decryptor.
-            if let (true, Some(decryptor)) = (c.encrypted_column_metadata.is_some(), decryptor) {
-                let column_decryptor = match c.crypto_metadata.as_ref() {
-                    None => {
-                        return Err(general_err!(
-                            "No crypto_metadata is set for column '{}', which has encrypted metadata",
-                            d.path().string()
-                        ));
-                    }
-                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(crypto_metadata)) => {
-                        let column_name = crypto_metadata.path_in_schema.join(".");
-                        decryptor.get_column_metadata_decryptor(
-                            column_name.as_str(),
-                            crypto_metadata.key_metadata.as_deref(),
-                        )?
-                    }
-                    Some(TColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
-                        decryptor.get_footer_decryptor()?
-                    }
-                };
-
-                let column_aad = create_module_aad(
-                    decryptor.file_aad(),
-                    ModuleType::ColumnMetaData,
-                    rg.ordinal.unwrap() as usize,
-                    i,
-                    None,
-                )?;
-
-                let buf = c.encrypted_column_metadata.clone().unwrap();
-                let decrypted_cc_buf = column_decryptor
-                    .decrypt(buf.as_slice(), column_aad.as_ref())
-                    .map_err(|_| {
-                        general_err!(
-                            "Unable to decrypt column '{}', perhaps the column key is wrong?",
-                            d.path().string()
-                        )
-                    })?;
-
-                let mut prot = TCompactSliceInputProtocol::new(decrypted_cc_buf.as_slice());
-                c.meta_data = Some(crate::format::ColumnMetaData::read_from_in_protocol(
-                    &mut prot,
-                )?);
-            }
-            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
-        }
-
-        let sorting_columns = rg.sorting_columns.map(|scs| {
-            scs.iter()
-                .map(|sc| sc.into())
-                .collect::<Vec<SortingColumn>>()
-        });
-        Ok(RowGroupMetaData {
-            columns,
-            num_rows,
-            sorting_columns,
-            total_byte_size,
-            schema_descr,
-            file_offset: rg.file_offset,
-            ordinal: rg.ordinal,
-        })
     }
 
     /// Method to convert from Thrift.

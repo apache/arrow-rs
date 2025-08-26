@@ -181,17 +181,17 @@ macro_rules! thrift_union_all_empty {
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union {
-    ($(#[$($def_attrs:tt)*])* union $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_id:literal : $( ( $field_type:ident $(< $element_type:ident >)? ) )? $field_name:ident $(;)?)* }) => {
+    ($(#[$($def_attrs:tt)*])* union $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $( ( $field_type:ident $(< $element_type:ident >)? $(< $field_lt:lifetime >)?) )? $field_name:ident $(;)?)* }) => {
         $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
         #[derive(Clone, Debug, Eq, PartialEq)]
         #[allow(non_camel_case_types)]
         #[allow(non_snake_case)]
         #[allow(missing_docs)]
-        pub enum $identifier {
-            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name $( ( $crate::__thrift_union_type!{$field_type $($element_type)?} ) )?),*
+        pub enum $identifier $(<$lt>)? {
+            $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name $( ( $crate::__thrift_union_type!{$field_type $($field_lt)? $($element_type)?} ) )?),*
         }
 
-        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
+        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier $(<$lt>)? {
             type Error = ParquetError;
 
             fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
@@ -220,7 +220,7 @@ macro_rules! thrift_union {
             }
         }
 
-        impl<W: Write> WriteThrift<W> for $identifier {
+        impl<$($lt,)? W: Write> WriteThrift<W> for $identifier $(<$lt>)?  {
             const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
             fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
@@ -232,7 +232,7 @@ macro_rules! thrift_union {
             }
         }
 
-        impl<W: Write> WriteThriftField<W> for $identifier {
+        impl<$($lt,)? W: Write> WriteThriftField<W> for $identifier $(<$lt>)? {
             fn write_thrift_field(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
@@ -466,6 +466,9 @@ macro_rules! __thrift_field_type {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_union_type {
+    (binary $lt:lifetime) => { &$lt [u8] };
+    (string $lt:lifetime) => { &$lt str };
+    ($field_type:ident $lt:lifetime) => { $field_type<$lt> };
     ($field_type:ident) => { $field_type };
     (list $field_type:ident) => { Vec<$field_type> };
 }
