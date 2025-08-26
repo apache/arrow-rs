@@ -124,6 +124,7 @@ pub use reader::{FooterTail, ParquetMetaDataReader};
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
+use crate::geospatial::statistics as geo_statistics;
 pub(crate) use writer::ThriftMetadataWriter;
 
 /// Page level statistics for each column chunk of each row group.
@@ -835,6 +836,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    geo_statistics: Option<geo_statistics::GeospatialStatistics>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
@@ -1060,6 +1062,12 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns geospatial statistics that are set for this column chunk,
+    /// or `None` if no geospatial statistics are available.
+    pub fn geo_statistics(&self) -> Option<&geo_statistics::GeospatialStatistics> {
+        self.geo_statistics.as_ref()
+    }
+
     /// Returns the offset for the page encoding stats,
     /// or `None` if no page encoding stats are available.
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
@@ -1164,6 +1172,7 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
+        let geo_statistics = geo_statistics::from_thrift(col_metadata.geospatial_statistics)?;
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()
@@ -1226,6 +1235,7 @@ impl ColumnChunkMetaData {
             unencoded_byte_array_data_bytes,
             repetition_level_histogram,
             definition_level_histogram,
+            geo_statistics,
             #[cfg(feature = "encryption")]
             column_crypto_metadata,
         };
@@ -1294,7 +1304,7 @@ impl ColumnChunkMetaData {
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
             size_statistics,
-            geospatial_statistics: None,
+            geospatial_statistics: geo_statistics::to_thrift(self.geo_statistics.as_ref()),
         }
     }
 
@@ -1354,6 +1364,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            geo_statistics: None,
             encoding_stats: None,
             bloom_filter_offset: None,
             bloom_filter_length: None,
@@ -1426,6 +1437,12 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets statistics for this column chunk.
     pub fn set_statistics(mut self, value: Statistics) -> Self {
         self.0.statistics = Some(value);
+        self
+    }
+
+    /// Sets geospatial statistics for this column chunk.
+    pub fn set_geo_statistics(mut self, value: geo_statistics::GeospatialStatistics) -> Self {
+        self.0.geo_statistics = Some(value);
         self
     }
 
