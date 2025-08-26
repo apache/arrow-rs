@@ -511,3 +511,45 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ParquetMetaData {
         Ok(ParquetMetaData::new(fmd, row_groups))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::file::metadata::thrift_gen::BoundingBox;
+    use crate::parquet_thrift::{tests::test_roundtrip, OrderedF64};
+
+    #[test]
+    fn test_bounding_box_roundtrip() {
+        test_roundtrip(BoundingBox {
+            xmin: OrderedF64(0.1),
+            xmax: OrderedF64(10.3),
+            ymin: OrderedF64(0.001),
+            ymax: OrderedF64(128.5),
+            zmin: None,
+            zmax: None,
+            mmin: None,
+            mmax: None,
+        });
+
+        test_roundtrip(BoundingBox {
+            xmin: OrderedF64(0.1),
+            xmax: OrderedF64(10.3),
+            ymin: OrderedF64(0.001),
+            ymax: OrderedF64(128.5),
+            zmin: Some(OrderedF64(11.0)),
+            zmax: Some(OrderedF64(1300.0)),
+            mmin: None,
+            mmax: None,
+        });
+
+        test_roundtrip(BoundingBox {
+            xmin: OrderedF64(0.1),
+            xmax: OrderedF64(10.3),
+            ymin: OrderedF64(0.001),
+            ymax: OrderedF64(128.5),
+            zmin: Some(OrderedF64(11.0)),
+            zmax: Some(OrderedF64(1300.0)),
+            mmin: Some(OrderedF64(3.14)),
+            mmax: Some(OrderedF64(42.0)),
+        });
+    }
+}
