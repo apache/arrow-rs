@@ -1149,7 +1149,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # list.append_value("bar");
     /// # list.append_value("baz");
     /// # list.finish();
-    /// # obj.finish().unwrap();
+    /// # obj.finish();
     /// # let (metadata, value) = builder.finish();
     /// // given a variant like `{"foo": ["bar", "baz"]}`
     /// let variant = Variant::new(&metadata, &value);
@@ -1325,6 +1325,12 @@ impl<'v> From<&'v [u8]> for Variant<'_, 'v> {
 impl From<NaiveTime> for Variant<'_, '_> {
     fn from(value: NaiveTime) -> Self {
         Variant::Time(value)
+    }
+}
+
+impl From<Uuid> for Variant<'_, '_> {
+    fn from(value: Uuid) -> Self {
+        Variant::Uuid(value)
     }
 }
 
@@ -1572,7 +1578,7 @@ mod tests {
         let mut nested_obj = root_obj.new_object("nested_object");
         nested_obj.insert("inner_key1", "inner_value1");
         nested_obj.insert("inner_key2", 999i32);
-        nested_obj.finish().unwrap();
+        nested_obj.finish();
 
         // Add list with mixed types
         let mut mixed_list = root_obj.new_list("mixed_list");
@@ -1590,7 +1596,7 @@ mod tests {
 
         mixed_list.finish();
 
-        root_obj.finish().unwrap();
+        root_obj.finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
