@@ -282,7 +282,7 @@ impl ValueBuilder {
             object_builder.insert(field_name, value);
         }
 
-        object_builder.finish().unwrap();
+        object_builder.finish();
     }
 
     fn try_append_object(state: ParentState<'_>, obj: VariantObject) -> Result<(), ArrowError> {
@@ -293,7 +293,8 @@ impl ValueBuilder {
             object_builder.try_insert(field_name, value)?;
         }
 
-        object_builder.finish()
+        object_builder.finish();
+        Ok(())
     }
 
     fn append_list(state: ParentState<'_>, list: VariantList) {
@@ -1124,7 +1125,7 @@ impl Drop for ParentState<'_> {
 /// obj.insert("name", "Alice");
 /// obj.insert("age", 30);
 /// obj.insert("score", 95.5);
-/// obj.finish().unwrap();
+/// obj.finish();
 ///
 /// let (metadata, value) = builder.finish();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1142,7 +1143,7 @@ impl Drop for ParentState<'_> {
 /// obj.insert("name", "Bob"); // field id = 3
 /// obj.insert("age", 25);
 /// obj.insert("score", 88.0);
-/// obj.finish().unwrap();
+/// obj.finish();
 ///
 /// let (metadata, value) = builder.finish();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1634,7 +1635,7 @@ impl<'a> ObjectBuilder<'a> {
     }
 
     /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
-    pub fn finish(mut self) -> Result<(), ArrowError> {
+    pub fn finish(mut self) {
         let metadata_builder = self.parent_state.metadata_builder();
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
@@ -1697,8 +1698,6 @@ impl<'a> ObjectBuilder<'a> {
                 offset_size,
             );
         self.parent_state.finish();
-
-        Ok(())
     }
 }
 
@@ -1906,8 +1905,7 @@ mod tests {
             .new_object()
             .with_field("name", "John")
             .with_field("age", 42i8)
-            .finish()
-            .unwrap();
+            .finish();
 
         let (metadata, value) = builder.finish();
         assert!(!metadata.is_empty());
@@ -1923,8 +1921,7 @@ mod tests {
             .with_field("zebra", "stripes")
             .with_field("apple", "red")
             .with_field("banana", "yellow")
-            .finish()
-            .unwrap();
+            .finish();
 
         let (_, value) = builder.finish();
 
@@ -1948,8 +1945,7 @@ mod tests {
             .new_object()
             .with_field("name", "Ron Artest")
             .with_field("name", "Metta World Peace") // Duplicate field
-            .finish()
-            .unwrap();
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -2068,15 +2064,13 @@ mod tests {
             .new_object()
             .with_field("id", 1)
             .with_field("type", "Cauliflower")
-            .finish()
-            .unwrap();
+            .finish();
 
         list_builder
             .new_object()
             .with_field("id", 2)
             .with_field("type", "Beets")
-            .finish()
-            .unwrap();
+            .finish();
 
         list_builder.finish();
 
@@ -2113,17 +2107,9 @@ mod tests {
 
         let mut list_builder = builder.new_list();
 
-        list_builder
-            .new_object()
-            .with_field("a", 1)
-            .finish()
-            .unwrap();
+        list_builder.new_object().with_field("a", 1).finish();
 
-        list_builder
-            .new_object()
-            .with_field("b", 2)
-            .finish()
-            .unwrap();
+        list_builder.new_object().with_field("b", 2).finish();
 
         list_builder.finish();
 
@@ -2169,7 +2155,7 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("a", 1);
-            let _ = object_builder.finish();
+            object_builder.finish();
         }
 
         list_builder.append_value(2);
@@ -2177,7 +2163,7 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("b", 2);
-            let _ = object_builder.finish();
+            object_builder.finish();
         }
 
         list_builder.append_value(3);
@@ -2227,10 +2213,10 @@ mod tests {
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
-            let _ = outer_object_builder.finish();
+            outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -2269,11 +2255,11 @@ mod tests {
                 inner_object_builder.insert("b", false);
                 inner_object_builder.insert("c", "a");
 
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
             outer_object_builder.insert("b", false);
-            let _ = outer_object_builder.finish();
+            outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -2317,10 +2303,10 @@ mod tests {
                     .with_value(false)
                     .finish();
 
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
-            let _ = outer_object_builder.finish();
+            outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -2380,15 +2366,15 @@ mod tests {
                 {
                     let mut inner_inner_object_builder = inner_object_builder.new_object("c");
                     inner_inner_object_builder.insert("aa", "bb");
-                    let _ = inner_inner_object_builder.finish();
+                    inner_inner_object_builder.finish();
                 }
 
                 {
                     let mut inner_inner_object_builder = inner_object_builder.new_object("d");
                     inner_inner_object_builder.insert("cc", "dd");
-                    let _ = inner_inner_object_builder.finish();
+                    inner_inner_object_builder.finish();
                 }
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
             outer_object_builder.insert("b", true);
@@ -2412,10 +2398,10 @@ mod tests {
                     inner_list_builder.finish();
                 }
 
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
-            let _ = outer_object_builder.finish();
+            outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -2515,7 +2501,7 @@ mod tests {
                     let mut inner_object_builder = inner_list_builder.new_object();
                     inner_object_builder.insert("a", "b");
                     inner_object_builder.insert("b", "c");
-                    let _ = inner_object_builder.finish();
+                    inner_object_builder.finish();
                 }
 
                 {
@@ -2524,7 +2510,7 @@ mod tests {
                     let mut inner_object_builder = inner_list_builder.new_object();
                     inner_object_builder.insert("c", "d");
                     inner_object_builder.insert("d", "e");
-                    let _ = inner_object_builder.finish();
+                    inner_object_builder.finish();
                 }
 
                 inner_list_builder.finish();
@@ -2610,7 +2596,7 @@ mod tests {
         let mut obj = builder.new_object();
         obj.insert("a", 1);
         obj.insert("a", 2);
-        assert!(obj.finish().is_ok());
+        obj.finish();
 
         // Deeply nested list structure with duplicates
         let mut builder = VariantBuilder::new();
@@ -2620,12 +2606,8 @@ mod tests {
         nested_obj.insert("x", 1);
         nested_obj.insert("x", 2);
         nested_obj.new_list("x").with_value(3).finish();
-        nested_obj
-            .new_object("x")
-            .with_field("y", 4)
-            .finish()
-            .unwrap();
-        assert!(nested_obj.finish().is_ok());
+        nested_obj.new_object("x").with_field("y", 4).finish();
+        nested_obj.finish();
         inner_list.finish();
         outer_list.finish();
 
@@ -2685,8 +2667,8 @@ mod tests {
         valid_obj.insert("m", 1);
         valid_obj.insert("n", 2);
 
-        let valid_result = valid_obj.finish();
-        assert!(valid_result.is_ok());
+        valid_obj.finish();
+        list.finish();
     }
 
     #[test]
@@ -2755,7 +2737,7 @@ mod tests {
 
         // add a field name that wasn't pre-defined but doesn't break the sort order
         obj.insert("d", 2);
-        obj.finish().unwrap();
+        obj.finish();
 
         let (metadata, value) = variant1.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -2789,7 +2771,7 @@ mod tests {
 
         // add a field name that wasn't pre-defined but breaks the sort order
         obj.insert("a", 2);
-        obj.finish().unwrap();
+        obj.finish();
 
         let (metadata, value) = variant1.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -3033,7 +3015,7 @@ mod tests {
         // Create a nested object builder and finish it
         let mut nested_object_builder = list_builder.new_object();
         nested_object_builder.insert("name", "unknown");
-        nested_object_builder.finish().unwrap();
+        nested_object_builder.finish();
 
         // Drop the outer list builder without finishing it
         drop(list_builder);
@@ -3063,7 +3045,7 @@ mod tests {
         object_builder.insert("second", 2i8);
 
         // The parent object should only contain the original fields
-        object_builder.finish().unwrap();
+        object_builder.finish();
         let (metadata, value) = builder.finish();
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
@@ -3117,7 +3099,7 @@ mod tests {
         object_builder.insert("second", 2i8);
 
         // The parent object should only contain the original fields
-        object_builder.finish().unwrap();
+        object_builder.finish();
         let (metadata, value) = builder.finish();
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
@@ -3141,7 +3123,7 @@ mod tests {
         // Create a nested object builder and finish it
         let mut nested_object_builder = object_builder.new_object("nested");
         nested_object_builder.insert("name", "unknown");
-        nested_object_builder.finish().unwrap();
+        nested_object_builder.finish();
 
         // Drop the outer object builder without finishing it
         drop(object_builder);
@@ -3179,7 +3161,7 @@ mod tests {
 
         obj.insert("b", true);
         obj.insert("a", false);
-        obj.finish().unwrap();
+        obj.finish();
         builder.finish()
     }
 
@@ -3208,10 +3190,10 @@ mod tests {
             {
                 let mut inner_obj = outer_obj.new_object("b");
                 inner_obj.insert("a", "inner_value");
-                inner_obj.finish().unwrap();
+                inner_obj.finish();
             }
 
-            outer_obj.finish().unwrap();
+            outer_obj.finish();
         }
 
         builder.finish()
@@ -3289,7 +3271,7 @@ mod tests {
                             }
                         }
                         if i % skip != 0 {
-                            object.finish().unwrap();
+                            object.finish();
                         }
                     }
                     if i % skip != 0 {
@@ -3297,7 +3279,7 @@ mod tests {
                     }
                 }
                 if i % skip != 0 {
-                    object.finish().unwrap();
+                    object.finish();
                 }
             }
             list.finish();
@@ -3333,7 +3315,7 @@ mod tests {
             obj.insert("name", "Alice");
             obj.insert("age", 30i8);
             obj.insert("active", true);
-            obj.finish().unwrap();
+            obj.finish();
         }
 
         let value = value_builder.into_inner();
@@ -3394,9 +3376,9 @@ mod tests {
                 let mut address = obj.new_object("address");
                 address.insert("street", "123 Main St");
                 address.insert("city", "Anytown");
-                address.finish().unwrap();
+                address.finish();
             }
-            obj.finish().unwrap();
+            obj.finish();
         }
         let (metadata, value1) = builder.finish();
         let variant1 = Variant::try_new(&metadata, &value1).unwrap();
@@ -3423,7 +3405,7 @@ mod tests {
             obj.insert("field2", 42i32);
             obj.insert("field3", true);
             obj.insert("field4", "value4");
-            obj.finish().unwrap();
+            obj.finish();
         }
         let (metadata1, value1) = builder.finish();
         let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
@@ -3452,7 +3434,7 @@ mod tests {
             // Copy field2 using bytes API
             obj.insert_bytes("field2", original_obj.get("field2").unwrap());
 
-            obj.finish().unwrap();
+            obj.finish();
         }
         let value2 = builder2.into_inner();
         let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
@@ -3556,7 +3538,7 @@ mod tests {
                     user1.insert("id", 1i32);
                     user1.insert("name", "Alice");
                     user1.insert("active", true);
-                    user1.finish().unwrap();
+                    user1.finish();
                 }
 
                 // User 2
@@ -3565,7 +3547,7 @@ mod tests {
                     user2.insert("id", 2i32);
                     user2.insert("name", "Bob");
                     user2.insert("active", false);
-                    user2.finish().unwrap();
+                    user2.finish();
                 }
 
                 // User 3
@@ -3574,14 +3556,14 @@ mod tests {
                     user3.insert("id", 3i32);
                     user3.insert("name", "Charlie");
                     user3.insert("active", true);
-                    user3.finish().unwrap();
+                    user3.finish();
                 }
 
                 users_list.finish();
             }
 
             root_obj.insert("total_count", 3i32);
-            root_obj.finish().unwrap();
+            root_obj.finish();
         }
         let (metadata1, value1) = builder.finish();
         let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
@@ -3625,7 +3607,7 @@ mod tests {
                             // Add status transformation (don't copy the 'active' field)
                             new_user.insert("status", "verified");
 
-                            new_user.finish().unwrap();
+                            new_user.finish();
                         }
                     }
                 }
@@ -3637,7 +3619,7 @@ mod tests {
                     new_user.insert("name", "System User");
                     new_user.insert("computed_score", 0i32);
                     new_user.insert("status", "system");
-                    new_user.finish().unwrap();
+                    new_user.finish();
                 }
 
                 filtered_users.finish();
@@ -3646,7 +3628,7 @@ mod tests {
             // Update count
             root_obj.insert("active_count", 3i32); // 2 active + 1 new
 
-            root_obj.finish().unwrap();
+            root_obj.finish();
         }
         let value2 = builder2.into_inner();
         let result_variant = Variant::try_new(&metadata1, &value2).unwrap();

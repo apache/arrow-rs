@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn test_variant_object_empty_fields() {
         let mut builder = VariantBuilder::new();
-        builder.new_object().with_field("", 42).finish().unwrap();
+        builder.new_object().with_field("", 42).finish();
         let (metadata, value) = builder.finish();
 
         // Resulting object is valid and has a single empty field
@@ -676,7 +676,7 @@ mod tests {
             obj.insert(&field_names[i as usize], i);
         }
 
-        obj.finish().unwrap();
+        obj.finish();
         let (metadata, value) = builder.finish();
         let variant = Variant::new(&metadata, &value);
 
@@ -737,7 +737,7 @@ mod tests {
             obj.insert(&key, str_val.as_str());
         }
 
-        obj.finish().unwrap();
+        obj.finish();
         let (metadata, value) = builder.finish();
         let variant = Variant::new(&metadata, &value);
 
@@ -783,7 +783,7 @@ mod tests {
         o.insert("c", ());
         o.insert("a", ());
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -801,7 +801,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
         let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
@@ -812,7 +812,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
         let (m, v) = b.finish();
 
         let v2 = Variant::try_new(&m, &v).unwrap();
@@ -828,7 +828,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", 4.3);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -841,8 +841,8 @@ mod tests {
         o.insert("a", ());
         let mut inner_o = o.new_object("b");
         inner_o.insert("a", 3.3);
-        inner_o.finish().unwrap();
-        o.finish().unwrap();
+        inner_o.finish();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -866,7 +866,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", 4.3);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -879,7 +879,7 @@ mod tests {
         o.insert("aardvark", ());
         o.insert("barracuda", 3.3);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
         let v2 = Variant::try_new(&m, &v).unwrap();
@@ -895,7 +895,7 @@ mod tests {
         o.insert("b", false);
         o.insert("a", ());
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -910,7 +910,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
@@ -930,7 +930,7 @@ mod tests {
         o.insert("a", ());
         o.insert("b", 4.3);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (meta1, value1) = b.finish();
 
@@ -945,7 +945,7 @@ mod tests {
         o.insert("b", 4.3);
         o.insert("a", ());
 
-        o.finish().unwrap();
+        o.finish();
 
         let (meta2, value2) = b.finish();
 
@@ -969,7 +969,7 @@ mod tests {
         o.insert("a", false);
         o.insert("b", false);
 
-        o.finish().unwrap();
+        o.finish();
 
         let (m, v) = b.finish();
 
