@@ -1616,6 +1616,56 @@ mod test {
     }
 
     #[test]
+    fn test_skippable_types_project_each_field_individually() {
+        let path = "test/data/skippable_types.avro";
+        let full = read_file(path, 1024, false);
+        let schema_full = full.schema();
+        let num_rows = full.num_rows();
+        let writer_json = load_writer_schema_json(path);
+        assert_eq!(
+            writer_json["type"], "record",
+            "writer schema must be a record"
+        );
+        let fields_json = writer_json
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record has fields");
+        assert_eq!(
+            schema_full.fields().len(),
+            fields_json.len(),
+            "full read column count vs writer fields"
+        );
+        for (idx, f) in fields_json.iter().enumerate() {
+            let name = f
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or_else(|| panic!("field at index {idx} has no name"));
+            let reader_schema = make_reader_schema_with_selected_fields_in_order(path, &[name]);
+            let projected = read_alltypes_with_reader_schema(path, reader_schema);
+            assert_eq!(
+                projected.num_columns(),
+                1,
+                "projected batch should contain exactly the selected column '{name}'"
+            );
+            assert_eq!(
+                projected.num_rows(),
+                num_rows,
+                "row count mismatch for projected column '{name}'"
+            );
+            let field = schema_full.field(idx).clone();
+            let col = full.column(idx).clone();
+            let expected =
+                RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![col]).unwrap();
+            // Equality means: (1) read the right column values; and (2) all other
+            // writer fields were skipped correctly for this projection (no misalignment).
+            assert_eq!(
+                projected, expected,
+                "projected column '{name}' mismatch vs full read column"
+            );
+        }
+    }
+
+    #[test]
     fn test_read_zero_byte_avro_file() {
         let batch = read_file("test/data/zero_byte.avro", 3, false);
         let schema = batch.schema();

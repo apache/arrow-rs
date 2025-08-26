@@ -392,7 +392,7 @@ impl Decoder {
                 }
             }
             (Codec::Map(child), _) => {
-                let val_field = child.field_with_name("value").with_nullable(true);
+                let val_field = child.field_with_name("value");
                 let map_field = Arc::new(ArrowField::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
@@ -683,14 +683,16 @@ impl Decoder {
                         )));
                     }
                 }
-                let entries_struct = StructArray::new(
-                    Fields::from(vec![
-                        Arc::new(ArrowField::new("key", DataType::Utf8, false)),
-                        Arc::new(ArrowField::new("value", val_arr.data_type().clone(), true)),
-                    ]),
-                    vec![Arc::new(key_arr), val_arr],
-                    None,
-                );
+                let entries_fields = match map_field.data_type() {
+                    DataType::Struct(fields) => fields.clone(),
+                    other => {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Map entries field must be a Struct, got {other:?}"
+                        )))
+                    }
+                };
+                let entries_struct =
+                    StructArray::new(entries_fields, vec![Arc::new(key_arr), val_arr], None);
                 let map_arr = MapArray::new(map_field.clone(), moff, entries_struct, nulls, false);
                 Arc::new(map_arr)
             }
@@ -858,7 +860,11 @@ fn sign_extend_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
     Ok(arr)
 }
 
-/// Lightweight skipping decoder for writer-only fields
+/// Lightweight skipper for non‑projected writer fields
+/// (fields present in the writer schema but omitted by the reader/projection);
+/// per Avro 1.11.1 schema resolution these fields are ignored.
+///
+/// <https://avro.apache.org/docs/1.11.1/specification/#schema-resolution>
 #[derive(Debug)]
 enum Skipper {
     Null,

@@ -851,6 +851,41 @@ impl<'a> Maker<'a> {
             (Schema::Union(writer_variants), Schema::Union(reader_variants)) => {
                 self.resolve_nullable_union(writer_variants, reader_variants, namespace)
             }
+            // if both sides are the same complex kind (non-record), adopt the reader type.
+            // This aligns with Avro spec: arrays, maps, and enums resolve recursively;
+            // for identical shapes we can just parse the reader schema.
+            (Schema::Complex(ComplexType::Array(_)), Schema::Complex(ComplexType::Array(_)))
+            | (Schema::Complex(ComplexType::Map(_)), Schema::Complex(ComplexType::Map(_)))
+            | (Schema::Complex(ComplexType::Fixed(_)), Schema::Complex(ComplexType::Fixed(_)))
+            | (Schema::Complex(ComplexType::Enum(_)), Schema::Complex(ComplexType::Enum(_))) => {
+                self.parse_type(reader_schema, namespace)
+            }
+            // Named-type references (equal on both sides) – parse reader side.
+            (Schema::TypeName(TypeName::Ref(_)), Schema::TypeName(TypeName::Ref(_)))
+            | (
+                Schema::Type(Type {
+                    r#type: TypeName::Ref(_),
+                    ..
+                }),
+                Schema::Type(Type {
+                    r#type: TypeName::Ref(_),
+                    ..
+                }),
+            )
+            | (
+                Schema::TypeName(TypeName::Ref(_)),
+                Schema::Type(Type {
+                    r#type: TypeName::Ref(_),
+                    ..
+                }),
+            )
+            | (
+                Schema::Type(Type {
+                    r#type: TypeName::Ref(_),
+                    ..
+                }),
+                Schema::TypeName(TypeName::Ref(_)),
+            ) => self.parse_type(reader_schema, namespace),
             _ => Err(ArrowError::NotYetImplemented(
                 "Other resolutions not yet implemented".to_string(),
             )),
