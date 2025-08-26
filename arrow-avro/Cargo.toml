@@ -73,7 +73,7 @@ arrow = { workspace = true }
 futures = "0.3.31"
 bytes = "1.10.1"
 async-stream = "0.3.6"
-apache-avro = "0.14.0"
+apache-avro = "0.20.0"
 num-bigint = "0.4"
 once_cell = "1.21.3"
 
@@ -83,4 +83,8 @@ harness = false
 
 [[bench]]
 name = "decoder"
+harness = false
+
+[[bench]]
+name = "avro_writer"
 harness = false
