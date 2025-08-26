@@ -34,7 +34,7 @@ rust-version = { workspace = true }
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
 indexmap = "2.10.0"
-uuid = { version = "1.18.0"}
+uuid = { version = "1.18.0", features = ["v4"]}
 
 simdutf8 = { workspace = true , optional = true }
 

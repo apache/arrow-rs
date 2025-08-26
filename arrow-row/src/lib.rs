@@ -97,7 +97,7 @@
 //! assert_eq!(&c2_values, &["a", "f", "c", "e"]);
 //! ```
 //!
-//! # Lexsort
+//! # Lexicographic Sorts (lexsort)
 //!
 //! The row format can also be used to implement a fast multi-column / lexicographic sort
 //!
@@ -117,6 +117,33 @@
 //! }
 //! ```
 //!
+//! # Flattening Dictionaries
+//!
+//! For performance reasons, dictionary arrays are flattened ("hydrated") to their
+//! underlying values during row conversion. See [the issue] for more details.
+//!
+//! This means that the arrays that come out of [`RowConverter::convert_rows`]
+//! may not have the same data types as the input arrays. For example, encoding
+//! a `Dictionary<Int8, Utf8>` and then will come out as a `Utf8` array.
+//!
+//! ```
+//! # use arrow_array::{Array, ArrayRef, DictionaryArray};
+//! # use arrow_array::types::Int8Type;
+//! # use arrow_row::{RowConverter, SortField};
+//! # use arrow_schema::DataType;
+//! # use std::sync::Arc;
+//! // Input is a Dictionary array
+//! let dict: DictionaryArray::<Int8Type> = ["a", "b", "c", "a", "b"].into_iter().collect();
+//! let sort_fields = vec![SortField::new(dict.data_type().clone())];
+//! let arrays = vec![Arc::new(dict) as ArrayRef];
+//! let converter = RowConverter::new(sort_fields).unwrap();
+//! // Convert to rows
+//! let rows = converter.convert_columns(&arrays).unwrap();
+//! let converted = converter.convert_rows(&rows).unwrap();
+//! // result was a Utf8 array, not a Dictionary array
+//! assert_eq!(converted[0].data_type(), &DataType::Utf8);
+//! ```
+//!
 //! [non-comparison sorts]: https://en.wikipedia.org/wiki/Sorting_algorithm#Non-comparison_sorts
 //! [radix sort]: https://en.wikipedia.org/wiki/Radix_sort
 //! [normalized for sorting]: http://wwwlgis.informatik.uni-kl.de/archiv/wwwdvs.informatik.uni-kl.de/courses/DBSREAL/SS2005/Vorlesungsunterlagen/Implementing_Sorting.pdf
@@ -124,6 +151,7 @@
 //! [`lexsort`]: https://docs.rs/arrow-ord/latest/arrow_ord/sort/fn.lexsort.html
 //! [compared]: PartialOrd
 //! [compare]: PartialOrd
+//! [the issue]: https://github.com/apache/arrow-rs/issues/4811
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -661,6 +689,8 @@ impl RowConverter {
     ///
     /// See [`Row`] for information on when [`Row`] can be compared
     ///
+    /// See [`Self::convert_rows`] for converting [`Rows`] back into [`ArrayRef`]
+    ///
     /// # Panics
     ///
     /// Panics if the schema of `columns` does not match that provided to [`RowConverter::new`]
@@ -767,6 +797,8 @@ impl RowConverter {
     }
 
     /// Convert [`Rows`] columns into [`ArrayRef`]
+    ///
+    /// See [`Self::convert_columns`] for converting [`ArrayRef`] into [`Rows`]
     ///
     /// # Panics
     ///
