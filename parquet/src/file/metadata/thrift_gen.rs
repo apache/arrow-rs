@@ -520,10 +520,10 @@ mod tests {
     #[test]
     fn test_bounding_box_roundtrip() {
         test_roundtrip(BoundingBox {
-            xmin: OrderedF64(0.1),
-            xmax: OrderedF64(10.3),
-            ymin: OrderedF64(0.001),
-            ymax: OrderedF64(128.5),
+            xmin: 0.1.into(),
+            xmax: 10.3.into(),
+            ymin: 0.001.into(),
+            ymax: 128.5.into(),
             zmin: None,
             zmax: None,
             mmin: None,
@@ -531,25 +531,25 @@ mod tests {
         });
 
         test_roundtrip(BoundingBox {
-            xmin: OrderedF64(0.1),
-            xmax: OrderedF64(10.3),
-            ymin: OrderedF64(0.001),
-            ymax: OrderedF64(128.5),
-            zmin: Some(OrderedF64(11.0)),
-            zmax: Some(OrderedF64(1300.0)),
+            xmin: 0.1.into(),
+            xmax: 10.3.into(),
+            ymin: 0.001.into(),
+            ymax: 128.5.into(),
+            zmin: Some(11.0.into()),
+            zmax: Some(1300.0.into()),
             mmin: None,
             mmax: None,
         });
 
         test_roundtrip(BoundingBox {
-            xmin: OrderedF64(0.1),
-            xmax: OrderedF64(10.3),
-            ymin: OrderedF64(0.001),
-            ymax: OrderedF64(128.5),
-            zmin: Some(OrderedF64(11.0)),
-            zmax: Some(OrderedF64(1300.0)),
-            mmin: Some(OrderedF64(3.14)),
-            mmax: Some(OrderedF64(42.0)),
+            xmin: 0.1.into(),
+            xmax: 10.3.into(),
+            ymin: 0.001.into(),
+            ymax: 128.5.into(),
+            zmin: Some(11.0.into()),
+            zmax: Some(1300.0.into()),
+            mmin: Some(3.14.into()),
+            mmax: Some(42.0.into()),
         });
     }
 }

@@ -29,7 +29,13 @@ use crate::errors::{ParquetError, Result};
 // wrappers out there that should probably be used instead.
 // thrift seems to re-export an impl from ordered-float
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OrderedF64(pub f64);
+pub struct OrderedF64(f64);
+
+impl From<f64> for OrderedF64 {
+    fn from(value: f64) -> Self {
+        Self(value)
+    }
+}
 
 impl From<OrderedF64> for f64 {
     fn from(value: OrderedF64) -> Self {
