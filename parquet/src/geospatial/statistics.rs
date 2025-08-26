@@ -204,17 +204,17 @@ pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Opti
                     bbox.ymax.into(),
                 );
 
-                if bbox.zmin.is_some() && bbox.zmax.is_some() {
-                    new_bbox = new_bbox.with_zrange(bbox.zmin.unwrap().into(), bbox.zmax.unwrap().into());
-                } else if bbox.zmin.is_some() != bbox.zmax.is_some() {
-                    return Err(ParquetError::General(format!("Z-coordinate values mismatch: {:?} and {:?}", bbox.zmin, bbox.zmax)));
-                }
+                new_bbox = match (bbox.zmin, bbox.zmax) {
+                    (Some(zmin), Some(zmax)) => new_bbox.with_zrange(zmin.into(), zmax.into()),
+                    (None, None) => new_bbox,
+                    _ => return Err(ParquetError::General("Z-coordinate values mismatch".to_string())),
+                };
 
-                if bbox.mmin.is_some() && bbox.mmax.is_some() {
-                    new_bbox = new_bbox.with_mrange(bbox.mmin.unwrap().into(), bbox.mmax.unwrap().into());
-                } else if bbox.mmin.is_some() != bbox.mmax.is_some() {
-                    return Err(ParquetError::General(format!("M-coordinate values mismatch: {:?} and {:?}", bbox.mmin, bbox.mmax)));
-                }
+                new_bbox = match (bbox.mmin, bbox.mmax) {
+                    (Some(mmin), Some(mmax)) => new_bbox.with_mrange(mmin.into(), mmax.into()),
+                    (None, None) => new_bbox,
+                    _ => return Err(ParquetError::General("M-coordinate values mismatch".to_string())),
+                };
 
                 Some(new_bbox)
             } else {
