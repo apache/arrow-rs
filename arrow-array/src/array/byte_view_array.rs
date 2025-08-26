@@ -323,19 +323,21 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///
     /// Caller is responsible for ensuring that the index is within the bounds
     /// of the array
-    pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native { unsafe {
-        let v = self.views.get_unchecked(idx);
-        let len = *v as u32;
-        let b = if len <= MAX_INLINE_VIEW_LEN {
-            Self::inline_value(v, len as usize)
-        } else {
-            let view = ByteView::from(*v);
-            let data = self.buffers.get_unchecked(view.buffer_index as usize);
-            let offset = view.offset as usize;
-            data.get_unchecked(offset..offset + len as usize)
-        };
-        T::Native::from_bytes_unchecked(b)
-    }}
+    pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
+        unsafe {
+            let v = self.views.get_unchecked(idx);
+            let len = *v as u32;
+            let b = if len <= MAX_INLINE_VIEW_LEN {
+                Self::inline_value(v, len as usize)
+            } else {
+                let view = ByteView::from(*v);
+                let data = self.buffers.get_unchecked(view.buffer_index as usize);
+                let offset = view.offset as usize;
+                data.get_unchecked(offset..offset + len as usize)
+            };
+            T::Native::from_bytes_unchecked(b)
+        }
+    }
 
     /// Returns the first `len` bytes the inline value of the view.
     ///
@@ -343,10 +345,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// - The `view` must be a valid element from `Self::views()` that adheres to the view layout.
     /// - The `len` must be the length of the inlined value. It should never be larger than [`MAX_INLINE_VIEW_LEN`].
     #[inline(always)]
-    pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] { unsafe {
-        debug_assert!(len <= MAX_INLINE_VIEW_LEN as usize);
-        std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
-    }}
+    pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] {
+        unsafe {
+            debug_assert!(len <= MAX_INLINE_VIEW_LEN as usize);
+            std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
+        }
+    }
 
     /// Constructs a new iterator for iterating over the values of this array
     pub fn iter(&self) -> ArrayIter<&Self> {
@@ -539,31 +543,33 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///   `buffer_index` reset to `0` and its `offset` updated so that it points
     ///   into the bytes just appended at the end of `data_buf`.
     #[inline(always)]
-    unsafe fn copy_view_to_buffer(&self, i: usize, data_buf: &mut Vec<u8>) -> u128 { unsafe {
-        // SAFETY: `i < self.len()` ensures this is in‑bounds.
-        let raw_view = *self.views().get_unchecked(i);
-        let mut bv = ByteView::from(raw_view);
+    unsafe fn copy_view_to_buffer(&self, i: usize, data_buf: &mut Vec<u8>) -> u128 {
+        unsafe {
+            // SAFETY: `i < self.len()` ensures this is in‑bounds.
+            let raw_view = *self.views().get_unchecked(i);
+            let mut bv = ByteView::from(raw_view);
 
-        // Inline‑small views stay as‑is.
-        if bv.length <= MAX_INLINE_VIEW_LEN {
-            raw_view
-        } else {
-            // SAFETY: `bv.buffer_index` and `bv.offset..bv.offset+bv.length`
-            // must both lie within valid ranges for `self.buffers`.
-            let buffer = self.buffers.get_unchecked(bv.buffer_index as usize);
-            let start = bv.offset as usize;
-            let end = start + bv.length as usize;
-            let slice = buffer.get_unchecked(start..end);
+            // Inline‑small views stay as‑is.
+            if bv.length <= MAX_INLINE_VIEW_LEN {
+                raw_view
+            } else {
+                // SAFETY: `bv.buffer_index` and `bv.offset..bv.offset+bv.length`
+                // must both lie within valid ranges for `self.buffers`.
+                let buffer = self.buffers.get_unchecked(bv.buffer_index as usize);
+                let start = bv.offset as usize;
+                let end = start + bv.length as usize;
+                let slice = buffer.get_unchecked(start..end);
 
-            // Copy out‑of‑line data into our single “0” buffer.
-            let new_offset = data_buf.len() as u32;
-            data_buf.extend_from_slice(slice);
+                // Copy out‑of‑line data into our single “0” buffer.
+                let new_offset = data_buf.len() as u32;
+                data_buf.extend_from_slice(slice);
 
-            bv.buffer_index = 0;
-            bv.offset = new_offset;
-            bv.into()
+                bv.buffer_index = 0;
+                bv.offset = new_offset;
+                bv.into()
+            }
         }
-    }}
+    }
 
     /// Returns the total number of bytes used by all non inlined views in all
     /// buffers.
@@ -623,38 +629,40 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         left_idx: usize,
         right: &GenericByteViewArray<T>,
         right_idx: usize,
-    ) -> Ordering { unsafe {
-        let l_view = left.views().get_unchecked(left_idx);
-        let l_byte_view = ByteView::from(*l_view);
+    ) -> Ordering {
+        unsafe {
+            let l_view = left.views().get_unchecked(left_idx);
+            let l_byte_view = ByteView::from(*l_view);
 
-        let r_view = right.views().get_unchecked(right_idx);
-        let r_byte_view = ByteView::from(*r_view);
+            let r_view = right.views().get_unchecked(right_idx);
+            let r_byte_view = ByteView::from(*r_view);
 
-        let l_len = l_byte_view.length;
-        let r_len = r_byte_view.length;
+            let l_len = l_byte_view.length;
+            let r_len = r_byte_view.length;
 
-        if l_len <= 12 && r_len <= 12 {
-            return Self::inline_key_fast(*l_view).cmp(&Self::inline_key_fast(*r_view));
+            if l_len <= 12 && r_len <= 12 {
+                return Self::inline_key_fast(*l_view).cmp(&Self::inline_key_fast(*r_view));
+            }
+
+            // one of the string is larger than 12 bytes,
+            // we then try to compare the inlined data first
+
+            // Note: In theory, ByteView is only used for string which is larger than 12 bytes,
+            // but we can still use it to get the inlined prefix for shorter strings.
+            // The prefix is always the first 4 bytes of the view, for both short and long strings.
+            let l_inlined_be = l_byte_view.prefix.swap_bytes();
+            let r_inlined_be = r_byte_view.prefix.swap_bytes();
+            if l_inlined_be != r_inlined_be {
+                return l_inlined_be.cmp(&r_inlined_be);
+            }
+
+            // unfortunately, we need to compare the full data
+            let l_full_data: &[u8] = left.value_unchecked(left_idx).as_ref();
+            let r_full_data: &[u8] = right.value_unchecked(right_idx).as_ref();
+
+            l_full_data.cmp(r_full_data)
         }
-
-        // one of the string is larger than 12 bytes,
-        // we then try to compare the inlined data first
-
-        // Note: In theory, ByteView is only used for string which is larger than 12 bytes,
-        // but we can still use it to get the inlined prefix for shorter strings.
-        // The prefix is always the first 4 bytes of the view, for both short and long strings.
-        let l_inlined_be = l_byte_view.prefix.swap_bytes();
-        let r_inlined_be = r_byte_view.prefix.swap_bytes();
-        if l_inlined_be != r_inlined_be {
-            return l_inlined_be.cmp(&r_inlined_be);
-        }
-
-        // unfortunately, we need to compare the full data
-        let l_full_data: &[u8] = unsafe { left.value_unchecked(left_idx).as_ref() };
-        let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
-
-        l_full_data.cmp(r_full_data)
-    }}
+    }
 
     /// Builds a 128-bit composite key for an inline value:
     ///
@@ -852,9 +860,9 @@ impl<'a, T: ByteViewType + ?Sized> ArrayAccessor for &'a GenericByteViewArray<T>
         GenericByteViewArray::value(self, index)
     }
 
-    unsafe fn value_unchecked(&self, index: usize) -> Self::Item { unsafe {
-        GenericByteViewArray::value_unchecked(self, index)
-    }}
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        unsafe { GenericByteViewArray::value_unchecked(self, index) }
+    }
 }
 
 impl<'a, T: ByteViewType + ?Sized> IntoIterator for &'a GenericByteViewArray<T> {
@@ -998,9 +1006,9 @@ impl BinaryViewArray {
     /// Convert the [`BinaryViewArray`] to [`StringViewArray`]
     /// # Safety
     /// Caller is responsible for ensuring that items in array are utf8 data.
-    pub unsafe fn to_string_view_unchecked(self) -> StringViewArray { unsafe {
-        StringViewArray::new_unchecked(self.views, self.buffers, self.nulls)
-    }}
+    pub unsafe fn to_string_view_unchecked(self) -> StringViewArray {
+        unsafe { StringViewArray::new_unchecked(self.views, self.buffers, self.nulls) }
+    }
 }
 
 impl From<Vec<&[u8]>> for BinaryViewArray {
@@ -1171,7 +1179,10 @@ mod tests {
             builder.finish()
         };
         assert_eq!(array.value(0), "large payload over 12 bytes");
-        assert_eq!(array.value(1), "another large payload over 12 bytes that double than the first one, so that we can trigger the in_progress in builder re-created");
+        assert_eq!(
+            array.value(1),
+            "another large payload over 12 bytes that double than the first one, so that we can trigger the in_progress in builder re-created"
+        );
         assert_eq!(2, array.buffers.len());
     }
 
