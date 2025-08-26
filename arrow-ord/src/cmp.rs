@@ -23,6 +23,7 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 //!
 
+use arrow_array::array::*;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::{
@@ -31,7 +32,7 @@ use arrow_array::{
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
-use arrow_schema::ArrowError;
+use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
 use std::ops::Not;
@@ -224,6 +225,26 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
 
     let l_nulls = l.logical_nulls();
     let r_nulls = r.logical_nulls();
+
+    let _ree_distinct = match (l.data_type(), r.data_type()) {
+        (DataType::RunEndEncoded(run_field, _), DataType::RunEndEncoded(run_field2, _)) => {
+            let l_any = AnyRunArray::new(l, run_field.data_type().clone());
+            let r_any = AnyRunArray::new(r, run_field2.data_type().clone());
+            let flag = match op {
+                Op::Distinct => true,
+                Op::NotDistinct => false,
+                _ => false,
+            };
+            match (l_any, r_any) {
+                (Some(l), Some(r)) => ree_distinct(&l, &r, len, flag),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    if let Some(result) = _ree_distinct {
+        return Ok(result);
+    }
 
     let l_v = l.as_any_dictionary_opt();
     let l = l_v.map(|x| x.values().as_ref()).unwrap_or(l);
@@ -816,5 +837,352 @@ mod tests {
         let col = DictionaryArray::try_new(keys, Arc::new(values)).unwrap();
 
         neq(&col.slice(0, col.len() - 1), &col.slice(1, col.len() - 1)).unwrap();
+    }
+
+    #[cfg(test)]
+    mod ree_tests {
+        use super::super::*;
+        use arrow_array::types::Int32Type;
+        use arrow_array::{BooleanArray, Int32Array, RunArray};
+
+        #[test]
+        fn test_ree_distinct_basic() {
+            // Create REE array: [10, 10, 20, 30, 30] (logical length 5)
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![10, 20, 30]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![10, 20, 30]);
+            let other_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+            // Test distinct operations
+            let result = distinct(&run_array, &other_array).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![false, false, false, false, false])
+            );
+
+            let result = not_distinct(&run_array, &other_array).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![true, true, true, true, true])
+            );
+        }
+
+        #[test]
+        fn test_ree_distinct_mismatched_values() {
+            // [10, 10, 20]
+            let run_ends = Int32Array::from(vec![2, 3]);
+            let values = Int32Array::from(vec![10, 20]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // [10, 10, 99]
+            let run_ends = Int32Array::from(vec![2, 3]);
+            let values = Int32Array::from(vec![10, 99]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![false, false, true]));
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![true, true, false]));
+        }
+
+        #[test]
+        fn test_ree_distinct_all_different() {
+            // [1, 2, 3]
+            let run_ends = Int32Array::from(vec![1, 2, 3]);
+            let values = Int32Array::from(vec![1, 2, 3]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // [4, 5, 6]
+            let run_ends = Int32Array::from(vec![1, 2, 3]);
+            let values = Int32Array::from(vec![4, 5, 6]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![true, true, true]));
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![false, false, false]));
+        }
+
+        #[test]
+        fn test_ree_distinct_mixed_values() {
+            // [10, 10, 20, 30, 30]
+            let lhs = RunArray::<Int32Type>::try_new(
+                &Int32Array::from(vec![2, 3, 5]),
+                &Int32Array::from(vec![10, 20, 30]),
+            )
+            .unwrap();
+
+            // [10, 99, 20, 99, 30]
+            let rhs = RunArray::<Int32Type>::try_new(
+                &Int32Array::from(vec![1, 2, 3, 4, 5]),
+                &Int32Array::from(vec![10, 99, 20, 99, 30]),
+            )
+            .unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![false, true, false, true, false])
+            );
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![true, false, true, false, true])
+            );
+        }
+
+        #[test]
+        fn test_distinct_with_nulls_on_expanded_ree() {
+            // Simulate REE-expanded arrays with nulls
+            let lhs = Int32Array::from(vec![Some(1), None, Some(3)]);
+            let rhs = Int32Array::from(vec![Some(1), Some(2), None]);
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![false, true, true]));
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![true, false, false]));
+        }
+
+        #[test]
+        fn test_ree_distinct_with_nulls_and_values() {
+            // Logical: [10, NULL, 20, NULL, 30]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![10, -1, 20, -1, 30]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Logical: [10, NULL, 99, NULL, 30]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![10, -1, 99, -1, 30]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![false, false, true, false, false])
+            );
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![true, true, false, true, true])
+            );
+        }
+
+        #[test]
+        fn test_ree_distinct_edge_case_empty_arrays() {
+            // Empty REE arrays
+            let run_ends = Int32Array::from(vec![] as Vec<i32>);
+            let values = Int32Array::from(vec![] as Vec<i32>);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let run_ends = Int32Array::from(vec![] as Vec<i32>);
+            let values = Int32Array::from(vec![] as Vec<i32>);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![] as Vec<bool>));
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![] as Vec<bool>));
+        }
+
+        #[test]
+        fn test_ree_distinct_edge_case_single_run() {
+            // Single run with same value repeated
+            let run_ends = Int32Array::from(vec![5]);
+            let values = Int32Array::from(vec![42]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let run_ends = Int32Array::from(vec![5]);
+            let values = Int32Array::from(vec![42]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![false, false, false, false, false])
+            );
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![true, true, true, true, true])
+            );
+        }
+
+        #[test]
+        fn test_ree_distinct_edge_case_all_nulls() {
+            // All null values -> [NONE, NONE, NONE]
+            let run_ends = Int32Array::from(vec![3]);
+            let values = Int32Array::from(vec![None]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+            // All null values -> [NONE, NONE, NONE]
+            let run_ends = Int32Array::from(vec![3]);
+            let values = Int32Array::from(vec![None]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![false, false, false]));
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![true, true, true]));
+        }
+
+        #[test]
+        fn test_ree_distinct_edge_case_mixed_nulls_and_values() {
+            use arrow_array::BooleanArray;
+            use arrow_array::{types::Int32Type, Int32Array, RunArray};
+
+            // Logical LHS: [NULL, NULL, 10, 10, NULL]
+            let run_ends = Int32Array::from(vec![2, 4, 5]);
+            let values = Int32Array::from(vec![None, Some(10), None]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // Logical RHS: [NULL, Some(99), 10, 10, NULL]
+            let run_ends = Int32Array::from(vec![1, 2, 4, 5]);
+            let values = Int32Array::from(vec![None, Some(99), Some(10), None]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![
+                    false, // NULL vs NULL
+                    true,  // NULL vs 99 → distinct
+                    false, // 10 vs 10
+                    false, // 10 vs 10
+                    false  // NULL vs NULL
+                ])
+            );
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![true, false, true, true, true])
+            );
+        }
+
+        #[test]
+        fn test_ree_distinct_float64_type() {
+            // Test with Float64 type
+            let run_ends = Int32Array::from(vec![2, 4]);
+            let values = arrow_array::Float64Array::from(vec![1.5, 2.5]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let run_ends = Int32Array::from(vec![2, 4]);
+            let values = arrow_array::Float64Array::from(vec![1.5, 3.5]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![false, false, true, true]));
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![true, true, false, false]));
+        }
+
+        #[test]
+        fn test_ree_distinct_timestamp_type() {
+            // Test with Timestamp type
+            use arrow_array::TimestampMicrosecondArray;
+
+            let run_ends = Int32Array::from(vec![2, 3]);
+            let values = TimestampMicrosecondArray::from(vec![1000000, 2000000]); // 1s, 2s
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let run_ends = Int32Array::from(vec![2, 3]);
+            let values = TimestampMicrosecondArray::from(vec![1000000, 3000000]); // 1s, 3s
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![false, false, true]));
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(result, BooleanArray::from(vec![true, true, false]));
+        }
+
+        #[test]
+        fn test_ree_is_distinct_from_int_mixed() {
+            // LHS: [10, 10, NULL, 20, 30]
+            let run_ends = Int32Array::from(vec![2, 3, 4, 5]);
+            let values = Int32Array::from(vec![Some(10), None, Some(20), Some(30)]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // RHS: [10, 99, NULL, 25, 30]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![Some(10), Some(99), None, Some(25), Some(30)]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![
+                    false, // 10 == 10
+                    true,  // 10 != 99
+                    false, // NULL == NULL
+                    true,  // 20 != 25
+                    false  // 30 == 30
+                ])
+            );
+        }
+
+        #[test]
+        fn test_ree_is_not_distinct_from_int_mixed() {
+            // LHS: [NULL, 50, 50, NULL, 100]
+            let run_ends = Int32Array::from(vec![1, 3, 4, 5]);
+            let values = Int32Array::from(vec![None, Some(50), None, Some(100)]);
+            let lhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // RHS: [NULL, 50, 51, NULL, 100]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![None, Some(50), Some(51), None, Some(100)]);
+            let rhs = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = not_distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![
+                    true,  // NULL == NULL
+                    true,  // 50 == 50
+                    false, // 50 != 51
+                    true,  // NULL == NULL
+                    true   // 100 == 100
+                ])
+            );
+        }
+
+        #[test]
+        fn test_ree_is_distinct_from_utf8() {
+            use arrow_array::{Int32Array, RunArray, StringArray};
+
+            // LHS: ["foo", NULL, "bar", "baz", "baz"]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 5]);
+            let values = StringArray::from(vec![Some("foo"), None, Some("bar"), Some("baz")]);
+            let lhs =
+                RunArray::<arrow_array::types::Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            // RHS: ["foo", "missing", NULL, "baz", "baz"]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 5]);
+            let values = StringArray::from(vec![Some("foo"), Some("missing"), None, Some("baz")]);
+            let rhs =
+                RunArray::<arrow_array::types::Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let result = distinct(&lhs, &rhs).unwrap();
+            assert_eq!(
+                result,
+                BooleanArray::from(vec![
+                    false, // "foo" == "foo"
+                    true,  // NULL vs "missing"
+                    true,  // "bar" vs NULL
+                    false, // "baz" == "baz"
+                    false, // "baz" == "baz"
+                ])
+            );
+        }
     }
 }
