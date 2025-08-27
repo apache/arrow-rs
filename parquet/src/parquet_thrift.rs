@@ -244,6 +244,19 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
         Ok(())
     }
 
+    // This is a specialized version of read_field_begin, solely for use in parsing
+    // PageLocation structs in the offset index. This function assumes that the delta
+    // field will always be less than 0xf, fields will be in order, and no boolean fields
+    // will be read. This also skips validation of the field type.
+    //
+    // Returns a tuple of (field_type, field_delta)
+    pub(crate) fn read_field_header(&mut self) -> Result<(u8, u8)> {
+        let field_type = self.read_byte()?;
+        let field_delta = (field_type & 0xf0) >> 4;
+        let field_type = field_type & 0xf;
+        Ok((field_type, field_delta))
+    }
+
     pub(crate) fn read_field_begin(&mut self) -> Result<FieldIdentifier> {
         // we can read at least one byte, which is:
         // - the type

@@ -133,7 +133,16 @@ pub fn read_offset_indexes<R: ChunkReader>(
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
     let mut prot = ThriftCompactInputProtocol::new(data);
-    OffsetIndexMetaData::try_from(&mut prot)
+
+    // Try to read fast-path first. If that fails, fall back to slower but more robust
+    // decoder.
+    match OffsetIndexMetaData::try_from_fast(&mut prot) {
+        Ok(offset_index) => Ok(offset_index),
+        Err(_) => {
+            prot = ThriftCompactInputProtocol::new(data);
+            OffsetIndexMetaData::try_from(&mut prot)
+        }
+    }
 }
 
 // private struct only used for decoding then discarded
