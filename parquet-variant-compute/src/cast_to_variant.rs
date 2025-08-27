@@ -149,17 +149,13 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     let input_type = input.data_type();
     // todo: handle other types like Boolean, Date, Timestamp, etc.
     match input_type {
+        DataType::Null => {
+            for _ in 0..input.len() {
+                builder.append_null();
+            }
+        }
         DataType::Boolean => {
             non_generic_conversion_array!(input.as_boolean(), |v| v, builder);
-        }
-        DataType::Binary => {
-            generic_conversion_array!(BinaryType, as_bytes, |v| v, input, builder);
-        }
-        DataType::LargeBinary => {
-            generic_conversion_array!(LargeBinaryType, as_bytes, |v| v, input, builder);
-        }
-        DataType::BinaryView => {
-            generic_conversion_array!(BinaryViewType, as_byte_view, |v| v, input, builder);
         }
         DataType::Int8 => {
             primitive_conversion_array!(Int8Type, input, builder);
@@ -239,16 +235,26 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder
             );
         }
-        DataType::FixedSizeBinary(_) => {
-            non_generic_conversion_array!(input.as_fixed_size_binary(), |v| v, builder);
-        }
-        DataType::Null => {
-            for _ in 0..input.len() {
-                builder.append_null();
-            }
-        }
         DataType::Timestamp(time_unit, time_zone) => {
             convert_timestamp(time_unit, time_zone, input, &mut builder);
+        }
+        DataType::Date32 => {
+            generic_conversion_array!(
+                Date32Type,
+                as_primitive,
+                |v: i32| -> NaiveDate { Date32Type::to_naive_date(v) },
+                input,
+                builder
+            );
+        }
+        DataType::Date64 => {
+            generic_conversion_array!(
+                Date64Type,
+                as_primitive,
+                |v: i64| { Date64Type::to_naive_date_opt(v).unwrap() },
+                input,
+                builder
+            );
         }
         DataType::Time32(unit) => {
             match *unit {
@@ -326,6 +332,18 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                     .to_string(),
             ));
         }
+        DataType::Binary => {
+            generic_conversion_array!(BinaryType, as_bytes, |v| v, input, builder);
+        }
+        DataType::LargeBinary => {
+            generic_conversion_array!(LargeBinaryType, as_bytes, |v| v, input, builder);
+        }
+        DataType::BinaryView => {
+            generic_conversion_array!(BinaryViewType, as_byte_view, |v| v, input, builder);
+        }
+        DataType::FixedSizeBinary(_) => {
+            non_generic_conversion_array!(input.as_fixed_size_binary(), |v| v, builder);
+        }
         DataType::Utf8 => {
             generic_conversion_array!(i32, as_string, |v| v, input, builder);
         }
@@ -335,126 +353,6 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Utf8View => {
             non_generic_conversion_array!(input.as_string_view(), |v| v, builder);
         }
-        DataType::Struct(_) => {
-            let struct_array = input.as_struct();
-
-            // Pre-convert all field arrays once for better performance
-            // This avoids converting the same field array multiple times
-            // Alternative approach: Use slicing per row: field_array.slice(i, 1)
-            // However, pre-conversion is more efficient for typical use cases
-            let field_variant_arrays: Result<Vec<_>, _> = struct_array
-                .columns()
-                .iter()
-                .map(|field_array| cast_to_variant(field_array.as_ref()))
-                .collect();
-            let field_variant_arrays = field_variant_arrays?;
-
-            // Cache column names to avoid repeated calls
-            let column_names = struct_array.column_names();
-
-            for i in 0..struct_array.len() {
-                if struct_array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                // Create a VariantBuilder for this struct instance
-                let mut variant_builder = VariantBuilder::new();
-                let mut object_builder = variant_builder.new_object();
-
-                // Iterate through all fields in the struct
-                for (field_idx, field_name) in column_names.iter().enumerate() {
-                    // Use pre-converted field variant arrays for better performance
-                    // Check nulls directly from the pre-converted arrays instead of accessing column again
-                    if !field_variant_arrays[field_idx].is_null(i) {
-                        let field_variant = field_variant_arrays[field_idx].value(i);
-                        object_builder.insert(field_name, field_variant);
-                    }
-                    // Note: we skip null fields rather than inserting Variant::Null
-                    // to match Arrow struct semantics where null fields are omitted
-                }
-
-                object_builder.finish();
-                let (metadata, value) = variant_builder.finish();
-                let variant = Variant::try_new(&metadata, &value)?;
-                builder.append_variant(variant);
-            }
-        }
-        DataType::Union(fields, _) => {
-            convert_union(fields, input, &mut builder)?;
-        }
-        DataType::Date32 => {
-            generic_conversion_array!(
-                Date32Type,
-                as_primitive,
-                |v: i32| -> NaiveDate { Date32Type::to_naive_date(v) },
-                input,
-                builder
-            );
-        }
-        DataType::Date64 => {
-            generic_conversion_array!(
-                Date64Type,
-                as_primitive,
-                |v: i64| { Date64Type::to_naive_date_opt(v).unwrap() },
-                input,
-                builder
-            );
-        }
-        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-            DataType::Int16 => convert_run_end_encoded::<Int16Type>(input, &mut builder)?,
-            DataType::Int32 => convert_run_end_encoded::<Int32Type>(input, &mut builder)?,
-            DataType::Int64 => convert_run_end_encoded::<Int64Type>(input, &mut builder)?,
-            _ => {
-                return Err(ArrowError::CastError(format!(
-                    "Unsupported run ends type: {:?}",
-                    run_ends.data_type()
-                )));
-            }
-        },
-        DataType::Dictionary(_, _) => {
-            convert_dictionary_encoded(input, &mut builder)?;
-        }
-
-        DataType::Map(field, _) => match field.data_type() {
-            DataType::Struct(_) => {
-                let map_array = input.as_map();
-                let keys = cast(map_array.keys(), &DataType::Utf8)?;
-                let key_strings = keys.as_string::<i32>();
-                let values = cast_to_variant(map_array.values())?;
-                let offsets = map_array.offsets();
-
-                let mut start_offset = offsets[0];
-                for end_offset in offsets.iter().skip(1) {
-                    if start_offset >= *end_offset {
-                        builder.append_null();
-                        continue;
-                    }
-
-                    let length = (end_offset - start_offset) as usize;
-
-                    let mut variant_builder = VariantBuilder::new();
-                    let mut object_builder = variant_builder.new_object();
-
-                    for i in start_offset..*end_offset {
-                        let value = values.value(i as usize);
-                        object_builder.insert(key_strings.value(i as usize), value);
-                    }
-                    object_builder.finish();
-                    let (metadata, value) = variant_builder.finish();
-                    let variant = Variant::try_new(&metadata, &value)?;
-
-                    builder.append_variant(variant);
-
-                    start_offset += length as i32;
-                }
-            }
-            _ => {
-                return Err(ArrowError::CastError(format!(
-                    "Unsupported map field type for casting to Variant: {field:?}",
-                )));
-            }
-        },
         DataType::List(_) => {
             let list_array = input.as_list::<i32>();
             let values = list_array.values();
@@ -535,7 +433,107 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(Variant::List(variant_list.clone()))
             }
         }
+        DataType::Struct(_) => {
+            let struct_array = input.as_struct();
 
+            // Pre-convert all field arrays once for better performance
+            // This avoids converting the same field array multiple times
+            // Alternative approach: Use slicing per row: field_array.slice(i, 1)
+            // However, pre-conversion is more efficient for typical use cases
+            let field_variant_arrays: Result<Vec<_>, _> = struct_array
+                .columns()
+                .iter()
+                .map(|field_array| cast_to_variant(field_array.as_ref()))
+                .collect();
+            let field_variant_arrays = field_variant_arrays?;
+
+            // Cache column names to avoid repeated calls
+            let column_names = struct_array.column_names();
+
+            for i in 0..struct_array.len() {
+                if struct_array.is_null(i) {
+                    builder.append_null();
+                    continue;
+                }
+
+                // Create a VariantBuilder for this struct instance
+                let mut variant_builder = VariantBuilder::new();
+                let mut object_builder = variant_builder.new_object();
+
+                // Iterate through all fields in the struct
+                for (field_idx, field_name) in column_names.iter().enumerate() {
+                    // Use pre-converted field variant arrays for better performance
+                    // Check nulls directly from the pre-converted arrays instead of accessing column again
+                    if !field_variant_arrays[field_idx].is_null(i) {
+                        let field_variant = field_variant_arrays[field_idx].value(i);
+                        object_builder.insert(field_name, field_variant);
+                    }
+                    // Note: we skip null fields rather than inserting Variant::Null
+                    // to match Arrow struct semantics where null fields are omitted
+                }
+
+                object_builder.finish();
+                let (metadata, value) = variant_builder.finish();
+                let variant = Variant::try_new(&metadata, &value)?;
+                builder.append_variant(variant);
+            }
+        }
+        DataType::Map(field, _) => match field.data_type() {
+            DataType::Struct(_) => {
+                let map_array = input.as_map();
+                let keys = cast(map_array.keys(), &DataType::Utf8)?;
+                let key_strings = keys.as_string::<i32>();
+                let values = cast_to_variant(map_array.values())?;
+                let offsets = map_array.offsets();
+
+                let mut start_offset = offsets[0];
+                for end_offset in offsets.iter().skip(1) {
+                    if start_offset >= *end_offset {
+                        builder.append_null();
+                        continue;
+                    }
+
+                    let length = (end_offset - start_offset) as usize;
+
+                    let mut variant_builder = VariantBuilder::new();
+                    let mut object_builder = variant_builder.new_object();
+
+                    for i in start_offset..*end_offset {
+                        let value = values.value(i as usize);
+                        object_builder.insert(key_strings.value(i as usize), value);
+                    }
+                    object_builder.finish();
+                    let (metadata, value) = variant_builder.finish();
+                    let variant = Variant::try_new(&metadata, &value)?;
+
+                    builder.append_variant(variant);
+
+                    start_offset += length as i32;
+                }
+            }
+            _ => {
+                return Err(ArrowError::CastError(format!(
+                    "Unsupported map field type for casting to Variant: {field:?}",
+                )));
+            }
+        },
+        DataType::Union(fields, _) => {
+            convert_union(fields, input, &mut builder)?;
+        }
+        DataType::Dictionary(_, _) => {
+            convert_dictionary_encoded(input, &mut builder)?;
+        }
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => convert_run_end_encoded::<Int16Type>(input, &mut builder)?,
+            DataType::Int32 => convert_run_end_encoded::<Int32Type>(input, &mut builder)?,
+            DataType::Int64 => convert_run_end_encoded::<Int64Type>(input, &mut builder)?,
+            _ => {
+                return Err(ArrowError::CastError(format!(
+                    "Unsupported run ends type: {:?}",
+                    run_ends.data_type()
+                )));
+            }
+        },
         dt => {
             return Err(ArrowError::CastError(format!(
                 "Unsupported data type for casting to Variant: {dt:?}",
