@@ -49,7 +49,6 @@ use parquet::data_type::AsBytes;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, ParquetOffsetIndex};
 use parquet::file::properties::WriterProperties;
 use parquet::file::FOOTER_SIZE;
-use parquet::format::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -257,7 +256,7 @@ struct TestColumnChunk {
     dictionary_page_location: Option<i64>,
 
     /// The location of the data pages in the file
-    page_locations: Vec<PageLocation>,
+    page_locations: Vec<parquet::format::PageLocation>,
 }
 
 /// Information about the pages in a single row group
@@ -287,8 +286,11 @@ impl TestRowGroups {
                     .enumerate()
                     .map(|(col_idx, col_meta)| {
                         let column_name = col_meta.column_descr().name().to_string();
-                        let page_locations =
-                            offset_index[rg_index][col_idx].page_locations().to_vec();
+                        let page_locations = offset_index[rg_index][col_idx]
+                            .page_locations()
+                            .iter()
+                            .map(parquet::format::PageLocation::from)
+                            .collect();
                         let dictionary_page_location = col_meta.dictionary_page_offset();
 
                         // We can find the byte range of the entire column chunk

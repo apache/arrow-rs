@@ -106,7 +106,7 @@ use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::{
     page_encoding_stats::{self, PageEncodingStats},
-    page_index::offset_index::PageLocation,
+    page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation},
 };
 use crate::file::{
     page_index::index::PageIndex,
@@ -156,7 +156,7 @@ pub(crate) use writer::ThriftMetadataWriter;
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`ColumnIndex`]: crate::format::ColumnIndex
-pub type ParquetColumnIndex = Vec<Vec<Index>>;
+pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
 
 /// [`OffsetIndexMetaData`] for each data page of each row group of each column
 ///
@@ -1948,7 +1948,7 @@ impl OffsetIndexBuilder {
 mod tests {
     use super::*;
     use crate::basic::{PageType, SortOrder};
-    use crate::file::page_index::index::NativeIndex;
+    use crate::file::page_index::column_index::{ColumnIndex, PrimitiveColumnIndex};
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -2223,7 +2223,17 @@ mod tests {
         let mut column_index = ColumnIndexBuilder::new(Type::BOOLEAN);
         column_index.append(false, vec![1u8], vec![2u8, 3u8], 4);
         let column_index = column_index.build_to_thrift();
-        let native_index = NativeIndex::<bool>::try_new(column_index).unwrap();
+        let native_index = PrimitiveColumnIndex::<bool> {
+            column_index: ColumnIndex {
+                null_pages: column_index.null_pages,
+                boundary_order: column_index.boundary_order.try_into().unwrap(),
+                null_counts: column_index.null_counts,
+                repetition_level_histograms: column_index.repetition_level_histograms,
+                definition_level_histograms: column_index.definition_level_histograms,
+            },
+            min_values: vec![],
+            max_values: vec![],
+        };
 
         // Now, add in OffsetIndex
         let mut offset_index = OffsetIndexBuilder::new();
@@ -2237,16 +2247,16 @@ mod tests {
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
-            .set_column_index(Some(vec![vec![Index::BOOLEAN(native_index)]]))
+            .set_column_index(Some(vec![vec![ColumnIndexMetaData::BOOLEAN(native_index)]]))
             .set_offset_index(Some(vec![vec![
                 OffsetIndexMetaData::try_new(offset_index).unwrap()
             ]]))
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2784;
+        let bigger_expected_size = 2704;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3120;
+        let bigger_expected_size = 3040;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

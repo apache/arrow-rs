@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for reading [`Index`] and [`OffsetIndexMetaData`] from parquet metadata.
+//! Support for reading [`ColumnIndexMetaData`] and [`OffsetIndexMetaData`] from parquet metadata.
 
 use crate::basic::{BoundaryOrder, Type};
 use crate::data_type::Int96;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
-use crate::file::page_index::index::{Index, NativeIndex};
+use crate::file::page_index::column_index::{
+    ByteArrayColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
+};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
@@ -38,7 +40,7 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
     }
 }
 
-/// Reads per-column [`Index`] for all columns of a row group by
+/// Reads per-column [`ColumnIndexMetaData`] for all columns of a row group by
 /// decoding [`ColumnIndex`] .
 ///
 /// Returns a vector of `index[column_number]`.
@@ -56,7 +58,7 @@ pub(crate) fn acc_range(a: Option<Range<u64>>, b: Option<Range<u64>>) -> Option<
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Option<Vec<Index>>, ParquetError> {
+) -> Result<Option<Vec<ColumnIndexMetaData>>, ParquetError> {
     let fetch = chunks
         .iter()
         .fold(None, |range, c| acc_range(range, c.column_index_range()));
@@ -77,7 +79,7 @@ pub fn read_columns_indexes<R: ChunkReader>(
                         ..usize::try_from(r.end - fetch.start)?],
                     c.column_type(),
                 ),
-                None => Ok(Index::NONE),
+                None => Ok(ColumnIndexMetaData::NONE),
             })
             .collect(),
     )
@@ -134,8 +136,9 @@ pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, Pa
     OffsetIndexMetaData::try_from(&mut prot)
 }
 
+// private struct only used for decoding then discarded
 thrift_struct!(
-pub(crate) struct ColumnIndex<'a> {
+pub(super) struct ThriftColumnIndex<'a> {
   1: required list<bool> null_pages
   2: required list<'a><binary> min_values
   3: required list<'a><binary> max_values
@@ -146,20 +149,25 @@ pub(crate) struct ColumnIndex<'a> {
 }
 );
 
-pub(crate) fn decode_column_index(data: &[u8], column_type: Type) -> Result<Index, ParquetError> {
+pub(crate) fn decode_column_index(
+    data: &[u8],
+    column_type: Type,
+) -> Result<ColumnIndexMetaData, ParquetError> {
     let mut prot = ThriftCompactInputProtocol::new(data);
-    let index = ColumnIndex::try_from(&mut prot)?;
+    let index = ThriftColumnIndex::try_from(&mut prot)?;
 
     let index = match column_type {
-        Type::BOOLEAN => Index::BOOLEAN(NativeIndex::<bool>::try_new_local(index)?),
-        Type::INT32 => Index::INT32(NativeIndex::<i32>::try_new_local(index)?),
-        Type::INT64 => Index::INT64(NativeIndex::<i64>::try_new_local(index)?),
-        Type::INT96 => Index::INT96(NativeIndex::<Int96>::try_new_local(index)?),
-        Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new_local(index)?),
-        Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new_local(index)?),
-        Type::BYTE_ARRAY => Index::BYTE_ARRAY(NativeIndex::try_new_local(index)?),
+        Type::BOOLEAN => {
+            ColumnIndexMetaData::BOOLEAN(PrimitiveColumnIndex::<bool>::try_new(index)?)
+        }
+        Type::INT32 => ColumnIndexMetaData::INT32(PrimitiveColumnIndex::<i32>::try_new(index)?),
+        Type::INT64 => ColumnIndexMetaData::INT64(PrimitiveColumnIndex::<i64>::try_new(index)?),
+        Type::INT96 => ColumnIndexMetaData::INT96(PrimitiveColumnIndex::<Int96>::try_new(index)?),
+        Type::FLOAT => ColumnIndexMetaData::FLOAT(PrimitiveColumnIndex::<f32>::try_new(index)?),
+        Type::DOUBLE => ColumnIndexMetaData::DOUBLE(PrimitiveColumnIndex::<f64>::try_new(index)?),
+        Type::BYTE_ARRAY => ColumnIndexMetaData::BYTE_ARRAY(ByteArrayColumnIndex::try_new(index)?),
         Type::FIXED_LEN_BYTE_ARRAY => {
-            Index::FIXED_LEN_BYTE_ARRAY(NativeIndex::try_new_local(index)?)
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(ByteArrayColumnIndex::try_new(index)?)
         }
     };
 

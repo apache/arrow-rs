@@ -24,9 +24,7 @@ use crate::encryption::{
 };
 #[cfg(feature = "encryption")]
 use crate::errors::ParquetError;
-use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
-use crate::file::page_index::index::Index;
 use crate::file::writer::{get_file_magic, TrackedWrite};
 use crate::format::EncryptionAlgorithm;
 #[cfg(feature = "encryption")]
@@ -34,6 +32,7 @@ use crate::format::{AesGcmV1, ColumnCryptoMetaData};
 use crate::schema::types;
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
+use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
 use std::io::Write;
 use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
@@ -391,17 +390,31 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                     column_indexes
                         .iter()
                         .map(|column_index| match column_index {
-                            Index::NONE => None,
-                            Index::BOOLEAN(column_index) => Some(column_index.to_thrift()),
-                            Index::BYTE_ARRAY(column_index) => Some(column_index.to_thrift()),
-                            Index::DOUBLE(column_index) => Some(column_index.to_thrift()),
-                            Index::FIXED_LEN_BYTE_ARRAY(column_index) => {
+                            ColumnIndexMetaData::NONE => None,
+                            ColumnIndexMetaData::BOOLEAN(column_index) => {
                                 Some(column_index.to_thrift())
                             }
-                            Index::FLOAT(column_index) => Some(column_index.to_thrift()),
-                            Index::INT32(column_index) => Some(column_index.to_thrift()),
-                            Index::INT64(column_index) => Some(column_index.to_thrift()),
-                            Index::INT96(column_index) => Some(column_index.to_thrift()),
+                            ColumnIndexMetaData::BYTE_ARRAY(column_index) => {
+                                Some(column_index.to_thrift())
+                            }
+                            ColumnIndexMetaData::DOUBLE(column_index) => {
+                                Some(column_index.to_thrift())
+                            }
+                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => {
+                                Some(column_index.to_thrift())
+                            }
+                            ColumnIndexMetaData::FLOAT(column_index) => {
+                                Some(column_index.to_thrift())
+                            }
+                            ColumnIndexMetaData::INT32(column_index) => {
+                                Some(column_index.to_thrift())
+                            }
+                            ColumnIndexMetaData::INT64(column_index) => {
+                                Some(column_index.to_thrift())
+                            }
+                            ColumnIndexMetaData::INT96(column_index) => {
+                                Some(column_index.to_thrift())
+                            }
                         })
                         .collect()
                 })
