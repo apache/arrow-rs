@@ -572,11 +572,10 @@ impl Decoder {
                 if is_not_null {
                     // It is important to decode before appending to null buffer in case of decode error
                     encoding.decode(buf)?;
-                    nb.append(true);
                 } else {
                     encoding.append_null();
-                    nb.append(false);
                 }
+                nb.append(is_not_null);
             }
             Self::RecordResolved {
                 encodings,
