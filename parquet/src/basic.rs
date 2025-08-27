@@ -362,9 +362,7 @@ pub enum LogicalType {
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
     fn read_thrift(prot: &mut R) -> Result<Self> {
-        prot.read_struct_begin()?;
-
-        let field_ident = prot.read_field_begin()?;
+        let field_ident = prot.read_field_begin(0)?;
         if field_ident.field_type == FieldType::Stop {
             return Err(general_err!("received empty union from remote LogicalType"));
         }
@@ -463,13 +461,12 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
                 }
             }
         };
-        let field_ident = prot.read_field_begin()?;
+        let field_ident = prot.read_field_begin(field_ident.id)?;
         if field_ident.field_type != FieldType::Stop {
             return Err(general_err!(
                 "Received multiple fields for union from remote LogicalType"
             ));
         }
-        prot.read_struct_end()?;
         Ok(ret)
     }
 }
@@ -1122,8 +1119,7 @@ impl ColumnOrder {
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
     fn read_thrift(prot: &mut R) -> Result<Self> {
-        prot.read_struct_begin()?;
-        let field_ident = prot.read_field_begin()?;
+        let field_ident = prot.read_field_begin(0)?;
         if field_ident.field_type == FieldType::Stop {
             return Err(general_err!("Received empty union from remote ColumnOrder"));
         }
@@ -1138,13 +1134,12 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
                 Self::UNKNOWN
             }
         };
-        let field_ident = prot.read_field_begin()?;
+        let field_ident = prot.read_field_begin(field_ident.id)?;
         if field_ident.field_type != FieldType::Stop {
             return Err(general_err!(
                 "Received multiple fields for union from remote ColumnOrder"
             ));
         }
-        prot.read_struct_end()?;
         Ok(ret)
     }
 }

@@ -159,6 +159,7 @@ impl TryFrom<u8> for ElementType {
 pub(crate) struct FieldIdentifier {
     pub(crate) field_type: FieldType,
     pub(crate) id: i16,
+    pub(crate) bool_val: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -210,11 +211,50 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         })
     }
 
-    fn read_struct_begin(&mut self) -> Result<()>;
+    fn read_field_begin(&mut self, last_field_id: i16) -> Result<FieldIdentifier> {
+        // we can read at least one byte, which is:
+        // - the type
+        // - the field delta and the type
+        let field_type = self.read_byte()?;
+        let field_delta = (field_type & 0xf0) >> 4;
+        let field_type = FieldType::try_from(field_type & 0xf)?;
+        let mut bool_val: Option<bool> = None;
 
-    fn read_struct_end(&mut self) -> Result<()>;
+        match field_type {
+            FieldType::Stop => Ok(FieldIdentifier {
+                field_type: FieldType::Stop,
+                id: 0,
+                bool_val,
+            }),
+            _ => {
+                // special handling for bools
+                if field_type == FieldType::BooleanFalse {
+                    bool_val = Some(false);
+                } else if field_type == FieldType::BooleanTrue {
+                    bool_val = Some(true);
+                }
+                let field_id = if field_delta != 0 {
+                    last_field_id.checked_add(field_delta as i16).map_or_else(
+                        || {
+                            Err(general_err!(format!(
+                                "cannot add {} to {}",
+                                field_delta, last_field_id
+                            )))
+                        },
+                        Ok,
+                    )?
+                } else {
+                    self.read_i16()?
+                };
 
-    fn read_field_begin(&mut self) -> Result<FieldIdentifier>;
+                Ok(FieldIdentifier {
+                    field_type,
+                    id: field_id,
+                    bool_val,
+                })
+            }
+        }
+    }
 
     // This is a specialized version of read_field_begin, solely for use in parsing
     // PageLocation structs in the offset index. This function assumes that the delta
@@ -229,7 +269,19 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         Ok((field_type, field_delta))
     }
 
-    fn read_bool(&mut self) -> Result<bool>;
+    // not to be used for bool struct fields, just for bool arrays
+    fn read_bool(&mut self) -> Result<bool> {
+        let b = self.read_byte()?;
+        // Previous versions of the thrift specification said to use 0 and 1 inside collections,
+        // but that differed from existing implementations.
+        // The specification was updated in https://github.com/apache/thrift/commit/2c29c5665bc442e703480bb0ee60fe925ffe02e8.
+        // At least the go implementation seems to have followed the previously documented values.
+        match b {
+            0x01 => Ok(true),
+            0x00 | 0x02 => Ok(false),
+            unkn => Err(general_err!(format!("cannot convert {unkn} into bool"))),
+        }
+    }
 
     fn read_string(&mut self) -> Result<&'a str> {
         let slice = self.read_bytes()?;
@@ -301,15 +353,16 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             FieldType::Double => self.skip_bytes(8).map(|_| ()),
             FieldType::Binary => self.skip_binary().map(|_| ()),
             FieldType::Struct => {
-                self.read_struct_begin()?;
+                let mut last_field_id = 0i16;
                 loop {
-                    let field_ident = self.read_field_begin()?;
+                    let field_ident = self.read_field_begin(last_field_id)?;
                     if field_ident.field_type == FieldType::Stop {
                         break;
                     }
                     self.skip_till_depth(field_ident.field_type, depth - 1)?;
+                    last_field_id = field_ident.id;
                 }
-                self.read_struct_end()
+                Ok(())
             }
             FieldType::List => {
                 let list_ident = self.read_list_begin()?;
@@ -327,31 +380,15 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
 
 pub(crate) struct ThriftSliceInputProtocol<'a> {
     buf: &'a [u8],
-    // Identifier of the last field deserialized for a struct.
-    last_read_field_id: i16,
-    // Stack of the last read field ids (a new entry is added each time a nested struct is read).
-    read_field_id_stack: Vec<i16>,
-    // Boolean value for a field.
-    // Saved because boolean fields and their value are encoded in a single byte,
-    // and reading the field only occurs after the field id is read.
-    pending_read_bool_value: Option<bool>,
 }
 
 impl<'a> ThriftSliceInputProtocol<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
-        Self {
-            buf,
-            last_read_field_id: 0,
-            read_field_id_stack: Vec::with_capacity(16),
-            pending_read_bool_value: None,
-        }
+        Self { buf }
     }
 
     pub fn reset_buffer(&mut self, buf: &'a [u8]) {
         self.buf = buf;
-        self.last_read_field_id = 0;
-        self.read_field_id_stack.clear();
-        self.pending_read_bool_value = None;
     }
 
     pub fn as_slice(&self) -> &'a [u8] {
@@ -387,83 +424,6 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
         match slice.try_into() {
             Ok(slice) => Ok(f64::from_le_bytes(slice)),
             Err(_) => Err(general_err!("Unexpected error converting slice")),
-        }
-    }
-
-    fn read_struct_begin(&mut self) -> Result<()> {
-        self.read_field_id_stack.push(self.last_read_field_id);
-        self.last_read_field_id = 0;
-        Ok(())
-    }
-
-    fn read_struct_end(&mut self) -> Result<()> {
-        self.last_read_field_id = self
-            .read_field_id_stack
-            .pop()
-            .expect("should have previous field ids");
-        Ok(())
-    }
-
-    fn read_field_begin(&mut self) -> Result<FieldIdentifier> {
-        // we can read at least one byte, which is:
-        // - the type
-        // - the field delta and the type
-        let field_type = self.read_byte()?;
-        let field_delta = (field_type & 0xf0) >> 4;
-        let field_type = FieldType::try_from(field_type & 0xf)?;
-
-        match field_type {
-            FieldType::Stop => Ok(FieldIdentifier {
-                field_type: FieldType::Stop,
-                id: 0,
-            }),
-            _ => {
-                // special handling for bools
-                if field_type == FieldType::BooleanFalse {
-                    self.pending_read_bool_value = Some(false);
-                } else if field_type == FieldType::BooleanTrue {
-                    self.pending_read_bool_value = Some(true);
-                }
-                if field_delta != 0 {
-                    self.last_read_field_id = self
-                        .last_read_field_id
-                        .checked_add(field_delta as i16)
-                        .map_or_else(
-                            || {
-                                Err(general_err!(format!(
-                                    "cannot add {} to {}",
-                                    field_delta, self.last_read_field_id
-                                )))
-                            },
-                            Ok,
-                        )?;
-                } else {
-                    self.last_read_field_id = self.read_i16()?;
-                };
-
-                Ok(FieldIdentifier {
-                    field_type,
-                    id: self.last_read_field_id,
-                })
-            }
-        }
-    }
-
-    fn read_bool(&mut self) -> Result<bool> {
-        match self.pending_read_bool_value.take() {
-            Some(b) => Ok(b),
-            None => {
-                let b = self.read_byte()?;
-                // Previous versions of the thrift specification said to use 0 and 1 inside collections,
-                // but that differed from existing implementations.
-                // The specification was updated in https://github.com/apache/thrift/commit/2c29c5665bc442e703480bb0ee60fe925ffe02e8.
-                // At least the go implementation seems to have followed the previously documented values.
-                match b {
-                    0x01 => Ok(true),
-                    0x00 | 0x02 => Ok(false),
-                    unkn => Err(general_err!(format!("cannot convert {unkn} into bool"))),
-                }
-            }
         }
     }
 }

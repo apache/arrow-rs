@@ -106,8 +106,7 @@ macro_rules! thrift_union_all_empty {
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier {
             fn read_thrift(prot: &mut R) -> Result<Self> {
-                prot.read_struct_begin()?;
-                let field_ident = prot.read_field_begin()?;
+                let field_ident = prot.read_field_begin(0)?;
                 if field_ident.field_type == FieldType::Stop {
                     return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
                 }
@@ -121,13 +120,12 @@ macro_rules! thrift_union_all_empty {
                         return Err(general_err!("Unexpected {} {}", stringify!($identifier), field_ident.id));
                     }
                 };
-                let field_ident = prot.read_field_begin()?;
+                let field_ident = prot.read_field_begin(field_ident.id)?;
                 if field_ident.field_type != FieldType::Stop {
                     return Err(general_err!(
                         "Received multiple fields for union from remote {}", stringify!($identifier)
                     ));
                 }
-                prot.read_struct_end()?;
                 Ok(ret)
             }
         }
@@ -190,8 +188,7 @@ macro_rules! thrift_union {
 
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
             fn read_thrift(prot: &mut R) -> Result<Self> {
-                prot.read_struct_begin()?;
-                let field_ident = prot.read_field_begin()?;
+                let field_ident = prot.read_field_begin(0)?;
                 if field_ident.field_type == FieldType::Stop {
                     return Err(general_err!("Received empty union from remote {}", stringify!($identifier)));
                 }
@@ -204,13 +201,12 @@ macro_rules! thrift_union {
                         return Err(general_err!("Unexpected {} {}", stringify!($identifier), field_ident.id));
                     }
                 };
-                let field_ident = prot.read_field_begin()?;
+                let field_ident = prot.read_field_begin(field_ident.id)?;
                 if field_ident.field_type != FieldType::Stop {
                     return Err(general_err!(
                         concat!("Received multiple fields for union from remote {}", stringify!($identifier))
                     ));
                 }
-                prot.read_struct_end()?;
                 Ok(ret)
             }
         }
@@ -277,23 +273,23 @@ macro_rules! thrift_struct {
         impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
             fn read_thrift(prot: &mut R) -> Result<Self> {
                 $(let mut $field_name: Option<$crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?)> = None;)*
-                prot.read_struct_begin()?;
+                let mut last_field_id = 0i16;
                 loop {
-                    let field_ident = prot.read_field_begin()?;
+                    let field_ident = prot.read_field_begin(last_field_id)?;
                     if field_ident.field_type == FieldType::Stop {
                         break;
                     }
                     match field_ident.id {
                         $($field_id => {
-                            let val = $crate::__thrift_read_field!(prot, $field_type $($field_lt)? $($element_type)?);
+                            let val = $crate::__thrift_read_field!(prot, field_ident, $field_type $($field_lt)? $($element_type)?);
                             $field_name = Some(val);
                         })*
                         _ => {
                             prot.skip(field_ident.field_type)?;
                         }
                     };
+                    last_field_id = field_ident.id;
                 }
-                prot.read_struct_end()?;
                 $($crate::__thrift_result_required_or_optional!($required_or_optional $field_name);)*
                 Ok(Self {
                     $($field_name),*
@@ -407,38 +403,41 @@ macro_rules! __thrift_result_required_or_optional {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_read_field {
-    ($prot:tt, list $lt:lifetime binary) => {
+    ($prot:tt, $field_ident:tt, list $lt:lifetime binary) => {
         read_thrift_vec::<&'a [u8], R>(&mut *$prot)?
     };
-    ($prot:tt, list $lt:lifetime $element_type:ident) => {
+    ($prot:tt, $field_ident:tt, list $lt:lifetime $element_type:ident) => {
         read_thrift_vec::<$element_type, R>(&mut *$prot)?
     };
-    ($prot:tt, list string) => {
+    ($prot:tt, $field_ident:tt, list string) => {
         read_thrift_vec::<String, R>(&mut *$prot)?
     };
-    ($prot:tt, list $element_type:ident) => {
+    ($prot:tt, $field_ident:tt, list $element_type:ident) => {
         read_thrift_vec::<$element_type, R>(&mut *$prot)?
     };
-    ($prot:tt, string $lt:lifetime) => {
+    ($prot:tt, $field_ident:tt, string $lt:lifetime) => {
         <&$lt str>::read_thrift(&mut *$prot)?
     };
-    ($prot:tt, binary $lt:lifetime) => {
+    ($prot:tt, $field_ident:tt, binary $lt:lifetime) => {
         <&$lt [u8]>::read_thrift(&mut *$prot)?
     };
-    ($prot:tt, $field_type:ident $lt:lifetime) => {
+    ($prot:tt, $field_ident:tt, $field_type:ident $lt:lifetime) => {
         $field_type::read_thrift(&mut *$prot)?
     };
-    ($prot:tt, string) => {
+    ($prot:tt, $field_ident:tt, string) => {
         String::read_thrift(&mut *$prot)?
     };
-    ($prot:tt, binary) => {
+    ($prot:tt, $field_ident:tt, binary) => {
         // this one needs to not conflict with `list<i8>`
         $prot.read_bytes()?.to_vec()
     };
-    ($prot:tt, double) => {
+    ($prot:tt, $field_ident:tt, double) => {
         $crate::parquet_thrift::OrderedF64::read_thrift(&mut *$prot)?
     };
-    ($prot:tt, $field_type:ident) => {
+    ($prot:tt, $field_ident:tt, bool) => {
+        $field_ident.bool_val.unwrap()
+    };
+    ($prot:tt, $field_ident:tt, $field_type:ident) => {
         $field_type::read_thrift(&mut *$prot)?
     };
 }
