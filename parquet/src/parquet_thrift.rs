@@ -345,7 +345,8 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         }
 
         match field_type {
-            FieldType::BooleanFalse | FieldType::BooleanTrue => self.read_bool().map(|_| ()),
+            // boolean field has no data
+            FieldType::BooleanFalse | FieldType::BooleanTrue => Ok(()),
             FieldType::Byte => self.read_i8().map(|_| ()),
             FieldType::I16 => self.skip_vlq().map(|_| ()),
             FieldType::I32 => self.skip_vlq().map(|_| ()),
