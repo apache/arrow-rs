@@ -40,79 +40,11 @@ use arrow::temporal_conversions::{
     timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
-use arrow_schema::{ArrowError, DataType, TimeUnit, UnionFields};
+use arrow_schema::{ArrowError, DataType, FieldRef, TimeUnit, UnionFields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use parquet_variant::{
     Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
-
-fn convert_timestamp(
-    time_unit: &TimeUnit,
-    time_zone: &Option<Arc<str>>,
-    input: &dyn Array,
-    builder: &mut VariantArrayBuilder,
-) {
-    let native_datetimes: Vec<Option<NaiveDateTime>> = match time_unit {
-        arrow_schema::TimeUnit::Second => {
-            let ts_array = input
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .expect("Array is not TimestampSecondArray");
-
-            ts_array
-                .iter()
-                .map(|x| x.map(|y| timestamp_s_to_datetime(y).unwrap()))
-                .collect()
-        }
-        arrow_schema::TimeUnit::Millisecond => {
-            let ts_array = input
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .expect("Array is not TimestampMillisecondArray");
-
-            ts_array
-                .iter()
-                .map(|x| x.map(|y| timestamp_ms_to_datetime(y).unwrap()))
-                .collect()
-        }
-        arrow_schema::TimeUnit::Microsecond => {
-            let ts_array = input
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .expect("Array is not TimestampMicrosecondArray");
-            ts_array
-                .iter()
-                .map(|x| x.map(|y| timestamp_us_to_datetime(y).unwrap()))
-                .collect()
-        }
-        arrow_schema::TimeUnit::Nanosecond => {
-            let ts_array = input
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .expect("Array is not TimestampNanosecondArray");
-            ts_array
-                .iter()
-                .map(|x| x.map(|y| timestamp_ns_to_datetime(y).unwrap()))
-                .collect()
-        }
-    };
-
-    for x in native_datetimes {
-        match x {
-            Some(ndt) => {
-                if time_zone.is_none() {
-                    builder.append_variant(ndt.into());
-                } else {
-                    let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&ndt);
-                    builder.append_variant(utc_dt.into());
-                }
-            }
-            None => {
-                builder.append_null();
-            }
-        }
-    }
-}
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
 /// need to convert a specific data type
@@ -147,7 +79,6 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     let mut builder = VariantArrayBuilder::new(input.len());
 
     let input_type = input.data_type();
-    // todo: handle other types like Boolean, Date, Timestamp, etc.
     match input_type {
         DataType::Null => {
             for _ in 0..input.len() {
@@ -433,96 +364,10 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 builder.append_variant(Variant::List(variant_list.clone()))
             }
         }
-        DataType::Struct(_) => {
-            let struct_array = input.as_struct();
-
-            // Pre-convert all field arrays once for better performance
-            // This avoids converting the same field array multiple times
-            // Alternative approach: Use slicing per row: field_array.slice(i, 1)
-            // However, pre-conversion is more efficient for typical use cases
-            let field_variant_arrays: Result<Vec<_>, _> = struct_array
-                .columns()
-                .iter()
-                .map(|field_array| cast_to_variant(field_array.as_ref()))
-                .collect();
-            let field_variant_arrays = field_variant_arrays?;
-
-            // Cache column names to avoid repeated calls
-            let column_names = struct_array.column_names();
-
-            for i in 0..struct_array.len() {
-                if struct_array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                // Create a VariantBuilder for this struct instance
-                let mut variant_builder = VariantBuilder::new();
-                let mut object_builder = variant_builder.new_object();
-
-                // Iterate through all fields in the struct
-                for (field_idx, field_name) in column_names.iter().enumerate() {
-                    // Use pre-converted field variant arrays for better performance
-                    // Check nulls directly from the pre-converted arrays instead of accessing column again
-                    if !field_variant_arrays[field_idx].is_null(i) {
-                        let field_variant = field_variant_arrays[field_idx].value(i);
-                        object_builder.insert(field_name, field_variant);
-                    }
-                    // Note: we skip null fields rather than inserting Variant::Null
-                    // to match Arrow struct semantics where null fields are omitted
-                }
-
-                object_builder.finish();
-                let (metadata, value) = variant_builder.finish();
-                let variant = Variant::try_new(&metadata, &value)?;
-                builder.append_variant(variant);
-            }
-        }
-        DataType::Map(field, _) => match field.data_type() {
-            DataType::Struct(_) => {
-                let map_array = input.as_map();
-                let keys = cast(map_array.keys(), &DataType::Utf8)?;
-                let key_strings = keys.as_string::<i32>();
-                let values = cast_to_variant(map_array.values())?;
-                let offsets = map_array.offsets();
-
-                let mut start_offset = offsets[0];
-                for end_offset in offsets.iter().skip(1) {
-                    if start_offset >= *end_offset {
-                        builder.append_null();
-                        continue;
-                    }
-
-                    let length = (end_offset - start_offset) as usize;
-
-                    let mut variant_builder = VariantBuilder::new();
-                    let mut object_builder = variant_builder.new_object();
-
-                    for i in start_offset..*end_offset {
-                        let value = values.value(i as usize);
-                        object_builder.insert(key_strings.value(i as usize), value);
-                    }
-                    object_builder.finish();
-                    let (metadata, value) = variant_builder.finish();
-                    let variant = Variant::try_new(&metadata, &value)?;
-
-                    builder.append_variant(variant);
-
-                    start_offset += length as i32;
-                }
-            }
-            _ => {
-                return Err(ArrowError::CastError(format!(
-                    "Unsupported map field type for casting to Variant: {field:?}",
-                )));
-            }
-        },
-        DataType::Union(fields, _) => {
-            convert_union(fields, input, &mut builder)?;
-        }
-        DataType::Dictionary(_, _) => {
-            convert_dictionary_encoded(input, &mut builder)?;
-        }
+        DataType::Struct(_) => convert_struct(input, &mut builder)?,
+        DataType::Map(field, _) => convert_map(field, input, &mut builder)?,
+        DataType::Union(fields, _) => convert_union(fields, input, &mut builder)?,
+        DataType::Dictionary(_, _) => convert_dictionary_encoded(input, &mut builder)?,
         DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
             DataType::Int16 => convert_run_end_encoded::<Int16Type>(input, &mut builder)?,
             DataType::Int32 => convert_run_end_encoded::<Int32Type>(input, &mut builder)?,
@@ -543,7 +388,175 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     Ok(builder.build())
 }
 
-/// Convert union arrays
+// TODO do we need a cast_with_options to allow specifying conversion behavior,
+// e.g. how to handle overflows, whether to convert to Variant::Null or return
+// an error, etc. ?
+
+/// Convert timestamp arrays to native datetimes
+fn convert_timestamp(
+    time_unit: &TimeUnit,
+    time_zone: &Option<Arc<str>>,
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) {
+    let native_datetimes: Vec<Option<NaiveDateTime>> = match time_unit {
+        arrow_schema::TimeUnit::Second => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .expect("Array is not TimestampSecondArray");
+
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_s_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Millisecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .expect("Array is not TimestampMillisecondArray");
+
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_ms_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Microsecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .expect("Array is not TimestampMicrosecondArray");
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_us_to_datetime(y).unwrap()))
+                .collect()
+        }
+        arrow_schema::TimeUnit::Nanosecond => {
+            let ts_array = input
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .expect("Array is not TimestampNanosecondArray");
+            ts_array
+                .iter()
+                .map(|x| x.map(|y| timestamp_ns_to_datetime(y).unwrap()))
+                .collect()
+        }
+    };
+
+    for x in native_datetimes {
+        match x {
+            Some(ndt) => {
+                if time_zone.is_none() {
+                    builder.append_variant(ndt.into());
+                } else {
+                    let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&ndt);
+                    builder.append_variant(utc_dt.into());
+                }
+            }
+            None => {
+                builder.append_null();
+            }
+        }
+    }
+}
+
+fn convert_struct(input: &dyn Array, builder: &mut VariantArrayBuilder) -> Result<(), ArrowError> {
+    let struct_array = input.as_struct();
+
+    // Pre-convert all field arrays once for better performance
+    // This avoids converting the same field array multiple times
+    // Alternative approach: Use slicing per row: field_array.slice(i, 1)
+    // However, pre-conversion is more efficient for typical use cases
+    let field_variant_arrays: Result<Vec<_>, _> = struct_array
+        .columns()
+        .iter()
+        .map(|field_array| cast_to_variant(field_array.as_ref()))
+        .collect();
+    let field_variant_arrays = field_variant_arrays?;
+
+    // Cache column names to avoid repeated calls
+    let column_names = struct_array.column_names();
+
+    for i in 0..struct_array.len() {
+        if struct_array.is_null(i) {
+            builder.append_null();
+            continue;
+        }
+
+        // Create a VariantBuilder for this struct instance
+        let mut variant_builder = VariantBuilder::new();
+        let mut object_builder = variant_builder.new_object();
+
+        // Iterate through all fields in the struct
+        for (field_idx, field_name) in column_names.iter().enumerate() {
+            // Use pre-converted field variant arrays for better performance
+            // Check nulls directly from the pre-converted arrays instead of accessing column again
+            if !field_variant_arrays[field_idx].is_null(i) {
+                let field_variant = field_variant_arrays[field_idx].value(i);
+                object_builder.insert(field_name, field_variant);
+            }
+            // Note: we skip null fields rather than inserting Variant::Null
+            // to match Arrow struct semantics where null fields are omitted
+        }
+
+        object_builder.finish();
+        let (metadata, value) = variant_builder.finish();
+        let variant = Variant::try_new(&metadata, &value)?;
+        builder.append_variant(variant);
+    }
+
+    Ok(())
+}
+
+fn convert_map(
+    field: &FieldRef,
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) -> Result<(), ArrowError> {
+    match field.data_type() {
+        DataType::Struct(_) => {
+            let map_array = input.as_map();
+            let keys = cast(map_array.keys(), &DataType::Utf8)?;
+            let key_strings = keys.as_string::<i32>();
+            let values = cast_to_variant(map_array.values())?;
+            let offsets = map_array.offsets();
+
+            let mut start_offset = offsets[0];
+            for end_offset in offsets.iter().skip(1) {
+                if start_offset >= *end_offset {
+                    builder.append_null();
+                    continue;
+                }
+
+                let length = (end_offset - start_offset) as usize;
+
+                let mut variant_builder = VariantBuilder::new();
+                let mut object_builder = variant_builder.new_object();
+
+                for i in start_offset..*end_offset {
+                    let value = values.value(i as usize);
+                    object_builder.insert(key_strings.value(i as usize), value);
+                }
+                object_builder.finish();
+                let (metadata, value) = variant_builder.finish();
+                let variant = Variant::try_new(&metadata, &value)?;
+
+                builder.append_variant(variant);
+
+                start_offset += length as i32;
+            }
+        }
+        _ => {
+            return Err(ArrowError::CastError(format!(
+                "Unsupported map field type for casting to Variant: {field:?}",
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 fn convert_union(
     fields: &UnionFields,
     input: &dyn Array,
@@ -580,7 +593,33 @@ fn convert_union(
     Ok(())
 }
 
-/// Generic function to convert run-end encoded arrays
+fn convert_dictionary_encoded(
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) -> Result<(), ArrowError> {
+    let dict_array = input.as_any_dictionary();
+    let values_variant_array = cast_to_variant(dict_array.values().as_ref())?;
+    let normalized_keys = dict_array.normalized_keys();
+    let keys = dict_array.keys();
+
+    for (i, key_idx) in normalized_keys.iter().enumerate() {
+        if keys.is_null(i) {
+            builder.append_null();
+            continue;
+        }
+
+        if values_variant_array.is_null(*key_idx) {
+            builder.append_null();
+            continue;
+        }
+
+        let value = values_variant_array.value(*key_idx);
+        builder.append_variant(value);
+    }
+
+    Ok(())
+}
+
 fn convert_run_end_encoded<R: RunEndIndexType>(
     input: &dyn Array,
     builder: &mut VariantArrayBuilder,
@@ -614,38 +653,6 @@ fn convert_run_end_encoded<R: RunEndIndexType>(
 
     Ok(())
 }
-
-/// Convert dictionary encoded arrays
-fn convert_dictionary_encoded(
-    input: &dyn Array,
-    builder: &mut VariantArrayBuilder,
-) -> Result<(), ArrowError> {
-    let dict_array = input.as_any_dictionary();
-    let values_variant_array = cast_to_variant(dict_array.values().as_ref())?;
-    let normalized_keys = dict_array.normalized_keys();
-    let keys = dict_array.keys();
-
-    for (i, key_idx) in normalized_keys.iter().enumerate() {
-        if keys.is_null(i) {
-            builder.append_null();
-            continue;
-        }
-
-        if values_variant_array.is_null(*key_idx) {
-            builder.append_null();
-            continue;
-        }
-
-        let value = values_variant_array.value(*key_idx);
-        builder.append_variant(value);
-    }
-
-    Ok(())
-}
-
-// TODO do we need a cast_with_options to allow specifying conversion behavior,
-// e.g. how to handle overflows, whether to convert to Variant::Null or return
-// an error, etc. ?
 
 #[cfg(test)]
 mod tests {
