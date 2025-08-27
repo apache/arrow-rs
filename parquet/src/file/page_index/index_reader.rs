@@ -27,8 +27,8 @@ use crate::file::page_index::column_index::{
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{
-    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
-    WriteThriftField,
+    read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
+    ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
 };
 use crate::thrift_struct;
 use std::io::Write;
@@ -136,15 +136,15 @@ pub fn read_offset_indexes<R: ChunkReader>(
 }
 
 pub(crate) fn decode_offset_index(data: &[u8]) -> Result<OffsetIndexMetaData, ParquetError> {
-    let mut prot = ThriftCompactInputProtocol::new(data);
+    let mut prot = ThriftSliceInputProtocol::new(data);
 
     // Try to read fast-path first. If that fails, fall back to slower but more robust
     // decoder.
     match OffsetIndexMetaData::try_from_fast(&mut prot) {
         Ok(offset_index) => Ok(offset_index),
         Err(_) => {
-            prot = ThriftCompactInputProtocol::new(data);
-            OffsetIndexMetaData::try_from(&mut prot)
+            prot = ThriftSliceInputProtocol::new(data);
+            OffsetIndexMetaData::read_thrift(&mut prot)
         }
     }
 }
@@ -166,8 +166,8 @@ pub(crate) fn decode_column_index(
     data: &[u8],
     column_type: Type,
 ) -> Result<ColumnIndexMetaData, ParquetError> {
-    let mut prot = ThriftCompactInputProtocol::new(data);
-    let index = ThriftColumnIndex::try_from(&mut prot)?;
+    let mut prot = ThriftSliceInputProtocol::new(data);
+    let index = ThriftColumnIndex::read_thrift(&mut prot)?;
 
     let index = match column_type {
         Type::BOOLEAN => {

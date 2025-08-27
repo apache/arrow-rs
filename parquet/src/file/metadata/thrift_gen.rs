@@ -35,8 +35,8 @@ use crate::{
         statistics::ValueStatistics,
     },
     parquet_thrift::{
-        ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
-        WriteThrift, WriteThriftField,
+        read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
+        ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
     },
     schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor},
     thrift_struct, thrift_union,
@@ -46,6 +46,7 @@ use crate::{
 use crate::{
     encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
     file::column_crypto_metadata::ColumnCryptoMetaData,
+    parquet_thrift::ThriftSliceInputProtocol,
     schema::types::SchemaDescPtr,
 };
 
@@ -141,6 +142,7 @@ pub(crate) struct DataPageHeaderV2 {
 );
 
 thrift_struct!(
+#[allow(dead_code)]
 pub(crate) struct PageHeader {
   /// the type of the page: indicates which of the *_header fields is set
   1: required PageType type_
@@ -668,8 +670,8 @@ fn row_group_from_encrypted_thrift(
                         )
                     })?;
 
-            let mut prot = ThriftCompactInputProtocol::new(decrypted_cc_buf.as_slice());
-            let col_meta = ColumnMetaData::try_from(&mut prot)?;
+            let mut prot = ThriftSliceInputProtocol::new(decrypted_cc_buf.as_slice());
+            let col_meta = ColumnMetaData::read_thrift(&mut prot)?;
             c.meta_data = Some(col_meta);
             columns.push(convert_column(c, d.clone())?);
         } else {
@@ -698,14 +700,14 @@ pub(crate) fn parquet_metadata_with_encryption(
     encrypted_footer: bool,
     buf: &[u8],
 ) -> Result<ParquetMetaData> {
-    let mut prot = ThriftCompactInputProtocol::new(buf);
+    let mut prot = ThriftSliceInputProtocol::new(buf);
     let mut file_decryptor = None;
     let decrypted_fmd_buf;
 
     if encrypted_footer {
         if let Some(file_decryption_properties) = file_decryption_properties {
             let t_file_crypto_metadata: FileCryptoMetaData =
-                FileCryptoMetaData::try_from(&mut prot)
+                FileCryptoMetaData::read_thrift(&mut prot)
                     .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
             let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
                 EncryptionAlgorithm::AES_GCM_V1(algo) => algo.supply_aad_prefix,
@@ -733,7 +735,7 @@ pub(crate) fn parquet_metadata_with_encryption(
                         "Provided footer key and AAD were unable to decrypt parquet footer"
                     )
                 })?;
-            prot = ThriftCompactInputProtocol::new(decrypted_fmd_buf.as_ref());
+            prot = ThriftSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
 
             file_decryptor = Some(decryptor);
         } else {
@@ -743,7 +745,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         }
     }
 
-    let file_meta = super::thrift_gen::FileMetaData::try_from(&mut prot)
+    let file_meta = super::thrift_gen::FileMetaData::read_thrift(&mut prot)
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
 
     let version = file_meta.version;
@@ -851,10 +853,9 @@ pub(super) fn get_file_decryptor(
 
 /// Create ParquetMetaData from thrift input. Note that this only decodes the file metadata in
 /// the Parquet footer. Page indexes will need to be added later.
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ParquetMetaData {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        let file_meta = super::thrift_gen::FileMetaData::try_from(prot)?;
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ParquetMetaData {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let file_meta = super::thrift_gen::FileMetaData::read_thrift(prot)?;
 
         let version = file_meta.version;
         let num_rows = file_meta.num_rows;

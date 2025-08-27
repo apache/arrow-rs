@@ -121,8 +121,8 @@ use crate::{
 use crate::{
     basic::{ColumnOrder, Compression, Encoding, Type},
     parquet_thrift::{
-        ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
-        WriteThrift, WriteThriftField,
+        ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
+        ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
     },
 };
 use crate::{

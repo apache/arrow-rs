@@ -167,41 +167,12 @@ pub(crate) struct ListIdentifier {
     pub(crate) size: i32,
 }
 
-/// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
-///
-/// [`TCompactInputProtocol`]: thrift::protocol::TCompactInputProtocol
-pub(crate) struct ThriftCompactInputProtocol<'a> {
-    buf: &'a [u8],
-    // Identifier of the last field deserialized for a struct.
-    last_read_field_id: i16,
-    // Stack of the last read field ids (a new entry is added each time a nested struct is read).
-    read_field_id_stack: Vec<i16>,
-    // Boolean value for a field.
-    // Saved because boolean fields and their value are encoded in a single byte,
-    // and reading the field only occurs after the field id is read.
-    pending_read_bool_value: Option<bool>,
-}
+pub(crate) trait ThriftCompactInputProtocol<'a> {
+    fn read_byte(&mut self) -> Result<u8>;
 
-impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
-    pub fn new(buf: &'a [u8]) -> Self {
-        Self {
-            buf,
-            last_read_field_id: 0,
-            read_field_id_stack: Vec::with_capacity(16),
-            pending_read_bool_value: None,
-        }
-    }
+    fn read_bytes(&mut self) -> Result<&'a [u8]>;
 
-    pub fn reset_buffer(&mut self, buf: &'a [u8]) {
-        self.buf = buf;
-        self.last_read_field_id = 0;
-        self.read_field_id_stack.clear();
-        self.pending_read_bool_value = None;
-    }
-
-    pub fn as_slice(&self) -> &'a [u8] {
-        self.buf
-    }
+    fn skip_bytes(&mut self, n: usize) -> Result<()>;
 
     fn read_vlq(&mut self) -> Result<u64> {
         let mut in_progress = 0;
@@ -221,7 +192,7 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
         Ok((val >> 1) as i64 ^ -((val & 1) as i64))
     }
 
-    fn read_list_set_begin(&mut self) -> Result<(ElementType, i32)> {
+    fn read_list_begin(&mut self) -> Result<ListIdentifier> {
         let header = self.read_byte()?;
         let element_type = ElementType::try_from(header & 0x0f)?;
 
@@ -233,22 +204,17 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
             self.read_vlq()? as _
         };
 
-        Ok((element_type, element_count))
+        Ok(ListIdentifier {
+            element_type,
+            size: element_count,
+        })
     }
 
-    pub(crate) fn read_struct_begin(&mut self) -> Result<()> {
-        self.read_field_id_stack.push(self.last_read_field_id);
-        self.last_read_field_id = 0;
-        Ok(())
-    }
+    fn read_struct_begin(&mut self) -> Result<()>;
 
-    pub(crate) fn read_struct_end(&mut self) -> Result<()> {
-        self.last_read_field_id = self
-            .read_field_id_stack
-            .pop()
-            .expect("should have previous field ids");
-        Ok(())
-    }
+    fn read_struct_end(&mut self) -> Result<()>;
+
+    fn read_field_begin(&mut self) -> Result<FieldIdentifier>;
 
     // This is a specialized version of read_field_begin, solely for use in parsing
     // PageLocation structs in the offset index. This function assumes that the delta
@@ -256,14 +222,189 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
     // will be read. This also skips validation of the field type.
     //
     // Returns a tuple of (field_type, field_delta)
-    pub(crate) fn read_field_header(&mut self) -> Result<(u8, u8)> {
+    fn read_field_header(&mut self) -> Result<(u8, u8)> {
         let field_type = self.read_byte()?;
         let field_delta = (field_type & 0xf0) >> 4;
         let field_type = field_type & 0xf;
         Ok((field_type, field_delta))
     }
 
-    pub(crate) fn read_field_begin(&mut self) -> Result<FieldIdentifier> {
+    fn read_bool(&mut self) -> Result<bool>;
+
+    fn read_string(&mut self) -> Result<&'a str> {
+        let slice = self.read_bytes()?;
+        Ok(std::str::from_utf8(slice)?)
+    }
+
+    fn read_i8(&mut self) -> Result<i8> {
+        Ok(self.read_byte()? as _)
+    }
+
+    fn read_i16(&mut self) -> Result<i16> {
+        Ok(self.read_zig_zag()? as _)
+    }
+
+    fn read_i32(&mut self) -> Result<i32> {
+        Ok(self.read_zig_zag()? as _)
+    }
+
+    fn read_i64(&mut self) -> Result<i64> {
+        self.read_zig_zag()
+    }
+
+    fn read_double(&mut self) -> Result<f64>;
+
+    fn skip_vlq(&mut self) -> Result<()> {
+        loop {
+            let byte = self.read_byte()?;
+            if byte & 0x80 == 0 {
+                return Ok(());
+            }
+        }
+    }
+
+    fn skip_binary(&mut self) -> Result<()> {
+        let len = self.read_vlq()? as usize;
+        self.skip_bytes(len)
+    }
+
+    /// Skip a field with type `field_type` recursively until the default
+    /// maximum skip depth is reached.
+    fn skip(&mut self, field_type: FieldType) -> Result<()> {
+        // TODO: magic number
+        self.skip_till_depth(field_type, 64)
+    }
+
+    /// Empty structs in unions consist of a single byte of 0 for the field stop record.
+    /// This skips that byte without pushing to the field id stack.
+    fn skip_empty_struct(&mut self) -> Result<()> {
+        let b = self.read_byte()?;
+        if b != 0 {
+            Err(general_err!("Empty struct has fields"))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Skip a field with type `field_type` recursively up to `depth` levels.
+    fn skip_till_depth(&mut self, field_type: FieldType, depth: i8) -> Result<()> {
+        if depth == 0 {
+            return Err(general_err!(format!("cannot parse past {:?}", field_type)));
+        }
+
+        match field_type {
+            FieldType::BooleanFalse | FieldType::BooleanTrue => self.read_bool().map(|_| ()),
+            FieldType::Byte => self.read_i8().map(|_| ()),
+            FieldType::I16 => self.skip_vlq().map(|_| ()),
+            FieldType::I32 => self.skip_vlq().map(|_| ()),
+            FieldType::I64 => self.skip_vlq().map(|_| ()),
+            FieldType::Double => self.skip_bytes(8).map(|_| ()),
+            FieldType::Binary => self.skip_binary().map(|_| ()),
+            FieldType::Struct => {
+                self.read_struct_begin()?;
+                loop {
+                    let field_ident = self.read_field_begin()?;
+                    if field_ident.field_type == FieldType::Stop {
+                        break;
+                    }
+                    self.skip_till_depth(field_ident.field_type, depth - 1)?;
+                }
+                self.read_struct_end()
+            }
+            FieldType::List => {
+                let list_ident = self.read_list_begin()?;
+                for _ in 0..list_ident.size {
+                    let element_type = FieldType::try_from(list_ident.element_type)?;
+                    self.skip_till_depth(element_type, depth - 1)?;
+                }
+                Ok(())
+            }
+            // no list or map types in parquet format
+            u => Err(general_err!(format!("cannot skip field type {:?}", &u))),
+        }
+    }
+}
+
+pub(crate) struct ThriftSliceInputProtocol<'a> {
+    buf: &'a [u8],
+    // Identifier of the last field deserialized for a struct.
+    last_read_field_id: i16,
+    // Stack of the last read field ids (a new entry is added each time a nested struct is read).
+    read_field_id_stack: Vec<i16>,
+    // Boolean value for a field.
+    // Saved because boolean fields and their value are encoded in a single byte,
+    // and reading the field only occurs after the field id is read.
+    pending_read_bool_value: Option<bool>,
+}
+
+impl<'a> ThriftSliceInputProtocol<'a> {
+    pub fn new(buf: &'a [u8]) -> Self {
+        Self {
+            buf,
+            last_read_field_id: 0,
+            read_field_id_stack: Vec::with_capacity(16),
+            pending_read_bool_value: None,
+        }
+    }
+
+    pub fn reset_buffer(&mut self, buf: &'a [u8]) {
+        self.buf = buf;
+        self.last_read_field_id = 0;
+        self.read_field_id_stack.clear();
+        self.pending_read_bool_value = None;
+    }
+
+    pub fn as_slice(&self) -> &'a [u8] {
+        self.buf
+    }
+}
+
+impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a> {
+    #[inline]
+    fn read_byte(&mut self) -> Result<u8> {
+        let ret = *self.buf.first().ok_or_else(eof_error)?;
+        self.buf = &self.buf[1..];
+        Ok(ret)
+    }
+
+    fn read_bytes(&mut self) -> Result<&'b [u8]> {
+        let len = self.read_vlq()? as usize;
+        let ret = self.buf.get(..len).ok_or_else(eof_error)?;
+        self.buf = &self.buf[len..];
+        Ok(ret)
+    }
+
+    #[inline]
+    fn skip_bytes(&mut self, n: usize) -> Result<()> {
+        self.buf.get(..n).ok_or_else(eof_error)?;
+        self.buf = &self.buf[n..];
+        Ok(())
+    }
+
+    fn read_double(&mut self) -> Result<f64> {
+        let slice = self.buf.get(..8).ok_or_else(eof_error)?;
+        self.buf = &self.buf[8..];
+        match slice.try_into() {
+            Ok(slice) => Ok(f64::from_le_bytes(slice)),
+            Err(_) => Err(general_err!("Unexpected error converting slice")),
+        }
+    }
+
+    fn read_struct_begin(&mut self) -> Result<()> {
+        self.read_field_id_stack.push(self.last_read_field_id);
+        self.last_read_field_id = 0;
+        Ok(())
+    }
+
+    fn read_struct_end(&mut self) -> Result<()> {
+        self.last_read_field_id = self
+            .read_field_id_stack
+            .pop()
+            .expect("should have previous field ids");
+        Ok(())
+    }
+
+    fn read_field_begin(&mut self) -> Result<FieldIdentifier> {
         // we can read at least one byte, which is:
         // - the type
         // - the field delta and the type
@@ -308,7 +449,7 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
         }
     }
 
-    pub(crate) fn read_bool(&mut self) -> Result<bool> {
+    fn read_bool(&mut self) -> Result<bool> {
         match self.pending_read_bool_value.take() {
             Some(b) => Ok(b),
             None => {
@@ -325,225 +466,85 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'a> {
             }
         }
     }
-
-    pub(crate) fn read_bytes(&mut self) -> Result<&'b [u8]> {
-        let len = self.read_vlq()? as usize;
-        let ret = self.buf.get(..len).ok_or_else(eof_error)?;
-        self.buf = &self.buf[len..];
-        Ok(ret)
-    }
-
-    pub(crate) fn read_string(&mut self) -> Result<&'b str> {
-        let slice = self.read_bytes()?;
-        Ok(std::str::from_utf8(slice)?)
-    }
-
-    pub(crate) fn read_i8(&mut self) -> Result<i8> {
-        Ok(self.read_byte()? as _)
-    }
-
-    pub(crate) fn read_i16(&mut self) -> Result<i16> {
-        Ok(self.read_zig_zag()? as _)
-    }
-
-    pub(crate) fn read_i32(&mut self) -> Result<i32> {
-        Ok(self.read_zig_zag()? as _)
-    }
-
-    pub(crate) fn read_i64(&mut self) -> Result<i64> {
-        self.read_zig_zag()
-    }
-
-    pub(crate) fn read_double(&mut self) -> Result<f64> {
-        let slice = self.buf.get(..8).ok_or_else(eof_error)?;
-        self.buf = &self.buf[8..];
-        match slice.try_into() {
-            Ok(slice) => Ok(f64::from_le_bytes(slice)),
-            Err(_) => Err(general_err!("Unexpected error converting slice")),
-        }
-    }
-
-    pub(crate) fn read_list_begin(&mut self) -> Result<ListIdentifier> {
-        let (element_type, element_count) = self.read_list_set_begin()?;
-        Ok(ListIdentifier {
-            element_type,
-            size: element_count,
-        })
-    }
-
-    pub(crate) fn read_list_end(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    #[inline]
-    fn read_byte(&mut self) -> Result<u8> {
-        let ret = *self.buf.first().ok_or_else(eof_error)?;
-        self.buf = &self.buf[1..];
-        Ok(ret)
-    }
-
-    #[inline]
-    fn skip_bytes(&mut self, n: usize) -> Result<()> {
-        self.buf.get(..n).ok_or_else(eof_error)?;
-        self.buf = &self.buf[n..];
-        Ok(())
-    }
-
-    fn skip_vlq(&mut self) -> Result<()> {
-        loop {
-            let byte = self.read_byte()?;
-            if byte & 0x80 == 0 {
-                return Ok(());
-            }
-        }
-    }
-
-    fn skip_binary(&mut self) -> Result<()> {
-        let len = self.read_vlq()? as usize;
-        self.skip_bytes(len)
-    }
-
-    /// Skip a field with type `field_type` recursively until the default
-    /// maximum skip depth is reached.
-    pub(crate) fn skip(&mut self, field_type: FieldType) -> Result<()> {
-        // TODO: magic number
-        self.skip_till_depth(field_type, 64)
-    }
-
-    /// Empty structs in unions consist of a single byte of 0 for the field stop record.
-    /// This skips that byte without pushing to the field id stack.
-    pub(crate) fn skip_empty_struct(&mut self) -> Result<()> {
-        let b = self.read_byte()?;
-        if b != 0 {
-            Err(general_err!("Empty struct has fields"))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Skip a field with type `field_type` recursively up to `depth` levels.
-    fn skip_till_depth(&mut self, field_type: FieldType, depth: i8) -> Result<()> {
-        if depth == 0 {
-            return Err(general_err!(format!("cannot parse past {:?}", field_type)));
-        }
-
-        match field_type {
-            FieldType::BooleanFalse | FieldType::BooleanTrue => self.read_bool().map(|_| ()),
-            FieldType::Byte => self.read_i8().map(|_| ()),
-            FieldType::I16 => self.skip_vlq().map(|_| ()),
-            FieldType::I32 => self.skip_vlq().map(|_| ()),
-            FieldType::I64 => self.skip_vlq().map(|_| ()),
-            FieldType::Double => self.skip_bytes(8).map(|_| ()),
-            FieldType::Binary => self.skip_binary().map(|_| ()),
-            FieldType::Struct => {
-                self.read_struct_begin()?;
-                loop {
-                    let field_ident = self.read_field_begin()?;
-                    if field_ident.field_type == FieldType::Stop {
-                        break;
-                    }
-                    self.skip_till_depth(field_ident.field_type, depth - 1)?;
-                }
-                self.read_struct_end()
-            }
-            FieldType::List => {
-                let list_ident = self.read_list_begin()?;
-                for _ in 0..list_ident.size {
-                    let element_type = FieldType::try_from(list_ident.element_type)?;
-                    self.skip_till_depth(element_type, depth - 1)?;
-                }
-                self.read_list_end()
-            }
-            // no list or map types in parquet format
-            u => Err(general_err!(format!("cannot skip field type {:?}", &u))),
-        }
-    }
 }
 
 fn eof_error() -> ParquetError {
     eof_err!("Unexpected EOF")
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for bool {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+pub(crate) trait ReadThrift<'a, R: ThriftCompactInputProtocol<'a>> {
+    // used to read generated enums and structs
+    fn read_thrift(prot: &mut R) -> Result<Self>
+    where
+        Self: Sized;
+}
+
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for bool {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         prot.read_bool()
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i8 {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for i8 {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         prot.read_i8()
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i16 {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for i16 {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         prot.read_i16()
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i32 {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for i32 {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         prot.read_i32()
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for i64 {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for i64 {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         prot.read_i64()
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for OrderedF64 {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for OrderedF64 {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(OrderedF64(prot.read_double()?))
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for &'a str {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for &'a str {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         prot.read_string()
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for String {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for String {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         Ok(prot.read_string()?.to_owned())
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for &'a [u8] {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for &'a [u8] {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         prot.read_bytes()
     }
 }
 
-impl<'a, T> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Vec<T>
+pub(crate) fn read_thrift_vec<'a, T, R>(prot: &mut R) -> Result<Vec<T>>
 where
-    T: for<'b> TryFrom<&'b mut ThriftCompactInputProtocol<'a>>,
-    ParquetError: for<'b> From<<T as TryFrom<&'b mut ThriftCompactInputProtocol<'a>>>::Error>,
+    R: ThriftCompactInputProtocol<'a>,
+    T: ReadThrift<'a, R>,
 {
-    type Error = ParquetError;
-
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self, Self::Error> {
-        let list_ident = prot.read_list_begin()?;
-        let mut res = Vec::with_capacity(list_ident.size as usize);
-        for _ in 0..list_ident.size {
-            let val = T::try_from(prot)?;
-            res.push(val);
-        }
-
-        Ok(res)
+    let list_ident = prot.read_list_begin()?;
+    let mut res = Vec::with_capacity(list_ident.size as usize);
+    for _ in 0..list_ident.size {
+        let val = T::read_thrift(prot)?;
+        res.push(val);
     }
+    Ok(res)
 }
 
 /////////////////////////
@@ -900,11 +901,11 @@ pub(crate) mod tests {
 
     pub(crate) fn test_roundtrip<T>(val: T)
     where
-        T: for<'a> TryFrom<&'a mut ThriftCompactInputProtocol<'a>>
+        T: for<'a> ReadThrift<'a, ThriftSliceInputProtocol<'a>>
             + WriteThrift<Vec<u8>>
             + PartialEq
             + Debug,
-        for<'a> <T as TryFrom<&'a mut ThriftCompactInputProtocol<'a>>>::Error: Debug,
+        //for<'a> <T as TryFrom<&'a mut ThriftCompactInputProtocol<'a>>>::Error: Debug,
     {
         let buf = Vec::<u8>::new();
         let mut writer = ThriftCompactOutputProtocol::new(buf);
@@ -912,8 +913,8 @@ pub(crate) mod tests {
 
         //println!("serialized: {:x?}", writer.inner());
 
-        let mut prot = ThriftCompactInputProtocol::new(writer.inner());
-        let read_val = T::try_from(&mut prot).unwrap();
+        let mut prot = ThriftSliceInputProtocol::new(writer.inner());
+        let read_val = T::read_thrift(&mut prot).unwrap();
         assert_eq!(val, read_val);
     }
 

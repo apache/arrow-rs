@@ -33,10 +33,9 @@ macro_rules! thrift_enum {
             $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name = $field_value,)*
         }
 
-        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
-            type Error = ParquetError;
+        impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier {
             #[allow(deprecated)]
-            fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+            fn read_thrift(prot: &mut R) -> Result<Self> {
                 let val = prot.read_i32()?;
                 match val {
                     $($field_value => Ok(Self::$field_name),)*
@@ -105,10 +104,8 @@ macro_rules! thrift_union_all_empty {
             $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name),*
         }
 
-        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier {
-            type Error = ParquetError;
-
-            fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier {
+            fn read_thrift(prot: &mut R) -> Result<Self> {
                 prot.read_struct_begin()?;
                 let field_ident = prot.read_field_begin()?;
                 if field_ident.field_type == FieldType::Stop {
@@ -191,10 +188,8 @@ macro_rules! thrift_union {
             $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $field_name $( ( $crate::__thrift_union_type!{$field_type $($field_lt)? $($element_type)?} ) )?),*
         }
 
-        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier $(<$lt>)? {
-            type Error = ParquetError;
-
-            fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
+            fn read_thrift(prot: &mut R) -> Result<Self> {
                 prot.read_struct_begin()?;
                 let field_ident = prot.read_field_begin()?;
                 if field_ident.field_type == FieldType::Stop {
@@ -279,9 +274,8 @@ macro_rules! thrift_struct {
             $($(#[cfg_attr(not(doctest), $($field_attrs)*)])* $vis $field_name: $crate::__thrift_required_or_optional!($required_or_optional $crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?))),*
         }
 
-        impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for $identifier $(<$lt>)? {
-            type Error = ParquetError;
-            fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+        impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
+            fn read_thrift(prot: &mut R) -> Result<Self> {
                 $(let mut $field_name: Option<$crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?)> = None;)*
                 prot.read_struct_begin()?;
                 loop {
@@ -414,38 +408,38 @@ macro_rules! __thrift_result_required_or_optional {
 #[macro_export]
 macro_rules! __thrift_read_field {
     ($prot:tt, list $lt:lifetime binary) => {
-        Vec::<&'a [u8]>::try_from(&mut *$prot)?
+        read_thrift_vec::<&'a [u8], R>(&mut *$prot)?
     };
     ($prot:tt, list $lt:lifetime $element_type:ident) => {
-        Vec::<$element_type>::try_from(&mut *$prot)?
+        read_thrift_vec::<$element_type, R>(&mut *$prot)?
     };
     ($prot:tt, list string) => {
-        Vec::<String>::try_from(&mut *$prot)?
+        read_thrift_vec::<String, R>(&mut *$prot)?
     };
     ($prot:tt, list $element_type:ident) => {
-        Vec::<$element_type>::try_from(&mut *$prot)?
+        read_thrift_vec::<$element_type, R>(&mut *$prot)?
     };
     ($prot:tt, string $lt:lifetime) => {
-        <&$lt str>::try_from(&mut *$prot)?
+        <&$lt str>::read_thrift(&mut *$prot)?
     };
     ($prot:tt, binary $lt:lifetime) => {
-        <&$lt [u8]>::try_from(&mut *$prot)?
+        <&$lt [u8]>::read_thrift(&mut *$prot)?
     };
     ($prot:tt, $field_type:ident $lt:lifetime) => {
-        $field_type::try_from(&mut *$prot)?
+        $field_type::read_thrift(&mut *$prot)?
     };
     ($prot:tt, string) => {
-        String::try_from(&mut *$prot)?
+        String::read_thrift(&mut *$prot)?
     };
     ($prot:tt, binary) => {
         // this one needs to not conflict with `list<i8>`
         $prot.read_bytes()?.to_vec()
     };
     ($prot:tt, double) => {
-        $crate::parquet_thrift::OrderedF64::try_from(&mut *$prot)?
+        $crate::parquet_thrift::OrderedF64::read_thrift(&mut *$prot)?
     };
     ($prot:tt, $field_type:ident) => {
-        $field_type::try_from(&mut *$prot)?
+        $field_type::read_thrift(&mut *$prot)?
     };
 }
 
@@ -478,10 +472,10 @@ macro_rules! __thrift_union_type {
 #[macro_export]
 macro_rules! __thrift_read_variant {
     ($prot:tt, $field_name:ident $field_type:ident) => {
-        Self::$field_name($field_type::try_from(&mut *$prot)?)
+        Self::$field_name($field_type::read_thrift(&mut *$prot)?)
     };
     ($prot:tt, $field_name:ident list $field_type:ident) => {
-        Self::$field_name(Vec::<$field_type>::try_from(&mut *$prot)?)
+        Self::$field_name(Vec::<$field_type>::read_thrift(&mut *$prot)?)
     };
     ($prot:tt, $field_name:ident) => {{
         $prot.skip_empty_struct()?;
