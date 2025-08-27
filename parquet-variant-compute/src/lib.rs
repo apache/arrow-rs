@@ -22,7 +22,7 @@
 //! - [`VariantArrayBuilder`]: For building [`VariantArray`]
 //! - [`json_to_variant`]: Function to convert a batch of JSON strings to a `VariantArray`.
 //! - [`variant_to_json`]: Function to convert a `VariantArray` to a batch of JSON strings.
-//! - [`cast_to_variant`]: Module to cast other Arrow arrays to `VariantArray`.
+//! - [`mod@cast_to_variant`]: Module to cast other Arrow arrays to `VariantArray`.
 //! - [`variant_get`]: Module to get values from a `VariantArray` using a specified [`VariantPath`]
 //!
 //! ## 🚧 Work In Progress
