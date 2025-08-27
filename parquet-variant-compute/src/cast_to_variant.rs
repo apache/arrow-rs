@@ -24,8 +24,8 @@ use crate::type_conversion::{
 };
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
-    Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
+    Array, AsArray, OffsetSizeTrait, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast;
@@ -284,86 +284,8 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::Utf8View => {
             non_generic_conversion_array!(input.as_string_view(), |v| v, builder);
         }
-        DataType::List(_) => {
-            let list_array = input.as_list::<i32>();
-            let values = list_array.values();
-            let offsets = list_array.offsets();
-
-            let first_offset = offsets.first().expect("There should be an offset");
-            let length = offsets.last().expect("There should be an offset") - first_offset;
-            let sliced_values = values.slice(*first_offset as usize, length as usize);
-
-            let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
-            let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
-                offsets.iter().map(|o| o - first_offset),
-            ));
-
-            for i in 0..list_array.len() {
-                if list_array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                let start = new_offsets[i] as usize;
-                let end = new_offsets[i + 1] as usize;
-
-                // Start building the inner VariantList
-                let mut variant_builder = VariantBuilder::new();
-                let mut list_builder = variant_builder.new_list();
-
-                // Add all values from the slice
-                for j in start..end {
-                    list_builder.append_value(values_variant_array.value(j));
-                }
-
-                list_builder.finish();
-
-                let (metadata, value) = variant_builder.finish();
-                let variant = Variant::new(&metadata, &value);
-                let variant_list = variant.as_list().expect("Variant should be list");
-                builder.append_variant(Variant::List(variant_list.clone()))
-            }
-        }
-        DataType::LargeList(_) => {
-            let large_list_array = input.as_list::<i64>();
-            let values = large_list_array.values();
-            let offsets = large_list_array.offsets();
-
-            let first_offset = offsets.first().expect("There should be an offset");
-            let length = offsets.last().expect("There should be an offset") - first_offset;
-            let sliced_values = values.slice(*first_offset as usize, length as usize);
-
-            let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
-            let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
-                offsets.iter().map(|o| o - first_offset),
-            ));
-
-            for i in 0..large_list_array.len() {
-                if large_list_array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                let start = new_offsets[i] as usize; // What if the system is 32bit and offset is > usize::MAX?
-                let end = new_offsets[i + 1] as usize;
-
-                // Start building the inner VariantList
-                let mut variant_builder = VariantBuilder::new();
-                let mut list_builder = variant_builder.new_list();
-
-                // Add all values from the slice
-                for j in start..end {
-                    list_builder.append_value(values_variant_array.value(j));
-                }
-
-                list_builder.finish();
-
-                let (metadata, value) = variant_builder.finish();
-                let variant = Variant::new(&metadata, &value);
-                let variant_list = variant.as_list().expect("Variant should be list");
-                builder.append_variant(Variant::List(variant_list.clone()))
-            }
-        }
+        DataType::List(_) => convert_list::<i32>(input, &mut builder)?,
+        DataType::LargeList(_) => convert_list::<i64>(input, &mut builder)?,
         DataType::Struct(_) => convert_struct(input, &mut builder)?,
         DataType::Map(field, _) => convert_map(field, input, &mut builder)?,
         DataType::Union(fields, _) => convert_union(fields, input, &mut builder)?,
@@ -459,6 +381,52 @@ fn convert_timestamp(
             }
         }
     }
+}
+
+/// Generic function to convert list arrays (both List and LargeList) to variant arrays
+fn convert_list<O: OffsetSizeTrait>(
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) -> Result<(), ArrowError> {
+    let list_array = input.as_list::<O>();
+    let values = list_array.values();
+    let offsets = list_array.offsets();
+
+    let first_offset = *offsets.first().expect("There should be an offset");
+    let length = *offsets.last().expect("There should be an offset") - first_offset;
+    let sliced_values = values.slice(first_offset.as_usize(), length.as_usize());
+
+    let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
+    let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
+        offsets.iter().map(|o| *o - first_offset),
+    ));
+
+    for i in 0..list_array.len() {
+        if list_array.is_null(i) {
+            builder.append_null();
+            continue;
+        }
+
+        let start = new_offsets[i].as_usize();
+        let end = new_offsets[i + 1].as_usize();
+
+        // Start building the inner VariantList
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+
+        // Add all values from the slice
+        for j in start..end {
+            list_builder.append_value(values_variant_array.value(j));
+        }
+
+        list_builder.finish();
+
+        let (metadata, value) = variant_builder.finish();
+        let variant = Variant::new(&metadata, &value);
+        builder.append_variant(variant)
+    }
+
+    Ok(())
 }
 
 fn convert_struct(input: &dyn Array, builder: &mut VariantArrayBuilder) -> Result<(), ArrowError> {
