@@ -27,18 +27,33 @@ extern crate uuid;
 
 use apache_avro::types::Value;
 use apache_avro::{to_avro_datum, Decimal, Schema as ApacheSchema};
-use arrow_avro::schema::{Fingerprint, SINGLE_OBJECT_MAGIC};
+use arrow_avro::schema::{Fingerprint, FingerprintAlgorithm, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC};
 use arrow_avro::{reader::ReaderBuilder, schema::AvroSchema};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use once_cell::sync::Lazy;
 use std::{hint::black_box, time::Duration};
 use uuid::Uuid;
 
-fn make_prefix(fp: Fingerprint) -> [u8; 10] {
-    let Fingerprint::Rabin(val) = fp;
-    let mut buf = [0u8; 10];
-    buf[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
-    buf[2..].copy_from_slice(&val.to_le_bytes()); // little‑endian 64‑bit
+fn make_prefix<const S: usize>(fp: Fingerprint) -> [u8; S] {
+    let mut buf = [0u8; S];
+    match fp {
+        Fingerprint::Rabin(val) => {
+            buf[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
+            buf[2..].copy_from_slice(&val.to_le_bytes()); // little‑endian 64‑bit
+        }
+        Fingerprint::SHA256(val) => {
+            buf[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
+            buf[2..].copy_from_slice(&val);
+        }
+        Fingerprint::MD5(val) => {
+            buf[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
+            buf[2..].copy_from_slice(&val);
+        }
+        Fingerprint::Id(id) => {
+            buf[..1].copy_from_slice(&CONFLUENT_MAGIC); // 00
+            buf[1..].copy_from_slice(&id.to_be_bytes()); // big‑endian 32‑bit
+        }
+    }
     buf
 }
 
@@ -336,6 +351,27 @@ fn new_decoder(
         .expect("failed to build decoder")
 }
 
+fn new_decoder_id(
+    schema_json: &'static str,
+    batch_size: usize,
+    utf8view: bool,
+    id: u32,
+) -> arrow_avro::reader::Decoder {
+    let schema = AvroSchema::new(schema_json.parse().unwrap());
+    let mut store = arrow_avro::schema::SchemaStore::new_with_type(FingerprintAlgorithm::None);
+    // Register the schema with a provided Confluent-style ID
+    store
+        .set(Fingerprint::Id(id), schema.clone())
+        .expect("failed to set schema with id");
+    ReaderBuilder::new()
+        .with_writer_schema_store(store)
+        .with_active_fingerprint(Fingerprint::Id(id))
+        .with_batch_size(batch_size)
+        .with_utf8_view(utf8view)
+        .build_decoder()
+        .expect("failed to build decoder for id")
+}
+
 const SIZES: [usize; 3] = [100, 10_000, 1_000_000];
 
 const INT_SCHEMA: &str =
@@ -369,42 +405,55 @@ const MIX_SCHEMA: &str = r#"{"type":"record","name":"MixRec","fields":[{"name":"
 const NEST_SCHEMA: &str = r#"{"type":"record","name":"NestRec","fields":[{"name":"sub","type":{"type":"record","name":"Sub","fields":[{"name":"x","type":"int"},{"name":"y","type":"string"}]}}]}"#;
 
 macro_rules! dataset {
-    ($name:ident, $schema_json:expr, $gen_fn:ident) => {
+    (@impl $name:ident, $schema_json:expr, $gen_fn:ident, $prefix_size:expr, $fingerprint_expr:expr) => {
         static $name: Lazy<Vec<Vec<u8>>> = Lazy::new(|| {
             let schema =
                 ApacheSchema::parse_str($schema_json).expect("invalid schema for generator");
-            let arrow_schema = AvroSchema::new($schema_json.to_string());
-            let fingerprint = arrow_schema.fingerprint().expect("fingerprint failed");
-            let prefix = make_prefix(fingerprint);
+            let fingerprint = $fingerprint_expr;
+            let prefix = make_prefix::<$prefix_size>(fingerprint);
             SIZES
                 .iter()
                 .map(|&n| $gen_fn(&schema, n, &prefix))
                 .collect()
         });
     };
+    // ID
+    ($name:ident, $schema_json:expr, $gen_fn:ident, $prefix_size:expr, $id:expr) => {
+        dataset!(@impl $name, $schema_json, $gen_fn, $prefix_size, Fingerprint::Id($id));
+    };
+    // Default
+    ($name:ident, $schema_json:expr, $gen_fn:ident, $prefix_size:expr) => {
+        dataset!(@impl $name, $schema_json, $gen_fn, $prefix_size, {
+            let arrow_schema = AvroSchema::new($schema_json.parse().unwrap());
+            arrow_schema.fingerprint().expect("fingerprint failed")
+        });
+    };
 }
 
-dataset!(INT_DATA, INT_SCHEMA, gen_int);
-dataset!(LONG_DATA, LONG_SCHEMA, gen_long);
-dataset!(FLOAT_DATA, FLOAT_SCHEMA, gen_float);
-dataset!(BOOL_DATA, BOOL_SCHEMA, gen_bool);
-dataset!(DOUBLE_DATA, DOUBLE_SCHEMA, gen_double);
-dataset!(BYTES_DATA, BYTES_SCHEMA, gen_bytes);
-dataset!(STRING_DATA, STRING_SCHEMA, gen_string);
-dataset!(DATE_DATA, DATE_SCHEMA, gen_date);
-dataset!(TMILLIS_DATA, TMILLIS_SCHEMA, gen_timemillis);
-dataset!(TMICROS_DATA, TMICROS_SCHEMA, gen_timemicros);
-dataset!(TSMILLIS_DATA, TSMILLIS_SCHEMA, gen_ts_millis);
-dataset!(TSMICROS_DATA, TSMICROS_SCHEMA, gen_ts_micros);
-dataset!(MAP_DATA, MAP_SCHEMA, gen_map);
-dataset!(ARRAY_DATA, ARRAY_SCHEMA, gen_array);
-dataset!(DECIMAL_DATA, DECIMAL_SCHEMA, gen_decimal);
-dataset!(UUID_DATA, UUID_SCHEMA, gen_uuid);
-dataset!(FIXED_DATA, FIXED_SCHEMA, gen_fixed);
-dataset!(INTERVAL_DATA, INTERVAL_SCHEMA_ENCODE, gen_interval);
-dataset!(ENUM_DATA, ENUM_SCHEMA, gen_enum);
-dataset!(MIX_DATA, MIX_SCHEMA, gen_mixed);
-dataset!(NEST_DATA, NEST_SCHEMA, gen_nested);
+const ID_BENCH_ID: u32 = 7;
+
+dataset!(INT_DATA_ID, INT_SCHEMA, gen_int, 5, ID_BENCH_ID);
+dataset!(INT_DATA, INT_SCHEMA, gen_int, 10);
+dataset!(LONG_DATA, LONG_SCHEMA, gen_long, 10);
+dataset!(FLOAT_DATA, FLOAT_SCHEMA, gen_float, 10);
+dataset!(BOOL_DATA, BOOL_SCHEMA, gen_bool, 10);
+dataset!(DOUBLE_DATA, DOUBLE_SCHEMA, gen_double, 10);
+dataset!(BYTES_DATA, BYTES_SCHEMA, gen_bytes, 10);
+dataset!(STRING_DATA, STRING_SCHEMA, gen_string, 10);
+dataset!(DATE_DATA, DATE_SCHEMA, gen_date, 10);
+dataset!(TMILLIS_DATA, TMILLIS_SCHEMA, gen_timemillis, 10);
+dataset!(TMICROS_DATA, TMICROS_SCHEMA, gen_timemicros, 10);
+dataset!(TSMILLIS_DATA, TSMILLIS_SCHEMA, gen_ts_millis, 10);
+dataset!(TSMICROS_DATA, TSMICROS_SCHEMA, gen_ts_micros, 10);
+dataset!(MAP_DATA, MAP_SCHEMA, gen_map, 10);
+dataset!(ARRAY_DATA, ARRAY_SCHEMA, gen_array, 10);
+dataset!(DECIMAL_DATA, DECIMAL_SCHEMA, gen_decimal, 10);
+dataset!(UUID_DATA, UUID_SCHEMA, gen_uuid, 10);
+dataset!(FIXED_DATA, FIXED_SCHEMA, gen_fixed, 10);
+dataset!(INTERVAL_DATA, INTERVAL_SCHEMA_ENCODE, gen_interval, 10);
+dataset!(ENUM_DATA, ENUM_SCHEMA, gen_enum, 10);
+dataset!(MIX_DATA, MIX_SCHEMA, gen_mixed, 10);
+dataset!(NEST_DATA, NEST_SCHEMA, gen_nested, 10);
 
 fn bench_scenario(
     c: &mut Criterion,
@@ -447,6 +496,48 @@ fn bench_scenario(
     group.finish();
 }
 
+fn bench_scenario_id(
+    c: &mut Criterion,
+    name: &str,
+    schema_json: &'static str,
+    data_sets: &[Vec<u8>],
+    utf8view: bool,
+    batch_size: usize,
+    id: u32,
+) {
+    let mut group = c.benchmark_group(name);
+    for (idx, &rows) in SIZES.iter().enumerate() {
+        let datum = &data_sets[idx];
+        group.throughput(Throughput::Bytes(datum.len() as u64));
+        match rows {
+            10_000 => {
+                group
+                    .sample_size(25)
+                    .measurement_time(Duration::from_secs(10))
+                    .warm_up_time(Duration::from_secs(3));
+            }
+            1_000_000 => {
+                group
+                    .sample_size(10)
+                    .measurement_time(Duration::from_secs(10))
+                    .warm_up_time(Duration::from_secs(3));
+            }
+            _ => {}
+        }
+        group.bench_function(BenchmarkId::from_parameter(rows), |b| {
+            b.iter_batched_ref(
+                || new_decoder_id(schema_json, batch_size, utf8view, id),
+                |decoder| {
+                    black_box(decoder.decode(datum).unwrap());
+                    black_box(decoder.flush().unwrap().unwrap());
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
 fn criterion_benches(c: &mut Criterion) {
     for &batch_size in &[SMALL_BATCH, LARGE_BATCH] {
         bench_scenario(
@@ -458,6 +549,15 @@ fn criterion_benches(c: &mut Criterion) {
             batch_size,
         );
         bench_scenario(c, "Int32", INT_SCHEMA, &INT_DATA, false, batch_size);
+        bench_scenario_id(
+            c,
+            "Int32_Id",
+            INT_SCHEMA,
+            &INT_DATA_ID,
+            false,
+            batch_size,
+            ID_BENCH_ID,
+        );
         bench_scenario(c, "Int64", LONG_SCHEMA, &LONG_DATA, false, batch_size);
         bench_scenario(c, "Float32", FLOAT_SCHEMA, &FLOAT_DATA, false, batch_size);
         bench_scenario(c, "Boolean", BOOL_SCHEMA, &BOOL_DATA, false, batch_size);

@@ -92,7 +92,7 @@
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
     compare_schemas, generate_fingerprint, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema,
-    SchemaStore, SINGLE_OBJECT_MAGIC,
+    SchemaStore, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
 };
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
@@ -185,7 +185,7 @@ impl Decoder {
                 };
             }
             match self.handle_prefix(&data[total_consumed..])? {
-                Some(0) => break, // insufficient bytes
+                Some(0) => break, // Insufficient bytes
                 Some(n) => {
                     total_consumed += n;
                     self.apply_pending_schema_if_batch_empty();
@@ -202,30 +202,50 @@ impl Decoder {
     }
 
     // Attempt to handle a single‑object‑encoding prefix at the current position.
-    //
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
+    #[inline(always)]
     fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
-        // Need at least the magic bytes to decide (2 bytes).
-        let Some(magic_bytes) = buf.get(..SINGLE_OBJECT_MAGIC.len()) else {
-            return Ok(Some(0)); // Get more bytes
-        };
-        // Bail out early if the magic does not match.
-        if magic_bytes != SINGLE_OBJECT_MAGIC {
-            return Ok(None); // Continue to decode the next record
-        }
-        // Try to parse the fingerprint that follows the magic.
-        let fingerprint_size = match self.fingerprint_algorithm {
-            FingerprintAlgorithm::Rabin => self
-                .handle_fingerprint(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
+        match self.fingerprint_algorithm {
+            FingerprintAlgorithm::Rabin => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
                     Fingerprint::Rabin(u64::from_le_bytes(bytes))
-                })?,
-        };
-        // Convert the inner result into a “bytes consumed” count.
-        // NOTE: Incomplete fingerprint consumes no bytes.
-        let consumed = fingerprint_size.map_or(0, |n| n + SINGLE_OBJECT_MAGIC.len());
-        Ok(Some(consumed))
+                })
+            }
+            FingerprintAlgorithm::MD5 => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::MD5(bytes)
+                })
+            }
+            FingerprintAlgorithm::SHA256 => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::SHA256(bytes)
+                })
+            }
+            FingerprintAlgorithm::None => {
+                self.handle_prefix_common(buf, &CONFLUENT_MAGIC, |bytes| {
+                    Fingerprint::Id(u32::from_be_bytes(bytes))
+                })
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn handle_prefix_common<const MAGIC_LEN: usize, const N: usize>(
+        &mut self,
+        buf: &[u8],
+        magic: &[u8; MAGIC_LEN],
+        fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
+    ) -> Result<Option<usize>, ArrowError> {
+        if buf.len() < MAGIC_LEN {
+            return Ok(Some(0));
+        }
+        if &buf[..MAGIC_LEN] != magic {
+            return Ok(None);
+        }
+        let consumed_fp = self.handle_fingerprint(&buf[MAGIC_LEN..], fingerprint_from)?;
+        Ok(Some(consumed_fp.map_or(0, |n| n + MAGIC_LEN)))
     }
 
     // Attempts to read and install a new fingerprint of `N` bytes.
@@ -239,7 +259,7 @@ impl Decoder {
     ) -> Result<Option<usize>, ArrowError> {
         // Need enough bytes to get fingerprint (next N bytes)
         let Some(fingerprint_bytes) = buf.get(..N) else {
-            return Ok(None); // Insufficient bytes
+            return Ok(None); // insufficient bytes
         };
         // SAFETY: length checked above.
         let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
@@ -760,6 +780,15 @@ mod test {
                 out.extend_from_slice(&v.to_le_bytes());
                 out
             }
+            Fingerprint::Id(v) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({v})");
+            }
+            Fingerprint::MD5(v) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({v:?})");
+            }
+            Fingerprint::SHA256(id) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({id:?})");
+            }
         }
     }
 
@@ -771,6 +800,19 @@ mod test {
             .with_active_fingerprint(fp)
             .build_decoder()
             .expect("decoder")
+    }
+
+    fn make_id_prefix(id: u32) -> Vec<u8> {
+        let mut out = Vec::with_capacity(1 + 4);
+        out.extend_from_slice(&crate::schema::CONFLUENT_MAGIC);
+        out.extend_from_slice(&id.to_be_bytes());
+        out
+    }
+
+    fn make_message_id(id: u32, value: i64) -> Vec<u8> {
+        let mut msg = make_id_prefix(id);
+        msg.extend_from_slice(&encode_zigzag(value));
+        msg
     }
 
     fn make_value_schema(pt: PrimitiveType) -> AvroSchema {
@@ -1258,6 +1300,9 @@ mod test {
         let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
+            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
         };
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         buf.extend_from_slice(&long_bytes[..4]);
@@ -1276,8 +1321,12 @@ mod test {
             RecordDecoder::try_new_with_options(root_long.data_type(), decoder.utf8_view).unwrap();
         let _ = decoder.cache.insert(fp_long, long_decoder);
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
-        let Fingerprint::Rabin(v) = fp_long;
-        buf.extend_from_slice(&v.to_le_bytes());
+        match fp_long {
+            Fingerprint::Rabin(v) => buf.extend_from_slice(&v.to_le_bytes()),
+            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+        }
         let consumed = decoder.handle_prefix(&buf).unwrap().unwrap();
         assert_eq!(consumed, buf.len());
         assert!(decoder.pending_schema.is_some());
@@ -1355,6 +1404,83 @@ mod test {
     }
 
     #[test]
+    fn test_two_messages_same_schema_id() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let id = 100u32;
+        // Set up store with None fingerprint algorithm and register schema by id
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id), writer_schema.clone())
+            .expect("set id schema");
+        let msg1 = make_message_id(id, 21);
+        let msg2 = make_message_id(id, 22);
+        let input = [msg1.clone(), msg2.clone()].concat();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(reader_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id))
+            .build_decoder()
+            .unwrap();
+        let _ = decoder.decode(&input).unwrap();
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 2);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.value(0), 21);
+        assert_eq!(col.value(1), 22);
+    }
+
+    #[test]
+    fn test_unknown_id_fingerprint_is_error() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let id_known = 7u32;
+        let id_unknown = 9u32;
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id_known), writer_schema.clone())
+            .expect("set id schema");
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(writer_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id_known))
+            .build_decoder()
+            .unwrap();
+        let prefix = make_id_prefix(id_unknown);
+        let err = decoder.decode(&prefix).expect_err("decode should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unknown fingerprint"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_handle_prefix_id_incomplete_magic() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let id = 5u32;
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id), writer_schema.clone())
+            .expect("set id schema");
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(writer_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id))
+            .build_decoder()
+            .unwrap();
+        let buf = &crate::schema::CONFLUENT_MAGIC[..0]; // empty incomplete magic
+        let res = decoder.handle_prefix(buf).unwrap();
+        assert_eq!(res, Some(0));
+        assert!(decoder.pending_schema.is_none());
+    }
+
     fn test_split_message_across_chunks() {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let reader_schema = writer_schema.clone();
@@ -1791,18 +1917,18 @@ mod test {
         let expected = RecordBatch::try_from_iter_with_nullable([(
             "foo",
             Arc::new(BinaryArray::from_iter_values(vec![
-                b"\x00".as_ref(),
-                b"\x01".as_ref(),
-                b"\x02".as_ref(),
-                b"\x03".as_ref(),
-                b"\x04".as_ref(),
-                b"\x05".as_ref(),
-                b"\x06".as_ref(),
-                b"\x07".as_ref(),
-                b"\x08".as_ref(),
-                b"\t".as_ref(),
-                b"\n".as_ref(),
-                b"\x0b".as_ref(),
+                b"\x00" as &[u8],
+                b"\x01" as &[u8],
+                b"\x02" as &[u8],
+                b"\x03" as &[u8],
+                b"\x04" as &[u8],
+                b"\x05" as &[u8],
+                b"\x06" as &[u8],
+                b"\x07" as &[u8],
+                b"\x08" as &[u8],
+                b"\t" as &[u8],
+                b"\n" as &[u8],
+                b"\x0b" as &[u8],
             ])) as Arc<dyn Array>,
             true,
         )])
