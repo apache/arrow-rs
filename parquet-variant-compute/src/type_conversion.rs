@@ -20,6 +20,7 @@
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// not requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
+/// If `strict` is true, return error on conversion failure. If false, insert null.
 macro_rules! non_generic_conversion_array {
     ($array:expr, $cast_fn:expr, $builder:expr) => {{
         let array = $array;
@@ -31,6 +32,31 @@ macro_rules! non_generic_conversion_array {
             let cast_value = $cast_fn(array.value(i));
             $builder.append_variant(Variant::from(cast_value));
         }
+    }};
+    ($array:expr, $cast_fn:expr, $builder:expr, $strict:expr) => {{
+        let array = $array;
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                $builder.append_null();
+                continue;
+            }
+            match $cast_fn(array.value(i)) {
+                Some(cast_value) => {
+                    $builder.append_variant(Variant::from(cast_value));
+                }
+                None => {
+                    if $strict {
+                        return Err(ArrowError::ComputeError(format!(
+                            "Failed to convert value at index {}: conversion failed",
+                            i
+                        )));
+                    } else {
+                        $builder.append_null();
+                    }
+                }
+            }
+        }
+        Ok::<(), ArrowError>(())
     }};
 }
 pub(crate) use non_generic_conversion_array;
@@ -52,12 +78,21 @@ pub(crate) use non_generic_conversion_single_value;
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
+/// If `strict` is true, return error on conversion failure. If false, insert null.
 macro_rules! generic_conversion_array {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
         $crate::type_conversion::non_generic_conversion_array!(
             $input.$method::<$t>(),
             $cast_fn,
             $builder
+        )
+    }};
+    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr, $strict:expr) => {{
+        $crate::type_conversion::non_generic_conversion_array!(
+            $input.$method::<$t>(),
+            $cast_fn,
+            $builder,
+            $strict
         )
     }};
 }
