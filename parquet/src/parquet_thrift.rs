@@ -866,7 +866,6 @@ pub(crate) mod tests {
             + WriteThrift<Vec<u8>>
             + PartialEq
             + Debug,
-        //for<'a> <T as TryFrom<&'a mut ThriftCompactInputProtocol<'a>>>::Error: Debug,
     {
         let buf = Vec::<u8>::new();
         let mut writer = ThriftCompactOutputProtocol::new(buf);
