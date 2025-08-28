@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::type_conversion::{
     decimal_to_variant_decimal, generic_conversion_array, non_generic_conversion_array,
-    primitive_conversion_array,
+    primitive_conversion_array, timestamp_to_variant_timestamp,
 };
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
@@ -46,7 +46,7 @@ use parquet_variant::{
     Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
 
-fn convert_timestamp(
+fn convert_timestamp_with_options(
     time_unit: &TimeUnit,
     time_zone: &Option<Arc<str>>,
     input: &dyn Array,
@@ -59,114 +59,43 @@ fn convert_timestamp(
                 .as_any()
                 .downcast_ref::<TimestampSecondArray>()
                 .expect("Array is not TimestampSecondArray");
-
-            if strict {
-                let mut result = Vec::with_capacity(ts_array.len());
-                for x in ts_array.iter() {
-                    match x {
-                        Some(y) => match timestamp_s_to_datetime(y) {
-                            Some(dt) => result.push(Some(dt)),
-                            None => {
-                                return Err(ArrowError::ComputeError(
-                                    "Invalid timestamp seconds value".to_string(),
-                                ))
-                            }
-                        },
-                        None => result.push(None),
-                    }
-                }
-                result
-            } else {
-                ts_array
-                    .iter()
-                    .map(|x| x.and_then(timestamp_s_to_datetime))
-                    .collect()
-            }
+            timestamp_to_variant_timestamp!(ts_array, timestamp_s_to_datetime, "seconds", strict)
         }
         arrow_schema::TimeUnit::Millisecond => {
             let ts_array = input
                 .as_any()
                 .downcast_ref::<TimestampMillisecondArray>()
                 .expect("Array is not TimestampMillisecondArray");
-
-            if strict {
-                let mut result = Vec::with_capacity(ts_array.len());
-                for x in ts_array.iter() {
-                    match x {
-                        Some(y) => match timestamp_ms_to_datetime(y) {
-                            Some(dt) => result.push(Some(dt)),
-                            None => {
-                                return Err(ArrowError::ComputeError(
-                                    "Invalid timestamp milliseconds value".to_string(),
-                                ))
-                            }
-                        },
-                        None => result.push(None),
-                    }
-                }
-                result
-            } else {
-                ts_array
-                    .iter()
-                    .map(|x| x.and_then(timestamp_ms_to_datetime))
-                    .collect()
-            }
+            timestamp_to_variant_timestamp!(
+                ts_array,
+                timestamp_ms_to_datetime,
+                "milliseconds",
+                strict
+            )
         }
         arrow_schema::TimeUnit::Microsecond => {
             let ts_array = input
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .expect("Array is not TimestampMicrosecondArray");
-            if strict {
-                let mut result = Vec::with_capacity(ts_array.len());
-                for x in ts_array.iter() {
-                    match x {
-                        Some(y) => match timestamp_us_to_datetime(y) {
-                            Some(dt) => result.push(Some(dt)),
-                            None => {
-                                return Err(ArrowError::ComputeError(
-                                    "Invalid timestamp microseconds value".to_string(),
-                                ))
-                            }
-                        },
-                        None => result.push(None),
-                    }
-                }
-                result
-            } else {
-                ts_array
-                    .iter()
-                    .map(|x| x.and_then(timestamp_us_to_datetime))
-                    .collect()
-            }
+            timestamp_to_variant_timestamp!(
+                ts_array,
+                timestamp_us_to_datetime,
+                "microseconds",
+                strict
+            )
         }
         arrow_schema::TimeUnit::Nanosecond => {
             let ts_array = input
                 .as_any()
                 .downcast_ref::<TimestampNanosecondArray>()
                 .expect("Array is not TimestampNanosecondArray");
-            if strict {
-                let mut result = Vec::with_capacity(ts_array.len());
-                for x in ts_array.iter() {
-                    match x {
-                        Some(y) => match timestamp_ns_to_datetime(y) {
-                            Some(dt) => result.push(Some(dt)),
-                            None => {
-                                return Err(ArrowError::ComputeError(
-                                    "Invalid timestamp nanoseconds value".to_string(),
-                                ))
-                            }
-                        },
-                        None => result.push(None),
-                    }
-                }
-                result
-            } else {
-                ts_array
-                    .iter()
-                    .map(|x| x.and_then(timestamp_ns_to_datetime))
-                    .collect()
-            }
+            timestamp_to_variant_timestamp!(
+                ts_array,
+                timestamp_ns_to_datetime,
+                "nanoseconds",
+                strict
+            )
         }
     };
 
@@ -335,7 +264,7 @@ pub fn cast_to_variant_with_options(
             }
         }
         DataType::Timestamp(time_unit, time_zone) => {
-            convert_timestamp(time_unit, time_zone, input, &mut builder, strict)?;
+            convert_timestamp_with_options(time_unit, time_zone, input, &mut builder, strict)?;
         }
         DataType::Time32(unit) => {
             match *unit {

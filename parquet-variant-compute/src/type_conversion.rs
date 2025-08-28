@@ -158,3 +158,30 @@ macro_rules! decimal_to_variant_decimal {
     }};
 }
 pub(crate) use decimal_to_variant_decimal;
+
+/// Convert a timestamp value to a `VariantTimestamp`
+macro_rules! timestamp_to_variant_timestamp {
+    ($ts_array:expr, $converter:expr, $unit_name:expr, $strict:expr) => {
+        if $strict {
+            let mut result = Vec::with_capacity($ts_array.len());
+            for x in $ts_array.iter() {
+                match x {
+                    Some(y) => match $converter(y) {
+                        Some(dt) => result.push(Some(dt)),
+                        None => {
+                            return Err(ArrowError::ComputeError(format!(
+                                "Invalid timestamp {} value",
+                                $unit_name
+                            )))
+                        }
+                    },
+                    None => result.push(None),
+                }
+            }
+            result
+        } else {
+            $ts_array.iter().map(|x| x.and_then($converter)).collect()
+        }
+    };
+}
+pub(crate) use timestamp_to_variant_timestamp;
