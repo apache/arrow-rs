@@ -548,7 +548,7 @@ mod tests {
             ymax: 128.5.into(),
             zmin: Some(11.0.into()),
             zmax: Some(1300.0.into()),
-            mmin: Some(3.14.into()),
+            mmin: Some(3.7.into()),
             mmax: Some(42.0.into()),
         });
     }
