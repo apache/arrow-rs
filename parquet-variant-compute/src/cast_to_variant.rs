@@ -286,6 +286,8 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         }
         DataType::List(_) => convert_list::<i32>(input, &mut builder)?,
         DataType::LargeList(_) => convert_list::<i64>(input, &mut builder)?,
+        DataType::ListView(_) => convert_list_view::<i32>(input, &mut builder)?,
+        DataType::LargeListView(_) => convert_list_view::<i64>(input, &mut builder)?,
         DataType::Struct(_) => convert_struct(input, &mut builder)?,
         DataType::Map(field, _) => convert_map(field, input, &mut builder)?,
         DataType::Union(fields, _) => convert_union(fields, input, &mut builder)?,
@@ -416,6 +418,47 @@ fn convert_list<O: OffsetSizeTrait>(
 
         // Add all values from the slice
         for j in start..end {
+            list_builder.append_value(values_variant_array.value(j));
+        }
+
+        list_builder.finish();
+
+        let (metadata, value) = variant_builder.finish();
+        let variant = Variant::new(&metadata, &value);
+        builder.append_variant(variant)
+    }
+
+    Ok(())
+}
+
+/// Generic function to convert list view arrays (both ListView and LargeListView) to variant arrays
+fn convert_list_view<O: OffsetSizeTrait>(
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) -> Result<(), ArrowError> {
+    let list_view_array = input.as_list_view::<O>();
+    let values = list_view_array.values();
+    let offsets = list_view_array.value_offsets();
+    let sizes = list_view_array.value_sizes();
+
+    // Convert the entire values array to variant array
+    let values_variant_array = cast_to_variant(values.as_ref())?;
+
+    for i in 0..list_view_array.len() {
+        if list_view_array.is_null(i) {
+            builder.append_null();
+            continue;
+        }
+
+        let offset = offsets[i].as_usize();
+        let size = sizes[i].as_usize();
+
+        // Start building the inner VariantList
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+
+        // Add all values from the slice
+        for j in offset..offset + size {
             list_builder.append_value(values_variant_array.value(j));
         }
 
@@ -632,10 +675,10 @@ mod tests {
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
         GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
         IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray,
-        LargeStringArray, ListArray, MapArray, NullArray, StringArray, StringRunBuilder,
-        StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-        UInt8Array, UnionArray,
+        LargeListViewBuilder, LargeStringArray, ListArray, ListViewBuilder, MapArray, NullArray,
+        StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
@@ -1785,6 +1828,132 @@ mod tests {
 
         run_test(
             Arc::new(large_list_array.slice(1, 2)),
+            vec![Some(variant), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_list_view() {
+        // Create a ListViewArray with some data
+        let mut builder = ListViewBuilder::new(Int32Array::builder(0));
+        builder.append_value(&Int32Array::from(vec![Some(0), Some(1), Some(2)]));
+        builder.append_value(&Int32Array::from(vec![Some(3), Some(4)]));
+        builder.append_null();
+        let list_view_array = builder.finish();
+
+        // Expected values
+        let (metadata1, value1) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0i32);
+            list.append_value(1i32);
+            list.append_value(2i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant1 = Variant::new(&metadata1, &value1);
+
+        let (metadata2, value2) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i32);
+            list.append_value(4i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant2 = Variant::new(&metadata2, &value2);
+
+        run_test(
+            Arc::new(list_view_array),
+            vec![Some(variant1), Some(variant2), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_list_view() {
+        // Create a ListViewArray with some data
+        let mut builder = ListViewBuilder::new(Int32Array::builder(0));
+        builder.append_value(&Int32Array::from(vec![Some(0), Some(1), Some(2)]));
+        builder.append_value(&Int32Array::from(vec![Some(3), Some(4)]));
+        builder.append_null();
+        let list_view_array = builder.finish();
+
+        // Expected value for slice(1, 2) - should get the second and third elements
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i32);
+            list.append_value(4i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(list_view_array.slice(1, 2)),
+            vec![Some(variant), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_large_list_view() {
+        // Create a LargeListViewArray with some data
+        let mut builder = LargeListViewBuilder::new(Int64Array::builder(0));
+        builder.append_value(&Int64Array::from(vec![Some(0), Some(1), Some(2)]));
+        builder.append_value(&Int64Array::from(vec![Some(3), Some(4)]));
+        builder.append_null();
+        let large_list_view_array = builder.finish();
+
+        // Expected values
+        let (metadata1, value1) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0i64);
+            list.append_value(1i64);
+            list.append_value(2i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant1 = Variant::new(&metadata1, &value1);
+
+        let (metadata2, value2) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i64);
+            list.append_value(4i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant2 = Variant::new(&metadata2, &value2);
+
+        run_test(
+            Arc::new(large_list_view_array),
+            vec![Some(variant1), Some(variant2), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_large_list_view() {
+        // Create a LargeListViewArray with some data
+        let mut builder = LargeListViewBuilder::new(Int64Array::builder(0));
+        builder.append_value(&Int64Array::from(vec![Some(0), Some(1), Some(2)]));
+        builder.append_value(&Int64Array::from(vec![Some(3), Some(4)]));
+        builder.append_null();
+        let large_list_view_array = builder.finish();
+
+        // Expected value for slice(1, 2) - should get the second and third elements
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i64);
+            list.append_value(4i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(large_list_view_array.slice(1, 2)),
             vec![Some(variant), None],
         );
     }
