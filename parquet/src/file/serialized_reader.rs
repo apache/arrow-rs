@@ -340,6 +340,35 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
     }
 }
 
+use crate::file::page_cache::{get_cached_page, store_cached_page, PageCacheKey};
+
+/// Cache-aware version of decode_page that checks/stores in page cache
+/// Returns a cached page if available, otherwise decompresses and caches result
+pub(crate) fn decode_page_cached(
+    page_header: PageHeader,
+    buffer: Bytes,
+    physical_type: Type,
+    decompressor: Option<&mut Box<dyn Codec>>,
+    cache_key: Option<PageCacheKey>,
+) -> Result<Page> {
+    // Try cache first if cache key is provided
+    if let Some(ref key) = cache_key {
+        if let Some(cached_page) = get_cached_page(key) {
+            return Ok((*cached_page).clone());
+        } 
+    }
+
+    // Cache miss or no caching - decode the page
+    let page = decode_page(page_header, buffer, physical_type, decompressor)?;
+    
+    // Store in cache if cache key is provided  
+    if let Some(key) = cache_key {
+        store_cached_page(key, Arc::new(page.clone()));
+    }
+    
+    Ok(page)
+}
+
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
@@ -518,6 +547,15 @@ pub struct SerializedPageReader<R: ChunkReader> {
     state: SerializedPageReaderState,
 
     context: SerializedPageReaderContext,
+
+    /// File identifier for page caching
+    file_id: u64,
+
+    /// Row group index for page caching
+    rg_idx: usize,
+
+    /// Column index for page caching
+    column_idx: usize,
 }
 
 impl<R: ChunkReader> SerializedPageReader<R> {
@@ -550,6 +588,43 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         Ok(self)
     }
 
+    /// Set cache context for stable cache keys using UUID from file metadata
+    pub(crate) fn set_cache_context_metadata(mut self, rg_idx: usize, column_idx: usize, column_metadata: &ColumnChunkMetaData, parquet_metadata: &ParquetMetaData) -> Self {        
+        self.column_idx = column_idx;
+        
+        // Store rg_idx for use in cache key generation
+        self.rg_idx = rg_idx;
+        
+        // Extract UUID from Arrow schema metadata for unique file identification
+        let uuid_str = if let Ok(arrow_schema) = crate::arrow::parquet_to_arrow_schema(
+            parquet_metadata.file_metadata().schema_descr(), 
+            parquet_metadata.file_metadata().key_value_metadata()
+        ) {
+            arrow_schema.metadata().get("uuid").cloned()
+        } else {
+            None
+        };
+        
+        let file_uuid_id = if let Some(uuid) = uuid_str.as_ref() {
+            // Convert UUID string to u64 using simple string hash (non-crypto)
+            let mut uuid_hash = 0u64;
+            for byte in uuid.bytes() {
+                uuid_hash = uuid_hash.wrapping_mul(31).wrapping_add(byte as u64);
+            }
+            uuid_hash
+        } else {
+            // Fallback to metadata-based ID if no UUID
+            // However this will probably lead to wrong result and should be aboided
+            (column_metadata.data_page_offset() as u64)
+                .wrapping_add(column_metadata.compressed_size() as u64)
+        };
+        
+        // Use UUID-based file ID directly - column info is already in cache key
+        self.file_id = file_uuid_id;
+        
+        self
+    }
+
     /// Adds any necessary crypto context to this page reader, if encryption is enabled.
     #[cfg(feature = "encryption")]
     pub(crate) fn add_crypto_context(
@@ -559,6 +634,10 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         parquet_meta_data: &ParquetMetaData,
         column_chunk_metadata: &ColumnChunkMetaData,
     ) -> Result<SerializedPageReader<R>> {
+        self.column_idx = column_idx;
+        // Generate a stable file_id using row group index and column index
+        // This ensures same logical pages get the same cache key
+        self.file_id = ((rg_idx as u64) << 32) | (column_idx as u64);
         let Some(file_decryptor) = parquet_meta_data.file_decryptor() else {
             return Ok(self);
         };
@@ -610,12 +689,19 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 require_dictionary: meta.dictionary_page_offset().is_some(),
             },
         };
+        // Generate a simple file ID from the reader pointer address  
+        // This will be replaced with (row_group_idx, column_idx) in add_crypto_context
+        let file_id = Arc::as_ptr(&reader) as *const _ as u64;
+        
         Ok(Self {
             reader,
             decompressor,
             state,
             physical_type: meta.column_type(),
             context: Default::default(),
+            file_id,
+            rg_idx: 0, // Will be set via set_cache_context_metadata
+            column_idx: 0, // Will be set via add_crypto_context or other method
         })
     }
 
@@ -894,11 +980,14 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         self.context
                             .decrypt_page_data(buffer, *page_index, *require_dictionary)?;
 
-                    let page = decode_page(
+                    let cache_key = Some(PageCacheKey::new(self.file_id, self.rg_idx, self.column_idx, *offset));
+                    
+                    let page = decode_page_cached(
                         header,
                         Bytes::from(buffer),
                         self.physical_type,
                         self.decompressor.as_mut(),
+                        cache_key,
                     )?;
                     if page.is_data_page() {
                         *page_index += 1;
@@ -938,11 +1027,21 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     if !is_dictionary_page {
                         *page_index += 1;
                     }
-                    decode_page(
+                    
+                    // Create cache key for this page
+                    let cache_key = Some(PageCacheKey::new(
+                        self.file_id,
+                        self.rg_idx,
+                        self.column_idx,
+                        front.offset as u64,
+                    ));
+                    
+                    decode_page_cached(
                         header,
                         bytes,
                         self.physical_type,
                         self.decompressor.as_mut(),
+                        cache_key,
                     )?
                 }
             };

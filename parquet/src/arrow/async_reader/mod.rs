@@ -1116,7 +1116,7 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     i,
                     self.metadata,
                     column_chunk_metadata,
-                )?;
+                )?.set_cache_context_metadata(self.row_group_idx, i, column_chunk_metadata, self.metadata);
 
                 let page_reader: Box<dyn PageReader> = Box::new(page_reader);
 
