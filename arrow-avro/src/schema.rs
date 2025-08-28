@@ -1567,7 +1567,7 @@ mod tests {
         let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
         let id = 42u32;
         let fp = Fingerprint::Id(id);
-        let out_fp = store.set(fp.clone(), schema.clone()).unwrap();
+        let out_fp = store.set(fp, schema.clone()).unwrap();
         assert_eq!(out_fp, fp);
         assert_eq!(store.lookup(&fp).cloned(), Some(schema.clone()));
         assert!(store.lookup(&Fingerprint::Id(id.wrapping_add(1))).is_none());
@@ -1589,7 +1589,7 @@ mod tests {
         let mut store = SchemaStore::new();
         let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
         let fp = schema.fingerprint().unwrap();
-        let out_fp = store.set(fp.clone(), schema.clone()).unwrap();
+        let out_fp = store.set(fp, schema.clone()).unwrap();
         assert_eq!(out_fp, fp);
         assert_eq!(store.lookup(&fp).cloned(), Some(schema));
     }
@@ -1599,8 +1599,8 @@ mod tests {
         let mut store = SchemaStore::new();
         let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
         let fp = schema.fingerprint().unwrap();
-        let _ = store.set(fp.clone(), schema.clone()).unwrap();
-        let _ = store.set(fp.clone(), schema.clone()).unwrap();
+        let _ = store.set(fp, schema.clone()).unwrap();
+        let _ = store.set(fp, schema.clone()).unwrap();
         assert_eq!(store.schemas.len(), 1);
     }
 
@@ -1611,8 +1611,8 @@ mod tests {
         let schema2 = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
         // Use the same Fingerprint::Id to simulate a collision across different schemas
         let fp = Fingerprint::Id(123);
-        let _ = store.set(fp.clone(), schema1).unwrap();
-        let err = store.set(fp.clone(), schema2).unwrap_err();
+        let _ = store.set(fp, schema1).unwrap();
+        let err = store.set(fp, schema2).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("Schema fingerprint collision"));
     }
