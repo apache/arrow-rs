@@ -85,6 +85,14 @@ struct ClientArgs {
     #[clap(long)]
     tls: bool,
 
+    /// Dump TLS key log.
+    ///
+    /// The target file is specified by the `SSLKEYLOGFILE` environment variable.
+    ///
+    /// Requires `--tls`.
+    #[clap(long, requires = "tls")]
+    key_log: bool,
+
     /// Server host.
     ///
     /// Required.
@@ -357,7 +365,11 @@ async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel
         .keep_alive_while_idle(true);
 
     if args.tls {
-        let tls_config = ClientTlsConfig::new().with_enabled_roots();
+        let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
+        if args.key_log {
+            tls_config = tls_config.use_key_log();
+        }
+
         endpoint = endpoint
             .tls_config(tls_config)
             .context("create TLS endpoint")?;
