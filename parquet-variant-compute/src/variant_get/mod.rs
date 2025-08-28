@@ -205,87 +205,83 @@ mod test {
 
     /// Partial Shredding: extract a value as a VariantArray
     macro_rules! numeric_partially_shredded_test {
-        ($test:ident, $data_fn:ident, $primitive_type:ty) => {
-            #[test]
-            fn $test() {
-                let array = $data_fn();
-                let options = GetOptions::new();
-                let result = variant_get(&array, options).unwrap();
+        ($primitive_type:ty, $data_fn:ident) => {
+            let array = $data_fn();
+            let options = GetOptions::new();
+            let result = variant_get(&array, options).unwrap();
 
-                // expect the result is a VariantArray
-                let result: &VariantArray = result.as_any().downcast_ref().unwrap();
-                assert_eq!(result.len(), 4);
+            // expect the result is a VariantArray
+            let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+            assert_eq!(result.len(), 4);
 
-                // Expect the values are the same as the original values
-                assert_eq!(
-                    result.value(0),
-                    Variant::from(<$primitive_type>::try_from(34u8).unwrap())
-                );
-                assert!(!result.is_valid(1));
-                assert_eq!(result.value(2), Variant::from("n/a"));
-                assert_eq!(
-                    result.value(3),
-                    Variant::from(<$primitive_type>::try_from(100u8).unwrap())
-                );
-            }
+            // Expect the values are the same as the original values
+            assert_eq!(
+                result.value(0),
+                Variant::from(<$primitive_type>::try_from(34u8).unwrap())
+            );
+            assert!(!result.is_valid(1));
+            assert_eq!(result.value(2), Variant::from("n/a"));
+            assert_eq!(
+                result.value(3),
+                Variant::from(<$primitive_type>::try_from(100u8).unwrap())
+            );
         };
     }
 
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_int8_as_variant,
-        partially_shredded_int8_variant_array,
-        i8
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_int16_as_variant,
-        partially_shredded_int16_variant_array,
-        i16
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_int32_as_variant,
-        partially_shredded_int32_variant_array,
-        i32
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_int64_as_variant,
-        partially_shredded_int64_variant_array,
-        i64
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_uint8_as_variant,
-        partially_shredded_uint8_variant_array,
-        u8
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_uint16_as_variant,
-        partially_shredded_uint16_variant_array,
-        u16
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_uint32_as_variant,
-        partially_shredded_uint32_variant_array,
-        u32
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_uint64_as_variant,
-        partially_shredded_uint64_variant_array,
-        u64
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_float16_as_variant,
-        partially_shredded_float16_variant_array,
-        half::f16
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_float32_as_variant,
-        partially_shredded_float32_variant_array,
-        f32
-    );
-    numeric_partially_shredded_test!(
-        get_variant_partially_shredded_float64_as_variant,
-        partially_shredded_float64_variant_array,
-        f64
-    );
+    #[test]
+    fn get_variant_partially_shredded_int8_as_variant() {
+        numeric_partially_shredded_test!(i8, partially_shredded_int8_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_int16_as_variant() {
+        numeric_partially_shredded_test!(i16, partially_shredded_int16_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_int32_as_variant() {
+        numeric_partially_shredded_test!(i32, partially_shredded_int32_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_int64_as_variant() {
+        numeric_partially_shredded_test!(i64, partially_shredded_int64_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_uint8_as_variant() {
+        numeric_partially_shredded_test!(u8, partially_shredded_uint8_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_uint16_as_variant() {
+        numeric_partially_shredded_test!(u16, partially_shredded_uint16_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_uint32_as_variant() {
+        numeric_partially_shredded_test!(u32, partially_shredded_uint32_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_uint64_as_variant() {
+        numeric_partially_shredded_test!(u64, partially_shredded_uint64_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_float16_as_variant() {
+        numeric_partially_shredded_test!(half::f16, partially_shredded_float16_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_float32_as_variant() {
+        numeric_partially_shredded_test!(f32, partially_shredded_float32_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_float64_as_variant() {
+        numeric_partially_shredded_test!(f64, partially_shredded_float64_variant_array);
+    }
 
     /// Shredding: extract a value as an Int32Array
     #[test]
@@ -327,89 +323,85 @@ mod test {
 
     /// Perfect Shredding: extract the typed value as a VariantArray
     macro_rules! numeric_perfectly_shredded_test {
-        ($test:ident, $data_fn:ident, $primitive_type:ty) => {
-            #[test]
-            fn $test() {
-                let array = $data_fn();
-                let options = GetOptions::new();
-                let result = variant_get(&array, options).unwrap();
+        ($primitive_type:ty, $data_fn:ident) => {
+            let array = $data_fn();
+            let options = GetOptions::new();
+            let result = variant_get(&array, options).unwrap();
 
-                // expect the result is a VariantArray
-                let result: &VariantArray = result.as_any().downcast_ref().unwrap();
-                assert_eq!(result.len(), 3);
+            // expect the result is a VariantArray
+            let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+            assert_eq!(result.len(), 3);
 
-                // Expect the values are the same as the original values
-                assert_eq!(
-                    result.value(0),
-                    Variant::from(<$primitive_type>::try_from(1u8).unwrap())
-                );
-                assert_eq!(
-                    result.value(1),
-                    Variant::from(<$primitive_type>::try_from(2u8).unwrap())
-                );
-                assert_eq!(
-                    result.value(2),
-                    Variant::from(<$primitive_type>::try_from(3u8).unwrap())
-                );
-            }
+            // Expect the values are the same as the original values
+            assert_eq!(
+                result.value(0),
+                Variant::from(<$primitive_type>::try_from(1u8).unwrap())
+            );
+            assert_eq!(
+                result.value(1),
+                Variant::from(<$primitive_type>::try_from(2u8).unwrap())
+            );
+            assert_eq!(
+                result.value(2),
+                Variant::from(<$primitive_type>::try_from(3u8).unwrap())
+            );
         };
     }
 
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_int8_as_variant,
-        perfectly_shredded_int8_variant_array,
-        i8
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_int16_as_variant,
-        perfectly_shredded_int16_variant_array,
-        i16
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_int32_as_variant,
-        perfectly_shredded_int32_variant_array,
-        i32
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_int64_as_variant,
-        perfectly_shredded_int64_variant_array,
-        i64
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_uint8_as_variant,
-        perfectly_shredded_uint8_variant_array,
-        u8
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_uint16_as_variant,
-        perfectly_shredded_uint16_variant_array,
-        u16
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_uint32_as_variant,
-        perfectly_shredded_uint32_variant_array,
-        u32
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_uint64_as_variant,
-        perfectly_shredded_uint64_variant_array,
-        u64
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_float16_as_variant,
-        perfectly_shredded_float16_variant_array,
-        half::f16
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_float32_as_variant,
-        perfectly_shredded_float32_variant_array,
-        f32
-    );
-    numeric_perfectly_shredded_test!(
-        get_variant_perfectly_shredded_float64_as_variant,
-        perfectly_shredded_float64_variant_array,
-        f64
-    );
+    #[test]
+    fn get_variant_perfectly_shredded_int8_as_variant() {
+        numeric_perfectly_shredded_test!(i8, perfectly_shredded_int8_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_int16_as_variant() {
+        numeric_perfectly_shredded_test!(i16, perfectly_shredded_int16_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_int32_as_variant() {
+        numeric_perfectly_shredded_test!(i32, perfectly_shredded_int32_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_int64_as_variant() {
+        numeric_perfectly_shredded_test!(i64, perfectly_shredded_int64_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_uint8_as_variant() {
+        numeric_perfectly_shredded_test!(u8, perfectly_shredded_uint8_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_uint16_as_variant() {
+        numeric_perfectly_shredded_test!(u16, perfectly_shredded_uint16_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_uint32_as_variant() {
+        numeric_perfectly_shredded_test!(u32, perfectly_shredded_uint32_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_uint64_as_variant() {
+        numeric_perfectly_shredded_test!(u64, perfectly_shredded_uint64_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_float16_as_variant() {
+        numeric_perfectly_shredded_test!(half::f16, perfectly_shredded_float16_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_float32_as_variant() {
+        numeric_perfectly_shredded_test!(f32, perfectly_shredded_float32_variant_array);
+    }
+
+    #[test]
+    fn get_variant_perfectly_shredded_float64_as_variant() {
+        numeric_perfectly_shredded_test!(f64, perfectly_shredded_float64_variant_array);
+    }
 
     /// Shredding: Extract the typed value as Int32Array
     #[test]
