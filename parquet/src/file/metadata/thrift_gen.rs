@@ -141,6 +141,7 @@ pub(crate) struct DataPageHeaderV2 {
 );
 
 thrift_struct!(
+#[allow(dead_code)]
 pub(crate) struct PageHeader {
   /// the type of the page: indicates which of the *_header fields is set
   1: required PageType type_
