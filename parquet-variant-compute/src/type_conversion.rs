@@ -20,7 +20,7 @@
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// not requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
-/// If `strict` is true, return error on conversion failure. If false, insert null.
+/// If `strict` is true(default), return error on conversion failure. If false, insert null.
 macro_rules! non_generic_conversion_array {
     ($array:expr, $cast_fn:expr, $builder:expr) => {{
         let array = $array;
@@ -78,7 +78,7 @@ pub(crate) use non_generic_conversion_single_value;
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
-/// If `strict` is true, return error on conversion failure. If false, insert null.
+/// If `strict` is true(default), return error on conversion failure. If false, insert null.
 macro_rules! generic_conversion_array {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
         $crate::type_conversion::non_generic_conversion_array!(
