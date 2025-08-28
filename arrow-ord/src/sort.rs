@@ -841,7 +841,7 @@ pub struct SortColumn {
 
 /// Sort a list of `ArrayRef` using `SortOptions` provided for each array.
 ///
-/// Performs a stable lexicographical sort on values and indices.
+/// Performs a unstable lexicographical sort on values and indices.
 ///
 /// Returns an `ArrowError::ComputeError(String)` if any of the array type is either unsupported by
 /// `lexsort_to_indices` or `take`.
