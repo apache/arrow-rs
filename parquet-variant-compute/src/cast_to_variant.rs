@@ -288,6 +288,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
         DataType::LargeList(_) => convert_list::<i64>(input, &mut builder)?,
         DataType::ListView(_) => convert_list_view::<i32>(input, &mut builder)?,
         DataType::LargeListView(_) => convert_list_view::<i64>(input, &mut builder)?,
+        DataType::FixedSizeList(_, _) => convert_fixed_size_list(input, &mut builder)?,
         DataType::Struct(_) => convert_struct(input, &mut builder)?,
         DataType::Map(field, _) => convert_map(field, input, &mut builder)?,
         DataType::Union(fields, _) => convert_union(fields, input, &mut builder)?,
@@ -303,11 +304,6 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
                 )));
             }
         },
-        dt => {
-            return Err(ArrowError::CastError(format!(
-                "Unsupported data type for casting to Variant: {dt:?}",
-            )));
-        }
     };
     Ok(builder.build())
 }
@@ -459,6 +455,44 @@ fn convert_list_view<O: OffsetSizeTrait>(
 
         // Add all values from the slice
         for j in offset..offset + size {
+            list_builder.append_value(values_variant_array.value(j));
+        }
+
+        list_builder.finish();
+
+        let (metadata, value) = variant_builder.finish();
+        let variant = Variant::new(&metadata, &value);
+        builder.append_variant(variant)
+    }
+
+    Ok(())
+}
+
+fn convert_fixed_size_list(
+    input: &dyn Array,
+    builder: &mut VariantArrayBuilder,
+) -> Result<(), ArrowError> {
+    let fixed_size_list_array = input.as_fixed_size_list();
+    let values = fixed_size_list_array.values();
+    let value_length = fixed_size_list_array.value_length().as_usize();
+
+    // Convert the entire values array to variant array
+    let values_variant_array = cast_to_variant(values.as_ref())?;
+
+    for i in 0..fixed_size_list_array.len() {
+        if fixed_size_list_array.is_null(i) {
+            builder.append_null();
+            continue;
+        }
+
+        let start = i * value_length;
+
+        // Start building the inner VariantList
+        let mut variant_builder = VariantBuilder::new();
+        let mut list_builder = variant_builder.new_list();
+
+        // Add all values from the slice
+        for j in start..start + value_length {
             list_builder.append_value(values_variant_array.value(j));
         }
 
@@ -672,8 +706,8 @@ mod tests {
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
         Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, DurationMicrosecondArray,
         DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray,
-        FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        FixedSizeBinaryBuilder, FixedSizeListBuilder, Float16Array, Float32Array, Float64Array,
+        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
         IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray,
         LargeListViewBuilder, LargeStringArray, ListArray, ListViewBuilder, MapArray, NullArray,
         StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray,
@@ -1954,6 +1988,83 @@ mod tests {
 
         run_test(
             Arc::new(large_list_view_array.slice(1, 2)),
+            vec![Some(variant), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_fixed_size_list() {
+        let mut builder = FixedSizeListBuilder::new(Int32Array::builder(0), 2);
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.append(true); // First list: [0, 1]
+
+        builder.values().append_value(2);
+        builder.values().append_value(3);
+        builder.append(true); // Second list: [2, 3]
+
+        builder.values().append_nulls(2);
+        builder.append(false); // Third list: null
+
+        let fixed_size_list_array = builder.finish();
+
+        // Expected values
+        let (metadata1, value1) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0i32);
+            list.append_value(1i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant1 = Variant::new(&metadata1, &value1);
+
+        let (metadata2, value2) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(2i32);
+            list.append_value(3i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant2 = Variant::new(&metadata2, &value2);
+
+        run_test(
+            Arc::new(fixed_size_list_array),
+            vec![Some(variant1), Some(variant2), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_fixed_size_list() {
+        // Create a FixedSizeListArray with size 2
+        let mut builder = FixedSizeListBuilder::new(Int64Array::builder(0), 2);
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.append(true); // First list: [0, 1]
+
+        builder.values().append_value(2);
+        builder.values().append_value(3);
+        builder.append(true); // Second list: [2, 3]
+
+        builder.values().append_nulls(2);
+        builder.append(false); // Third list: null
+
+        let fixed_size_list_array = builder.finish();
+
+        // Expected value for slice(1, 2) - should get the second and third elements
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(2i64);
+            list.append_value(3i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(fixed_size_list_array.slice(1, 2)),
             vec![Some(variant), None],
         );
     }
