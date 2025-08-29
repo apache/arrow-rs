@@ -558,7 +558,6 @@ fn spawn_parquet_parallel_serialization_task(
 
         let column_writers = writer_factory.create_column_writers(row_group_index)?;
 
-        // type ColumnWriterTask = SpawnedTask<Result<(ArrowColumnWriter, MemoryReservation)>>;
         let (mut col_writer_tasks, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(column_writers, max_buffer_rb)?;
 
@@ -737,7 +736,108 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
 }
 
 #[tokio::test]
-async fn test_multi_threaded_encrypted_writing() {
+async fn test_multi_threaded_encrypted_writing_replace_deprecated_api() {
+    // Read example data and set up encryption/decryption properties
+    let testdata = arrow::util::test_util::parquet_test_data();
+    let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
+    let file = std::fs::File::open(path).unwrap();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+    let decryption_properties = FileDecryptionProperties::builder(b"0123456789012345".into())
+        .with_column_key("double_field", b"1234567890123450".into())
+        .with_column_key("float_field", b"1234567890123451".into())
+        .build()
+        .unwrap();
+
+    let (record_batches, metadata) =
+        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
+    let schema = metadata.schema().clone();
+
+    let props = Some(
+        WriterPropertiesBuilder::default()
+            .with_file_encryption_properties(file_encryption_properties)
+            .build(),
+    );
+
+    // Create a temporary file to write the encrypted data
+    let temp_file = tempfile::tempfile().unwrap();
+    let writer =
+        ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props.clone()).unwrap();
+
+    let (mut serialized_file_writer, row_group_writer_factory) =
+        writer.into_serialized_writer().unwrap();
+
+    let (serialize_tx, mut serialize_rx) =
+        tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(1);
+
+    // Create a channel to send RecordBatches to the writer and send row batches
+    let (record_batch_tx, mut data) = tokio::sync::mpsc::channel::<RecordBatch>(100);
+    let data_generator = tokio::spawn(async move {
+        for record_batch in record_batches {
+            record_batch_tx.send(record_batch).await.unwrap();
+        }
+    });
+
+    // Get column writers
+    // This is instead of let col_writers = writer.get_column_writers().unwrap();
+    let col_writers = row_group_writer_factory.create_column_writers(0).unwrap();
+
+    let (col_writer_tasks, col_array_channels) =
+        spawn_column_parallel_row_group_writer(col_writers, 10).unwrap();
+
+    // Spawn serialization tasks for incoming RecordBatches
+    let launch_serialization_task = tokio::spawn(async move {
+        let Some(rb) = data.recv().await else {
+            panic!()
+        };
+        send_arrays_to_column_writers(&col_array_channels, &rb, &schema)
+            .await
+            .unwrap();
+        let finalize_rg_task = spawn_rg_join_and_finalize_task(col_writer_tasks, 10);
+
+        serialize_tx.send(finalize_rg_task).await.unwrap();
+        drop(col_array_channels);
+    });
+
+    // Append the finalized row groups to the SerializedFileWriter
+    // This is instead of arrow_writer.append_row_group(arrow_column_chunks)
+    while let Some(task) = serialize_rx.recv().await {
+        let (arrow_column_chunks, _) = task.await.unwrap().unwrap();
+        let mut row_group_writer = serialized_file_writer.next_row_group().unwrap();
+        for chunk in arrow_column_chunks {
+            chunk.append_to_row_group(&mut row_group_writer).unwrap();
+        }
+        row_group_writer.close().unwrap();
+    }
+
+    // Wait for data generator and serialization task to finish
+    data_generator.await.unwrap();
+    launch_serialization_task.await.unwrap();
+    let metadata = serialized_file_writer.close().unwrap();
+
+    // Close the file writer which writes the footer
+    assert_eq!(metadata.num_rows, 50);
+    assert_eq!(metadata.schema, metadata.schema);
+
+    // Check that the file was written correctly
+    let (read_record_batches, read_metadata) =
+        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
+    verify_encryption_test_data(read_record_batches, read_metadata.metadata());
+
+    // Check that file was encrypted
+    let result = ArrowReaderMetadata::load(&temp_file, ArrowReaderOptions::default());
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Parquet error: Parquet file has an encrypted footer but decryption properties were not provided"
+    );
+}
+
+#[tokio::test]
+async fn test_multi_threaded_encrypted_writing_deprecated() {
     // Read example data and set up encryption/decryption properties
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
