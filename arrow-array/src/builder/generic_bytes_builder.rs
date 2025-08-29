@@ -20,6 +20,7 @@ use crate::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use crate::{Array, ArrayRef, GenericByteArray, OffsetSizeTrait};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ArrayDataBuilder;
+use arrow_schema::ArrowError;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -142,9 +143,10 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// Appends array values and null to this builder as is
     /// (this means that underlying null values are copied as is).
     #[inline]
-    pub fn append_array(&mut self, array: &GenericByteArray<T>) {
+    pub fn append_array(&mut self, array: &GenericByteArray<T>) -> Result<(), ArrowError> {
+        use num::CheckedAdd;
         if array.len() == 0 {
-            return;
+            return Ok(());
         }
 
         let offsets = array.offsets();
@@ -161,6 +163,12 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             // (even if we make MutableBuffer to avoid updating length on each push
             //  and reserve the necessary capacity, it's still slower)
             let mut intermediate = Vec::with_capacity(offsets.len() - 1);
+
+            if shift.checked_add(&offsets[offsets.len() - 1]).is_none() {
+                return Err(ArrowError::OffsetOverflowError(
+                    shift.as_usize() + offsets[offsets.len() - 1].as_usize(),
+                ));
+            }
 
             for &offset in &offsets[1..] {
                 intermediate.push(offset + shift)
@@ -179,6 +187,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         } else {
             self.null_buffer_builder.append_n_non_nulls(array.len());
         }
+        Ok(())
     }
 
     /// Builds the [`GenericByteArray`] and reset this builder.
@@ -673,9 +682,9 @@ mod tests {
         let arr3 = GenericStringArray::<i32>::from(input[7..].to_vec());
 
         let mut builder = GenericStringBuilder::<i32>::new();
-        builder.append_array(&arr1);
-        builder.append_array(&arr2);
-        builder.append_array(&arr3);
+        builder.append_array(&arr1).unwrap();
+        builder.append_array(&arr2).unwrap();
+        builder.append_array(&arr3).unwrap();
 
         let actual = builder.finish();
         let expected = GenericStringArray::<i32>::from(input);
@@ -703,9 +712,9 @@ mod tests {
         let arr3 = GenericStringArray::<i32>::from(input[7..].to_vec());
 
         let mut builder = GenericStringBuilder::<i32>::new();
-        builder.append_array(&arr1);
-        builder.append_array(&arr2);
-        builder.append_array(&arr3);
+        builder.append_array(&arr1).unwrap();
+        builder.append_array(&arr2).unwrap();
+        builder.append_array(&arr3).unwrap();
 
         let actual = builder.finish();
         let expected = GenericStringArray::<i32>::from(input);
@@ -717,7 +726,7 @@ mod tests {
     fn test_append_empty_array() {
         let arr = GenericStringArray::<i32>::from(Vec::<&str>::new());
         let mut builder = GenericStringBuilder::<i32>::new();
-        builder.append_array(&arr);
+        builder.append_array(&arr).unwrap();
         let result = builder.finish();
         assert_eq!(result.len(), 0);
     }
@@ -744,7 +753,7 @@ mod tests {
         assert_ne!(sliced.offsets().last(), full_array.offsets().last());
 
         let mut builder = GenericStringBuilder::<i32>::new();
-        builder.append_array(&sliced);
+        builder.append_array(&sliced).unwrap();
         let actual = builder.finish();
 
         let expected = GenericStringArray::<i32>::from(vec![None, Some("how"), None, None]);
@@ -780,8 +789,8 @@ mod tests {
         };
 
         let mut builder = GenericStringBuilder::<i32>::new();
-        builder.append_array(&input_1_array_with_nulls);
-        builder.append_array(&input_2_array_with_nulls);
+        builder.append_array(&input_1_array_with_nulls).unwrap();
+        builder.append_array(&input_2_array_with_nulls).unwrap();
 
         let actual = builder.finish();
         let expected = GenericStringArray::<i32>::from(vec![
@@ -827,9 +836,9 @@ mod tests {
         let slice3 = full_array.slice(7, full_array.len() - 7);
 
         let mut builder = GenericStringBuilder::<i32>::new();
-        builder.append_array(&slice1);
-        builder.append_array(&slice2);
-        builder.append_array(&slice3);
+        builder.append_array(&slice1).unwrap();
+        builder.append_array(&slice2).unwrap();
+        builder.append_array(&slice3).unwrap();
 
         let actual = builder.finish();
 
