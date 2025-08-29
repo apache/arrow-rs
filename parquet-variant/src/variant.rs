@@ -928,7 +928,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use parquet_variant::Variant;
     /// use half::f16;
     ///
-    /// // you can extract a f16 from a float variant
+    /// // you can extract an f16 from a float variant
     /// let v1 = Variant::from(std::f32::consts::PI);
     /// assert_eq!(v1.as_f16(), Some(f16::from_f32(std::f32::consts::PI)));
     ///
