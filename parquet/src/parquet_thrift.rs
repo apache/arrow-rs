@@ -20,7 +20,7 @@
 // to not allocate byte arrays or strings.
 #![allow(dead_code)]
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, io::Write};
 
 use crate::errors::{ParquetError, Result};
 
@@ -30,6 +30,12 @@ use crate::errors::{ParquetError, Result};
 // thrift seems to re-export an impl from ordered-float
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OrderedF64(f64);
+
+impl From<f64> for OrderedF64 {
+    fn from(value: f64) -> Self {
+        Self(value)
+    }
+}
 
 impl From<OrderedF64> for f64 {
     fn from(value: OrderedF64) -> Self {
@@ -537,5 +543,396 @@ where
         }
 
         Ok(res)
+    }
+}
+
+/////////////////////////
+// thrift compact output
+
+pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
+    writer: W,
+}
+
+impl<W: Write> ThriftCompactOutputProtocol<W> {
+    pub(crate) fn new(writer: W) -> Self {
+        Self { writer }
+    }
+
+    pub(crate) fn inner(&self) -> &W {
+        &self.writer
+    }
+
+    fn write_byte(&mut self, b: u8) -> Result<()> {
+        self.writer.write_all(&[b])?;
+        Ok(())
+    }
+
+    fn write_vlq(&mut self, val: u64) -> Result<()> {
+        let mut v = val;
+        while v > 0x7f {
+            self.write_byte(v as u8 | 0x80)?;
+            v >>= 7;
+        }
+        self.write_byte(v as u8)
+    }
+
+    fn write_zig_zag(&mut self, val: i64) -> Result<()> {
+        let s = (val < 0) as i64;
+        self.write_vlq((((val ^ -s) << 1) + s) as u64)
+    }
+
+    pub(crate) fn write_field_begin(
+        &mut self,
+        field_type: FieldType,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<()> {
+        let delta = field_id.wrapping_sub(last_field_id);
+        if delta > 0 && delta <= 0xf {
+            self.write_byte((delta as u8) << 4 | field_type as u8)
+        } else {
+            self.write_byte(field_type as u8)?;
+            self.write_i16(field_id)
+        }
+    }
+
+    pub(crate) fn write_list_begin(&mut self, element_type: ElementType, len: usize) -> Result<()> {
+        if len < 15 {
+            self.write_byte((len as u8) << 4 | element_type as u8)
+        } else {
+            self.write_byte(0xf0u8 | element_type as u8)?;
+            self.write_vlq(len as _)
+        }
+    }
+
+    pub(crate) fn write_struct_end(&mut self) -> Result<()> {
+        self.write_byte(0)
+    }
+
+    pub(crate) fn write_bytes(&mut self, val: &[u8]) -> Result<()> {
+        self.write_vlq(val.len() as u64)?;
+        self.writer.write_all(val)?;
+        Ok(())
+    }
+
+    pub(crate) fn write_empty_struct(&mut self, field_id: i16, last_field_id: i16) -> Result<i16> {
+        self.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_struct_end()?;
+        Ok(last_field_id)
+    }
+
+    pub(crate) fn write_bool(&mut self, val: bool) -> Result<()> {
+        match val {
+            true => self.write_byte(1),
+            false => self.write_byte(2),
+        }
+    }
+
+    pub(crate) fn write_i8(&mut self, val: i8) -> Result<()> {
+        self.write_byte(val as u8)
+    }
+
+    pub(crate) fn write_i16(&mut self, val: i16) -> Result<()> {
+        self.write_zig_zag(val as _)
+    }
+
+    pub(crate) fn write_i32(&mut self, val: i32) -> Result<()> {
+        self.write_zig_zag(val as _)
+    }
+
+    pub(crate) fn write_i64(&mut self, val: i64) -> Result<()> {
+        self.write_zig_zag(val as _)
+    }
+
+    pub(crate) fn write_double(&mut self, val: f64) -> Result<()> {
+        self.writer.write_all(&val.to_le_bytes())?;
+        Ok(())
+    }
+}
+
+pub(crate) trait WriteThrift {
+    const ELEMENT_TYPE: ElementType;
+
+    // used to write generated enums and structs
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()>;
+}
+
+impl<T> WriteThrift for Vec<T>
+where
+    T: WriteThrift,
+{
+    const ELEMENT_TYPE: ElementType = ElementType::List;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_list_begin(T::ELEMENT_TYPE, self.len())?;
+        for item in self {
+            item.write_thrift(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl WriteThrift for bool {
+    const ELEMENT_TYPE: ElementType = ElementType::Bool;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_bool(*self)
+    }
+}
+
+impl WriteThrift for i8 {
+    const ELEMENT_TYPE: ElementType = ElementType::Byte;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i8(*self)
+    }
+}
+
+impl WriteThrift for i16 {
+    const ELEMENT_TYPE: ElementType = ElementType::I16;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i16(*self)
+    }
+}
+
+impl WriteThrift for i32 {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i32(*self)
+    }
+}
+
+impl WriteThrift for i64 {
+    const ELEMENT_TYPE: ElementType = ElementType::I64;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_i64(*self)
+    }
+}
+
+impl WriteThrift for OrderedF64 {
+    const ELEMENT_TYPE: ElementType = ElementType::Double;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_double(self.0)
+    }
+}
+
+impl WriteThrift for &[u8] {
+    const ELEMENT_TYPE: ElementType = ElementType::Binary;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_bytes(self)
+    }
+}
+
+impl WriteThrift for &str {
+    const ELEMENT_TYPE: ElementType = ElementType::Binary;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_bytes(self.as_bytes())
+    }
+}
+
+impl WriteThrift for String {
+    const ELEMENT_TYPE: ElementType = ElementType::Binary;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_bytes(self.as_bytes())
+    }
+}
+
+pub(crate) trait WriteThriftField {
+    // used to write struct fields (which may be basic types or generated types).
+    // write the field header and field value. returns `field_id`.
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16>;
+}
+
+impl WriteThriftField for bool {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        // boolean only writes the field header
+        match *self {
+            true => writer.write_field_begin(FieldType::BooleanTrue, field_id, last_field_id)?,
+            false => writer.write_field_begin(FieldType::BooleanFalse, field_id, last_field_id)?,
+        }
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for i8 {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Byte, field_id, last_field_id)?;
+        writer.write_i8(*self)?;
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for i16 {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I16, field_id, last_field_id)?;
+        writer.write_i16(*self)?;
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for i32 {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+        writer.write_i32(*self)?;
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for i64 {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I64, field_id, last_field_id)?;
+        writer.write_i64(*self)?;
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for OrderedF64 {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Double, field_id, last_field_id)?;
+        writer.write_double(self.0)?;
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for &[u8] {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Binary, field_id, last_field_id)?;
+        writer.write_bytes(self)?;
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for &str {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Binary, field_id, last_field_id)?;
+        writer.write_bytes(self.as_bytes())?;
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for String {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Binary, field_id, last_field_id)?;
+        writer.write_bytes(self.as_bytes())?;
+        Ok(field_id)
+    }
+}
+
+impl<T> WriteThriftField for Vec<T>
+where
+    T: WriteThrift,
+{
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::List, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::basic::{TimeUnit, Type};
+
+    use super::*;
+    use std::fmt::Debug;
+
+    pub(crate) fn test_roundtrip<T>(val: T)
+    where
+        T: for<'a> TryFrom<&'a mut ThriftCompactInputProtocol<'a>>
+            + WriteThrift
+            + PartialEq
+            + Debug,
+        for<'a> <T as TryFrom<&'a mut ThriftCompactInputProtocol<'a>>>::Error: Debug,
+    {
+        let buf = Vec::<u8>::new();
+        let mut writer = ThriftCompactOutputProtocol::new(buf);
+        val.write_thrift(&mut writer).unwrap();
+
+        //println!("serialized: {:x?}", writer.inner());
+
+        let mut prot = ThriftCompactInputProtocol::new(writer.inner());
+        let read_val = T::try_from(&mut prot).unwrap();
+        assert_eq!(val, read_val);
+    }
+
+    #[test]
+    fn test_enum_roundtrip() {
+        test_roundtrip(Type::BOOLEAN);
+        test_roundtrip(Type::INT32);
+        test_roundtrip(Type::INT64);
+        test_roundtrip(Type::INT96);
+        test_roundtrip(Type::FLOAT);
+        test_roundtrip(Type::DOUBLE);
+        test_roundtrip(Type::BYTE_ARRAY);
+        test_roundtrip(Type::FIXED_LEN_BYTE_ARRAY);
+    }
+
+    #[test]
+    fn test_union_all_empty_roundtrip() {
+        test_roundtrip(TimeUnit::MILLIS);
+        test_roundtrip(TimeUnit::MICROS);
+        test_roundtrip(TimeUnit::NANOS);
     }
 }

@@ -125,7 +125,10 @@ use crate::{
 };
 use crate::{
     basic::{ColumnOrder, Compression, Encoding, Type},
-    parquet_thrift::{FieldType, ThriftCompactInputProtocol},
+    parquet_thrift::{
+        ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+        WriteThrift, WriteThriftField,
+    },
 };
 use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
@@ -135,6 +138,7 @@ use crate::{
     thrift_struct,
 };
 pub use reader::{FooterTail, PageIndexPolicy, ParquetMetaDataReader};
+use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
