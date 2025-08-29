@@ -18,31 +18,26 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
-use crate::basic::{Encoding, Type};
+use crate::basic::PageType;
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::thrift_gen::PageHeader;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::{
     metadata::*,
     properties::{ReaderProperties, ReaderPropertiesPtr},
     reader::*,
-    statistics,
 };
-use crate::format::{PageHeader, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
-#[cfg(feature = "encryption")]
-use crate::thrift::TCompactSliceInputProtocol;
-use crate::thrift::TSerializable;
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
-use thrift::protocol::TCompactInputProtocol;
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -344,7 +339,6 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 pub(crate) fn decode_page(
     page_header: PageHeader,
     buffer: Bytes,
-    physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
     // Verify the 32-bit CRC checksum of the page
@@ -423,7 +417,7 @@ pub(crate) fn decode_page(
             Page::DictionaryPage {
                 buf: buffer,
                 num_values: dict_header.num_values.try_into()?,
-                encoding: Encoding::try_from(dict_header.encoding)?,
+                encoding: dict_header.encoding,
                 is_sorted,
             }
         }
@@ -434,10 +428,10 @@ pub(crate) fn decode_page(
             Page::DataPage {
                 buf: buffer,
                 num_values: header.num_values.try_into()?,
-                encoding: Encoding::try_from(header.encoding)?,
-                def_level_encoding: Encoding::try_from(header.definition_level_encoding)?,
-                rep_level_encoding: Encoding::try_from(header.repetition_level_encoding)?,
-                statistics: statistics::from_thrift(physical_type, header.statistics)?,
+                encoding: header.encoding,
+                def_level_encoding: header.definition_level_encoding,
+                rep_level_encoding: header.repetition_level_encoding,
+                statistics: None,
             }
         }
         PageType::DATA_PAGE_V2 => {
@@ -448,13 +442,13 @@ pub(crate) fn decode_page(
             Page::DataPageV2 {
                 buf: buffer,
                 num_values: header.num_values.try_into()?,
-                encoding: Encoding::try_from(header.encoding)?,
+                encoding: header.encoding,
                 num_nulls: header.num_nulls.try_into()?,
                 num_rows: header.num_rows.try_into()?,
                 def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
                 rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
                 is_compressed,
-                statistics: statistics::from_thrift(physical_type, header.statistics)?,
+                statistics: None,
             }
         }
         _ => {
@@ -511,9 +505,6 @@ pub struct SerializedPageReader<R: ChunkReader> {
 
     /// The compression codec for this column chunk. Only set for non-PLAIN codec.
     decompressor: Option<Box<dyn Codec>>,
-
-    /// Column chunk type.
-    physical_type: Type,
 
     state: SerializedPageReaderState,
 
@@ -614,7 +605,6 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             reader,
             decompressor,
             state,
-            physical_type: meta.column_type(),
             context: Default::default(),
         })
     }
@@ -732,8 +722,10 @@ impl SerializedPageReaderContext {
         _page_index: usize,
         _dictionary_page: bool,
     ) -> Result<PageHeader> {
-        let mut prot = TCompactInputProtocol::new(input);
-        Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+        use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
+
+        let mut prot = ThriftReadInputProtocol::new(input);
+        Ok(PageHeader::read_thrift(&mut prot)?)
     }
 
     fn decrypt_page_data<T>(
@@ -756,10 +748,14 @@ impl SerializedPageReaderContext {
     ) -> Result<PageHeader> {
         match self.page_crypto_context(page_index, dictionary_page) {
             None => {
-                let mut prot = TCompactInputProtocol::new(input);
-                Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+                use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
+
+                let mut prot = ThriftReadInputProtocol::new(input);
+                Ok(PageHeader::read_thrift(&mut prot)?)
             }
             Some(page_crypto_context) => {
+                use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
+
                 let data_decryptor = page_crypto_context.data_decryptor();
                 let aad = page_crypto_context.create_page_header_aad()?;
 
@@ -770,8 +766,8 @@ impl SerializedPageReaderContext {
                     ))
                 })?;
 
-                let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
-                Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+                let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
+                Ok(PageHeader::read_thrift(&mut prot)?)
             }
         }
     }
@@ -894,12 +890,8 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         self.context
                             .decrypt_page_data(buffer, *page_index, *require_dictionary)?;
 
-                    let page = decode_page(
-                        header,
-                        Bytes::from(buffer),
-                        self.physical_type,
-                        self.decompressor.as_mut(),
-                    )?;
+                    let page =
+                        decode_page(header, Bytes::from(buffer), self.decompressor.as_mut())?;
                     if page.is_data_page() {
                         *page_index += 1;
                     } else if page.is_dictionary_page() {
@@ -938,12 +930,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     if !is_dictionary_page {
                         *page_index += 1;
                     }
-                    decode_page(
-                        header,
-                        bytes,
-                        self.physical_type,
-                        self.decompressor.as_mut(),
-                    )?
+                    decode_page(header, bytes, self.decompressor.as_mut())?
                 }
             };
 
@@ -1107,7 +1094,7 @@ mod tests {
     };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
 
-    use crate::basic::{self, BoundaryOrder, ColumnOrder, SortOrder};
+    use crate::basic::{self, BoundaryOrder, ColumnOrder, Encoding, SortOrder};
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
@@ -1396,7 +1383,7 @@ mod tests {
                     assert_eq!(def_levels_byte_len, 2);
                     assert_eq!(rep_levels_byte_len, 0);
                     assert!(is_compressed);
-                    assert!(statistics.is_some());
+                    assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
                 _ => false,
@@ -1498,7 +1485,7 @@ mod tests {
                     assert_eq!(def_levels_byte_len, 2);
                     assert_eq!(rep_levels_byte_len, 0);
                     assert!(is_compressed);
-                    assert!(statistics.is_some());
+                    assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
                 _ => false,
@@ -1877,7 +1864,7 @@ mod tests {
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
         assert_eq!(
             ret.err().unwrap().to_string(),
-            "Parquet error: Could not parse metadata: Parquet error: Received empty union from remote ColumnOrder"
+            "Parquet error: Received empty union from remote ColumnOrder"
         );
     }
 

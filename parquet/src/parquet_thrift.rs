@@ -917,10 +917,7 @@ pub(crate) mod tests {
 
     pub(crate) fn test_roundtrip<T>(val: T)
     where
-        T: for<'a> ReadThrift<'a, ThriftSliceInputProtocol<'a>>
-            + WriteThrift
-            + PartialEq
-            + Debug,
+        T: for<'a> ReadThrift<'a, ThriftSliceInputProtocol<'a>> + WriteThrift + PartialEq + Debug,
     {
         let buf = Vec::<u8>::new();
         let mut writer = ThriftCompactOutputProtocol::new(buf);

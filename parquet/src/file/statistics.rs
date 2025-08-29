@@ -45,6 +45,7 @@ use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::thrift_gen::PageStatistics;
 use crate::util::bit_util::FromBytes;
 
 pub(crate) mod private {
@@ -281,6 +282,55 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<crate::format::Statistics
         .and_then(|value| i64::try_from(value).ok());
 
     let mut thrift_stats = crate::format::Statistics {
+        max: None,
+        min: None,
+        null_count,
+        distinct_count,
+        max_value: None,
+        min_value: None,
+        is_max_value_exact: None,
+        is_min_value_exact: None,
+    };
+
+    // Get min/max if set.
+    let (min, max, min_exact, max_exact) = (
+        stats.min_bytes_opt().map(|x| x.to_vec()),
+        stats.max_bytes_opt().map(|x| x.to_vec()),
+        Some(stats.min_is_exact()),
+        Some(stats.max_is_exact()),
+    );
+    if stats.is_min_max_backwards_compatible() {
+        // Copy to deprecated min, max values for compatibility with older readers
+        thrift_stats.min.clone_from(&min);
+        thrift_stats.max.clone_from(&max);
+    }
+
+    if !stats.is_min_max_deprecated() {
+        thrift_stats.min_value = min;
+        thrift_stats.max_value = max;
+    }
+
+    thrift_stats.is_min_value_exact = min_exact;
+    thrift_stats.is_max_value_exact = max_exact;
+
+    Some(thrift_stats)
+}
+
+/// Convert Statistics into Thrift definition.
+pub(crate) fn page_stats_to_thrift(stats: Option<&Statistics>) -> Option<PageStatistics> {
+    let stats = stats?;
+
+    // record null count if it can fit in i64
+    let null_count = stats
+        .null_count_opt()
+        .and_then(|value| i64::try_from(value).ok());
+
+    // record distinct count if it can fit in i64
+    let distinct_count = stats
+        .distinct_count_opt()
+        .and_then(|value| i64::try_from(value).ok());
+
+    let mut thrift_stats = PageStatistics {
         max: None,
         min: None,
         null_count,

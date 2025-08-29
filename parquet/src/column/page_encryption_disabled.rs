@@ -17,7 +17,7 @@
 
 use crate::column::page::CompressedPage;
 use crate::errors::Result;
-use crate::format::PageHeader;
+use crate::file::metadata::thrift_gen::PageHeaderWithStats;
 use std::io::Write;
 
 #[derive(Debug)]
@@ -36,7 +36,7 @@ impl PageEncryptor {
 
     pub fn encrypt_page_header<W: Write>(
         &mut self,
-        _page_header: &PageHeader,
+        _page_header: &PageHeaderWithStats,
         _sink: &mut W,
     ) -> Result<()> {
         unreachable!("The encryption feature is disabled")

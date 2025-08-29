@@ -23,7 +23,6 @@ use std::iter::Peekable;
 use std::slice::Iter;
 use std::sync::{Arc, Mutex};
 use std::vec::IntoIter;
-use thrift::protocol::TCompactOutputProtocol;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
@@ -48,8 +47,8 @@ use crate::file::metadata::{KeyValue, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
+use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
-use crate::thrift::TSerializable;
 use levels::{calculate_array_levels, ArrayLevels};
 
 mod byte_array;
@@ -583,8 +582,8 @@ impl PageWriter for ArrowPageWriter {
                     }
                 }
                 None => {
-                    let mut protocol = TCompactOutputProtocol::new(&mut header);
-                    page_header.write_to_out_protocol(&mut protocol)?;
+                    let mut protocol = ThriftCompactOutputProtocol::new(&mut header);
+                    page_header.write_thrift(&mut protocol)?;
                 }
             };
 
@@ -1487,12 +1486,14 @@ mod tests {
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::column::page::{Page, PageReader};
+    use crate::file::metadata::thrift_gen::PageHeaderWithStats;
     use crate::file::page_encoding_stats::PageEncodingStats;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
     use crate::format::PageHeader;
+    use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
     use crate::schema::types::ColumnPath;
-    use crate::thrift::TCompactSliceInputProtocol;
+    use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
@@ -4191,8 +4192,8 @@ mod tests {
 
         // decode first page header
         let first_page = &buf[4..];
-        let mut prot = TCompactSliceInputProtocol::new(first_page);
-        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let mut prot = ThriftSliceInputProtocol::new(first_page);
+        let hdr = PageHeaderWithStats::read_thrift(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
 
         assert!(stats.is_none());
@@ -4225,8 +4226,8 @@ mod tests {
 
         // decode first page header
         let first_page = &buf[4..];
-        let mut prot = TCompactSliceInputProtocol::new(first_page);
-        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let mut prot = ThriftSliceInputProtocol::new(first_page);
+        let hdr = PageHeaderWithStats::read_thrift(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
 
         let stats = stats.unwrap();

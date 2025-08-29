@@ -19,13 +19,13 @@
 //! using row group writers and column writers respectively.
 
 use crate::bloom_filter::Sbbf;
+use crate::file::metadata::thrift_gen::PageHeaderWithStats;
 use crate::file::page_index::index::Index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use crate::thrift::TSerializable;
+use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
-use thrift::protocol::TCompactOutputProtocol;
 
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
@@ -939,15 +939,15 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     /// Serializes page header into Thrift.
     /// Returns number of bytes that have been written into the sink.
     #[inline]
-    fn serialize_page_header(&mut self, header: crate::format::PageHeader) -> Result<usize> {
+    fn serialize_page_header(&mut self, header: PageHeaderWithStats) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
         match self.page_encryptor_and_sink_mut() {
             Some((page_encryptor, sink)) => {
                 page_encryptor.encrypt_page_header(&header, sink)?;
             }
             None => {
-                let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-                header.write_to_out_protocol(&mut protocol)?;
+                let mut protocol = ThriftCompactOutputProtocol::new(&mut self.sink);
+                header.write_thrift(&mut protocol)?;
             }
         }
         Ok(self.sink.bytes_written() - start_pos)
