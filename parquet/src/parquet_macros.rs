@@ -451,11 +451,13 @@ macro_rules! __thrift_required_or_optional {
 #[macro_export]
 macro_rules! __thrift_result_required_or_optional {
     (required $field_name:ident) => {
-        let $field_name = $field_name.expect(concat!(
-            "Required field ",
-            stringify!($field_name),
-            " is missing",
-        ));
+        let Some($field_name) = $field_name else {
+            return Err(general_err!(concat!(
+                "Required field ",
+                stringify!($field_name),
+                " is missing",
+            )));
+        };
     };
     (optional $field_name:ident) => {};
 }
