@@ -164,6 +164,7 @@ fn rewrite_file(bytes: Bytes) -> (Bytes, FileMetaData) {
         .expect("parquet open");
     let writer_properties = WriterProperties::builder()
         .set_statistics_enabled(EnabledStatistics::Page)
+        .set_write_page_header_statistics(true)
         .build();
     let mut output = Vec::new();
     let mut parquet_writer = ArrowWriter::try_new(
@@ -239,6 +240,26 @@ fn criterion_benchmark(c: &mut Criterion) {
                             );
                         }
                         parquet::thrift::bench_page_header(
+                            &file_bytes.slice(col_meta.data_page_offset as usize..),
+                        );
+                    }
+                });
+            });
+        })
+    });
+
+    #[cfg(feature = "arrow")]
+    c.bench_function("page headers (no stats)", |b| {
+        b.iter(|| {
+            metadata.row_groups.iter().for_each(|rg| {
+                rg.columns.iter().for_each(|col| {
+                    if let Some(col_meta) = &col.meta_data {
+                        if let Some(dict_offset) = col_meta.dictionary_page_offset {
+                            parquet::thrift::bench_page_header_no_stats(
+                                &file_bytes.slice(dict_offset as usize..),
+                            );
+                        }
+                        parquet::thrift::bench_page_header_no_stats(
                             &file_bytes.slice(col_meta.data_page_offset as usize..),
                         );
                     }
