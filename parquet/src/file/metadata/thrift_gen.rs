@@ -856,6 +856,7 @@ pub(crate) struct DataPageHeader {
 );
 
 impl DataPageHeader {
+    // reader that skips decoding page statistics
     fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
     where
         R: ThriftCompactInputProtocol<'a>,
@@ -938,6 +939,7 @@ pub(crate) struct DataPageHeaderV2 {
 );
 
 impl DataPageHeaderV2 {
+    // reader that skips decoding page statistics
     fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
     where
         R: ThriftCompactInputProtocol<'a>,
@@ -1057,6 +1059,9 @@ pub(crate) struct PageHeader {
 );
 
 impl PageHeader {
+    // reader that skips reading page statistics. obtained by running
+    // `cargo expand -p parquet --all-features --lib file::metadata::thrift_gen`
+    // and modifying the impl of `read_thrift`
     pub(crate) fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
     where
         R: ThriftCompactInputProtocol<'a>,
