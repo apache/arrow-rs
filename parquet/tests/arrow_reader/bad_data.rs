@@ -80,16 +80,13 @@ fn test_invalid_files() {
 #[test]
 fn test_parquet_1481() {
     let err = read_file("PARQUET-1481.parquet").unwrap_err();
-    #[cfg(feature="encryption")]
+    #[cfg(feature = "encryption")]
     assert_eq!(
         err.to_string(),
         "Parquet error: Could not parse metadata: Parquet error: Unexpected Type -7"
     );
-    #[cfg(not(feature="encryption"))]
-    assert_eq!(
-        err.to_string(),
-        "Parquet error: Unexpected Type -7"
-    );
+    #[cfg(not(feature = "encryption"))]
+    assert_eq!(err.to_string(), "Parquet error: Unexpected Type -7");
 }
 
 #[test]
