@@ -475,26 +475,10 @@ pub fn generate_fingerprint(
                 .to_string(),
         )),
         #[cfg(feature = "md5_alg")]
-        FingerprintAlgorithm::MD5 => {
-            {
-                return Ok(Fingerprint::MD5(compute_fingerprint_md5(&canonical)));
-            }
-            {
-                return Err(ArrowError::SchemaError(
-                    "Feature 'md5_fp' is not enabled".to_string(),
-                ));
-            }
-        }
+        FingerprintAlgorithm::MD5 => Ok(Fingerprint::MD5(compute_fingerprint_md5(&canonical))),
         #[cfg(feature = "sha256")]
         FingerprintAlgorithm::SHA256 => {
-            {
-                return Ok(Fingerprint::SHA256(compute_fingerprint_sha256(&canonical)));
-            }
-            {
-                return Err(ArrowError::SchemaError(
-                    "Feature 'sha256_fp' is not enabled".to_string(),
-                ));
-            }
+            Ok(Fingerprint::SHA256(compute_fingerprint_sha256(&canonical)))
         }
     }
 }

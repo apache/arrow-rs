@@ -498,7 +498,7 @@ fn bench_with_decoder<F>(
         }
         group.bench_function(BenchmarkId::from_parameter(row_count), |b| {
             b.iter_batched_ref(
-                || new_decoder(),
+                &mut new_decoder,
                 |decoder| {
                     black_box(decoder.decode(datum).unwrap());
                     black_box(decoder.flush().unwrap().unwrap());
