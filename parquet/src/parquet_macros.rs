@@ -447,6 +447,8 @@ macro_rules! __thrift_required_or_optional {
     (optional $field_type:ty) => { Option<$field_type> };
 }
 
+// Performance note: using `expect` here is about 4% faster on the page index bench,
+// but we want to propogate errors. Using `ok_or` is *much* slower.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_result_required_or_optional {
