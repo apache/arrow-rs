@@ -205,7 +205,6 @@ impl Decoder {
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
-    #[inline(always)]
     fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
         match self.fingerprint_algorithm {
             FingerprintAlgorithm::Rabin => {
@@ -213,38 +212,45 @@ impl Decoder {
                     Fingerprint::Rabin(u64::from_le_bytes(bytes))
                 })
             }
-            FingerprintAlgorithm::MD5 => {
-                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
-                    Fingerprint::MD5(bytes)
-                })
-            }
-            FingerprintAlgorithm::SHA256 => {
-                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
-                    Fingerprint::SHA256(bytes)
-                })
-            }
             FingerprintAlgorithm::None => {
                 self.handle_prefix_common(buf, &CONFLUENT_MAGIC, |bytes| {
                     Fingerprint::Id(u32::from_be_bytes(bytes))
                 })
             }
+            #[cfg(feature = "md5_alg")]
+            FingerprintAlgorithm::MD5 => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::MD5(bytes)
+                })
+            }
+            #[cfg(feature = "sha256")]
+            FingerprintAlgorithm::SHA256 => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::SHA256(bytes)
+                })
+            }
         }
     }
 
-    #[inline(always)]
     fn handle_prefix_common<const MAGIC_LEN: usize, const N: usize>(
         &mut self,
         buf: &[u8],
         magic: &[u8; MAGIC_LEN],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
     ) -> Result<Option<usize>, ArrowError> {
+        // Need at least the magic bytes to decide
+        // 2 bytes for Avro Spec and 1 byte for Confluent Wire Protocol.
         if buf.len() < MAGIC_LEN {
             return Ok(Some(0));
         }
+        // Bail out early if the magic does not match.
         if &buf[..MAGIC_LEN] != magic {
             return Ok(None);
         }
+        // Try to parse the fingerprint that follows the magic.
         let consumed_fp = self.handle_fingerprint(&buf[MAGIC_LEN..], fingerprint_from)?;
+        // Convert the inner result into a “bytes consumed” count.
+        // NOTE: Incomplete fingerprint consumes no bytes.
         Ok(Some(consumed_fp.map_or(0, |n| n + MAGIC_LEN)))
     }
 
@@ -783,9 +789,11 @@ mod test {
             Fingerprint::Id(v) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({v})");
             }
+            #[cfg(feature = "md5_alg")]
             Fingerprint::MD5(v) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({v:?})");
             }
+            #[cfg(feature = "sha256")]
             Fingerprint::SHA256(id) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({id:?})");
             }
@@ -1300,9 +1308,11 @@ mod test {
         let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
-            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
-            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
             Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            #[cfg(feature = "md5_alg")]
+            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
         };
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         buf.extend_from_slice(&long_bytes[..4]);
@@ -1323,9 +1333,11 @@ mod test {
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         match fp_long {
             Fingerprint::Rabin(v) => buf.extend_from_slice(&v.to_le_bytes()),
-            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
-            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
             Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            #[cfg(feature = "md5_alg")]
+            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
         }
         let consumed = decoder.handle_prefix(&buf).unwrap().unwrap();
         assert_eq!(consumed, buf.len());

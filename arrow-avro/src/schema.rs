@@ -20,6 +20,7 @@ use arrow_schema::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value};
+#[cfg(feature = "sha256")]
 use sha2::{Digest, Sha256};
 use std::cmp::PartialEq;
 use std::collections::hash_map::Entry;
@@ -377,19 +378,20 @@ impl AvroSchema {
 }
 
 /// Supported fingerprint algorithms for Avro schema identification.
-/// Currently only `Rabin` is supported, `SHA256` and `MD5` support will come in a future update
 /// For use with Confluent Schema Registry IDs, set to None.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum FingerprintAlgorithm {
     /// 64‑bit CRC‑64‑AVRO Rabin fingerprint.
     #[default]
     Rabin,
-    /// 128-bit MD5 message digest.
-    MD5,
-    /// 256-bit SHA-256 digest.
-    SHA256,
     /// Represents a fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
     None,
+    #[cfg(feature = "md5_alg")]
+    /// 128-bit MD5 message digest.
+    MD5,
+    #[cfg(feature = "sha256")]
+    /// 256-bit SHA-256 digest.
+    SHA256,
 }
 
 /// Allow easy extraction of the algorithm used to create a fingerprint.
@@ -397,9 +399,11 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
     fn from(fp: &Fingerprint) -> Self {
         match fp {
             Fingerprint::Rabin(_) => FingerprintAlgorithm::Rabin,
-            Fingerprint::SHA256(_) => FingerprintAlgorithm::SHA256,
-            Fingerprint::MD5(_) => FingerprintAlgorithm::MD5,
             Fingerprint::Id(_) => FingerprintAlgorithm::None,
+            #[cfg(feature = "md5_alg")]
+            Fingerprint::MD5(_) => FingerprintAlgorithm::MD5,
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(_) => FingerprintAlgorithm::SHA256,
         }
     }
 }
@@ -409,24 +413,52 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
 /// This is used as the key inside `SchemaStore` `HashMap`. Each `SchemaStore`
 /// instance always stores only one variant, matching its configured
 /// `FingerprintAlgorithm`, but the enum makes the API uniform.
-/// Currently only `Rabin` is supported
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
 /// <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Fingerprint {
-    /// A 128-bit MD5 fingerprint.
-    MD5([u8; 16]),
-    /// A 256-bit SHA-256 fingerprint.
-    SHA256([u8; 32]),
     /// A 64-bit Rabin fingerprint.
     Rabin(u64),
     /// A 32-bit Schema Registry ID.
     Id(u32),
+    #[cfg(feature = "md5_alg")]
+    /// A 128-bit MD5 fingerprint.
+    MD5([u8; 16]),
+    #[cfg(feature = "sha256")]
+    /// A 256-bit SHA-256 fingerprint.
+    SHA256([u8; 32]),
 }
 
-/// Generates a fingerprint for the given `Schema` using the specified `FingerprintAlgorithm`.
-pub(crate) fn generate_fingerprint(
+/// Generates a fingerprint for the given `Schema` using the specified [`FingerprintAlgorithm`].
+///
+/// The fingerprint is computed over the schema's Parsed Canonical Form
+/// as defined by the Avro specification. Depending on `hash_type`, this
+/// will return one of the supported [`Fingerprint`] variants:
+/// - [`Fingerprint::Rabin`] for [`FingerprintAlgorithm::Rabin`]
+/// - [`Fingerprint::MD5`] for [`FingerprintAlgorithm::MD5`]
+/// - [`Fingerprint::SHA256`] for [`FingerprintAlgorithm::SHA256`]
+///
+/// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
+/// and will result in an error. If you intend to use a Schema Registry ID-based
+/// wire format, load or set the [`Fingerprint::Id`] directly via [`load_fingerprint_id`]
+/// or [`SchemaStore::set`].
+///
+/// See also: <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
+///
+/// # Errors
+/// Returns an error if generating the canonical form of the schema fails,
+/// or if `hash_type` is [`FingerprintAlgorithm::None`].
+///
+/// # Examples
+/// ```no_run
+/// use arrow_avro::schema::{AvroSchema, FingerprintAlgorithm, generate_fingerprint};
+///
+/// let avro = AvroSchema::new("\"string\"".to_string());
+/// let schema = avro.schema().unwrap();
+/// let fp = generate_fingerprint(&schema, FingerprintAlgorithm::Rabin).unwrap();
+/// ```
+pub fn generate_fingerprint(
     schema: &Schema,
     hash_type: FingerprintAlgorithm,
 ) -> Result<Fingerprint, ArrowError> {
@@ -434,10 +466,6 @@ pub(crate) fn generate_fingerprint(
         ArrowError::ComputeError(format!("Failed to generate canonical form for schema: {e}"))
     })?;
     match hash_type {
-        FingerprintAlgorithm::SHA256 => {
-            Ok(Fingerprint::SHA256(compute_fingerprint_sha256(&canonical)))
-        }
-        FingerprintAlgorithm::MD5 => Ok(Fingerprint::MD5(compute_fingerprint_md5(&canonical))),
         FingerprintAlgorithm::Rabin => {
             Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
         }
@@ -446,6 +474,28 @@ pub(crate) fn generate_fingerprint(
                 if using Fingerprint::Id, pass the registry ID in instead using the set method."
                 .to_string(),
         )),
+        #[cfg(feature = "md5_alg")]
+        FingerprintAlgorithm::MD5 => {
+            {
+                return Ok(Fingerprint::MD5(compute_fingerprint_md5(&canonical)));
+            }
+            {
+                return Err(ArrowError::SchemaError(
+                    "Feature 'md5_fp' is not enabled".to_string(),
+                ));
+            }
+        }
+        #[cfg(feature = "sha256")]
+        FingerprintAlgorithm::SHA256 => {
+            {
+                return Ok(Fingerprint::SHA256(compute_fingerprint_sha256(&canonical)));
+            }
+            {
+                return Err(ArrowError::SchemaError(
+                    "Feature 'sha256_fp' is not enabled".to_string(),
+                ));
+            }
+        }
     }
 }
 
@@ -522,11 +572,10 @@ impl TryFrom<&HashMap<Fingerprint, AvroSchema>> for SchemaStore {
     /// Creates a `SchemaStore` from a HashMap of schemas.
     /// Each schema in the HashMap is registered with the new store.
     fn try_from(schemas: &HashMap<Fingerprint, AvroSchema>) -> Result<Self, Self::Error> {
-        let mut store = SchemaStore::new();
-        for (fingerprint, schema) in schemas {
-            store.set(*fingerprint, schema.clone())?;
-        }
-        Ok(store)
+        Ok(Self {
+            schemas: schemas.clone(),
+            ..Self::default()
+        })
     }
 }
 
@@ -795,6 +844,7 @@ pub(crate) fn compute_fingerprint_rabin(canonical_form: &str) -> u64 {
     fp
 }
 
+#[cfg(feature = "md5_alg")]
 /// Compute the **128‑bit MD5** fingerprint of the canonical form.
 ///
 /// Returns a 16‑byte array (`[u8; 16]`) containing the full MD5 digest,
@@ -805,6 +855,7 @@ pub(crate) fn compute_fingerprint_md5(canonical_form: &str) -> [u8; 16] {
     digest.0
 }
 
+#[cfg(feature = "sha256")]
 /// Compute the **256‑bit SHA‑256** fingerprint of the canonical form.
 ///
 /// Returns a 32‑byte array (`[u8; 32]`) containing the full SHA‑256 digest.
@@ -1549,13 +1600,15 @@ mod tests {
                     .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
                     .is_none());
             }
-            Fingerprint::SHA256(id) => {
+            Fingerprint::Id(id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
+            #[cfg(feature = "md5_alg")]
             Fingerprint::MD5(id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
-            Fingerprint::Id(id) => {
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
         }
