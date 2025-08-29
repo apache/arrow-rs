@@ -1425,6 +1425,7 @@ mod tests {
         );
     }
 
+    // FIXME(ets)
     #[test]
     #[ignore = "still working on page stats"]
     fn test_page_writer_data_pages() {
@@ -1454,6 +1455,7 @@ mod tests {
         test_page_roundtrip(&pages[..], Compression::UNCOMPRESSED, Type::INT32);
     }
 
+    // FIXME(ets)
     #[test]
     #[ignore = "still working on page stats"]
     fn test_page_writer_dict_pages() {

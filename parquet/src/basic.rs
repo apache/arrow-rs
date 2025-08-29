@@ -768,7 +768,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for Compression {
     }
 }
 
-// FIXME
+// FIXME(ets)
 // ugh...why did we add compression level to some variants if we don't use them????
 impl WriteThrift for Compression {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
