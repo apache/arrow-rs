@@ -21,7 +21,7 @@ use parquet::basic::{Encoding, Type as ParquetType};
 use parquet::data_type::{
     DataType, DoubleType, FixedLenByteArray, FixedLenByteArrayType, FloatType,
 };
-use parquet::decoding::{get_decoder, Decoder};
+use parquet::decoding::{Decoder, get_decoder};
 use parquet::encoding::get_encoder;
 use parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
 use rand::prelude::*;

@@ -636,7 +636,10 @@ impl WriterPropertiesBuilder {
     /// [`Index`]: crate::file::page_index::index::Index
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
-            assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+            assert!(
+                value > 0,
+                "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`."
+            );
         }
 
         self.column_index_truncate_length = max_length;
@@ -662,7 +665,10 @@ impl WriterPropertiesBuilder {
     /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
-            assert!(value > 0, "Cannot have a 0 statistics truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+            assert!(
+                value > 0,
+                "Cannot have a 0 statistics truncate length. If you wish to disable min/max value truncation, set it to `None`."
+            );
         }
 
         self.statistics_truncate_length = max_length;
@@ -1291,9 +1297,11 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
         );
-        assert!(props
-            .bloom_filter_properties(&ColumnPath::from("col"))
-            .is_none());
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("col"))
+                .is_none()
+        );
     }
 
     #[test]

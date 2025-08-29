@@ -21,9 +21,9 @@
 use crate::basic::{Encoding, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
-use crate::compression::{create_codec, Codec};
+use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
-use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
+use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::{
@@ -33,8 +33,8 @@ use crate::file::{
     statistics,
 };
 use crate::format::{PageHeader, PageLocation, PageType};
-use crate::record::reader::RowIter;
 use crate::record::Row;
+use crate::record::reader::RowIter;
 use crate::schema::types::Type as SchemaType;
 #[cfg(feature = "encryption")]
 use crate::thrift::TCompactSliceInputProtocol;

@@ -20,7 +20,7 @@ use arrow_buffer::ArrowNativeType;
 use std::mem::size_of;
 use std::ops::Add;
 
-use super::{Extend, _MutableArrayData};
+use super::{_MutableArrayData, Extend};
 
 pub(super) fn build_extend<T: ArrowNativeType>(array: &ArrayData) -> Extend<'_> {
     let values = array.buffer::<T>(0);

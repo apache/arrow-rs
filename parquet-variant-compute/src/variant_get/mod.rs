@@ -22,9 +22,9 @@ use arrow::{
 use arrow_schema::{ArrowError, FieldRef};
 use parquet_variant::VariantPath;
 
+use crate::VariantArray;
 use crate::variant_array::ShreddingState;
 use crate::variant_get::output::instantiate_output_builder;
-use crate::VariantArray;
 
 mod output;
 
@@ -116,10 +116,10 @@ mod test {
     use arrow_schema::{DataType, Field, FieldRef, Fields};
     use parquet_variant::{Variant, VariantPath};
 
-    use crate::json_to_variant;
     use crate::VariantArray;
+    use crate::json_to_variant;
 
-    use super::{variant_get, GetOptions};
+    use super::{GetOptions, variant_get};
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
@@ -255,7 +255,10 @@ mod test {
 
         let err = variant_get(&array, options).unwrap_err();
         // TODO make this error message nicer (not Debug format)
-        assert_eq!(err.to_string(), "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])");
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])"
+        );
     }
 
     /// Perfect Shredding: extract the typed value as a VariantArray

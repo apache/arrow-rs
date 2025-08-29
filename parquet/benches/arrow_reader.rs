@@ -19,13 +19,13 @@ use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow_schema::Field;
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
+use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use half::f16;
 use num::FromPrimitive;
 use num_bigint::BigInt;
 use parquet::arrow::array_reader::{
-    make_byte_array_reader, make_byte_view_array_reader, make_fixed_len_byte_array_reader,
-    ListArrayReader,
+    ListArrayReader, make_byte_array_reader, make_byte_view_array_reader,
+    make_fixed_len_byte_array_reader,
 };
 use parquet::basic::Type;
 use parquet::data_type::{ByteArray, FixedLenByteArrayType};
@@ -38,7 +38,7 @@ use parquet::{
     schema::types::{ColumnDescPtr, SchemaDescPtr},
 };
 use rand::distr::uniform::SampleUniform;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::{collections::VecDeque, sync::Arc};
 
 fn build_test_schema() -> SchemaDescPtr {

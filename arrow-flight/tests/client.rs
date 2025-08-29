@@ -22,10 +22,10 @@ mod common;
 use crate::common::fixture::TestFixture;
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
-    decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder, error::FlightError, Action,
-    ActionType, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, Criteria, Empty,
-    FlightClient, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, PollInfo, PutResult, RenewFlightEndpointRequest, Ticket,
+    Action, ActionType, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, Criteria,
+    Empty, FlightClient, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PollInfo, PutResult, RenewFlightEndpointRequest, Ticket,
+    decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder, error::FlightError,
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;

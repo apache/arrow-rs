@@ -36,9 +36,9 @@
 use std::fs::File;
 
 use arrow_array::RecordBatchReader;
-use clap::{builder::PossibleValue, Parser, ValueEnum};
+use clap::{Parser, ValueEnum, builder::PossibleValue};
 use parquet::{
-    arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
+    arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
     basic::{Compression, Encoding},
     file::{
         properties::{BloomFilterPosition, EnabledStatistics, WriterProperties, WriterVersion},

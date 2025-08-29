@@ -519,7 +519,7 @@ fn timestamp_op<T: TimestampOp>(
                 "Invalid timestamp arithmetic operation: {} {op} {}",
                 l.data_type(),
                 r.data_type()
-            )))
+            )));
         }
     };
     Ok(Arc::new(array.with_timezone_opt(l.timezone())))
@@ -941,7 +941,7 @@ fn decimal_op<T: DecimalType>(
 mod tests {
     use super::*;
     use arrow_array::temporal_conversions::{as_date, as_datetime};
-    use arrow_buffer::{i256, ScalarBuffer};
+    use arrow_buffer::{ScalarBuffer, i256};
     use chrono::{DateTime, NaiveDate};
 
     fn test_neg_primitive<T: ArrowPrimitiveType>(
@@ -1263,7 +1263,10 @@ mod tests {
             .with_precision_and_scale(37, 37)
             .unwrap();
         let err = mul(&a, &b).unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Output scale of Decimal128(3, 3) * Decimal128(37, 37) would exceed max scale of 38");
+        assert_eq!(
+            err,
+            "Invalid argument error: Output scale of Decimal128(3, 3) * Decimal128(37, 37) would exceed max scale of 38"
+        );
 
         let a = Decimal128Array::from(vec![1])
             .with_precision_and_scale(3, -2)

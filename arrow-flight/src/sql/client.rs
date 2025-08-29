@@ -17,8 +17,8 @@
 
 //! A FlightSQL Client [`FlightSqlServiceClient`]
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -28,7 +28,7 @@ use crate::decode::FlightRecordBatchStream;
 use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
 use crate::flight_service_client::FlightServiceClient;
-use crate::sql::gen::action_end_transaction_request::EndTransaction;
+use crate::sql::r#gen::action_end_transaction_request::EndTransaction;
 use crate::sql::server::{
     BEGIN_TRANSACTION, CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT, END_TRANSACTION,
 };
@@ -52,9 +52,9 @@ use arrow_array::RecordBatch;
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
-use arrow_ipc::{root_as_message, MessageHeader};
+use arrow_ipc::{MessageHeader, root_as_message};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use futures::{stream, Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt, stream};
 use prost::Message;
 use tonic::transport::Channel;
 use tonic::{IntoRequest, IntoStreamingRequest, Streaming};

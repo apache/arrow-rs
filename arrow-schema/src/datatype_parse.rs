@@ -26,7 +26,9 @@ pub(crate) fn parse_data_type(val: &str) -> ArrowResult<DataType> {
 type ArrowResult<T> = Result<T, ArrowError>;
 
 fn make_error(val: &str, msg: &str) -> ArrowError {
-    let msg = format!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error {msg}" );
+    let msg = format!(
+        "Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error {msg}"
+    );
     ArrowError::ParseError(msg)
 }
 
@@ -253,7 +255,7 @@ impl<'a> Parser<'a> {
                 return Err(make_error(
                     self.val,
                     &format!("finding IntervalUnit for Interval, got {tok}"),
-                ))
+                ));
             }
         };
         self.expect_token(Token::RParen)?;
@@ -342,7 +344,7 @@ impl<'a> Parser<'a> {
                     return Err(make_error(
                         self.val,
                         &format!("Expected a word for the name of Struct, but got {tok}"),
-                    ))
+                    ));
                 }
             };
             let field_type = self.parse_next_type()?;
@@ -353,8 +355,10 @@ impl<'a> Parser<'a> {
                 tok => {
                     return Err(make_error(
                         self.val,
-                        &format!("Unexpected token while parsing Struct fields. Expected ',' or ')', but got '{tok}'"),
-                    ))
+                        &format!(
+                            "Unexpected token while parsing Struct fields. Expected ',' or ')', but got '{tok}'"
+                        ),
+                    ));
                 }
             }
         }
@@ -484,7 +488,10 @@ impl<'a> Tokenizer<'a> {
                 if s.contains('"') {
                     return Err(make_error(
                         self.val,
-                        &format!("parsing {} as double quoted string: escaped double quote isn't supported", self.word),
+                        &format!(
+                            "parsing {} as double quoted string: escaped double quote isn't supported",
+                            self.word
+                        ),
                     ));
                 }
 
@@ -854,21 +861,60 @@ mod test {
             ),
             ("Int32, ", "trailing content after parsing 'Int32'"),
             ("Int32(3), ", "trailing content after parsing 'Int32'"),
-            ("FixedSizeBinary(Int32), ", "Error finding i64 for FixedSizeBinary, got 'Int32'"),
-            ("FixedSizeBinary(3.0), ", "Error parsing 3.0 as integer: invalid digit found in string"),
+            (
+                "FixedSizeBinary(Int32), ",
+                "Error finding i64 for FixedSizeBinary, got 'Int32'",
+            ),
+            (
+                "FixedSizeBinary(3.0), ",
+                "Error parsing 3.0 as integer: invalid digit found in string",
+            ),
             // too large for i32
-            ("FixedSizeBinary(4000000000), ", "Error converting 4000000000 into i32 for FixedSizeBinary: out of range integral type conversion attempted"),
+            (
+                "FixedSizeBinary(4000000000), ",
+                "Error converting 4000000000 into i32 for FixedSizeBinary: out of range integral type conversion attempted",
+            ),
             // can't have negative precision
-            ("Decimal32(-3, 5)", "Error converting -3 into u8 for Decimal32: out of range integral type conversion attempted"),
-            ("Decimal64(-3, 5)", "Error converting -3 into u8 for Decimal64: out of range integral type conversion attempted"),
-            ("Decimal128(-3, 5)", "Error converting -3 into u8 for Decimal128: out of range integral type conversion attempted"),
-            ("Decimal256(-3, 5)", "Error converting -3 into u8 for Decimal256: out of range integral type conversion attempted"),
-            ("Decimal32(3, 500)", "Error converting 500 into i8 for Decimal32: out of range integral type conversion attempted"),
-            ("Decimal64(3, 500)", "Error converting 500 into i8 for Decimal64: out of range integral type conversion attempted"),
-            ("Decimal128(3, 500)", "Error converting 500 into i8 for Decimal128: out of range integral type conversion attempted"),
-            ("Decimal256(3, 500)", "Error converting 500 into i8 for Decimal256: out of range integral type conversion attempted"),
-            ("Struct(f1, Int64)", "Error finding next type, got unexpected ','"),
-            ("Struct(f1 Int64,)", "Expected a word for the name of Struct, but got trailing comma"),
+            (
+                "Decimal32(-3, 5)",
+                "Error converting -3 into u8 for Decimal32: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal64(-3, 5)",
+                "Error converting -3 into u8 for Decimal64: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal128(-3, 5)",
+                "Error converting -3 into u8 for Decimal128: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal256(-3, 5)",
+                "Error converting -3 into u8 for Decimal256: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal32(3, 500)",
+                "Error converting 500 into i8 for Decimal32: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal64(3, 500)",
+                "Error converting 500 into i8 for Decimal64: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal128(3, 500)",
+                "Error converting 500 into i8 for Decimal128: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal256(3, 500)",
+                "Error converting 500 into i8 for Decimal256: out of range integral type conversion attempted",
+            ),
+            (
+                "Struct(f1, Int64)",
+                "Error finding next type, got unexpected ','",
+            ),
+            (
+                "Struct(f1 Int64,)",
+                "Expected a word for the name of Struct, but got trailing comma",
+            ),
             ("Struct(f1)", "Error finding next type, got unexpected ')'"),
         ];
 
@@ -893,6 +939,9 @@ mod test {
     fn parse_error_type() {
         let err = parse_data_type("foobar").unwrap_err();
         assert!(matches!(err, ArrowError::ParseError(_)));
-        assert_eq!(err.to_string(), "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error unrecognized word: foobar");
+        assert_eq!(
+            err.to_string(),
+            "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error unrecognized word: foobar"
+        );
     }
 }

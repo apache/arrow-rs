@@ -142,7 +142,7 @@ use serde::Serialize;
 
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
-use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
+use arrow_array::{RecordBatch, RecordBatchReader, StructArray, downcast_integer, make_array};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;

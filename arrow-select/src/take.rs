@@ -24,8 +24,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
-    bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer,
-    ScalarBuffer,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+    bit_util,
 };
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};

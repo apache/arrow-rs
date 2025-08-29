@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::bit_iterator::BitIndexIterator;
-use crate::data::{contains_nulls, ArrayData};
+use crate::data::{ArrayData, contains_nulls};
 use arrow_buffer::bit_util::get_bit;
 
 use super::utils::{equal_bits, equal_len};

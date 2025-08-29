@@ -30,8 +30,8 @@
 //! ```
 
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A memory reservation within a [`MemoryPool`] that is freed on drop
 pub trait MemoryReservation: Debug + Send + Sync {

@@ -18,7 +18,7 @@
 use arrow::datatypes::Int32Type;
 use arrow::{array::PrimitiveArray, util::bench_util::create_primitive_run_array};
 use arrow_array::ArrayAccessor;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("primitive_run_accessor");

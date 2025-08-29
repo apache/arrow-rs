@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
+use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, slice_from_slice_at_offset,
 };

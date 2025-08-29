@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_flight::sql::server::PeekableFlightDataStream;
 use arrow_flight::sql::DoPutPreparedStatementResult;
-use base64::prelude::BASE64_STANDARD;
+use arrow_flight::sql::server::PeekableFlightDataStream;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use core::str;
-use futures::{stream, Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt, stream};
 use once_cell::sync::Lazy;
 use prost::Message;
 use std::collections::HashSet;
@@ -39,23 +39,23 @@ use arrow_flight::sql::metadata::{
     SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
 };
 use arrow_flight::sql::{
-    server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
-    ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionCancelQueryRequest,
-    ActionCancelQueryResult, ActionClosePreparedStatementRequest,
-    ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult,
-    ActionCreatePreparedSubstraitPlanRequest, ActionEndSavepointRequest,
-    ActionEndTransactionRequest, Any, CommandGetCatalogs, CommandGetCrossReference,
-    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementIngest,
-    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable,
-    ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
+    ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
+    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+    ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementSubstraitPlan,
+    CommandStatementUpdate, Nullable, ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery,
+    XdbcDataType, server::FlightSqlService,
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer, Action,
-    FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
-    IpcMessage, SchemaAsIpc, Ticket,
+    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket, flight_service_server::FlightService,
+    flight_service_server::FlightServiceServer,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};

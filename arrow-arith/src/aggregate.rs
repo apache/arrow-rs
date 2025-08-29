@@ -45,11 +45,7 @@ trait NumericAccumulator<T: ArrowNativeTypeOp>: Copy + Default {
 /// After verifying the generated assembly this can be a simple `if`.
 #[inline(always)]
 fn select<T: Copy>(m: bool, a: T, b: T) -> T {
-    if m {
-        a
-    } else {
-        b
-    }
+    if m { a } else { b }
 }
 
 #[derive(Clone, Copy)]
@@ -451,11 +447,7 @@ where
             let idx = nulls.valid_indices().reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
                 let item = array.value_unchecked(idx);
-                if cmp(&acc, &item) {
-                    idx
-                } else {
-                    acc_idx
-                }
+                if cmp(&acc, &item) { idx } else { acc_idx }
             });
             idx.map(|idx| array.value_unchecked(idx))
         }
@@ -477,11 +469,7 @@ fn min_max_view_helper<T: ByteViewType>(
         let target_idx = (0..array.len()).reduce(|acc, item| {
             // SAFETY:  array's length is correct so item is within bounds
             let cmp = unsafe { GenericByteViewArray::compare_unchecked(array, item, array, acc) };
-            if cmp == swap_cond {
-                item
-            } else {
-                acc
-            }
+            if cmp == swap_cond { item } else { acc }
         });
         // SAFETY: idx came from valid range `0..array.len()`
         unsafe { target_idx.map(|idx| array.value_unchecked(idx)) }
@@ -491,11 +479,7 @@ fn min_max_view_helper<T: ByteViewType>(
         let target_idx = nulls.valid_indices().reduce(|acc_idx, idx| {
             let cmp =
                 unsafe { GenericByteViewArray::compare_unchecked(array, idx, array, acc_idx) };
-            if cmp == swap_cond {
-                idx
-            } else {
-                acc_idx
-            }
+            if cmp == swap_cond { idx } else { acc_idx }
         });
 
         // SAFETY: idx came from valid range `0..array.len()`

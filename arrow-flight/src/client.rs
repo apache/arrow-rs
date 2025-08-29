@@ -16,19 +16,19 @@
 // under the License.
 
 use crate::{
-    decode::FlightRecordBatchStream,
-    flight_service_client::FlightServiceClient,
-    gen::{CancelFlightInfoRequest, CancelFlightInfoResult, RenewFlightEndpointRequest},
-    trailers::extract_lazy_trailers,
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, PollInfo, PutResult, Ticket,
+    decode::FlightRecordBatchStream,
+    flight_service_client::FlightServiceClient,
+    r#gen::{CancelFlightInfoRequest, CancelFlightInfoResult, RenewFlightEndpointRequest},
+    trailers::extract_lazy_trailers,
 };
 use arrow_schema::Schema;
 use bytes::Bytes;
 use futures::{
+    Stream, StreamExt, TryStreamExt,
     future::ready,
     stream::{self, BoxStream},
-    Stream, StreamExt, TryStreamExt,
 };
 use prost::Message;
 use tonic::{metadata::MetadataMap, transport::Channel};

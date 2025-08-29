@@ -22,10 +22,10 @@ use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
 use arrow_buffer::{Buffer, IntervalMonthDayNano};
 use half::f16;
-use rand::distr::uniform::SampleUniform;
-use rand::rng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::distr::uniform::SampleUniform;
+use rand::rng;
 use rand::{
     distr::{Alphanumeric, Distribution, StandardUniform},
     prelude::StdRng,

@@ -19,14 +19,14 @@ use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use tonic::{metadata::MetadataMap, Request, Response, Status, Streaming};
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use tonic::{Request, Response, Status, Streaming, metadata::MetadataMap};
 
 use arrow_flight::{
-    encode::FlightDataEncoderBuilder,
-    flight_service_server::{FlightService, FlightServiceServer},
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
+    encode::FlightDataEncoderBuilder,
+    flight_service_server::{FlightService, FlightServiceServer},
 };
 
 #[derive(Debug, Clone)]

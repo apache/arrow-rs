@@ -17,12 +17,12 @@
 
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
-use arrow_cast::{cast_with_options, pretty::pretty_format_batches, CastOptions};
+use arrow_cast::{CastOptions, cast_with_options, pretty::pretty_format_batches};
 use arrow_flight::{
-    sql::{client::FlightSqlServiceClient, CommandGetDbSchemas, CommandGetTables},
     FlightInfo,
+    sql::{CommandGetDbSchemas, CommandGetTables, client::FlightSqlServiceClient},
 };
 use arrow_schema::Schema;
 use clap::{Parser, Subcommand};
@@ -323,7 +323,7 @@ fn construct_record_batch_from_params(
 }
 
 fn setup_logging(args: LoggingArgs) -> Result<()> {
-    use tracing_subscriber::{util::SubscriberInitExt, EnvFilter, FmtSubscriber};
+    use tracing_subscriber::{EnvFilter, FmtSubscriber, util::SubscriberInitExt};
 
     tracing_log::LogTracer::init().context("tracing log init")?;
 
