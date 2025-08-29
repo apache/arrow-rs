@@ -650,20 +650,20 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     }
 }
 
-pub(crate) trait WriteThrift<W: Write> {
+pub(crate) trait WriteThrift {
     const ELEMENT_TYPE: ElementType;
 
     // used to write generated enums and structs
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()>;
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()>;
 }
 
-impl<T, W: Write> WriteThrift<W> for Vec<T>
+impl<T> WriteThrift for Vec<T>
 where
-    T: WriteThrift<W>,
+    T: WriteThrift,
 {
     const ELEMENT_TYPE: ElementType = ElementType::List;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_list_begin(T::ELEMENT_TYPE, self.len())?;
         for item in self {
             item.write_thrift(writer)?;
@@ -672,82 +672,82 @@ where
     }
 }
 
-impl<W: Write> WriteThrift<W> for bool {
+impl WriteThrift for bool {
     const ELEMENT_TYPE: ElementType = ElementType::Bool;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_bool(*self)
     }
 }
 
-impl<W: Write> WriteThrift<W> for i8 {
+impl WriteThrift for i8 {
     const ELEMENT_TYPE: ElementType = ElementType::Byte;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_i8(*self)
     }
 }
 
-impl<W: Write> WriteThrift<W> for i16 {
+impl WriteThrift for i16 {
     const ELEMENT_TYPE: ElementType = ElementType::I16;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_i16(*self)
     }
 }
 
-impl<W: Write> WriteThrift<W> for i32 {
+impl WriteThrift for i32 {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_i32(*self)
     }
 }
 
-impl<W: Write> WriteThrift<W> for i64 {
+impl WriteThrift for i64 {
     const ELEMENT_TYPE: ElementType = ElementType::I64;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_i64(*self)
     }
 }
 
-impl<W: Write> WriteThrift<W> for OrderedF64 {
+impl WriteThrift for OrderedF64 {
     const ELEMENT_TYPE: ElementType = ElementType::Double;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_double(self.0)
     }
 }
 
-impl<W: Write> WriteThrift<W> for &[u8] {
+impl WriteThrift for &[u8] {
     const ELEMENT_TYPE: ElementType = ElementType::Binary;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_bytes(self)
     }
 }
 
-impl<W: Write> WriteThrift<W> for &str {
+impl WriteThrift for &str {
     const ELEMENT_TYPE: ElementType = ElementType::Binary;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_bytes(self.as_bytes())
     }
 }
 
-impl<W: Write> WriteThrift<W> for String {
+impl WriteThrift for String {
     const ELEMENT_TYPE: ElementType = ElementType::Binary;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         writer.write_bytes(self.as_bytes())
     }
 }
 
-pub(crate) trait WriteThriftField<W: Write> {
+pub(crate) trait WriteThriftField {
     // used to write struct fields (which may be basic types or generated types).
     // write the field header and field value. returns `field_id`.
-    fn write_thrift_field(
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -755,8 +755,8 @@ pub(crate) trait WriteThriftField<W: Write> {
     ) -> Result<i16>;
 }
 
-impl<W: Write> WriteThriftField<W> for bool {
-    fn write_thrift_field(
+impl WriteThriftField for bool {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -771,8 +771,8 @@ impl<W: Write> WriteThriftField<W> for bool {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for i8 {
-    fn write_thrift_field(
+impl WriteThriftField for i8 {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -784,8 +784,8 @@ impl<W: Write> WriteThriftField<W> for i8 {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for i16 {
-    fn write_thrift_field(
+impl WriteThriftField for i16 {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -797,8 +797,8 @@ impl<W: Write> WriteThriftField<W> for i16 {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for i32 {
-    fn write_thrift_field(
+impl WriteThriftField for i32 {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -810,8 +810,8 @@ impl<W: Write> WriteThriftField<W> for i32 {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for i64 {
-    fn write_thrift_field(
+impl WriteThriftField for i64 {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -823,8 +823,8 @@ impl<W: Write> WriteThriftField<W> for i64 {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for OrderedF64 {
-    fn write_thrift_field(
+impl WriteThriftField for OrderedF64 {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -836,8 +836,8 @@ impl<W: Write> WriteThriftField<W> for OrderedF64 {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for &[u8] {
-    fn write_thrift_field(
+impl WriteThriftField for &[u8] {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -849,8 +849,8 @@ impl<W: Write> WriteThriftField<W> for &[u8] {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for &str {
-    fn write_thrift_field(
+impl WriteThriftField for &str {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -862,8 +862,8 @@ impl<W: Write> WriteThriftField<W> for &str {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for String {
-    fn write_thrift_field(
+impl WriteThriftField for String {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -875,11 +875,11 @@ impl<W: Write> WriteThriftField<W> for String {
     }
 }
 
-impl<T, W: Write> WriteThriftField<W> for Vec<T>
+impl<T> WriteThriftField for Vec<T>
 where
-    T: WriteThrift<W>,
+    T: WriteThrift,
 {
-    fn write_thrift_field(
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -901,7 +901,7 @@ pub(crate) mod tests {
     pub(crate) fn test_roundtrip<T>(val: T)
     where
         T: for<'a> TryFrom<&'a mut ThriftCompactInputProtocol<'a>>
-            + WriteThrift<Vec<u8>>
+            + WriteThrift
             + PartialEq
             + Debug,
         for<'a> <T as TryFrom<&'a mut ThriftCompactInputProtocol<'a>>>::Error: Debug,
