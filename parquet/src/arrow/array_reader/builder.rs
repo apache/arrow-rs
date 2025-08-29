@@ -385,6 +385,13 @@ impl<'a> ArrayReaderBuilder<'a> {
                 Some(DataType::Utf8View | DataType::BinaryView) => {
                     make_byte_view_array_reader(page_iterator, column_desc, arrow_type)?
                 }
+                // TODO: This is just a quick fix, causing the array to be read back as a plain encoded array.
+                // Implement a reader for REE encoded byte arrays similar to the make_byte_array_dictionary_reader
+                Some(DataType::RunEndEncoded(_, val)) => make_byte_array_reader(
+                    page_iterator,
+                    column_desc,
+                    Some(val.data_type().clone()),
+                )?,
                 _ => make_byte_array_reader(page_iterator, column_desc, arrow_type)?,
             },
             PhysicalType::FIXED_LEN_BYTE_ARRAY => match arrow_type {
