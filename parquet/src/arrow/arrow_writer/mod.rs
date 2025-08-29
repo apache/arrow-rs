@@ -1486,14 +1486,12 @@ mod tests {
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::column::page::{Page, PageReader};
-    use crate::file::metadata::thrift_gen::PageHeaderWithStats;
+    use crate::file::metadata::thrift_gen::PageHeader;
     use crate::file::page_encoding_stats::PageEncodingStats;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
-    use crate::format::PageHeader;
     use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
     use crate::schema::types::ColumnPath;
-    use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
@@ -4193,7 +4191,7 @@ mod tests {
         // decode first page header
         let first_page = &buf[4..];
         let mut prot = ThriftSliceInputProtocol::new(first_page);
-        let hdr = PageHeaderWithStats::read_thrift(&mut prot).unwrap();
+        let hdr = PageHeader::read_thrift(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
 
         assert!(stats.is_none());
@@ -4227,7 +4225,7 @@ mod tests {
         // decode first page header
         let first_page = &buf[4..];
         let mut prot = ThriftSliceInputProtocol::new(first_page);
-        let hdr = PageHeaderWithStats::read_thrift(&mut prot).unwrap();
+        let hdr = PageHeader::read_thrift(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
 
         let stats = stats.unwrap();
@@ -4278,8 +4276,8 @@ mod tests {
 
         // decode first page header
         let first_page = &buf[4..];
-        let mut prot = TCompactSliceInputProtocol::new(first_page);
-        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let mut prot = ThriftSliceInputProtocol::new(first_page);
+        let hdr = PageHeader::read_thrift(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
         assert!(stats.is_some());
         let stats = stats.unwrap();
@@ -4291,8 +4289,8 @@ mod tests {
 
         // check second page now
         let second_page = &prot.as_slice()[hdr.compressed_page_size as usize..];
-        let mut prot = TCompactSliceInputProtocol::new(second_page);
-        let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
+        let mut prot = ThriftSliceInputProtocol::new(second_page);
+        let hdr = PageHeader::read_thrift(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
         assert!(stats.is_some());
         let stats = stats.unwrap();

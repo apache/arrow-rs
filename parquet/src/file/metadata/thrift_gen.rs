@@ -817,7 +817,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ParquetMetaDat
 // we don't ever use those stats, but they take an inordinate
 // amount of time to decode.
 thrift_struct!(
-pub(crate) struct DataPageHeader {
+pub(crate) struct DataPageHeaderNoStats {
   1: required i32 num_values
   2: required Encoding encoding
   3: required Encoding definition_level_encoding;
@@ -826,7 +826,7 @@ pub(crate) struct DataPageHeader {
 );
 
 thrift_struct!(
-pub(crate) struct DataPageHeaderV2 {
+pub(crate) struct DataPageHeaderV2NoStats {
   1: required i32 num_values
   2: required i32 num_nulls
   3: required i32 num_rows
@@ -855,6 +855,65 @@ pub(crate) struct DictionaryPageHeader {
 );
 
 thrift_struct!(
+pub(crate) struct PageHeaderNoStats {
+  /// the type of the page: indicates which of the *_header fields is set
+  1: required PageType type_
+
+  /// Uncompressed page size in bytes (not including this header)
+  2: required i32 uncompressed_page_size
+
+  /// Compressed (and potentially encrypted) page size in bytes, not including this header
+  3: required i32 compressed_page_size
+
+  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
+  4: optional i32 crc
+
+  // Headers for page specific data.  One only will be set.
+  5: optional DataPageHeaderNoStats data_page_header;
+  6: optional IndexPageHeader index_page_header;
+  7: optional DictionaryPageHeader dictionary_page_header;
+  8: optional DataPageHeaderV2NoStats data_page_header_v2;
+}
+);
+
+// these page headers are for the write side...they have statistics that don't require lifetimes
+thrift_struct!(
+pub(crate) struct PageStatistics {
+   1: optional binary max;
+   2: optional binary min;
+   3: optional i64 null_count;
+   4: optional i64 distinct_count;
+   5: optional binary max_value;
+   6: optional binary min_value;
+   7: optional bool is_max_value_exact;
+   8: optional bool is_min_value_exact;
+}
+);
+
+thrift_struct!(
+pub(crate) struct DataPageHeader {
+  1: required i32 num_values
+  2: required Encoding encoding
+  3: required Encoding definition_level_encoding;
+  4: required Encoding repetition_level_encoding;
+  5: optional PageStatistics statistics;
+}
+);
+
+thrift_struct!(
+pub(crate) struct DataPageHeaderV2 {
+  1: required i32 num_values
+  2: required i32 num_nulls
+  3: required i32 num_rows
+  4: required Encoding encoding
+  5: required i32 definition_levels_byte_length;
+  6: required i32 repetition_levels_byte_length;
+  7: optional bool is_compressed = true;
+  8: optional PageStatistics statistics;
+}
+);
+
+thrift_struct!(
 #[allow(dead_code)]
 pub(crate) struct PageHeader {
   /// the type of the page: indicates which of the *_header fields is set
@@ -874,66 +933,6 @@ pub(crate) struct PageHeader {
   6: optional IndexPageHeader index_page_header;
   7: optional DictionaryPageHeader dictionary_page_header;
   8: optional DataPageHeaderV2 data_page_header_v2;
-}
-);
-
-// these page headers are for the write side...they have statistics that don't require lifetimes
-thrift_struct!(
-pub(crate) struct PageStatistics {
-   1: optional binary max;
-   2: optional binary min;
-   3: optional i64 null_count;
-   4: optional i64 distinct_count;
-   5: optional binary max_value;
-   6: optional binary min_value;
-   7: optional bool is_max_value_exact;
-   8: optional bool is_min_value_exact;
-}
-);
-
-thrift_struct!(
-pub(crate) struct DataPageHeaderWithStats {
-  1: required i32 num_values
-  2: required Encoding encoding
-  3: required Encoding definition_level_encoding;
-  4: required Encoding repetition_level_encoding;
-  5: optional PageStatistics statistics;
-}
-);
-
-thrift_struct!(
-pub(crate) struct DataPageHeaderV2WithStats {
-  1: required i32 num_values
-  2: required i32 num_nulls
-  3: required i32 num_rows
-  4: required Encoding encoding
-  5: required i32 definition_levels_byte_length;
-  6: required i32 repetition_levels_byte_length;
-  7: optional bool is_compressed = true;
-  8: optional PageStatistics statistics;
-}
-);
-
-thrift_struct!(
-#[allow(dead_code)]
-pub(crate) struct PageHeaderWithStats {
-  /// the type of the page: indicates which of the *_header fields is set
-  1: required PageType type_
-
-  /// Uncompressed page size in bytes (not including this header)
-  2: required i32 uncompressed_page_size
-
-  /// Compressed (and potentially encrypted) page size in bytes, not including this header
-  3: required i32 compressed_page_size
-
-  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
-  4: optional i32 crc
-
-  // Headers for page specific data.  One only will be set.
-  5: optional DataPageHeaderWithStats data_page_header;
-  6: optional IndexPageHeader index_page_header;
-  7: optional DictionaryPageHeader dictionary_page_header;
-  8: optional DataPageHeaderV2WithStats data_page_header_v2;
 }
 );
 

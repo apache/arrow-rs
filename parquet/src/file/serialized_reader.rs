@@ -25,7 +25,7 @@ use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::metadata::thrift_gen::PageHeaderNoStats;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::{
     metadata::*,
@@ -337,7 +337,7 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
-    page_header: PageHeader,
+    page_header: PageHeaderNoStats,
     buffer: Bytes,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
@@ -471,7 +471,7 @@ enum SerializedPageReaderState {
         remaining_bytes: u64,
 
         // If the next page header has already been "peeked", we will cache it and it`s length here
-        next_page_header: Option<Box<PageHeader>>,
+        next_page_header: Option<Box<PageHeaderNoStats>>,
 
         /// The index of the data page within this column chunk
         page_index: usize,
@@ -678,7 +678,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         input: &mut T,
         page_index: usize,
         dictionary_page: bool,
-    ) -> Result<(usize, PageHeader)> {
+    ) -> Result<(usize, PageHeaderNoStats)> {
         /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
         struct TrackedRead<R> {
             inner: R,
@@ -706,7 +706,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         buffer: &[u8],
         page_index: usize,
         dictionary_page: bool,
-    ) -> Result<(usize, PageHeader)> {
+    ) -> Result<(usize, PageHeaderNoStats)> {
         let mut input = std::io::Cursor::new(buffer);
         let header = context.read_page_header(&mut input, page_index, dictionary_page)?;
         let header_len = input.position() as usize;
@@ -721,11 +721,11 @@ impl SerializedPageReaderContext {
         input: &mut T,
         _page_index: usize,
         _dictionary_page: bool,
-    ) -> Result<PageHeader> {
+    ) -> Result<PageHeaderNoStats> {
         use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 
         let mut prot = ThriftReadInputProtocol::new(input);
-        Ok(PageHeader::read_thrift(&mut prot)?)
+        Ok(PageHeaderNoStats::read_thrift(&mut prot)?)
     }
 
     fn decrypt_page_data<T>(
@@ -745,13 +745,13 @@ impl SerializedPageReaderContext {
         input: &mut T,
         page_index: usize,
         dictionary_page: bool,
-    ) -> Result<PageHeader> {
+    ) -> Result<PageHeaderNoStats> {
         match self.page_crypto_context(page_index, dictionary_page) {
             None => {
                 use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 
                 let mut prot = ThriftReadInputProtocol::new(input);
-                Ok(PageHeader::read_thrift(&mut prot)?)
+                Ok(PageHeaderNoStats::read_thrift(&mut prot)?)
             }
             Some(page_crypto_context) => {
                 use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
@@ -767,7 +767,7 @@ impl SerializedPageReaderContext {
                 })?;
 
                 let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
-                Ok(PageHeader::read_thrift(&mut prot)?)
+                Ok(PageHeaderNoStats::read_thrift(&mut prot)?)
             }
         }
     }
@@ -1862,6 +1862,12 @@ mod tests {
             80, 65, 82, 49,
         ];
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
+        #[cfg(feature = "encryption")]
+        assert_eq!(
+            ret.err().unwrap().to_string(),
+            "Parquet error: Could not parse metadata: Parquet error: Received empty union from remote ColumnOrder"
+        );
+        #[cfg(not(feature = "encryption"))]
         assert_eq!(
             ret.err().unwrap().to_string(),
             "Parquet error: Received empty union from remote ColumnOrder"

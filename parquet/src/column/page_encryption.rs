@@ -22,7 +22,7 @@ use crate::encryption::encrypt::{encrypt_thrift_object, FileEncryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::ParquetError;
 use crate::errors::Result;
-use crate::file::metadata::thrift_gen::PageHeaderWithStats;
+use crate::file::metadata::thrift_gen::PageHeader;
 use bytes::Bytes;
 use std::io::Write;
 use std::sync::Arc;
@@ -92,7 +92,7 @@ impl PageEncryptor {
     /// Encrypt a column page header
     pub fn encrypt_page_header<W: Write>(
         &mut self,
-        page_header: &PageHeaderWithStats,
+        page_header: &PageHeader,
         sink: &mut W,
     ) -> Result<()> {
         let module_type = match page_header.type_ {

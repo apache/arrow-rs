@@ -22,7 +22,7 @@ use bytes::Bytes;
 use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::thrift_gen::{
-    DataPageHeaderV2WithStats, DataPageHeaderWithStats, DictionaryPageHeader, PageHeaderWithStats,
+    DataPageHeaderV2, DataPageHeader, DictionaryPageHeader, PageHeader,
 };
 use crate::file::statistics::{page_stats_to_thrift, Statistics};
 
@@ -198,14 +198,14 @@ impl CompressedPage {
     }
 
     /// Returns the thrift page header
-    pub(crate) fn to_thrift_header(&self) -> PageHeaderWithStats {
+    pub(crate) fn to_thrift_header(&self) -> PageHeader {
         let uncompressed_size = self.uncompressed_size();
         let compressed_size = self.compressed_size();
         let num_values = self.num_values();
         let encoding = self.encoding();
         let page_type = self.page_type();
 
-        let mut page_header = PageHeaderWithStats {
+        let mut page_header = PageHeader {
             type_: page_type.into(),
             uncompressed_page_size: uncompressed_size as i32,
             compressed_page_size: compressed_size as i32,
@@ -224,7 +224,7 @@ impl CompressedPage {
                 ref statistics,
                 ..
             } => {
-                let data_page_header = DataPageHeaderWithStats {
+                let data_page_header = DataPageHeader {
                     num_values: num_values as i32,
                     encoding: encoding.into(),
                     definition_level_encoding: def_level_encoding.into(),
@@ -242,7 +242,7 @@ impl CompressedPage {
                 ref statistics,
                 ..
             } => {
-                let data_page_header_v2 = DataPageHeaderV2WithStats {
+                let data_page_header_v2 = DataPageHeaderV2 {
                     num_values: num_values as i32,
                     num_nulls: num_nulls as i32,
                     num_rows: num_rows as i32,
@@ -333,11 +333,11 @@ pub struct PageMetadata {
     pub is_dict: bool,
 }
 
-impl TryFrom<&crate::file::metadata::thrift_gen::PageHeader> for PageMetadata {
+impl TryFrom<&crate::file::metadata::thrift_gen::PageHeaderNoStats> for PageMetadata {
     type Error = ParquetError;
 
     fn try_from(
-        value: &crate::file::metadata::thrift_gen::PageHeader,
+        value: &crate::file::metadata::thrift_gen::PageHeaderNoStats,
     ) -> std::result::Result<Self, Self::Error> {
         match value.type_ {
             PageType::DATA_PAGE => {
