@@ -297,15 +297,17 @@ impl UnionBuilder {
                         mut null_buffer_builder,
                     },
                 )| {
+                    let null_buffer = null_buffer_builder.finish();
+                    let nullable = null_buffer.is_some();
                     let array_ref = make_array(unsafe {
                         ArrayDataBuilder::new(data_type.clone())
                             .add_buffer(values_buffer.finish())
                             .len(slots)
-                            .nulls(null_buffer_builder.finish())
+                            .nulls(null_buffer)
                             .build_unchecked()
                     });
                     children.push(array_ref);
-                    (type_id, Arc::new(Field::new(name, data_type, false)))
+                    (type_id, Arc::new(Field::new(name, data_type, nullable)))
                 },
             )
             .collect();
