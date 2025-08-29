@@ -413,7 +413,15 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// # }
     /// ```
     pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {
-        Self::new_builder(AsyncReader(input), metadata)
+        let mut builder = Self::new_builder(AsyncReader(input), metadata);
+
+        // Enable default page caching for async readers
+        if builder.page_cache.is_none() {
+            use crate::file::page_cache::TwoQueuePageCache;
+            builder.page_cache = Some(Arc::new(TwoQueuePageCache::new(100, 0.25)));
+        }
+
+        builder
     }
 
     /// Read bloom filter for a column in a row group
@@ -1111,12 +1119,14 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     self.row_count,
                     page_locations,
                 )?;
-                let page_reader = page_reader.add_crypto_context(
-                    self.row_group_idx,
-                    i,
-                    self.metadata,
-                    column_chunk_metadata,
-                )?.set_cache_context_metadata(self.row_group_idx, i, column_chunk_metadata, self.metadata);
+                let page_reader = page_reader
+                    .add_crypto_context(
+                        self.row_group_idx,
+                        i,
+                        self.metadata,
+                        column_chunk_metadata,
+                    )?
+                    .set_cache_context_metadata(self.row_group_idx, i, self.metadata);
 
                 let page_reader: Box<dyn PageReader> = Box::new(page_reader);
 

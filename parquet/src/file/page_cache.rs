@@ -19,10 +19,9 @@
 
 use crate::column::page::Page;
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::collections::VecDeque;
 
 /// Cache key that uniquely identifies a page within a file
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -38,27 +37,56 @@ pub struct PageCacheKey {
 }
 
 impl PageCacheKey {
+    /// Create a new PageCacheKey
     pub fn new(file_id: u64, rg_idx: usize, column_idx: usize, page_offset: u64) -> Self {
         Self {
             file_id,
             rg_idx,
-            column_idx, 
+            column_idx,
             page_offset,
         }
     }
 }
 
-pub struct PageCache {
-    map: DashMap<PageCacheKey, (Arc<Page>, bool)>, // (page, is_protected)
+/// Configuration options for the page cache
+pub enum PageCacheConfig {
+    /// No caching
+    NoCache,
+    /// Two-queue caching with specified max size and probationary ratio
+    TwoQueue {
+        /// Maximum number of pages to cache
+        max_pages: usize,
+        /// Ratio of probationary pages
+        probationary_ratio: f64,
+    },
+}
+
+/// Trait defining the interface for page cache strategies
+pub trait PageCacheStrategy: Send + Sync {
+    /// Get a page from the cache
+    fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>>;
+
+    /// Put a page into the cache
+    fn put(&self, key: PageCacheKey, page: Arc<Page>);
+}
+
+/// Two-queue page cache implementation
+pub struct TwoQueuePageCache {
+    /// Main storage mapping cache keys to (page, is_protected) tuples
+    map: DashMap<PageCacheKey, (Arc<Page>, bool)>,
+    /// Maximum number of entries in the probationary queue
     probationary_max: usize,
+    /// Maximum number of entries in the protected queue
     protected_max: usize,
 
+    /// Queue tracking probationary pages in LRU order
     probationary: Mutex<VecDeque<PageCacheKey>>,
+    /// Queue tracking protected pages in LRU order
     protected: Mutex<VecDeque<PageCacheKey>>,
 }
 
-impl PageCache {
-    /// `probationary_ratio` in 0.0..1.0
+impl TwoQueuePageCache {
+    /// Create a new TwoQueuePageCache with specified max size and probationary ratio
     pub fn new(max_pages: usize, probationary_ratio: f64) -> Self {
         let probationary_max = ((max_pages as f64) * probationary_ratio).ceil() as usize;
         let protected_max = max_pages - probationary_max;
@@ -71,7 +99,30 @@ impl PageCache {
         }
     }
 
-    pub fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>> {
+    /// Evict pages to maintain probationary/protected size ratios
+    fn evict_if_needed(&self) {
+        // Evict from probationary first
+        let mut prob = self.probationary.lock().unwrap();
+        while prob.len() > self.probationary_max {
+            if let Some(oldest) = prob.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+        drop(prob);
+
+        // Evict from protected if necessary
+        let mut prot = self.protected.lock().unwrap();
+        while prot.len() > self.protected_max {
+            if let Some(oldest) = prot.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+    }
+}
+
+impl PageCacheStrategy for TwoQueuePageCache {
+    /// Get a page from the cache
+    fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>> {
         if let Some(mut entry) = self.map.get_mut(key) {
             let (page, is_protected) = &mut *entry;
             let page_clone = page.clone();
@@ -106,7 +157,8 @@ impl PageCache {
         }
     }
 
-    pub fn put(&self, key: PageCacheKey, page: Arc<Page>) {
+    /// Put a page into the cache
+    fn put(&self, key: PageCacheKey, page: Arc<Page>) {
         if self.map.contains_key(&key) {
             // Reset to probationary
             self.map.insert(key.clone(), (page, false));
@@ -134,55 +186,45 @@ impl PageCache {
 
         self.evict_if_needed();
     }
+}
 
-    /// Evict pages to maintain probationary/protected size ratios
-    fn evict_if_needed(&self) {
-        // Evict from probationary first
-        let mut prob = self.probationary.lock().unwrap();
-        while prob.len() > self.probationary_max {
-            if let Some(oldest) = prob.pop_front() {
-                self.map.remove(&oldest);
-            }
-        }
-        drop(prob);
+/// No caching strategy (no-op)
+pub struct NoPageCache;
 
-        // Evict from protected if necessary
-        let mut prot = self.protected.lock().unwrap();
-        while prot.len() > self.protected_max {
-            if let Some(oldest) = prot.pop_front() {
-                self.map.remove(&oldest);
-            }
+/// No-op implementation of PageCacheStrategy
+impl PageCacheStrategy for NoPageCache {
+    fn get(&self, _key: &PageCacheKey) -> Option<Arc<Page>> {
+        None
+    }
+
+    fn put(&self, _key: PageCacheKey, _page: Arc<Page>) {
+        // No-op
+    }
+}
+
+/// Enum to hold different page cache strategies and do static dispatch
+pub enum PageCacheType {
+    /// No caching
+    NoCache(NoPageCache),
+    /// Two-queue caching
+    TwoQueue(TwoQueuePageCache),
+}
+
+/// Dispatch methods to the underlying cache strategy
+impl PageCacheType {
+    /// Get a page from the cache
+    pub fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>> {
+        match self {
+            PageCacheType::NoCache(c) => c.get(key),
+            PageCacheType::TwoQueue(c) => c.get(key),
         }
     }
 
-    pub fn size(&self) -> usize {
-        self.map.len()
+    /// Put a page into the cache
+    pub fn put(&self, key: PageCacheKey, page: Arc<Page>) {
+        match self {
+            PageCacheType::NoCache(c) => c.put(key, page),
+            PageCacheType::TwoQueue(c) => c.put(key, page),
+        }
     }
-
-}
-
-/// Global page cache instance
-pub static PAGE_CACHE: std::sync::OnceLock<PageCache> = std::sync::OnceLock::new();
-
-/// Initialize the global page cache with default parameters
-pub fn init_page_cache_default() -> &'static PageCache {
-    PAGE_CACHE.get_or_init(|| {
-        PageCache::new(100, 0.25)
-    })
-}
-
-/// Get a page from the global cache
-pub fn get_cached_page(key: &PageCacheKey) -> Option<Arc<Page>> {
-    let cache = PAGE_CACHE.get_or_init(|| {
-        PageCache::new(100, 0.25)
-    });
-    cache.get(key)
-}
-
-/// Store a page in the global cache
-pub fn store_cached_page(key: PageCacheKey, page: Arc<Page>) {
-    let cache = PAGE_CACHE.get_or_init(|| {
-        PageCache::new(100, 0.25)
-    });
-    cache.put(key, page)
 }
