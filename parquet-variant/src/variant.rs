@@ -28,6 +28,7 @@ use std::ops::Deref;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use half::f16;
 use uuid::Uuid;
 
 mod decimal;
@@ -915,6 +916,37 @@ impl<'m, 'v> Variant<'m, 'v> {
             _ => None,
         }
     }
+
+    /// Converts this variant to an `f16` if possible.
+    ///
+    /// Returns `Some(f16)` for float and double variants,
+    /// `None` for non-floating-point variants.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use half::f16;
+    ///
+    /// // you can extract an f16 from a float variant
+    /// let v1 = Variant::from(std::f32::consts::PI);
+    /// assert_eq!(v1.as_f16(), Some(f16::from_f32(std::f32::consts::PI)));
+    ///
+    /// // and from a double variant (with loss of precision to nearest f16)
+    /// let v2 = Variant::from(std::f64::consts::PI);
+    /// assert_eq!(v2.as_f16(), Some(f16::from_f64(std::f64::consts::PI)));
+    ///
+    /// // but not from other variants
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_f16(), None);
+    pub fn as_f16(&self) -> Option<f16> {
+        match *self {
+            Variant::Float(i) => Some(f16::from_f32(i)),
+            Variant::Double(i) => Some(f16::from_f64(i)),
+            _ => None,
+        }
+    }
+
     /// Converts this variant to an `f32` if possible.
     ///
     /// Returns `Some(f32)` for float and double variants,
