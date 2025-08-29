@@ -23,6 +23,8 @@ use thrift::protocol::{
     TOutputProtocol, TSetIdentifier, TStructIdentifier, TType,
 };
 
+use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
+
 /// Reads and writes the struct to Thrift protocols.
 ///
 /// Unlike [`thrift::protocol::TSerializable`] this uses generics instead of trait objects
@@ -41,8 +43,8 @@ pub fn bench_file_metadata(bytes: &bytes::Bytes) {
 
 /// Public function to aid benchmarking. Reads Parquet `PageHeader` encoded in `bytes`.
 pub fn bench_page_header(bytes: &bytes::Bytes) {
-    let mut input = TCompactSliceInputProtocol::new(bytes);
-    crate::format::PageHeader::read_from_in_protocol(&mut input).unwrap();
+    let mut prot = ThriftReadInputProtocol::new(bytes.as_ref());
+    crate::file::metadata::thrift_gen::PageHeader::read_thrift(&mut prot).unwrap();
 }
 
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
