@@ -48,7 +48,7 @@ fn make_prefix(fp: Fingerprint) -> Vec<u8> {
             buf.extend_from_slice(&id.to_be_bytes()); // big-endian
             buf
         }
-        #[cfg(feature = "md5_alg")]
+        #[cfg(feature = "md5")]
         Fingerprint::MD5(val) => {
             let mut buf = Vec::with_capacity(2 + 16);
             buf.extend_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01

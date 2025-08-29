@@ -386,7 +386,7 @@ pub enum FingerprintAlgorithm {
     Rabin,
     /// Represents a fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
     None,
-    #[cfg(feature = "md5_alg")]
+    #[cfg(feature = "md5")]
     /// 128-bit MD5 message digest.
     MD5,
     #[cfg(feature = "sha256")]
@@ -400,7 +400,7 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
         match fp {
             Fingerprint::Rabin(_) => FingerprintAlgorithm::Rabin,
             Fingerprint::Id(_) => FingerprintAlgorithm::None,
-            #[cfg(feature = "md5_alg")]
+            #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintAlgorithm::MD5,
             #[cfg(feature = "sha256")]
             Fingerprint::SHA256(_) => FingerprintAlgorithm::SHA256,
@@ -422,7 +422,7 @@ pub enum Fingerprint {
     Rabin(u64),
     /// A 32-bit Schema Registry ID.
     Id(u32),
-    #[cfg(feature = "md5_alg")]
+    #[cfg(feature = "md5")]
     /// A 128-bit MD5 fingerprint.
     MD5([u8; 16]),
     #[cfg(feature = "sha256")]
@@ -474,7 +474,7 @@ pub fn generate_fingerprint(
                 if using Fingerprint::Id, pass the registry ID in instead using the set method."
                 .to_string(),
         )),
-        #[cfg(feature = "md5_alg")]
+        #[cfg(feature = "md5")]
         FingerprintAlgorithm::MD5 => Ok(Fingerprint::MD5(compute_fingerprint_md5(&canonical))),
         #[cfg(feature = "sha256")]
         FingerprintAlgorithm::SHA256 => {
@@ -828,7 +828,7 @@ pub(crate) fn compute_fingerprint_rabin(canonical_form: &str) -> u64 {
     fp
 }
 
-#[cfg(feature = "md5_alg")]
+#[cfg(feature = "md5")]
 /// Compute the **128‑bit MD5** fingerprint of the canonical form.
 ///
 /// Returns a 16‑byte array (`[u8; 16]`) containing the full MD5 digest,
@@ -1587,7 +1587,7 @@ mod tests {
             Fingerprint::Id(id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
-            #[cfg(feature = "md5_alg")]
+            #[cfg(feature = "md5")]
             Fingerprint::MD5(id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }

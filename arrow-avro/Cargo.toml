@@ -40,7 +40,7 @@ default = ["deflate", "snappy", "zstd", "bzip2", "xz"]
 deflate = ["flate2"]
 snappy = ["snap", "crc"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
-md5 = ["dep:md5"] # or even md5 = []
+md5 = ["dep:md5"]
 sha256 = ["sha2"]
 
 [dependencies]

@@ -217,7 +217,7 @@ impl Decoder {
                     Fingerprint::Id(u32::from_be_bytes(bytes))
                 })
             }
-            #[cfg(feature = "md5_alg")]
+            #[cfg(feature = "md5")]
             FingerprintAlgorithm::MD5 => {
                 self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
                     Fingerprint::MD5(bytes)
@@ -789,7 +789,7 @@ mod test {
             Fingerprint::Id(v) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({v})");
             }
-            #[cfg(feature = "md5_alg")]
+            #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({v:?})");
             }
@@ -1309,7 +1309,7 @@ mod test {
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
             Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
-            #[cfg(feature = "md5_alg")]
+            #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
             #[cfg(feature = "sha256")]
             Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
@@ -1334,7 +1334,7 @@ mod test {
         match fp_long {
             Fingerprint::Rabin(v) => buf.extend_from_slice(&v.to_le_bytes()),
             Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
-            #[cfg(feature = "md5_alg")]
+            #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
             #[cfg(feature = "sha256")]
             Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
