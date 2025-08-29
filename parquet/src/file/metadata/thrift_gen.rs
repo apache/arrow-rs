@@ -39,7 +39,7 @@ use crate::{
         ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
     },
     schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor},
-    thrift_struct, thrift_union,
+    thrift_struct, thrift_struct_write_impl, thrift_union,
     util::bit_util::FromBytes,
 };
 #[cfg(feature = "encryption")]
@@ -64,103 +64,6 @@ pub(crate) struct SchemaElement<'a> {
   8: optional i32 precision
   9: optional i32 field_id;
   10: optional LogicalType logical_type
-}
-);
-
-thrift_struct!(
-pub(crate) struct DataPageHeader {
-  /// Number of values, including NULLs, in this data page.
-  ///
-  /// If a OffsetIndex is present, a page must begin at a row
-  /// boundary (repetition_level = 0). Otherwise, pages may begin
-  /// within a row (repetition_level > 0).
-  1: required i32 num_values
-
-  /// Encoding used for this data page
-  2: required Encoding encoding
-
-  /// Encoding used for definition levels
-  3: required Encoding definition_level_encoding;
-
-  /// Encoding used for repetition levels
-  4: required Encoding repetition_level_encoding;
-
-  // Optional statistics for the data in this page
-  // page stats are pretty useless...lets ignore them
-  //5: optional Statistics statistics;
-}
-);
-
-thrift_struct!(
-    pub(crate) struct IndexPageHeader {}
-);
-
-thrift_struct!(
-pub(crate) struct DictionaryPageHeader {
-  /// Number of values in the dictionary
-  1: required i32 num_values;
-
-  /// Encoding using this dictionary page
-  2: required Encoding encoding
-
-  /// If true, the entries in the dictionary are sorted in ascending order
-  3: optional bool is_sorted;
-}
-);
-
-thrift_struct!(
-pub(crate) struct DataPageHeaderV2 {
-  /// Number of values, including NULLs, in this data page.
-  1: required i32 num_values
-  /// Number of NULL values, in this data page.
-  /// Number of non-null = num_values - num_nulls which is also the number of values in the data section
-  2: required i32 num_nulls
-  /// Number of rows in this data page. Every page must begin at a
-  /// row boundary (repetition_level = 0): rows must **not** be
-  /// split across page boundaries when using V2 data pages.
-  3: required i32 num_rows
-  /// Encoding used for data in this page
-  4: required Encoding encoding
-
-  // repetition levels and definition levels are always using RLE (without size in it)
-
-  /// Length of the definition levels
-  5: required i32 definition_levels_byte_length;
-  /// Length of the repetition levels
-  6: required i32 repetition_levels_byte_length;
-
-  /// Whether the values are compressed.
-  /// Which means the section of the page between
-  /// definition_levels_byte_length + repetition_levels_byte_length + 1 and compressed_page_size (included)
-  /// is compressed with the compression_codec.
-  /// If missing it is considered compressed
-  7: optional bool is_compressed = true;
-
-  // Optional statistics for the data in this page
-  //8: optional Statistics statistics;
-}
-);
-
-thrift_struct!(
-#[allow(dead_code)]
-pub(crate) struct PageHeader {
-  /// the type of the page: indicates which of the *_header fields is set
-  1: required PageType type_
-
-  /// Uncompressed page size in bytes (not including this header)
-  2: required i32 uncompressed_page_size
-
-  /// Compressed (and potentially encrypted) page size in bytes, not including this header
-  3: required i32 compressed_page_size
-
-  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
-  4: optional i32 crc
-
-  // Headers for page specific data.  One only will be set.
-  5: optional DataPageHeader data_page_header;
-  6: optional IndexPageHeader index_page_header;
-  7: optional DictionaryPageHeader dictionary_page_header;
-  8: optional DataPageHeaderV2 data_page_header_v2;
 }
 );
 
@@ -908,6 +811,191 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ParquetMetaDat
         Ok(ParquetMetaData::new(fmd, row_groups))
     }
 }
+
+// page header stuff. this is partially hand coded so we can avoid parsing the page statistics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DataPageHeader<'a> {
+    pub(crate) num_values: i32,
+    pub(crate) encoding: Encoding,
+    pub(crate) definition_level_encoding: Encoding,
+    pub(crate) repetition_level_encoding: Encoding,
+    // this will only be used on write
+    pub(crate) statistics: Option<Statistics<'a>>,
+}
+
+thrift_struct_write_impl!(
+struct DataPageHeader<'a> {
+  1: required i32 num_values
+  2: required Encoding encoding
+  3: required Encoding definition_level_encoding;
+  4: required Encoding repetition_level_encoding;
+  5: optional Statistics<'a> statistics;
+}
+);
+
+// read data page header but skip statistics
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for DataPageHeader<'a> {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let mut num_values: Option<i32> = None;
+        let mut encoding: Option<Encoding> = None;
+        let mut definition_level_encoding: Option<Encoding> = None;
+        let mut repetition_level_encoding: Option<Encoding> = None;
+
+        let mut last_field_id = 0i16;
+        loop {
+            let field_ident = prot.read_field_begin(last_field_id)?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => num_values = Some(prot.read_i32()?),
+                2 => encoding = Some(Encoding::read_thrift(prot)?),
+                3 => definition_level_encoding = Some(Encoding::read_thrift(prot)?),
+                4 => repetition_level_encoding = Some(Encoding::read_thrift(prot)?),
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+            last_field_id = field_ident.id;
+        }
+
+        let num_values = num_values.expect("Required field num_values is missing");
+        let encoding = encoding.expect("Required field encoding is missing");
+        let definition_level_encoding =
+            definition_level_encoding.expect("Required field definition_level_encoding is missing");
+        let repetition_level_encoding =
+            repetition_level_encoding.expect("Required field repetition_level_encoding is missing");
+
+        Ok(Self {
+            num_values,
+            encoding,
+            definition_level_encoding,
+            repetition_level_encoding,
+            statistics: None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DataPageHeaderV2<'a> {
+    pub(crate) num_values: i32,
+    pub(crate) num_nulls: i32,
+    pub(crate) num_rows: i32,
+    pub(crate) encoding: Encoding,
+    pub(crate) definition_levels_byte_length: i32,
+    pub(crate) repetition_levels_byte_length: i32,
+    pub(crate) is_compressed: Option<bool>,
+    // this will only be used on write
+    pub(crate) statistics: Option<Statistics<'a>>,
+}
+
+thrift_struct_write_impl!(
+struct DataPageHeaderV2<'a> {
+  1: required i32 num_values
+  2: required i32 num_nulls
+  3: required i32 num_rows
+  4: required Encoding encoding
+  5: required i32 definition_levels_byte_length;
+  6: required i32 repetition_levels_byte_length;
+  7: optional bool is_compressed = true;
+  8: optional Statistics<'a> statistics;
+}
+);
+
+// read data page header but skip statistics
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for DataPageHeaderV2<'a> {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let mut num_values: Option<i32> = None;
+        let mut num_nulls: Option<i32> = None;
+        let mut num_rows: Option<i32> = None;
+        let mut encoding: Option<Encoding> = None;
+        let mut definition_levels_byte_length: Option<i32> = None;
+        let mut repetition_levels_byte_length: Option<i32> = None;
+        let mut is_compressed: Option<bool> = Some(true);
+
+        let mut last_field_id = 0i16;
+        loop {
+            let field_ident = prot.read_field_begin(last_field_id)?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => num_values = Some(prot.read_i32()?),
+                2 => num_nulls = Some(prot.read_i32()?),
+                3 => num_rows = Some(prot.read_i32()?),
+                4 => encoding = Some(Encoding::read_thrift(prot)?),
+                5 => definition_levels_byte_length = Some(prot.read_i32()?),
+                6 => repetition_levels_byte_length = Some(prot.read_i32()?),
+                7 => is_compressed = field_ident.bool_val,
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+            last_field_id = field_ident.id;
+        }
+
+        let num_values = num_values.expect("Required field num_values is missing");
+        let num_nulls = num_nulls.expect("Required field num_nulls is missing");
+        let num_rows = num_rows.expect("Required field num_rows is missing");
+        let encoding = encoding.expect("Required field encoding is missing");
+        let definition_levels_byte_length = definition_levels_byte_length
+            .expect("Required field definition_levels_byte_length is missing");
+        let repetition_levels_byte_length = repetition_levels_byte_length
+            .expect("Required field repetition_levels_byte_length is missing");
+
+        Ok(Self {
+            num_values,
+            num_nulls,
+            num_rows,
+            encoding,
+            definition_levels_byte_length,
+            repetition_levels_byte_length,
+            is_compressed,
+            statistics: None,
+        })
+    }
+}
+
+thrift_struct!(
+    pub(crate) struct IndexPageHeader {}
+);
+
+thrift_struct!(
+pub(crate) struct DictionaryPageHeader {
+  /// Number of values in the dictionary
+  1: required i32 num_values;
+
+  /// Encoding using this dictionary page
+  2: required Encoding encoding
+
+  /// If true, the entries in the dictionary are sorted in ascending order
+  3: optional bool is_sorted;
+}
+);
+
+thrift_struct!(
+#[allow(dead_code)]
+pub(crate) struct PageHeader<'a> {
+  /// the type of the page: indicates which of the *_header fields is set
+  1: required PageType type_
+
+  /// Uncompressed page size in bytes (not including this header)
+  2: required i32 uncompressed_page_size
+
+  /// Compressed (and potentially encrypted) page size in bytes, not including this header
+  3: required i32 compressed_page_size
+
+  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
+  4: optional i32 crc
+
+  // Headers for page specific data.  One only will be set.
+  5: optional DataPageHeader<'a> data_page_header;
+  6: optional IndexPageHeader index_page_header;
+  7: optional DictionaryPageHeader dictionary_page_header;
+  8: optional DataPageHeaderV2<'a> data_page_header_v2;
+}
+);
+
 
 #[cfg(test)]
 mod tests {

@@ -20,7 +20,10 @@
 // to not allocate byte arrays or strings.
 #![allow(dead_code)]
 
-use std::{cmp::Ordering, io::Write};
+use std::{
+    cmp::Ordering,
+    io::{Read, Write},
+};
 
 use crate::errors::{ParquetError, Result};
 
@@ -172,6 +175,8 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     fn read_byte(&mut self) -> Result<u8>;
 
     fn read_bytes(&mut self) -> Result<&'a [u8]>;
+
+    fn read_bytes_owned(&mut self) -> Result<Vec<u8>>;
 
     fn skip_bytes(&mut self, n: usize) -> Result<()>;
 
@@ -412,6 +417,10 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
         Ok(ret)
     }
 
+    fn read_bytes_owned(&mut self) -> Result<Vec<u8>> {
+        Ok(self.read_bytes()?.to_vec())
+    }
+
     #[inline]
     fn skip_bytes(&mut self, n: usize) -> Result<()> {
         self.buf.get(..n).ok_or_else(eof_error)?;
@@ -431,6 +440,52 @@ impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a>
 
 fn eof_error() -> ParquetError {
     eof_err!("Unexpected EOF")
+}
+
+// input protocol that's only intended for use in reading page headers. not fully implemented
+// so this shouldn't be used generally.
+pub(crate) struct ThriftReadInputProtocol<R: Read> {
+    reader: R,
+}
+
+impl<R: Read> ThriftReadInputProtocol<R> {
+    pub(crate) fn new(reader: R) -> Self {
+        Self { reader }
+    }
+}
+
+impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> {
+    #[inline]
+    fn read_byte(&mut self) -> Result<u8> {
+        let mut buf = [0_u8; 1];
+        self.reader.read_exact(&mut buf)?;
+        Ok(buf[0])
+    }
+
+    fn read_bytes(&mut self) -> Result<&'a [u8]> {
+        unimplemented!()
+    }
+
+    fn read_bytes_owned(&mut self) -> Result<Vec<u8>> {
+        let len = self.read_vlq()? as usize;
+        let mut v = Vec::with_capacity(len);
+        std::io::copy(&mut self.reader.by_ref().take(len as u64), &mut v)?;
+        Ok(v)
+    }
+
+    fn skip_bytes(&mut self, n: usize) -> Result<()> {
+        std::io::copy(
+            &mut self.reader.by_ref().take(n as u64),
+            &mut std::io::sink(),
+        )?;
+        Ok(())
+    }
+
+    fn read_double(&mut self) -> Result<f64> {
+        let mut buf = [0_u8; 8];
+        self.reader.read_exact(&mut buf)?;
+        Ok(f64::from_le_bytes(buf))
+    }
 }
 
 pub(crate) trait ReadThrift<'a, R: ThriftCompactInputProtocol<'a>> {
@@ -484,7 +539,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for &'a str {
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for String {
     fn read_thrift(prot: &mut R) -> Result<Self> {
-        Ok(prot.read_string()?.to_owned())
+        Ok(String::from_utf8(prot.read_bytes_owned()?)?)
     }
 }
 
