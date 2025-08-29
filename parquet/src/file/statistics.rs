@@ -118,6 +118,7 @@ macro_rules! statistics_enum_func {
     }};
 }
 
+// FIXME(ets): remove this when done with format changes
 /// Converts Thrift definition into `Statistics`.
 pub fn from_thrift(
     physical_type: Type,
@@ -267,6 +268,156 @@ pub fn from_thrift(
     })
 }
 
+/// Converts Thrift definition into `Statistics`.
+pub(crate) fn from_thrift_page_stats(
+    physical_type: Type,
+    thrift_stats: Option<PageStatistics>,
+) -> Result<Option<Statistics>> {
+    Ok(match thrift_stats {
+        Some(stats) => {
+            // Number of nulls recorded, when it is not available, we just mark it as 0.
+            // TODO this should be `None` if there is no information about NULLS.
+            // see https://github.com/apache/arrow-rs/pull/6216/files
+            let null_count = stats.null_count.unwrap_or(0);
+
+            if null_count < 0 {
+                return Err(ParquetError::General(format!(
+                    "Statistics null count is negative {null_count}",
+                )));
+            }
+
+            // Generic null count.
+            let null_count = Some(null_count as u64);
+            // Generic distinct count (count of distinct values occurring)
+            let distinct_count = stats.distinct_count.map(|value| value as u64);
+            // Whether or not statistics use deprecated min/max fields.
+            let old_format = stats.min_value.is_none() && stats.max_value.is_none();
+            // Generic min value as bytes.
+            let min = if old_format {
+                stats.min
+            } else {
+                stats.min_value
+            };
+            // Generic max value as bytes.
+            let max = if old_format {
+                stats.max
+            } else {
+                stats.max_value
+            };
+
+            fn check_len(min: &Option<Vec<u8>>, max: &Option<Vec<u8>>, len: usize) -> Result<()> {
+                if let Some(min) = min {
+                    if min.len() < len {
+                        return Err(ParquetError::General(
+                            "Insufficient bytes to parse min statistic".to_string(),
+                        ));
+                    }
+                }
+                if let Some(max) = max {
+                    if max.len() < len {
+                        return Err(ParquetError::General(
+                            "Insufficient bytes to parse max statistic".to_string(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+
+            match physical_type {
+                Type::BOOLEAN => check_len(&min, &max, 1),
+                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
+                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
+                Type::INT96 => check_len(&min, &max, 12),
+                _ => Ok(()),
+            }?;
+
+            // Values are encoded using PLAIN encoding definition, except that
+            // variable-length byte arrays do not include a length prefix.
+            //
+            // Instead of using actual decoder, we manually convert values.
+            let res = match physical_type {
+                Type::BOOLEAN => Statistics::boolean(
+                    min.map(|data| data[0] != 0),
+                    max.map(|data| data[0] != 0),
+                    distinct_count,
+                    null_count,
+                    old_format,
+                ),
+                Type::INT32 => Statistics::int32(
+                    min.map(|data| i32::from_le_bytes(data[..4].try_into().unwrap())),
+                    max.map(|data| i32::from_le_bytes(data[..4].try_into().unwrap())),
+                    distinct_count,
+                    null_count,
+                    old_format,
+                ),
+                Type::INT64 => Statistics::int64(
+                    min.map(|data| i64::from_le_bytes(data[..8].try_into().unwrap())),
+                    max.map(|data| i64::from_le_bytes(data[..8].try_into().unwrap())),
+                    distinct_count,
+                    null_count,
+                    old_format,
+                ),
+                Type::INT96 => {
+                    // INT96 statistics may not be correct, because comparison is signed
+                    let min = if let Some(data) = min {
+                        assert_eq!(data.len(), 12);
+                        Some(Int96::try_from_le_slice(&data)?)
+                    } else {
+                        None
+                    };
+                    let max = if let Some(data) = max {
+                        assert_eq!(data.len(), 12);
+                        Some(Int96::try_from_le_slice(&data)?)
+                    } else {
+                        None
+                    };
+                    Statistics::int96(min, max, distinct_count, null_count, old_format)
+                }
+                Type::FLOAT => Statistics::float(
+                    min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                    max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
+                    distinct_count,
+                    null_count,
+                    old_format,
+                ),
+                Type::DOUBLE => Statistics::double(
+                    min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                    max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
+                    distinct_count,
+                    null_count,
+                    old_format,
+                ),
+                Type::BYTE_ARRAY => Statistics::ByteArray(
+                    ValueStatistics::new(
+                        min.map(ByteArray::from),
+                        max.map(ByteArray::from),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
+                ),
+                Type::FIXED_LEN_BYTE_ARRAY => Statistics::FixedLenByteArray(
+                    ValueStatistics::new(
+                        min.map(ByteArray::from).map(FixedLenByteArray::from),
+                        max.map(ByteArray::from).map(FixedLenByteArray::from),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
+                ),
+            };
+
+            Some(res)
+        }
+        None => None,
+    })
+}
+
+// FIXME(ets): remove when done with format changes
 /// Convert Statistics into Thrift definition.
 pub fn to_thrift(stats: Option<&Statistics>) -> Option<crate::format::Statistics> {
     let stats = stats?;

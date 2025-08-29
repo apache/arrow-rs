@@ -1425,9 +1425,7 @@ mod tests {
         );
     }
 
-    // FIXME(ets)
     #[test]
-    #[ignore = "still working on page stats"]
     fn test_page_writer_data_pages() {
         let pages = vec![
             Page::DataPage {
@@ -1455,9 +1453,7 @@ mod tests {
         test_page_roundtrip(&pages[..], Compression::UNCOMPRESSED, Type::INT32);
     }
 
-    // FIXME(ets)
     #[test]
-    #[ignore = "still working on page stats"]
     fn test_page_writer_dict_pages() {
         let pages = vec![
             Page::DictionaryPage {
@@ -1606,6 +1602,7 @@ mod tests {
 
             let props = ReaderProperties::builder()
                 .set_backward_compatible_lz4(false)
+                .set_read_page_statistics(true)
                 .build();
             let mut page_reader = SerializedPageReader::new_with_properties(
                 Arc::new(reader),

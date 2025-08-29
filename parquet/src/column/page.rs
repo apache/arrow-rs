@@ -333,11 +333,11 @@ pub struct PageMetadata {
     pub is_dict: bool,
 }
 
-impl TryFrom<&crate::file::metadata::thrift_gen::PageHeaderNoStats> for PageMetadata {
+impl TryFrom<&crate::file::metadata::thrift_gen::PageHeader> for PageMetadata {
     type Error = ParquetError;
 
     fn try_from(
-        value: &crate::file::metadata::thrift_gen::PageHeaderNoStats,
+        value: &crate::file::metadata::thrift_gen::PageHeader,
     ) -> std::result::Result<Self, Self::Error> {
         match value.type_ {
             PageType::DATA_PAGE => {

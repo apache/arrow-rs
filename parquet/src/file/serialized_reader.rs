@@ -18,15 +18,16 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
-use crate::basic::PageType;
+use crate::basic::{PageType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift_gen::PageHeaderNoStats;
+use crate::file::metadata::thrift_gen::PageHeader;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
+use crate::file::statistics;
 use crate::file::{
     metadata::*,
     properties::{ReaderProperties, ReaderPropertiesPtr},
@@ -337,8 +338,9 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
 
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
-    page_header: PageHeaderNoStats,
+    page_header: PageHeader,
     buffer: Bytes,
+    physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
 ) -> Result<Page> {
     // Verify the 32-bit CRC checksum of the page
@@ -431,7 +433,7 @@ pub(crate) fn decode_page(
                 encoding: header.encoding,
                 def_level_encoding: header.definition_level_encoding,
                 rep_level_encoding: header.repetition_level_encoding,
-                statistics: None,
+                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
         PageType::DATA_PAGE_V2 => {
@@ -448,7 +450,7 @@ pub(crate) fn decode_page(
                 def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
                 rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
                 is_compressed,
-                statistics: None,
+                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
         _ => {
@@ -471,7 +473,7 @@ enum SerializedPageReaderState {
         remaining_bytes: u64,
 
         // If the next page header has already been "peeked", we will cache it and it`s length here
-        next_page_header: Option<Box<PageHeaderNoStats>>,
+        next_page_header: Option<Box<PageHeader>>,
 
         /// The index of the data page within this column chunk
         page_index: usize,
@@ -493,6 +495,8 @@ enum SerializedPageReaderState {
 
 #[derive(Default)]
 struct SerializedPageReaderContext {
+    /// Controls decoding of page-level statistics
+    read_stats: bool,
     /// Crypto context carrying objects required for decryption
     #[cfg(feature = "encryption")]
     crypto_context: Option<Arc<CryptoContext>>,
@@ -505,6 +509,9 @@ pub struct SerializedPageReader<R: ChunkReader> {
 
     /// The compression codec for this column chunk. Only set for non-PLAIN codec.
     decompressor: Option<Box<dyn Codec>>,
+
+    /// Column chunk type.
+    physical_type: Type,
 
     state: SerializedPageReaderState,
 
@@ -601,11 +608,16 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 require_dictionary: meta.dictionary_page_offset().is_some(),
             },
         };
+        let mut context = SerializedPageReaderContext::default();
+        if props.read_page_stats() {
+            context.read_stats = true;
+        }
         Ok(Self {
             reader,
             decompressor,
             state,
-            context: Default::default(),
+            physical_type: meta.column_type(),
+            context,
         })
     }
 
@@ -678,7 +690,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         input: &mut T,
         page_index: usize,
         dictionary_page: bool,
-    ) -> Result<(usize, PageHeaderNoStats)> {
+    ) -> Result<(usize, PageHeader)> {
         /// A wrapper around a [`std::io::Read`] that keeps track of the bytes read
         struct TrackedRead<R> {
             inner: R,
@@ -706,7 +718,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         buffer: &[u8],
         page_index: usize,
         dictionary_page: bool,
-    ) -> Result<(usize, PageHeaderNoStats)> {
+    ) -> Result<(usize, PageHeader)> {
         let mut input = std::io::Cursor::new(buffer);
         let header = context.read_page_header(&mut input, page_index, dictionary_page)?;
         let header_len = input.position() as usize;
@@ -721,11 +733,15 @@ impl SerializedPageReaderContext {
         input: &mut T,
         _page_index: usize,
         _dictionary_page: bool,
-    ) -> Result<PageHeaderNoStats> {
+    ) -> Result<PageHeader> {
         use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 
         let mut prot = ThriftReadInputProtocol::new(input);
-        Ok(PageHeaderNoStats::read_thrift(&mut prot)?)
+        if self.read_stats {
+            Ok(PageHeader::read_thrift(&mut prot)?)
+        } else {
+            Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+        }
     }
 
     fn decrypt_page_data<T>(
@@ -745,13 +761,19 @@ impl SerializedPageReaderContext {
         input: &mut T,
         page_index: usize,
         dictionary_page: bool,
-    ) -> Result<PageHeaderNoStats> {
+    ) -> Result<PageHeader> {
         match self.page_crypto_context(page_index, dictionary_page) {
             None => {
                 use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 
                 let mut prot = ThriftReadInputProtocol::new(input);
-                Ok(PageHeaderNoStats::read_thrift(&mut prot)?)
+                if self.read_stats {
+                    Ok(PageHeader::read_thrift(&mut prot)?)
+                } else {
+                    use crate::file::metadata::thrift_gen::PageHeader;
+
+                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+                }
             }
             Some(page_crypto_context) => {
                 use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
@@ -767,7 +789,15 @@ impl SerializedPageReaderContext {
                 })?;
 
                 let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
-                Ok(PageHeaderNoStats::read_thrift(&mut prot)?)
+                if self.read_stats {
+                    use crate::file::metadata::thrift_gen::PageHeader;
+
+                    Ok(PageHeader::read_thrift(&mut prot)?)
+                } else {
+                    use crate::file::metadata::thrift_gen::PageHeader;
+
+                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+                }
             }
         }
     }
@@ -890,8 +920,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         self.context
                             .decrypt_page_data(buffer, *page_index, *require_dictionary)?;
 
-                    let page =
-                        decode_page(header, Bytes::from(buffer), self.decompressor.as_mut())?;
+                    let page = decode_page(
+                        header,
+                        Bytes::from(buffer),
+                        self.physical_type,
+                        self.decompressor.as_mut(),
+                    )?;
                     if page.is_data_page() {
                         *page_index += 1;
                     } else if page.is_dictionary_page() {
@@ -930,7 +964,12 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     if !is_dictionary_page {
                         *page_index += 1;
                     }
-                    decode_page(header, bytes, self.decompressor.as_mut())?
+                    decode_page(
+                        header,
+                        bytes,
+                        self.physical_type,
+                        self.decompressor.as_mut(),
+                    )?
                 }
             };
 

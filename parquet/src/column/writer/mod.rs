@@ -2253,6 +2253,7 @@ mod tests {
 
         let props = ReaderProperties::builder()
             .set_backward_compatible_lz4(false)
+            .set_read_page_statistics(true)
             .build();
         let reader = SerializedPageReader::new_with_properties(
             Arc::new(Bytes::from(buf)),
@@ -2266,13 +2267,10 @@ mod tests {
         let pages = reader.collect::<Result<Vec<_>>>().unwrap();
         assert_eq!(pages.len(), 2);
 
-        /* TODO(ets): need to seek to the data page and decode ourselves since
-         * the stats are no longer read
-         */
         assert_eq!(pages[0].page_type(), PageType::DICTIONARY_PAGE);
         assert_eq!(pages[1].page_type(), PageType::DATA_PAGE);
 
-        /*let page_statistics = pages[1].statistics().unwrap();
+        let page_statistics = pages[1].statistics().unwrap();
         assert_eq!(
             page_statistics.min_bytes_opt().unwrap(),
             1_i32.to_le_bytes()
@@ -2282,7 +2280,7 @@ mod tests {
             7_i32.to_le_bytes()
         );
         assert_eq!(page_statistics.null_count_opt(), Some(0));
-        assert!(page_statistics.distinct_count_opt().is_none());*/
+        assert!(page_statistics.distinct_count_opt().is_none());
     }
 
     #[test]
