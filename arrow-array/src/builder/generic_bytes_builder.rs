@@ -418,7 +418,7 @@ impl<O: OffsetSizeTrait> std::io::Write for GenericBinaryBuilder<O> {
 mod tests {
     use super::*;
     use crate::array::Array;
-    use crate::{GenericBinaryArray, GenericStringArray};
+    use crate::GenericStringArray;
     use arrow_buffer::NullBuffer;
     use std::fmt::Write as _;
     use std::io::Write as _;
