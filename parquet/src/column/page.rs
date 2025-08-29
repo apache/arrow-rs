@@ -22,7 +22,7 @@ use bytes::Bytes;
 use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::thrift_gen::{
-    DataPageHeaderV2, DataPageHeader, DictionaryPageHeader, PageHeader,
+    DataPageHeader, DataPageHeaderV2, DictionaryPageHeader, PageHeader,
 };
 use crate::file::statistics::{page_stats_to_thrift, Statistics};
 
