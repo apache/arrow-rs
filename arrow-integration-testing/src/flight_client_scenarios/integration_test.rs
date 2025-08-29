@@ -32,7 +32,7 @@ use arrow_flight::{
     utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, IpcMessage, Location, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
-use tonic::{Request, Streaming};
+use tonic::{transport::Endpoint, Request, Streaming};
 
 use arrow::datatypes::Schema;
 use std::sync::Arc;
@@ -46,7 +46,9 @@ type Client = FlightServiceClient<tonic::transport::Channel>;
 pub async fn run_scenario(host: &str, port: u16, path: &str) -> Result {
     let url = format!("http://{host}:{port}");
 
-    let client = FlightServiceClient::connect(url).await?;
+    let endpoint = Endpoint::new(url)?;
+    let channel = endpoint.connect().await?;
+    let client = FlightServiceClient::new(channel);
 
     let json_file = open_json_file(path)?;
 
@@ -211,7 +213,9 @@ async fn consume_flight_location(
     // more details: https://github.com/apache/arrow-rs/issues/1398
     location.uri = location.uri.replace("grpc+tcp://", "http://");
 
-    let mut client = FlightServiceClient::connect(location.uri).await?;
+    let endpoint = Endpoint::new(location.uri)?;
+    let channel = endpoint.connect().await?;
+    let mut client = FlightServiceClient::new(channel);
     let resp = client.do_get(ticket).await?;
     let mut resp = resp.into_inner();
 
