@@ -52,12 +52,8 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         run: |
-          # Temp pin to nightly-2025-08-18 until https://github.com/rust-lang/rust/issues/145652 is resolved
-          # See https://github.com/apache/arrow-rs/issues/8181 for more details
-          rustup toolchain install nightly-2025-08-18 --component miri
-          rustup override set nightly-2025-08-18
-          # rustup toolchain install nightly --component miri
-          # rustup override set nightly
+          rustup toolchain install nightly --component miri
+          rustup override set nightly
           cargo miri setup
       - name: Run Miri Checks
         env:
