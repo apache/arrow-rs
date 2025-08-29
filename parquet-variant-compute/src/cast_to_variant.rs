@@ -109,13 +109,13 @@ fn convert_timestamp_with_options(
                     builder.append_variant(utc_dt.into());
                 }
             }
+            None if strict && input.is_valid(i) => {
+                return Err(ArrowError::ComputeError(format!(
+                    "Failed to convert timestamp at index {}: invalid timestamp value",
+                    i
+                )));
+            }
             None => {
-                if strict && input.is_valid(i) {
-                    return Err(ArrowError::ComputeError(format!(
-                        "Failed to convert timestamp at index {}: invalid timestamp value",
-                        i
-                    )));
-                }
                 builder.append_null();
             }
         }
@@ -563,9 +563,9 @@ pub fn cast_to_variant_with_options(
     Ok(builder.build())
 }
 
-/// Convert an array to a `VariantArray` with strict mode enabled (panics on conversion failures).
+/// Convert an array to a `VariantArray` with strict mode enabled (returns errors on conversion failures).
 ///
-/// This function provides backward compatibility. For non-panicking behavior,
+/// This function provides backward compatibility. For non-strict behavior,
 /// use `cast_to_variant_with_options` with `strict = false`.
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     cast_to_variant_with_options(input, true)

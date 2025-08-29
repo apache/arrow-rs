@@ -44,16 +44,13 @@ macro_rules! non_generic_conversion_array {
                 Some(cast_value) => {
                     $builder.append_variant(Variant::from(cast_value));
                 }
-                None => {
-                    if $strict {
-                        return Err(ArrowError::ComputeError(format!(
-                            "Failed to convert value at index {}: conversion failed",
-                            i
-                        )));
-                    } else {
-                        $builder.append_null();
-                    }
+                None if $strict => {
+                    return Err(ArrowError::ComputeError(format!(
+                        "Failed to convert value at index {}: conversion failed",
+                        i
+                    )));
                 }
+                None => $builder.append_null(),
             }
         }
         Ok::<(), ArrowError>(())
@@ -163,22 +160,11 @@ pub(crate) use decimal_to_variant_decimal;
 macro_rules! timestamp_to_variant_timestamp {
     ($ts_array:expr, $converter:expr, $unit_name:expr, $strict:expr) => {
         if $strict {
-            let mut result = Vec::with_capacity($ts_array.len());
-            for x in $ts_array.iter() {
-                match x {
-                    Some(y) => match $converter(y) {
-                        Some(dt) => result.push(Some(dt)),
-                        None => {
-                            return Err(ArrowError::ComputeError(format!(
-                                "Invalid timestamp {} value",
-                                $unit_name
-                            )))
-                        }
-                    },
-                    None => result.push(None),
-                }
-            }
-            result
+            let error =
+                || ArrowError::ComputeError(format!("Invalid timestamp {} value", $unit_name));
+            let converter = |x| $converter(x).ok_or_else(error);
+            let iter = $ts_array.iter().map(|x| x.map(converter).transpose());
+            iter.collect::<Result<Vec<_>, ArrowError>>()?
         } else {
             $ts_array.iter().map(|x| x.and_then($converter)).collect()
         }
