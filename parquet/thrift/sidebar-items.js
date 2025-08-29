@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["bench_file_metadata","collection_u8_to_type","eof_error","u8_to_type"],"macro":["thrift_unimplemented"],"struct":["TCompactOutputProtocol","TCompactSliceInputProtocol"],"trait":["TSerializable"]};
