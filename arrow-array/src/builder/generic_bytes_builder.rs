@@ -418,7 +418,7 @@ impl<O: OffsetSizeTrait> std::io::Write for GenericBinaryBuilder<O> {
 mod tests {
     use super::*;
     use crate::array::Array;
-    use crate::GenericStringArray;
+    use crate::{GenericBinaryArray, GenericStringArray};
     use arrow_buffer::NullBuffer;
     use std::fmt::Write as _;
     use std::io::Write as _;
@@ -843,5 +843,20 @@ mod tests {
         let actual = builder.finish();
 
         assert_eq!(actual, full_array);
+    }
+
+    #[test]
+    fn test_append_array_offset_overflow_precise() {
+        let mut builder = GenericStringBuilder::<i32>::new();
+
+        let initial_string = "x".repeat(i32::MAX as usize - 100);
+        builder.append_value(&initial_string);
+
+        let overflow_string = "y".repeat(200);
+        let overflow_array = GenericStringArray::<i32>::from(vec![overflow_string.as_str()]);
+
+        let result = builder.append_array(&overflow_array);
+
+        assert!(matches!(result, Err(ArrowError::OffsetOverflowError(_))));
     }
 }
