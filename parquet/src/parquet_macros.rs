@@ -232,8 +232,8 @@ macro_rules! thrift_union {
             }
         }
 
-        impl $(<$lt>)? WriteThriftField<W> for $identifier $(<$lt>)? {
-            fn write_thrift_field(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+        impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)
