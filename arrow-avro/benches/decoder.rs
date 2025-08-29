@@ -37,27 +37,27 @@ use uuid::Uuid;
 fn make_prefix(fp: Fingerprint) -> Vec<u8> {
     match fp {
         Fingerprint::Rabin(val) => {
-            let mut buf = Vec::with_capacity(2 + 8);
+            let mut buf = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + size_of::<u64>());
             buf.extend_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
             buf.extend_from_slice(&val.to_le_bytes()); // little-endian
             buf
         }
         Fingerprint::Id(id) => {
-            let mut buf = Vec::with_capacity(1 + 4);
+            let mut buf = Vec::with_capacity(CONFLUENT_MAGIC.len() + size_of::<u32>());
             buf.extend_from_slice(&CONFLUENT_MAGIC); // 00
             buf.extend_from_slice(&id.to_be_bytes()); // big-endian
             buf
         }
         #[cfg(feature = "md5")]
         Fingerprint::MD5(val) => {
-            let mut buf = Vec::with_capacity(2 + 16);
+            let mut buf = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + size_of_val(&val));
             buf.extend_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
             buf.extend_from_slice(&val);
             buf
         }
         #[cfg(feature = "sha256")]
         Fingerprint::SHA256(val) => {
-            let mut buf = Vec::with_capacity(2 + 32);
+            let mut buf = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + size_of_val(&val));
             buf.extend_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
             buf.extend_from_slice(&val);
             buf

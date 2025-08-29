@@ -91,8 +91,8 @@
 //!
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
-    compare_schemas, generate_fingerprint, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema,
-    SchemaStore, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+    compare_schemas, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore,
+    CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
 };
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
@@ -201,7 +201,7 @@ impl Decoder {
         Ok(total_consumed)
     }
 
-    // Attempt to handle a single‑object‑encoding prefix at the current position.
+    // Attempt to handle a prefix at the current position.
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
@@ -232,6 +232,9 @@ impl Decoder {
         }
     }
 
+    /// This method checks for the provided `magic` bytes at the start of `buf` and, if present,
+    /// attempts to read the following fingerprint of `N` bytes, converting it to a
+    /// [`Fingerprint`] using `fingerprint_from`.
     fn handle_prefix_common<const MAGIC_LEN: usize, const N: usize>(
         &mut self,
         buf: &[u8],
@@ -684,7 +687,7 @@ mod test {
     use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
     use crate::schema::{
         AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, Schema as AvroRaw,
-        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, SINGLE_OBJECT_MAGIC,
+        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
     };
     use crate::test_util::arrow_test_data;
     use arrow::array::ArrayDataBuilder;
@@ -811,7 +814,7 @@ mod test {
     }
 
     fn make_id_prefix(id: u32) -> Vec<u8> {
-        let mut out = Vec::with_capacity(1 + 4);
+        let mut out = Vec::with_capacity(CONFLUENT_MAGIC.len() + size_of::<u32>());
         out.extend_from_slice(&crate::schema::CONFLUENT_MAGIC);
         out.extend_from_slice(&id.to_be_bytes());
         out

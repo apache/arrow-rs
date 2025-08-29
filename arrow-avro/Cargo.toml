@@ -41,7 +41,7 @@ deflate = ["flate2"]
 snappy = ["snap", "crc"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 md5 = ["dep:md5"]
-sha256 = ["sha2"]
+sha256 = ["dep:sha2"]
 
 [dependencies]
 arrow-schema = { workspace = true }

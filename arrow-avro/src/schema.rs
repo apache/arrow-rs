@@ -54,8 +54,8 @@ pub const AVRO_DOC_METADATA_KEY: &str = "avro.doc";
 /// Compare two Avro schemas for equality (identical schemas).
 /// Returns true if the schemas have the same parsing canonical form (i.e., logically identical).
 pub fn compare_schemas(writer: &Schema, reader: &Schema) -> Result<bool, ArrowError> {
-    let canon_writer = generate_canonical_form(writer)?;
-    let canon_reader = generate_canonical_form(reader)?;
+    let canon_writer = AvroSchema::generate_canonical_form(writer)?;
+    let canon_reader = AvroSchema::generate_canonical_form(reader)?;
     Ok(canon_writer == canon_reader)
 }
 
@@ -373,7 +373,85 @@ impl AvroSchema {
 
     /// Returns the Rabin fingerprint of the schema.
     pub fn fingerprint(&self) -> Result<Fingerprint, ArrowError> {
-        generate_fingerprint_rabin(&self.schema()?)
+        Self::generate_fingerprint_rabin(&self.schema()?)
+    }
+
+    /// Generates a fingerprint for the given `Schema` using the specified [`FingerprintAlgorithm`].
+    ///
+    /// The fingerprint is computed over the schema's Parsed Canonical Form
+    /// as defined by the Avro specification. Depending on `hash_type`, this
+    /// will return one of the supported [`Fingerprint`] variants:
+    /// - [`Fingerprint::Rabin`] for [`FingerprintAlgorithm::Rabin`]
+    /// - [`Fingerprint::MD5`] for [`FingerprintAlgorithm::MD5`]
+    /// - [`Fingerprint::SHA256`] for [`FingerprintAlgorithm::SHA256`]
+    ///
+    /// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
+    /// and will result in an error. If you intend to use a Schema Registry ID-based
+    /// wire format, load or set the [`Fingerprint::Id`] directly via [`Fingerprint::load_fingerprint_id`]
+    /// or [`SchemaStore::set`].
+    ///
+    /// See also: <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
+    ///
+    /// # Errors
+    /// Returns an error if generating the canonical form of the schema fails,
+    /// or if `hash_type` is [`FingerprintAlgorithm::None`].
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use arrow_avro::schema::{AvroSchema, FingerprintAlgorithm};
+    ///
+    /// let avro = AvroSchema::new("\"string\"".to_string());
+    /// let schema = avro.schema().unwrap();
+    /// let fp = AvroSchema::generate_fingerprint(&schema, FingerprintAlgorithm::Rabin).unwrap();
+    /// ```
+    pub fn generate_fingerprint(
+        schema: &Schema,
+        hash_type: FingerprintAlgorithm,
+    ) -> Result<Fingerprint, ArrowError> {
+        let canonical = Self::generate_canonical_form(schema).map_err(|e| {
+            ArrowError::ComputeError(format!("Failed to generate canonical form for schema: {e}"))
+        })?;
+        match hash_type {
+            FingerprintAlgorithm::Rabin => {
+                Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
+            }
+            FingerprintAlgorithm::None => Err(ArrowError::SchemaError(
+                "FingerprintAlgorithm of None cannot be used to generate a fingerprint; \
+                if using Fingerprint::Id, pass the registry ID in instead using the set method."
+                    .to_string(),
+            )),
+            #[cfg(feature = "md5")]
+            FingerprintAlgorithm::MD5 => Ok(Fingerprint::MD5(compute_fingerprint_md5(&canonical))),
+            #[cfg(feature = "sha256")]
+            FingerprintAlgorithm::SHA256 => {
+                Ok(Fingerprint::SHA256(compute_fingerprint_sha256(&canonical)))
+            }
+        }
+    }
+
+    /// Generates the 64-bit Rabin fingerprint for the given `Schema`.
+    ///
+    /// The fingerprint is computed from the canonical form of the schema.
+    /// This is also known as `CRC-64-AVRO`.
+    ///
+    /// # Returns
+    /// A `Fingerprint::Rabin` variant containing the 64-bit fingerprint.
+    pub fn generate_fingerprint_rabin(schema: &Schema) -> Result<Fingerprint, ArrowError> {
+        Self::generate_fingerprint(schema, FingerprintAlgorithm::Rabin)
+    }
+
+    /// Generates the Parsed Canonical Form for the given [`Schema`].
+    ///
+    /// The canonical form is a standardized JSON representation of the schema,
+    /// primarily used for generating a schema fingerprint for equality checking.
+    ///
+    /// This form strips attributes that do not affect the schema's identity,
+    /// such as `doc` fields, `aliases`, and any properties not defined in the
+    /// Avro specification.
+    ///
+    /// <https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas>
+    pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
+        build_canonical(schema, None)
     }
 }
 
@@ -430,90 +508,17 @@ pub enum Fingerprint {
     SHA256([u8; 32]),
 }
 
-/// Generates a fingerprint for the given `Schema` using the specified [`FingerprintAlgorithm`].
-///
-/// The fingerprint is computed over the schema's Parsed Canonical Form
-/// as defined by the Avro specification. Depending on `hash_type`, this
-/// will return one of the supported [`Fingerprint`] variants:
-/// - [`Fingerprint::Rabin`] for [`FingerprintAlgorithm::Rabin`]
-/// - [`Fingerprint::MD5`] for [`FingerprintAlgorithm::MD5`]
-/// - [`Fingerprint::SHA256`] for [`FingerprintAlgorithm::SHA256`]
-///
-/// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
-/// and will result in an error. If you intend to use a Schema Registry ID-based
-/// wire format, load or set the [`Fingerprint::Id`] directly via [`load_fingerprint_id`]
-/// or [`SchemaStore::set`].
-///
-/// See also: <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
-///
-/// # Errors
-/// Returns an error if generating the canonical form of the schema fails,
-/// or if `hash_type` is [`FingerprintAlgorithm::None`].
-///
-/// # Examples
-/// ```no_run
-/// use arrow_avro::schema::{AvroSchema, FingerprintAlgorithm, generate_fingerprint};
-///
-/// let avro = AvroSchema::new("\"string\"".to_string());
-/// let schema = avro.schema().unwrap();
-/// let fp = generate_fingerprint(&schema, FingerprintAlgorithm::Rabin).unwrap();
-/// ```
-pub fn generate_fingerprint(
-    schema: &Schema,
-    hash_type: FingerprintAlgorithm,
-) -> Result<Fingerprint, ArrowError> {
-    let canonical = generate_canonical_form(schema).map_err(|e| {
-        ArrowError::ComputeError(format!("Failed to generate canonical form for schema: {e}"))
-    })?;
-    match hash_type {
-        FingerprintAlgorithm::Rabin => {
-            Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
-        }
-        FingerprintAlgorithm::None => Err(ArrowError::SchemaError(
-            "FingerprintAlgorithm of None cannot be used to generate a fingerprint; \
-                if using Fingerprint::Id, pass the registry ID in instead using the set method."
-                .to_string(),
-        )),
-        #[cfg(feature = "md5")]
-        FingerprintAlgorithm::MD5 => Ok(Fingerprint::MD5(compute_fingerprint_md5(&canonical))),
-        #[cfg(feature = "sha256")]
-        FingerprintAlgorithm::SHA256 => {
-            Ok(Fingerprint::SHA256(compute_fingerprint_sha256(&canonical)))
-        }
+impl Fingerprint {
+    /// Loads the 32-bit Schema Registry fingerprint (Confluent Schema Registry ID).
+    ///
+    /// The provided `id` is in big-endian wire order; this converts it to host order
+    /// and returns `Fingerprint::Id`.
+    ///
+    /// # Returns
+    /// A `Fingerprint::Id` variant containing the 32-bit fingerprint.
+    pub fn load_fingerprint_id(id: u32) -> Self {
+        Fingerprint::Id(u32::from_be(id))
     }
-}
-
-/// Loads the 32-bit Schema Registry fingerprint for the given `Schema`.
-///
-/// # Returns
-/// A `Fingerprint::Id` variant containing the 32-bit fingerprint.
-pub fn load_fingerprint_id(id: u32) -> Fingerprint {
-    Fingerprint::Id(u32::from_be(id))
-}
-
-/// Generates the 64-bit Rabin fingerprint for the given `Schema`.
-///
-/// The fingerprint is computed from the canonical form of the schema.
-/// This is also known as `CRC-64-AVRO`.
-///
-/// # Returns
-/// A `Fingerprint::Rabin` variant containing the 64-bit fingerprint.
-pub fn generate_fingerprint_rabin(schema: &Schema) -> Result<Fingerprint, ArrowError> {
-    generate_fingerprint(schema, FingerprintAlgorithm::Rabin)
-}
-
-/// Generates the Parsed Canonical Form for the given [`Schema`].
-///
-/// The canonical form is a standardized JSON representation of the schema,
-/// primarily used for generating a schema fingerprint for equality checking.
-///
-/// This form strips attributes that do not affect the schema's identity,
-/// such as `doc` fields, `aliases`, and any properties not defined in the
-/// Avro specification.
-///
-/// <https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas>
-pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
-    build_canonical(schema, None)
 }
 
 /// An in-memory cache of Avro schemas, indexed by their fingerprint.
@@ -638,7 +643,8 @@ impl SchemaStore {
                     .to_string(),
             ));
         }
-        let fingerprint = generate_fingerprint(&schema.schema()?, self.fingerprint_algorithm)?;
+        let fingerprint =
+            AvroSchema::generate_fingerprint(&schema.schema()?, self.fingerprint_algorithm)?;
         self.set(fingerprint, schema)?;
         Ok(fingerprint)
     }
@@ -1657,7 +1663,7 @@ mod tests {
     #[test]
     fn test_canonical_form_generation_primitive() {
         let schema = int_schema();
-        let canonical_form = generate_canonical_form(&schema).unwrap();
+        let canonical_form = AvroSchema::generate_canonical_form(&schema).unwrap();
         assert_eq!(canonical_form, r#""int""#);
     }
 
@@ -1665,7 +1671,7 @@ mod tests {
     fn test_canonical_form_generation_record() {
         let schema = record_schema();
         let expected_canonical_form = r#"{"name":"test.namespace.record1","type":"record","fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}]}"#;
-        let canonical_form = generate_canonical_form(&schema).unwrap();
+        let canonical_form = AvroSchema::generate_canonical_form(&schema).unwrap();
         assert_eq!(canonical_form, expected_canonical_form);
     }
 
@@ -1734,7 +1740,7 @@ mod tests {
             },
         }));
         let expected_canonical_form = r#"{"name":"record_with_attrs","type":"record","fields":[{"name":"f1","type":"bytes"}]}"#;
-        let canonical_form = generate_canonical_form(&schema_with_attrs).unwrap();
+        let canonical_form = AvroSchema::generate_canonical_form(&schema_with_attrs).unwrap();
         assert_eq!(canonical_form, expected_canonical_form);
     }
 
