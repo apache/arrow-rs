@@ -197,17 +197,17 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ConvertedType {
     }
 }
 
-impl<W: Write> WriteThrift<W> for ConvertedType {
+impl WriteThrift for ConvertedType {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         // because we've added NONE, the variant values are off by 1, so correct that here
         writer.write_i32(*self as i32 - 1)
     }
 }
 
-impl<W: Write> WriteThriftField<W> for ConvertedType {
-    fn write_thrift_field(
+impl WriteThriftField for ConvertedType {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -476,10 +476,10 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
     }
 }
 
-impl<W: Write> WriteThrift<W> for LogicalType {
+impl WriteThrift for LogicalType {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         match self {
             Self::String => {
                 writer.write_empty_struct(1, 0)?;
@@ -575,8 +575,8 @@ impl<W: Write> WriteThrift<W> for LogicalType {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for LogicalType {
-    fn write_thrift_field(
+impl WriteThriftField for LogicalType {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -776,10 +776,10 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Compression {
 
 // FIXME
 // ugh...why did we add compression level to some variants if we don't use them????
-impl<W: Write> WriteThrift<W> for Compression {
+impl WriteThrift for Compression {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let id: i32 = match *self {
             Self::UNCOMPRESSED => 0,
             Self::SNAPPY => 1,
@@ -794,8 +794,8 @@ impl<W: Write> WriteThrift<W> for Compression {
     }
 }
 
-impl<W: Write> WriteThriftField<W> for Compression {
-    fn write_thrift_field(
+impl WriteThriftField for Compression {
+    fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
         field_id: i16,
@@ -1154,10 +1154,10 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
     }
 }
 
-impl<W: Write> WriteThrift<W> for ColumnOrder {
+impl WriteThrift for ColumnOrder {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    fn write_thrift(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         match *self {
             Self::TYPE_DEFINED_ORDER(_) => {
                 writer.write_field_begin(FieldType::Struct, 1, 0)?;
