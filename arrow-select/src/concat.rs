@@ -236,7 +236,7 @@ fn concat_bytes<T: ByteArrayType>(arrays: &[&dyn Array]) -> Result<ArrayRef, Arr
     let mut builder = GenericByteBuilder::<T>::with_capacity(item_capacity, bytes_capacity);
 
     for array in arrays {
-        builder.append_array(array.as_bytes::<T>());
+        builder.append_array(array.as_bytes::<T>())?;
     }
 
     Ok(Arc::new(builder.finish()))
