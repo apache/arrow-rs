@@ -206,7 +206,7 @@ impl CompressedPage {
         let page_type = self.page_type();
 
         let mut page_header = PageHeader {
-            type_: page_type.into(),
+            type_: page_type,
             uncompressed_page_size: uncompressed_size as i32,
             compressed_page_size: compressed_size as i32,
             // TODO: Add support for crc checksum
@@ -226,9 +226,9 @@ impl CompressedPage {
             } => {
                 let data_page_header = DataPageHeader {
                     num_values: num_values as i32,
-                    encoding: encoding.into(),
-                    definition_level_encoding: def_level_encoding.into(),
-                    repetition_level_encoding: rep_level_encoding.into(),
+                    encoding,
+                    definition_level_encoding: def_level_encoding,
+                    repetition_level_encoding: rep_level_encoding,
                     statistics: page_stats_to_thrift(statistics.as_ref()),
                 };
                 page_header.data_page_header = Some(data_page_header);
@@ -246,7 +246,7 @@ impl CompressedPage {
                     num_values: num_values as i32,
                     num_nulls: num_nulls as i32,
                     num_rows: num_rows as i32,
-                    encoding: encoding.into(),
+                    encoding,
                     definition_levels_byte_length: def_levels_byte_len as i32,
                     repetition_levels_byte_length: rep_levels_byte_len as i32,
                     is_compressed: Some(is_compressed),
@@ -257,7 +257,7 @@ impl CompressedPage {
             Page::DictionaryPage { is_sorted, .. } => {
                 let dictionary_page_header = DictionaryPageHeader {
                     num_values: num_values as i32,
-                    encoding: encoding.into(),
+                    encoding,
                     is_sorted: Some(is_sorted),
                 };
                 page_header.dictionary_page_header = Some(dictionary_page_header);
