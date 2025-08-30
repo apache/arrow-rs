@@ -756,9 +756,8 @@ enum NegativeBlockBehavior {
 
 #[inline]
 fn skip_blocks(
-    buf: &mut AvroCursor<'_>,
-    mut skip_item: impl FnMut(&mut AvroCursor<'_>) -> Result<(), ArrowError>,
-    _skip_negative_block_by_size: bool,
+    buf: &mut AvroCursor,
+    mut skip_item: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
 ) -> Result<usize, ArrowError> {
     process_blockwise(
         buf,
@@ -777,16 +776,22 @@ fn read_blocks(
 
 #[inline]
 fn process_blockwise(
-    buf: &mut AvroCursor<'_>,
-    mut on_item: impl FnMut(&mut AvroCursor<'_>) -> Result<(), ArrowError>,
+    buf: &mut AvroCursor,
+    mut on_item: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
     negative_behavior: NegativeBlockBehavior,
 ) -> Result<usize, ArrowError> {
     let mut total = 0usize;
     loop {
+        // Read the block count
+        //  positive = that many items
+        //  negative = that many items + read block size
+        //  See: https://avro.apache.org/docs/1.11.1/specification/#maps
         let block_count = buf.get_long()?;
         match block_count.cmp(&0) {
             Ordering::Equal => break,
             Ordering::Less => {
+                // If block_count is negative, read the absolute value of count,
+                // then read the block size as a long and discard
                 let count = (-block_count) as usize;
                 // A negative count is followed by a long of the size in bytes
                 let size_in_bytes = buf.get_long()? as usize;
@@ -805,6 +810,7 @@ fn process_blockwise(
                 total += count;
             }
             Ordering::Greater => {
+                // If block_count is positive, decode that many items
                 let count = block_count as usize;
                 for _ in 0..count {
                     on_item(buf)?;
@@ -978,18 +984,14 @@ impl Skipper {
                 Ok(())
             }
             Self::List(item) => {
-                skip_blocks(buf, |c| item.skip(c), true)?;
+                skip_blocks(buf, |c| item.skip(c))?;
                 Ok(())
             }
             Self::Map(value) => {
-                skip_blocks(
-                    buf,
-                    |c| {
-                        c.get_bytes()?; // key
-                        value.skip(c)
-                    },
-                    true,
-                )?;
+                skip_blocks(buf, |c| {
+                    c.get_bytes()?; // key
+                    value.skip(c)
+                })?;
                 Ok(())
             }
             Self::Struct(fields) => {
