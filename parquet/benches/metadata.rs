@@ -16,7 +16,6 @@
 // under the License.
 
 use parquet::file::metadata::ParquetMetaDataReader;
-use parquet::file::page_encoding_stats::PageEncodingStats;
 use rand::Rng;
 use thrift::protocol::TCompactOutputProtocol;
 
@@ -27,7 +26,7 @@ use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 use parquet::format::{
     ColumnChunk, ColumnMetaData, CompressionCodec, Encoding, FieldRepetitionType, FileMetaData,
-    PageType, RowGroup, SchemaElement, Type,
+    PageEncodingStats, PageType, RowGroup, SchemaElement, Type,
 };
 use parquet::thrift::TSerializable;
 
@@ -96,12 +95,12 @@ fn encoded_meta() -> Vec<u8> {
                         dictionary_page_offset: Some(rng.random()),
                         statistics: Some(stats.clone()),
                         encoding_stats: Some(vec![
-                            parquet::format::PageEncodingStats {
+                            PageEncodingStats {
                                 page_type: PageType::DICTIONARY_PAGE,
                                 encoding: Encoding::PLAIN,
                                 count: 1,
                             },
-                            parquet::format::PageEncodingStats {
+                            PageEncodingStats {
                                 page_type: PageType::DATA_PAGE,
                                 encoding: Encoding::RLE_DICTIONARY,
                                 count: 10,
