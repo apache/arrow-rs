@@ -50,7 +50,8 @@ half = { version = "2.1", default-features = false }
 num = { version = "0.4", default-features = false, features = ["std"] }
 lexical-core = { version = "1.0", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 atoi = "2.0.0"
-comfy-table = { version = "7.0", optional = true, default-features = false }
+# unpin after MSRV bump to 1.85
+comfy-table = { version = "=7.1.2", optional = true, default-features = false }
 base64 = "0.22"
 ryu = "1.0.16"
 
