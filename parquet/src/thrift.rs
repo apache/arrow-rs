@@ -51,6 +51,12 @@ pub fn bench_page_header_no_stats(bytes: &bytes::Bytes) {
     crate::file::metadata::thrift_gen::PageHeader::read_thrift_without_stats(&mut prot).unwrap();
 }
 
+/// Public function to aid benchmarking. Reads Parquet `PageHeader` encoded in `bytes`.
+pub fn bench_page_header(bytes: &bytes::Bytes) {
+    let mut prot = TCompactSliceInputProtocol::new(bytes);
+    crate::format::PageHeader::read_from_in_protocol(&mut prot).unwrap();
+}
+
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
 ///
 /// [`TCompactInputProtocol`]: thrift::protocol::TCompactInputProtocol

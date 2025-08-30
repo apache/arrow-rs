@@ -26,7 +26,7 @@ use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 use parquet::format::{
     ColumnChunk, ColumnMetaData, CompressionCodec, Encoding, FieldRepetitionType, FileMetaData,
-    RowGroup, SchemaElement, Type,
+    PageEncodingStats, PageType, RowGroup, SchemaElement, Type,
 };
 use parquet::thrift::TSerializable;
 
@@ -94,7 +94,18 @@ fn encoded_meta() -> Vec<u8> {
                         index_page_offset: Some(rng.random()),
                         dictionary_page_offset: Some(rng.random()),
                         statistics: Some(stats.clone()),
-                        encoding_stats: None,
+                        encoding_stats: Some(vec![
+                            PageEncodingStats {
+                                page_type: PageType::DICTIONARY_PAGE,
+                                encoding: Encoding::PLAIN,
+                                count: 1,
+                            },
+                            PageEncodingStats {
+                                page_type: PageType::DATA_PAGE,
+                                encoding: Encoding::RLE_DICTIONARY,
+                                count: 10,
+                            },
+                        ]),
                         bloom_filter_offset: None,
                         bloom_filter_length: None,
                         size_statistics: None,
