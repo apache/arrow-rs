@@ -1542,10 +1542,10 @@ mod tests {
 
         // map_field1: ["null", "string"]
         data.extend_from_slice(&encode_avro_long(2)); // 2 entries in map
-        // First entry: key1 -> null value (union branch 0)
+                                                      // First entry: key1 -> null value (union branch 0)
         data.extend_from_slice(&encode_avro_bytes(b"key1"));
         data.extend_from_slice(&encode_avro_long(0)); // union branch 0 (null)
-        // Second entry: key2 -> "value2" (union branch 1)
+                                                      // Second entry: key2 -> "value2" (union branch 1)
         data.extend_from_slice(&encode_avro_bytes(b"key2"));
         data.extend_from_slice(&encode_avro_long(1)); // union branch 1 (string)
         data.extend_from_slice(&encode_avro_bytes(b"value2"));
@@ -1553,10 +1553,10 @@ mod tests {
 
         // map_field2: ["string", "null"]
         data.extend_from_slice(&encode_avro_long(2)); // 2 entries in map
-        // First entry: key3 -> null value (union branch 1)
+                                                      // First entry: key3 -> null value (union branch 1)
         data.extend_from_slice(&encode_avro_bytes(b"key3"));
         data.extend_from_slice(&encode_avro_long(1)); // union branch 1 (null)
-        // Second entry: key4 -> "value4" (union branch 0)
+                                                      // Second entry: key4 -> "value4" (union branch 0)
         data.extend_from_slice(&encode_avro_bytes(b"key4"));
         data.extend_from_slice(&encode_avro_long(0)); // union branch 0 (string)
         data.extend_from_slice(&encode_avro_bytes(b"value4"));
