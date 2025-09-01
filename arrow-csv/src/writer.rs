@@ -102,7 +102,7 @@ impl<W: Write> Writer<W> {
         WriterBuilder::new().with_delimiter(delimiter).build(writer)
     }
 
-    /// Write a vector of record batches to a writable object
+    /// Write an arrow RecordBatch to a writable object
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         let num_columns = batch.num_columns();
         if self.beginning {
