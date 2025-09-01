@@ -46,12 +46,26 @@ use parquet_variant::{
     Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
 
+/// Options for controlling the behavior of `cast_to_variant_with_options`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CastOptions {
+    /// If true, return error on conversion failure. If false, insert null for failed conversions.
+    pub strict: bool,
+}
+
+impl Default for CastOptions {
+    fn default() -> Self {
+        Self { strict: true }
+    }
+}
+
+
 fn convert_timestamp_with_options(
     time_unit: &TimeUnit,
     time_zone: &Option<Arc<str>>,
     input: &dyn Array,
     builder: &mut VariantArrayBuilder,
-    strict: bool,
+    options: &CastOptions,
 ) -> Result<(), ArrowError> {
     let native_datetimes: Vec<Option<NaiveDateTime>> = match time_unit {
         arrow_schema::TimeUnit::Second => {
@@ -59,7 +73,7 @@ fn convert_timestamp_with_options(
                 .as_any()
                 .downcast_ref::<TimestampSecondArray>()
                 .expect("Array is not TimestampSecondArray");
-            timestamp_to_variant_timestamp!(ts_array, timestamp_s_to_datetime, "seconds", strict)
+            timestamp_to_variant_timestamp!(ts_array, timestamp_s_to_datetime, "seconds", options.strict)
         }
         arrow_schema::TimeUnit::Millisecond => {
             let ts_array = input
@@ -70,7 +84,7 @@ fn convert_timestamp_with_options(
                 ts_array,
                 timestamp_ms_to_datetime,
                 "milliseconds",
-                strict
+                options.strict
             )
         }
         arrow_schema::TimeUnit::Microsecond => {
@@ -82,7 +96,7 @@ fn convert_timestamp_with_options(
                 ts_array,
                 timestamp_us_to_datetime,
                 "microseconds",
-                strict
+                options.strict
             )
         }
         arrow_schema::TimeUnit::Nanosecond => {
@@ -94,7 +108,7 @@ fn convert_timestamp_with_options(
                 ts_array,
                 timestamp_ns_to_datetime,
                 "nanoseconds",
-                strict
+                options.strict
             )
         }
     };
@@ -109,7 +123,7 @@ fn convert_timestamp_with_options(
                     builder.append_variant(utc_dt.into());
                 }
             }
-            None if strict && input.is_valid(i) => {
+            None if options.strict && input.is_valid(i) => {
                 return Err(ArrowError::ComputeError(format!(
                     "Failed to convert timestamp at index {}: invalid timestamp value",
                     i
@@ -155,10 +169,10 @@ fn convert_timestamp_with_options(
 ///
 /// # Arguments
 /// * `input` - The array to convert to VariantArray
-/// * `strict` - If true, return error on conversion failure. If false, insert null for failed conversions.
+/// * `options` - Options controlling conversion behavior
 pub fn cast_to_variant_with_options(
     input: &dyn Array,
-    strict: bool,
+    options: &CastOptions,
 ) -> Result<VariantArray, ArrowError> {
     let mut builder = VariantArrayBuilder::new(input.len());
 
@@ -264,7 +278,7 @@ pub fn cast_to_variant_with_options(
             }
         }
         DataType::Timestamp(time_unit, time_zone) => {
-            convert_timestamp_with_options(time_unit, time_zone, input, &mut builder, strict)?;
+            convert_timestamp_with_options(time_unit, time_zone, input, &mut builder, options)?;
         }
         DataType::Time32(unit) => {
             match *unit {
@@ -276,7 +290,7 @@ pub fn cast_to_variant_with_options(
                         |v| NaiveTime::from_num_seconds_from_midnight_opt(v as u32, 0u32),
                         input,
                         builder,
-                        strict
+                        options.strict
                     )?;
                 }
                 TimeUnit::Millisecond => {
@@ -289,7 +303,7 @@ pub fn cast_to_variant_with_options(
                         ),
                         input,
                         builder,
-                        strict
+                        options.strict
                     )?;
                 }
                 _ => {
@@ -312,7 +326,7 @@ pub fn cast_to_variant_with_options(
                         ),
                         input,
                         builder,
-                        strict
+                        options.strict
                     )?;
                 }
                 TimeUnit::Nanosecond => {
@@ -325,7 +339,7 @@ pub fn cast_to_variant_with_options(
                         ),
                         input,
                         builder,
-                        strict
+                        options.strict
                     )?;
                 }
                 _ => {
@@ -416,7 +430,7 @@ pub fn cast_to_variant_with_options(
                 |v: i64| Date64Type::to_naive_date_opt(v),
                 input,
                 builder,
-                strict
+                options.strict
             )?;
         }
         DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
@@ -566,9 +580,9 @@ pub fn cast_to_variant_with_options(
 /// Convert an array to a `VariantArray` with strict mode enabled (returns errors on conversion failures).
 ///
 /// This function provides backward compatibility. For non-strict behavior,
-/// use `cast_to_variant_with_options` with `strict = false`.
+/// use `cast_to_variant_with_options` with `CastOptions { strict: false }`.
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
-    cast_to_variant_with_options(input, true)
+    cast_to_variant_with_options(input, &CastOptions::default())
 }
 
 /// Convert union arrays
@@ -2399,7 +2413,8 @@ mod tests {
     /// against the expected values. It also tests the handling of nulls by
     /// setting one element to null and verifying the output.
     fn run_test_with_options(values: ArrayRef, expected: Vec<Option<Variant>>, strict: bool) {
-        let variant_array = cast_to_variant_with_options(&values, strict).unwrap();
+        let options = CastOptions { strict };
+        let variant_array = cast_to_variant_with_options(&values, &options).unwrap();
         assert_eq!(variant_array.len(), expected.len());
         for (i, expected_value) in expected.iter().enumerate() {
             match expected_value {
