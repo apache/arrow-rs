@@ -59,7 +59,6 @@ impl Default for CastOptions {
     }
 }
 
-
 fn convert_timestamp_with_options(
     time_unit: &TimeUnit,
     time_zone: &Option<Arc<str>>,
@@ -73,7 +72,12 @@ fn convert_timestamp_with_options(
                 .as_any()
                 .downcast_ref::<TimestampSecondArray>()
                 .expect("Array is not TimestampSecondArray");
-            timestamp_to_variant_timestamp!(ts_array, timestamp_s_to_datetime, "seconds", options.strict)
+            timestamp_to_variant_timestamp!(
+                ts_array,
+                timestamp_s_to_datetime,
+                "seconds",
+                options.strict
+            )
         }
         arrow_schema::TimeUnit::Millisecond => {
             let ts_array = input
