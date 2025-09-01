@@ -736,7 +736,7 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
 }
 
 #[tokio::test]
-async fn test_multi_threaded_encrypted_writing_replace_deprecated_api() {
+async fn test_multi_threaded_encrypted_writing() {
     // Read example data and set up encryption/decryption properties
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/encrypt_columns_and_footer.parquet.encrypted");
