@@ -783,7 +783,6 @@ async fn test_multi_threaded_encrypted_writing() {
     });
 
     // Get column writers
-    // This is instead of let col_writers = writer.get_column_writers().unwrap();
     let col_writers = row_group_writer_factory.create_column_writers(0).unwrap();
 
     let (col_writer_tasks, col_array_channels) =
@@ -804,7 +803,6 @@ async fn test_multi_threaded_encrypted_writing() {
     });
 
     // Append the finalized row groups to the SerializedFileWriter
-    // This is instead of arrow_writer.append_row_group(arrow_column_chunks)
     while let Some(task) = serialize_rx.recv().await {
         let (arrow_column_chunks, _) = task.await.unwrap().unwrap();
         let mut row_group_writer = serialized_file_writer.next_row_group().unwrap();
