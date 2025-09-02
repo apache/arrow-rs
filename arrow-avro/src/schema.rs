@@ -555,14 +555,14 @@ pub struct SchemaStore {
     schemas: HashMap<Fingerprint, AvroSchema>,
 }
 
-impl TryFrom<&HashMap<Fingerprint, AvroSchema>> for SchemaStore {
+impl TryFrom<HashMap<Fingerprint, AvroSchema>> for SchemaStore {
     type Error = ArrowError;
 
     /// Creates a `SchemaStore` from a HashMap of schemas.
     /// Each schema in the HashMap is registered with the new store.
-    fn try_from(schemas: &HashMap<Fingerprint, AvroSchema>) -> Result<Self, Self::Error> {
+    fn try_from(schemas: HashMap<Fingerprint, AvroSchema>) -> Result<Self, Self::Error> {
         Ok(Self {
-            schemas: schemas.clone(),
+            schemas,
             ..Self::default()
         })
     }
@@ -1544,7 +1544,7 @@ mod tests {
             record_avro_schema.fingerprint().unwrap(),
             record_avro_schema.clone(),
         );
-        let store = SchemaStore::try_from(&schemas).unwrap();
+        let store = SchemaStore::try_from(schemas).unwrap();
         let int_fp = int_avro_schema.fingerprint().unwrap();
         assert_eq!(store.lookup(&int_fp).cloned(), Some(int_avro_schema));
         let rec_fp = record_avro_schema.fingerprint().unwrap();
@@ -1569,7 +1569,7 @@ mod tests {
             int_avro_schema.fingerprint().unwrap(),
             int_avro_schema.clone(),
         );
-        let store = SchemaStore::try_from(&schemas).unwrap();
+        let store = SchemaStore::try_from(schemas).unwrap();
         assert_eq!(store.schemas.len(), 2);
         let int_fp = int_avro_schema.fingerprint().unwrap();
         assert_eq!(store.lookup(&int_fp).cloned(), Some(int_avro_schema));
