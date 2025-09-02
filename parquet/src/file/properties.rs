@@ -20,7 +20,7 @@ use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
-use crate::file::metadata::KeyValue;
+use crate::file::metadata::{KeyValue, RowGroupMetaData, RowGroupMetaDataBuilder};
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
 use std::str::FromStr;
@@ -192,6 +192,30 @@ impl WriterProperties {
     pub fn builder() -> WriterPropertiesBuilder {
         WriterPropertiesBuilder::default()
     }
+
+    /// Converts this [`RowGroupMetaData`] into a [`RowGroupMetaDataBuilder`]
+    pub fn into_builder(self) -> WriterPropertiesBuilder {
+        WriterPropertiesBuilder {
+            data_page_size_limit: self.data_page_size_limit,
+            data_page_row_count_limit: self.data_page_row_count_limit,
+            write_batch_size: self.write_batch_size,
+            max_row_group_size: self.max_row_group_size,
+            bloom_filter_position: self.bloom_filter_position,
+            writer_version: self.writer_version,
+            created_by: self.created_by,
+            offset_index_disabled: self.offset_index_disabled,
+            key_value_metadata: self.key_value_metadata,
+            default_column_properties: self.default_column_properties,
+            column_properties: self.column_properties,
+            sorting_columns: self.sorting_columns,
+            column_index_truncate_length: self.column_index_truncate_length,
+            statistics_truncate_length: self.statistics_truncate_length,
+            coerce_types: self.coerce_types,
+            #[cfg(feature = "encryption")]
+            file_encryption_properties: self.file_encryption_properties,
+        }
+    }
+
 
     /// Returns data page size limit.
     ///
