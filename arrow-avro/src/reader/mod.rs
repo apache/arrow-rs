@@ -813,16 +813,18 @@ mod test {
             .expect("decoder")
     }
 
-    fn make_id_prefix(id: u32) -> Vec<u8> {
-        let mut out = Vec::with_capacity(CONFLUENT_MAGIC.len() + size_of::<u32>());
-        out.extend_from_slice(&crate::schema::CONFLUENT_MAGIC);
+    fn make_id_prefix(id: u32, additional: usize) -> Vec<u8> {
+        let capacity = CONFLUENT_MAGIC.len() + size_of::<u32>() + additional;
+        let mut out = Vec::with_capacity(capacity);
+        out.extend_from_slice(&CONFLUENT_MAGIC);
         out.extend_from_slice(&id.to_be_bytes());
         out
     }
 
     fn make_message_id(id: u32, value: i64) -> Vec<u8> {
-        let mut msg = make_id_prefix(id);
-        msg.extend_from_slice(&encode_zigzag(value));
+        let encoded_value = encode_zigzag(value);
+        let mut msg = make_id_prefix(id, encoded_value.len());
+        msg.extend_from_slice(&encoded_value);
         msg
     }
 
@@ -1466,7 +1468,7 @@ mod test {
             .with_active_fingerprint(Fingerprint::Id(id_known))
             .build_decoder()
             .unwrap();
-        let prefix = make_id_prefix(id_unknown);
+        let prefix = make_id_prefix(id_unknown, 0);
         let err = decoder.decode(&prefix).expect_err("decode should error");
         let msg = err.to_string();
         assert!(
