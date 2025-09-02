@@ -134,7 +134,9 @@ macro_rules! experimental {
     feature = "flate2",
     not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backened"))
 ))]
-compile_error!("When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`.");
+compile_error!(
+    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`."
+);
 
 #[macro_use]
 pub mod errors;

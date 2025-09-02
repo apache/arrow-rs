@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array,
-    StringArray, StructBuilder, UInt64Array,
+    Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array, StringArray,
+    StructBuilder, UInt64Array, make_array,
 };
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -1097,5 +1097,8 @@ fn test_sliced_array_child() {
     };
 
     let err = data.validate_values().unwrap_err();
-    assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    assert_eq!(
+        err.to_string(),
+        "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2"
+    );
 }

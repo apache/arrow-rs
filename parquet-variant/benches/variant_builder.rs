@@ -21,9 +21,9 @@ use criterion::*;
 
 use parquet_variant::{Variant, VariantBuilder};
 use rand::{
-    distr::{uniform::SampleUniform, Alphanumeric},
-    rngs::StdRng,
     Rng, SeedableRng,
+    distr::{Alphanumeric, uniform::SampleUniform},
+    rngs::StdRng,
 };
 use std::{hint, ops::Range};
 

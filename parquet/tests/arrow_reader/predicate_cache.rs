@@ -196,7 +196,7 @@ impl ParquetPredicateCacheTest {
 
         assert_eq!(
             &read_from_cache, expected_records_read_from_cache,
-                   "Expected {expected_records_read_from_cache} records read from cache, but got {read_from_cache}"
+            "Expected {expected_records_read_from_cache} records read from cache, but got {read_from_cache}"
         );
     }
 }

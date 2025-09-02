@@ -21,7 +21,7 @@ use arrow::datatypes::{Int32Type, Int64Type};
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
 use arrow_array::UInt32Array;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rand::Rng;
 use std::hint;
 

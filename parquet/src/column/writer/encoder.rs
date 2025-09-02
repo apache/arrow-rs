@@ -23,9 +23,9 @@ use crate::bloom_filter::Sbbf;
 use crate::column::writer::{
     compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min,
 };
-use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
-use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
+use crate::data_type::private::ParquetValueType;
+use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};

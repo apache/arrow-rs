@@ -17,9 +17,9 @@
 
 //! Decoder for [`Header`]
 
-use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
+use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
 use crate::reader::vlq::VLQDecoder;
-use crate::schema::{Schema, SCHEMA_METADATA_KEY};
+use crate::schema::{SCHEMA_METADATA_KEY, Schema};
 use arrow_schema::ArrowError;
 
 #[derive(Debug)]

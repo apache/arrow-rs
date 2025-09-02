@@ -23,17 +23,17 @@ extern crate criterion;
 extern crate once_cell;
 
 use arrow_array::{
-    types::{Int32Type, Int64Type, TimestampMicrosecondType},
     ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, PrimitiveArray, RecordBatch,
+    types::{Int32Type, Int64Type, TimestampMicrosecondType},
 };
 use arrow_avro::writer::AvroWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use once_cell::sync::Lazy;
 use rand::{
+    Rng, SeedableRng,
     distr::uniform::{SampleRange, SampleUniform},
     rngs::StdRng,
-    Rng, SeedableRng,
 };
 use std::io::Cursor;
 use std::sync::Arc;

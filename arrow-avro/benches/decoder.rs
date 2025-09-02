@@ -26,10 +26,10 @@ extern crate once_cell;
 extern crate uuid;
 
 use apache_avro::types::Value;
-use apache_avro::{to_avro_datum, Decimal, Schema as ApacheSchema};
+use apache_avro::{Decimal, Schema as ApacheSchema, to_avro_datum};
 use arrow_avro::schema::{Fingerprint, SINGLE_OBJECT_MAGIC};
 use arrow_avro::{reader::ReaderBuilder, schema::AvroSchema};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use once_cell::sync::Lazy;
 use std::{hint::black_box, time::Duration};
 use uuid::Uuid;

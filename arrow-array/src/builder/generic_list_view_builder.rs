@@ -245,7 +245,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{make_builder, Int32Builder, ListViewBuilder};
+    use crate::builder::{Int32Builder, ListViewBuilder, make_builder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Array, Int32Array};

@@ -27,11 +27,11 @@ use arrow_array::types::{
     ArrowDictionaryKeyType, ArrowPrimitiveType, BinaryType, ByteArrayType, LargeBinaryType,
     LargeUtf8Type, Utf8Type,
 };
-use arrow_array::{cast::AsArray, downcast_primitive};
 use arrow_array::{
-    downcast_dictionary_array, AnyDictionaryArray, Array, ArrayRef, ArrowNativeTypeOp,
-    BooleanArray, DictionaryArray, GenericByteArray, PrimitiveArray,
+    AnyDictionaryArray, Array, ArrayRef, ArrowNativeTypeOp, BooleanArray, DictionaryArray,
+    GenericByteArray, PrimitiveArray, downcast_dictionary_array,
 };
+use arrow_array::{cast::AsArray, downcast_primitive};
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, ScalarBuffer, ToByteSlice};
 use arrow_schema::{ArrowError, DataType};
 
@@ -365,9 +365,9 @@ mod tests {
     use super::*;
 
     use arrow_array::cast::as_string_array;
-    use arrow_array::types::Int32Type;
     use arrow_array::types::Int8Type;
-    use arrow_array::{DictionaryArray, Int32Array, Int8Array, StringArray};
+    use arrow_array::types::Int32Type;
+    use arrow_array::{DictionaryArray, Int8Array, Int32Array, StringArray};
     use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer};
     use std::sync::Arc;
 

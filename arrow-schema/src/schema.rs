@@ -697,14 +697,16 @@ mod tests {
     #[test]
     fn create_schema_string() {
         let schema = person_schema();
-        assert_eq!(schema.to_string(),
-                   "Field { name: \"first_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {\"k\": \"v\"} }, \
+        assert_eq!(
+            schema.to_string(),
+            "Field { name: \"first_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {\"k\": \"v\"} }, \
         Field { name: \"last_name\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
         Field { name: \"address\", data_type: Struct([\
             Field { name: \"street\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
             Field { name: \"zip\", data_type: UInt16, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
         ]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-        Field { name: \"interests\", data_type: Dictionary(Int32, Utf8), nullable: true, dict_id: 123, dict_is_ordered: true, metadata: {} }")
+        Field { name: \"interests\", data_type: Dictionary(Int32, Utf8), nullable: true, dict_id: 123, dict_is_ordered: true, metadata: {} }"
+        )
     }
 
     #[test]
@@ -1398,14 +1400,16 @@ mod tests {
         );
 
         // incompatible field should throw error
-        assert!(Schema::try_merge(vec![
-            Schema::new(vec![
-                Field::new("first_name", DataType::Utf8, false),
-                Field::new("last_name", DataType::Utf8, false),
-            ]),
-            Schema::new(vec![Field::new("last_name", DataType::Int64, false),])
-        ])
-        .is_err());
+        assert!(
+            Schema::try_merge(vec![
+                Schema::new(vec![
+                    Field::new("first_name", DataType::Utf8, false),
+                    Field::new("last_name", DataType::Utf8, false),
+                ]),
+                Schema::new(vec![Field::new("last_name", DataType::Int64, false),])
+            ])
+            .is_err()
+        );
 
         // incompatible metadata should throw error
         let res = Schema::try_merge(vec![

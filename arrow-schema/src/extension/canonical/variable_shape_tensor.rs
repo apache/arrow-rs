@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{extension::ExtensionType, ArrowError, DataType, Field};
+use crate::{ArrowError, DataType, Field, extension::ExtensionType};
 
 /// The extension type for `VariableShapeTensor`.
 ///
@@ -310,16 +310,19 @@ impl ExtensionType for VariableShapeTensor {
                     DataType::FixedSizeList(_, list_size) => {
                         let dimensions = usize::try_from(*list_size).expect("conversion failed");
                         // Make sure the metadata is valid.
-                        let metadata = VariableShapeTensorMetadata::try_new(dimensions, metadata.dim_names, metadata.permutations, metadata.uniform_shape)?;
+                        let metadata = VariableShapeTensorMetadata::try_new(
+                            dimensions,
+                            metadata.dim_names,
+                            metadata.permutations,
+                            metadata.uniform_shape,
+                        )?;
                         let data_field = &fields[0];
                         match data_field.data_type() {
-                            DataType::List(field) => {
-                                Ok(Self {
-                                    value_type: field.data_type().clone(),
-                                    dimensions,
-                                    metadata
-                                })
-                            }
+                            DataType::List(field) => Ok(Self {
+                                value_type: field.data_type().clone(),
+                                dimensions,
+                                metadata,
+                            }),
                             data_type => Err(ArrowError::InvalidArgumentError(format!(
                                 "VariableShapeTensor data type mismatch, expected List for data field, found {data_type}"
                             ))),
@@ -342,8 +345,8 @@ mod tests {
     #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
-        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
         Field,
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
     };
 
     use super::*;

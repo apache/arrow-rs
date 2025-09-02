@@ -17,8 +17,8 @@
 
 //! Conversion methods for dates and times.
 
-use crate::timezone::Tz;
 use crate::ArrowPrimitiveType;
+use crate::timezone::Tz;
 use arrow_schema::{DataType, TimeUnit};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
 
@@ -322,9 +322,9 @@ pub fn as_duration<T: ArrowPrimitiveType>(v: i64) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use crate::temporal_conversions::{
-        date64_to_datetime, split_second, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
-        timestamp_s_to_date, timestamp_s_to_datetime, timestamp_s_to_time,
-        timestamp_us_to_datetime, NANOSECONDS,
+        NANOSECONDS, date64_to_datetime, split_second, timestamp_ms_to_datetime,
+        timestamp_ns_to_datetime, timestamp_s_to_date, timestamp_s_to_datetime,
+        timestamp_s_to_time, timestamp_us_to_datetime,
     };
     use chrono::DateTime;
 

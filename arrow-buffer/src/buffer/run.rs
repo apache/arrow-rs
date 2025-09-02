@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::buffer::ScalarBuffer;
 use crate::ArrowNativeType;
+use crate::buffer::ScalarBuffer;
 
 /// A slice-able buffer of monotonically increasing, positive integers used to store run-ends
 ///

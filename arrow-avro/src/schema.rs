@@ -19,7 +19,7 @@ use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map as JsonMap, Value};
+use serde_json::{Map as JsonMap, Value, json};
 use std::cmp::PartialEq;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -931,7 +931,7 @@ fn datatype_to_avro(
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Map 'entries' field must be Struct(key,value)".into(),
-                    ))
+                    ));
                 }
             };
             let (val_schema, value_entry) = datatype_to_avro(
@@ -982,12 +982,12 @@ fn datatype_to_avro(
         DataType::Union(_, _) => {
             return Err(ArrowError::NotYetImplemented(
                 "Arrow Union to Avro Union not yet supported".into(),
-            ))
+            ));
         }
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Arrow type {other:?} has no Avro representation"
-            )))
+            )));
         }
     };
     Ok((val, extras))
@@ -1426,9 +1426,11 @@ mod tests {
             store.lookup(&Fingerprint::Rabin(fp_val)).cloned(),
             Some(schema.clone())
         );
-        assert!(store
-            .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
-            .is_none());
+        assert!(
+            store
+                .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1681,9 +1683,10 @@ mod tests {
         let union_dt = DataType::Union(uf, arrow_schema::UnionMode::Dense);
         let s = single_field_schema(ArrowField::new("u", union_dt, false));
         let err = AvroSchema::try_from(&s).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Arrow Union to Avro Union not yet supported"));
+        assert!(
+            err.to_string()
+                .contains("Arrow Union to Avro Union not yet supported")
+        );
     }
 
     #[test]

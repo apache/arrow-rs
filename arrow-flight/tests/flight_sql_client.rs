@@ -64,10 +64,12 @@ pub async fn test_begin_end_transaction() {
 
     // unknown transaction id
     let transaction_id = "UnknownTransactionId".to_string().into();
-    assert!(flight_sql_client
-        .end_transaction(transaction_id, EndTransaction::Commit)
-        .await
-        .is_err());
+    assert!(
+        flight_sql_client
+            .end_transaction(transaction_id, EndTransaction::Commit)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -139,9 +141,10 @@ pub async fn test_do_put_empty_stream() {
 
     // Execute a `do_put` and verify that the server error contains the expected message
     let err = flight_sql_client.do_put(request_stream).await.unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Unhandled Error: Command is missing."),);
+    assert!(
+        err.to_string()
+            .contains("Unhandled Error: Command is missing."),
+    );
 }
 
 #[tokio::test]
@@ -172,9 +175,10 @@ pub async fn test_do_put_first_element_err() {
     // Execute a `do_put` and verify that the server error contains the expected message
     let err = flight_sql_client.do_put(request_stream).await.unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("Unhandled Error: Command is missing."),);
+    assert!(
+        err.to_string()
+            .contains("Unhandled Error: Command is missing."),
+    );
 }
 
 #[tokio::test]
@@ -196,9 +200,10 @@ pub async fn test_do_put_missing_flight_descriptor() {
 
     // Execute a `do_put` and verify that the server error contains the expected message
     let err = flight_sql_client.do_put(request_stream).await.unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("Unhandled Error: Flight descriptor is missing."),);
+    assert!(
+        err.to_string()
+            .contains("Unhandled Error: Flight descriptor is missing."),
+    );
 }
 
 fn make_ingest_command() -> CommandStatementIngest {

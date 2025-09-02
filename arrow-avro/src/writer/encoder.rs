@@ -17,11 +17,11 @@
 
 //! Avro Encoder for Arrow types.
 
+use arrow_array::OffsetSizeTrait;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
-use arrow_array::OffsetSizeTrait;
 use arrow_array::{Array, GenericBinaryArray, PrimitiveArray, RecordBatch};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, FieldRef, TimeUnit};
@@ -213,7 +213,7 @@ pub fn make_encoder<'a>(array: &'a dyn Array) -> Result<NullableEncoder<'a>, Arr
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Unsupported data type for Avro encoding in slim build: {other:?}"
-            )))
+            )));
         }
     };
     Ok(enc)

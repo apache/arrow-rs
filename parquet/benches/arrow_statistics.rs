@@ -23,10 +23,10 @@ use arrow_schema::{
     DataType::{self, *},
     Field, Schema,
 };
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::{arrow::arrow_reader::ArrowReaderOptions, file::properties::WriterProperties};
 use parquet::{
-    arrow::{arrow_reader::ArrowReaderBuilder, ArrowWriter},
+    arrow::{ArrowWriter, arrow_reader::ArrowReaderBuilder},
     file::properties::EnabledStatistics,
 };
 use std::sync::Arc;

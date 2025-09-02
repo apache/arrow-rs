@@ -28,8 +28,8 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
-    Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Field as ArrowField,
+    FieldRef, Fields, IntervalUnit, Schema as ArrowSchema, SchemaRef,
 };
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -741,8 +741,8 @@ mod tests {
     use super::*;
     use crate::codec::AvroField;
     use arrow_array::{
-        cast::AsArray, Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
-        IntervalMonthDayNanoArray, ListArray, MapArray, StringArray, StructArray,
+        Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray, IntervalMonthDayNanoArray,
+        ListArray, MapArray, StringArray, StructArray, cast::AsArray,
     };
 
     fn encode_avro_int(value: i32) -> Vec<u8> {

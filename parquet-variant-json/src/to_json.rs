@@ -17,7 +17,7 @@
 
 //! Module for converting Variant data to JSON format
 use arrow_schema::ArrowError;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use chrono::Timelike;
 use parquet_variant::{Variant, VariantList, VariantObject};
 use serde_json::Value;
@@ -417,7 +417,7 @@ fn convert_array_to_json(buffer: &mut impl Write, arr: &VariantList) -> Result<(
 mod tests {
     use super::*;
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-    use parquet_variant::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
+    use parquet_variant::{VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
     #[test]
     fn test_decimal_edge_cases() -> Result<(), ArrowError> {
@@ -1267,53 +1267,65 @@ mod tests {
         let nan_variant = Variant::Float(f32::NAN);
         let nan_result = nan_variant.to_json_value();
         assert!(nan_result.is_err());
-        assert!(nan_result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid float value"));
+        assert!(
+            nan_result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid float value")
+        );
 
         // Test positive infinity - should return an error since JSON doesn't support Infinity
         let pos_inf_variant = Variant::Float(f32::INFINITY);
         let pos_inf_result = pos_inf_variant.to_json_value();
         assert!(pos_inf_result.is_err());
-        assert!(pos_inf_result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid float value"));
+        assert!(
+            pos_inf_result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid float value")
+        );
 
         // Test negative infinity - should return an error since JSON doesn't support -Infinity
         let neg_inf_variant = Variant::Float(f32::NEG_INFINITY);
         let neg_inf_result = neg_inf_variant.to_json_value();
         assert!(neg_inf_result.is_err());
-        assert!(neg_inf_result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid float value"));
+        assert!(
+            neg_inf_result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid float value")
+        );
 
         // Test the same for Double variants
         let nan_double_variant = Variant::Double(f64::NAN);
         let nan_double_result = nan_double_variant.to_json_value();
         assert!(nan_double_result.is_err());
-        assert!(nan_double_result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid double value"));
+        assert!(
+            nan_double_result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid double value")
+        );
 
         let pos_inf_double_variant = Variant::Double(f64::INFINITY);
         let pos_inf_double_result = pos_inf_double_variant.to_json_value();
         assert!(pos_inf_double_result.is_err());
-        assert!(pos_inf_double_result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid double value"));
+        assert!(
+            pos_inf_double_result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid double value")
+        );
 
         let neg_inf_double_variant = Variant::Double(f64::NEG_INFINITY);
         let neg_inf_double_result = neg_inf_double_variant.to_json_value();
         assert!(neg_inf_double_result.is_err());
-        assert!(neg_inf_double_result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid double value"));
+        assert!(
+            neg_inf_double_result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid double value")
+        );
 
         // Test normal float values still work
         let normal_float = Variant::Float(std::f32::consts::PI);

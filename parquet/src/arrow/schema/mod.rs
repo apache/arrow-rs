@@ -17,8 +17,8 @@
 
 //! Converting Parquet schema <--> Arrow schema: [`ArrowSchemaConverter`] and [parquet_to_arrow_schema]
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -370,11 +370,7 @@ fn parse_key_value_metadata(
                 })
                 .collect();
 
-            if map.is_empty() {
-                None
-            } else {
-                Some(map)
-            }
+            if map.is_empty() { None } else { Some(map) }
         }
         None => None,
     }
@@ -769,7 +765,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             }
         }
         DataType::Union(_, _) => unimplemented!("See ARROW-8817."),
-        DataType::Dictionary(_, ref value) => {
+        DataType::Dictionary(_, value) => {
             // Dictionary encoding not handled at the schema level
             let dict_field = field.clone().with_data_type(value.as_ref().clone());
             arrow_to_parquet_type(&dict_field, coerce_types)
@@ -797,7 +793,7 @@ mod tests {
     use crate::file::metadata::KeyValue;
     use crate::file::reader::FileReader;
     use crate::{
-        arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
+        arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
     };
 
@@ -2227,12 +2223,9 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn arrow_uuid_to_parquet_uuid() -> Result<()> {
-        let arrow_schema = Schema::new(vec![Field::new(
-            "uuid",
-            DataType::FixedSizeBinary(16),
-            false,
-        )
-        .with_extension_type(Uuid)]);
+        let arrow_schema = Schema::new(vec![
+            Field::new("uuid", DataType::FixedSizeBinary(16), false).with_extension_type(Uuid),
+        ]);
 
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
 
@@ -2252,7 +2245,7 @@ mod tests {
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn arrow_json_to_parquet_json() -> Result<()> {
         let arrow_schema = Schema::new(vec![
-            Field::new("json", DataType::Utf8, false).with_extension_type(Json::default())
+            Field::new("json", DataType::Utf8, false).with_extension_type(Json::default()),
         ]);
 
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
