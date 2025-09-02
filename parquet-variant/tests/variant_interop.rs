@@ -337,7 +337,7 @@ fn variant_object_builder() {
     obj.insert("null_field", ());
     obj.insert("timestamp_field", "2025-04-16T12:34:56.78");
 
-    obj.finish().unwrap();
+    obj.finish();
 
     let (built_metadata, built_value) = builder.finish();
     let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
@@ -449,7 +449,7 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
                 let key = format!("field_{i}");
                 object_builder.insert(&key, rng.random::<i32>());
             }
-            object_builder.finish().unwrap();
+            object_builder.finish();
         }
         15 => {
             // Time

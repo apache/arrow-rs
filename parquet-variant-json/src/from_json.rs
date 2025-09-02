@@ -126,7 +126,7 @@ fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(),
                 };
                 append_json(value, &mut field_builder)?;
             }
-            obj_builder.finish()?;
+            obj_builder.finish();
         }
     };
     Ok(())
@@ -489,7 +489,7 @@ mod test {
         let mut list_builder = variant_builder.new_list();
         let mut object_builder_inner = list_builder.new_object();
         object_builder_inner.insert("age", Variant::Int8(32));
-        object_builder_inner.finish().unwrap();
+        object_builder_inner.finish();
         list_builder.append_value(Variant::Int16(128));
         list_builder.append_value(Variant::BooleanFalse);
         list_builder.finish();
@@ -553,7 +553,7 @@ mod test {
         let mut object_builder = variant_builder.new_object();
         object_builder.insert("a", Variant::Int8(3));
         object_builder.insert("b", Variant::Int8(2));
-        object_builder.finish().unwrap();
+        object_builder.finish();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         JsonToVariantTest {
@@ -577,7 +577,7 @@ mod test {
         inner_list_builder.append_value(Variant::Double(-3e0));
         inner_list_builder.append_value(Variant::Double(1001e-3));
         inner_list_builder.finish();
-        object_builder.finish().unwrap();
+        object_builder.finish();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
         JsonToVariantTest {
@@ -643,9 +643,9 @@ mod test {
                 }
                 list_builder.finish();
             });
-            inner_object_builder.finish().unwrap();
+            inner_object_builder.finish();
         });
-        object_builder.finish().unwrap();
+        object_builder.finish();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
@@ -669,7 +669,7 @@ mod test {
         let mut object_builder = variant_builder.new_object();
         object_builder.insert("a", Variant::Int8(1));
         object_builder.insert("爱", Variant::ShortString(ShortString::try_new("अ")?));
-        object_builder.finish().unwrap();
+        object_builder.finish();
         let (metadata, value) = variant_builder.finish();
         let variant = Variant::try_new(&metadata, &value)?;
 
