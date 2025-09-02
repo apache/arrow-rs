@@ -590,10 +590,17 @@ impl Decoder {
                         )));
                     }
                 }
+                let value_metadata = match map_field.data_type() {
+                    DataType::Struct(fields) => fields[1].metadata().clone(),
+                    dt => panic!("Expected Struct for map entries, got {dt:?}"),
+                };
                 let entries_struct = StructArray::new(
                     Fields::from(vec![
                         Arc::new(ArrowField::new("key", DataType::Utf8, false)),
-                        Arc::new(ArrowField::new("value", val_arr.data_type().clone(), true)),
+                        Arc::new(
+                            ArrowField::new("value", val_arr.data_type().clone(), true)
+                                .with_metadata(value_metadata),
+                        ),
                     ]),
                     vec![Arc::new(key_arr), val_arr],
                     None,
@@ -1470,5 +1477,65 @@ mod tests {
         let int_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert!(int_array.is_null(0)); // row1 is null
         assert_eq!(int_array.value(1), 42); // row3 value is 42
+    }
+
+    #[test]
+    fn test_map_entries_with_enum_value() {
+        // Define enum symbols and metadata key
+        let symbols = ["A", "B", "C"];
+        let meta_key = "avro.enum.symbols".to_string();
+        let mut md = HashMap::new();
+        md.insert(meta_key.clone(), serde_json::to_string(&symbols).unwrap());
+
+        let symbols_arc: Arc<[String]> = symbols.iter().map(|s| (*s).to_string()).collect();
+        let value_type_with_md = AvroDataType::new(Codec::Enum(symbols_arc), md, None);
+        let map_type = AvroDataType::new(
+            Codec::Map(Arc::new(value_type_with_md)),
+            Default::default(),
+            None,
+        );
+
+        let mut decoder = Decoder::try_new(&map_type).unwrap();
+
+        // Map with two entries: {"k1": Enum::B, "k2": Enum::C} where B has index 1 and C has index 2
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_long(2)); // two entries in the map
+        data.extend_from_slice(&encode_avro_bytes(b"k1")); // key
+        data.extend_from_slice(&encode_avro_int(1)); // enum index for "B"
+        data.extend_from_slice(&encode_avro_bytes(b"k2")); // key
+        data.extend_from_slice(&encode_avro_int(2)); // enum index for "C"
+        data.extend_from_slice(&encode_avro_long(0)); // end of map
+
+        decoder.decode(&mut AvroCursor::new(&data)).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let map_arr = array.as_any().downcast_ref::<MapArray>().unwrap();
+
+        match map_arr.entries().data_type() {
+            DataType::Struct(fields) => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].name(), "key");
+                assert_eq!(fields[1].name(), "value");
+                assert!(fields[1].metadata().contains_key(&meta_key));
+            }
+            other => panic!("expected Struct for entries, got {other:?}"),
+        }
+
+        let keys = map_arr
+            .keys()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys.value(0), "k1");
+        assert_eq!(keys.value(1), "k2");
+
+        let values = map_arr
+            .values()
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values.keys().value(0), 1);
+        assert_eq!(values.keys().value(1), 2);
     }
 }
