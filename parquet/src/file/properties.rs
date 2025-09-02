@@ -20,7 +20,7 @@ use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
-use crate::file::metadata::{KeyValue, RowGroupMetaData, RowGroupMetaDataBuilder};
+use crate::file::metadata::KeyValue;
 use crate::format::SortingColumn;
 use crate::schema::types::ColumnPath;
 use std::str::FromStr;
@@ -193,7 +193,8 @@ impl WriterProperties {
         WriterPropertiesBuilder::default()
     }
 
-    /// Converts this [`RowGroupMetaData`] into a [`RowGroupMetaDataBuilder`]
+    /// Converts this [`WriterProperties`] into a [`WriterPropertiesBuilder`]
+    /// Used for mutating existing property settings
     pub fn into_builder(self) -> WriterPropertiesBuilder {
         WriterPropertiesBuilder {
             data_page_size_limit: self.data_page_size_limit,
@@ -215,7 +216,6 @@ impl WriterProperties {
             file_encryption_properties: self.file_encryption_properties,
         }
     }
-
 
     /// Returns data page size limit.
     ///
@@ -1401,50 +1401,59 @@ mod tests {
             .set_column_bloom_filter_fpp(ColumnPath::from("col"), 0.1)
             .build();
 
-        assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
-        assert_eq!(props.data_page_size_limit(), 10);
-        assert_eq!(props.dictionary_page_size_limit(), 20);
-        assert_eq!(props.write_batch_size(), 30);
-        assert_eq!(props.max_row_group_size(), 40);
-        assert_eq!(props.created_by(), "default");
-        assert_eq!(
-            props.key_value_metadata(),
-            Some(&vec![
-                KeyValue::new("key".to_string(), "value".to_string(),)
-            ])
-        );
+        fn test_props(props: &WriterProperties) {
+            assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
+            assert_eq!(props.data_page_size_limit(), 10);
+            assert_eq!(props.dictionary_page_size_limit(), 20);
+            assert_eq!(props.write_batch_size(), 30);
+            assert_eq!(props.max_row_group_size(), 40);
+            assert_eq!(props.created_by(), "default");
+            assert_eq!(
+                props.key_value_metadata(),
+                Some(&vec![
+                    KeyValue::new("key".to_string(), "value".to_string(),)
+                ])
+            );
 
-        assert_eq!(
-            props.encoding(&ColumnPath::from("a")),
-            Some(Encoding::DELTA_BINARY_PACKED)
-        );
-        assert_eq!(
-            props.compression(&ColumnPath::from("a")),
-            Compression::GZIP(Default::default())
-        );
-        assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
-        assert_eq!(
-            props.statistics_enabled(&ColumnPath::from("a")),
-            EnabledStatistics::None
-        );
+            assert_eq!(
+                props.encoding(&ColumnPath::from("a")),
+                Some(Encoding::DELTA_BINARY_PACKED)
+            );
+            assert_eq!(
+                props.compression(&ColumnPath::from("a")),
+                Compression::GZIP(Default::default())
+            );
+            assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
+            assert_eq!(
+                props.statistics_enabled(&ColumnPath::from("a")),
+                EnabledStatistics::None
+            );
 
-        assert_eq!(
-            props.encoding(&ColumnPath::from("col")),
-            Some(Encoding::RLE)
-        );
-        assert_eq!(
-            props.compression(&ColumnPath::from("col")),
-            Compression::SNAPPY
-        );
-        assert!(props.dictionary_enabled(&ColumnPath::from("col")));
-        assert_eq!(
-            props.statistics_enabled(&ColumnPath::from("col")),
-            EnabledStatistics::Chunk
-        );
-        assert_eq!(
-            props.bloom_filter_properties(&ColumnPath::from("col")),
-            Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })
-        );
+            assert_eq!(
+                props.encoding(&ColumnPath::from("col")),
+                Some(Encoding::RLE)
+            );
+            assert_eq!(
+                props.compression(&ColumnPath::from("col")),
+                Compression::SNAPPY
+            );
+            assert!(props.dictionary_enabled(&ColumnPath::from("col")));
+            assert_eq!(
+                props.statistics_enabled(&ColumnPath::from("col")),
+                EnabledStatistics::Chunk
+            );
+            assert_eq!(
+                props.bloom_filter_properties(&ColumnPath::from("col")),
+                Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })
+            );
+        }
+
+        // Test direct build of properties
+        test_props(&props);
+
+        // Test that into_builder() gives the same result
+        let props_into_builder_and_back = props.into_builder().build();
+        test_props(&props_into_builder_and_back);
     }
 
     #[test]
