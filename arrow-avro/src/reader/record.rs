@@ -1484,13 +1484,13 @@ mod tests {
         // Define enum symbols and metadata key
         let symbols = ["A", "B", "C"];
         let meta_key = "avro.enum.symbols".to_string();
-        let mut md = HashMap::new();
-        md.insert(meta_key.clone(), serde_json::to_string(&symbols).unwrap());
+        let mut metadata = HashMap::new();
+        metadata.insert(meta_key.clone(), serde_json::to_string(&symbols).unwrap());
 
         let symbols_arc: Arc<[String]> = symbols.iter().map(|s| (*s).to_string()).collect();
-        let value_type_with_md = AvroDataType::new(Codec::Enum(symbols_arc), md, None);
+        let enum_value_type = AvroDataType::new(Codec::Enum(symbols_arc), metadata, None);
         let map_type = AvroDataType::new(
-            Codec::Map(Arc::new(value_type_with_md)),
+            Codec::Map(Arc::new(enum_value_type)),
             Default::default(),
             None,
         );
