@@ -17,10 +17,9 @@
 
 use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
 use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
-use crate::writer::encoder::{write_long, EncoderOptions};
+use crate::writer::encoder::write_long;
 use arrow_schema::{ArrowError, Schema};
 use rand::RngCore;
-use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::fmt::Debug;
 use std::io::Write;
 
@@ -44,24 +43,6 @@ pub trait AvroFormat: Debug + Default {
 #[derive(Debug, Default)]
 pub struct AvroOcfFormat {
     sync_marker: [u8; 16],
-    /// Optional encoder behavior hints to keep file header schema ordering
-    /// consistent with value encoding (e.g. Impala null-second).
-    encoder_options: EncoderOptions,
-}
-
-impl AvroOcfFormat {
-    /// Optional helper to attach encoder options (i.e., Impala null-second) to the format.
-    #[allow(dead_code)]
-    pub fn with_encoder_options(mut self, opts: EncoderOptions) -> Self {
-        self.encoder_options = opts;
-        self
-    }
-
-    /// Access the options used by this format.
-    #[allow(dead_code)]
-    pub fn encoder_options(&self) -> &EncoderOptions {
-        &self.encoder_options
-    }
 }
 
 impl AvroFormat for AvroOcfFormat {
@@ -85,7 +66,7 @@ impl AvroFormat for AvroOcfFormat {
             Some(CompressionCodec::Xz) => "xz",
             None => "null",
         };
-        write_long(writer, 2)?;
+        write_long(writer, 2)?; // two entries
         write_string(writer, SCHEMA_METADATA_KEY)?;
         write_bytes(writer, avro_schema.json_string.as_bytes())?;
         write_string(writer, CODEC_METADATA_KEY)?;

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::{AvroDataType, Codec, Nullability, Promotion, ResolutionInfo};
+use crate::codec::{AvroDataType, Codec, Promotion, ResolutionInfo};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
