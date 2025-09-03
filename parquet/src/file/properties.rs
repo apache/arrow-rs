@@ -963,7 +963,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             #[cfg(feature = "encryption")]
             file_encryption_properties: props.file_encryption_properties,
         }
-    }   
+    }
 }
 
 /// Controls the level of statistics to be computed by the writer and stored in
