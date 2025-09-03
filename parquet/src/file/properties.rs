@@ -196,25 +196,8 @@ impl WriterProperties {
     /// Converts this [`WriterProperties`] into a [`WriterPropertiesBuilder`]
     /// Used for mutating existing property settings
     pub fn into_builder(self) -> WriterPropertiesBuilder {
-        WriterPropertiesBuilder {
-            data_page_size_limit: self.data_page_size_limit,
-            data_page_row_count_limit: self.data_page_row_count_limit,
-            write_batch_size: self.write_batch_size,
-            max_row_group_size: self.max_row_group_size,
-            bloom_filter_position: self.bloom_filter_position,
-            writer_version: self.writer_version,
-            created_by: self.created_by,
-            offset_index_disabled: self.offset_index_disabled,
-            key_value_metadata: self.key_value_metadata,
-            default_column_properties: self.default_column_properties,
-            column_properties: self.column_properties,
-            sorting_columns: self.sorting_columns,
-            column_index_truncate_length: self.column_index_truncate_length,
-            statistics_truncate_length: self.statistics_truncate_length,
-            coerce_types: self.coerce_types,
-            #[cfg(feature = "encryption")]
-            file_encryption_properties: self.file_encryption_properties,
-        }
+        let builder: WriterPropertiesBuilder = self.into();
+        builder
     }
 
     /// Returns data page size limit.
@@ -459,6 +442,7 @@ impl WriterProperties {
 /// Builder for  [`WriterProperties`] Parquet writer configuration.
 ///
 /// See example on [`WriterProperties`]
+#[derive(Debug, Clone)]
 pub struct WriterPropertiesBuilder {
     data_page_size_limit: usize,
     data_page_row_count_limit: usize,
@@ -956,6 +940,30 @@ impl WriterPropertiesBuilder {
         self.get_mut_props(col).set_bloom_filter_ndv(value);
         self
     }
+}
+
+impl From<WriterProperties> for WriterPropertiesBuilder {
+    fn from(props: WriterProperties) -> Self {
+        WriterPropertiesBuilder {
+            data_page_size_limit: props.data_page_size_limit,
+            data_page_row_count_limit: props.data_page_row_count_limit,
+            write_batch_size: props.write_batch_size,
+            max_row_group_size: props.max_row_group_size,
+            bloom_filter_position: props.bloom_filter_position,
+            writer_version: props.writer_version,
+            created_by: props.created_by,
+            offset_index_disabled: props.offset_index_disabled,
+            key_value_metadata: props.key_value_metadata,
+            default_column_properties: props.default_column_properties,
+            column_properties: props.column_properties,
+            sorting_columns: props.sorting_columns,
+            column_index_truncate_length: props.column_index_truncate_length,
+            statistics_truncate_length: props.statistics_truncate_length,
+            coerce_types: props.coerce_types,
+            #[cfg(feature = "encryption")]
+            file_encryption_properties: props.file_encryption_properties,
+        }
+    }   
 }
 
 /// Controls the level of statistics to be computed by the writer and stored in
