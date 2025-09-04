@@ -385,7 +385,7 @@ impl AvroSchema {
         if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
             return Ok(AvroSchema::new(json.clone()));
         }
-        let order = null_union_order.unwrap_or(Nullability::NullFirst);
+        let order = null_union_order.unwrap_or_default();
         let mut name_gen = NameGenerator::default();
         let fields_json = schema
             .fields()
