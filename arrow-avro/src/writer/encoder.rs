@@ -35,9 +35,6 @@ use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Plan reference passed to the unified encoder constructor (required).
-type PlanRef<'p> = &'p FieldPlan;
-
 /// Encode a single Avro-`long` using ZigZag + variable length, buffered.
 ///
 /// Spec: <https://avro.apache.org/docs/1.11.1/specification/#binary-encoding>
@@ -84,21 +81,186 @@ fn write_bool<W: Write + ?Sized>(writer: &mut W, v: bool) -> Result<(), ArrowErr
 /// Branch index is 0-based per Avro unions:
 /// - Null-first (default): null => 0, value => 1
 /// - Null-second (Impala): value => 0, null => 1
-#[inline]
 fn write_optional_index<W: Write + ?Sized>(
     writer: &mut W,
     is_null: bool,
     null_order: Nullability,
 ) -> Result<(), ArrowError> {
-    // For NullFirst: null => 0x00, value => 0x02
-    // For NullSecond: value => 0x00, null => 0x02
     let byte = union_value_branch_byte(null_order, is_null);
     writer
         .write_all(&[byte])
         .map_err(|e| ArrowError::IoError(format!("write union branch: {e}"), e))
 }
 
-/// Per‑site encoder plan for a field. This mirrors Avro structure so nested
+#[derive(Debug, Clone)]
+enum NullState {
+    NonNullable,
+    NullableNoNulls {
+        byte: u8,
+    },
+    Nullable {
+        nulls: NullBuffer,
+        null_order: Nullability,
+    },
+}
+
+/// Arrow to Avro FieldEncoder:
+/// - Holds the inner `Encoder` (by value)
+/// - Carries the per-site nullability **state** as a single enum that enforces invariants
+pub struct FieldEncoder<'a> {
+    encoder: Encoder<'a>,
+    null_state: NullState,
+}
+
+impl<'a> FieldEncoder<'a> {
+    fn make_encoder(
+        array: &'a dyn Array,
+        field: &Field,
+        plan: &FieldPlan,
+        nullability: Option<Nullability>,
+    ) -> Result<Self, ArrowError> {
+        let has_nulls = array.null_count() > 0;
+        let encoder = match plan {
+            FieldPlan::Struct { encoders } => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| ArrowError::SchemaError("Expected StructArray".into()))?;
+                Encoder::Struct(Box::new(StructEncoder::try_new(arr, encoders)?))
+            }
+            FieldPlan::List {
+                items_nullability,
+                item_plan,
+            } => match array.data_type() {
+                DataType::List(_) => {
+                    let arr = array
+                        .as_any()
+                        .downcast_ref::<ListArray>()
+                        .ok_or_else(|| ArrowError::SchemaError("Expected ListArray".into()))?;
+                    Encoder::List(Box::new(ListEncoder32::try_new(
+                        arr,
+                        *items_nullability,
+                        item_plan.as_ref(),
+                    )?))
+                }
+                DataType::LargeList(_) => {
+                    let arr = array
+                        .as_any()
+                        .downcast_ref::<LargeListArray>()
+                        .ok_or_else(|| ArrowError::SchemaError("Expected LargeListArray".into()))?;
+                    Encoder::LargeList(Box::new(ListEncoder64::try_new(
+                        arr,
+                        *items_nullability,
+                        item_plan.as_ref(),
+                    )?))
+                }
+                other => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Avro array site requires Arrow List/LargeList, found: {other:?}"
+                    )))
+                }
+            },
+            FieldPlan::Scalar => match array.data_type() {
+                DataType::Boolean => Encoder::Boolean(BooleanEncoder(array.as_boolean())),
+                DataType::Utf8 => {
+                    Encoder::Utf8(Utf8GenericEncoder::<i32>(array.as_string::<i32>()))
+                }
+                DataType::LargeUtf8 => {
+                    Encoder::Utf8Large(Utf8GenericEncoder::<i64>(array.as_string::<i64>()))
+                }
+                DataType::Int32 => Encoder::Int(IntEncoder(array.as_primitive::<Int32Type>())),
+                DataType::Int64 => Encoder::Long(LongEncoder(array.as_primitive::<Int64Type>())),
+                DataType::Float32 => {
+                    Encoder::Float32(F32Encoder(array.as_primitive::<Float32Type>()))
+                }
+                DataType::Float64 => {
+                    Encoder::Float64(F64Encoder(array.as_primitive::<Float64Type>()))
+                }
+                DataType::Binary => Encoder::Binary(BinaryEncoder(array.as_binary::<i32>())),
+                DataType::LargeBinary => {
+                    Encoder::LargeBinary(BinaryEncoder(array.as_binary::<i64>()))
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => Encoder::Timestamp(LongEncoder(
+                    array.as_primitive::<TimestampMicrosecondType>(),
+                )),
+                other => {
+                    return Err(ArrowError::NotYetImplemented(format!(
+                        "Avro scalar type not yet supported: {other:?}"
+                    )));
+                }
+            },
+            other => {
+                return Err(ArrowError::NotYetImplemented(
+                    "Avro writer: {other:?} not yet supported".into(),
+                ));
+            }
+        };
+        // Compute the effective null state from writer-declared nullability and data nulls.
+        let null_state = match (nullability, has_nulls) {
+            (None, false) => NullState::NonNullable,
+            (None, true) => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Avro site '{}' is non-nullable, but array contains nulls",
+                    field.name()
+                )));
+            }
+            (Some(order), false) => {
+                // Optimization: drop any bitmap; emit a constant "value" branch byte.
+                let byte = union_value_branch_byte(order, false);
+                NullState::NullableNoNulls { byte }
+            }
+            (Some(null_order), true) => {
+                let null_buffer = array.nulls().cloned().ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Array for Avro site '{}' reports nulls but has no null buffer",
+                        field.name()
+                    ))
+                })?;
+                NullState::Nullable {
+                    nulls: null_buffer,
+                    null_order,
+                }
+            }
+        };
+        Ok(Self {
+            encoder,
+            null_state,
+        })
+    }
+
+    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+        match &self.null_state {
+            NullState::NonNullable => self.encoder.encode(idx, out),
+            NullState::NullableNoNulls { byte } => {
+                // Constant non-null branch byte, then value.
+                out.write_all(&[*byte]).map_err(|e| {
+                    ArrowError::IoError(format!("write union value branch: {e}"), e)
+                })?;
+                self.encoder.encode(idx, out)
+            }
+            NullState::Nullable { nulls, null_order } => {
+                let is_null = nulls.is_null(idx);
+                write_optional_index(out, is_null, *null_order)?;
+                if is_null {
+                    Ok(())
+                } else {
+                    self.encoder.encode(idx, out)
+                }
+            }
+        }
+    }
+}
+
+fn union_value_branch_byte(null_order: Nullability, is_null: bool) -> u8 {
+    let nulls_first = null_order == Nullability::default();
+    if nulls_first == is_null {
+        0x00
+    } else {
+        0x02
+    }
+}
+
+/// Per‑site encoder plan for a field. This mirrors the Avro structure, so nested
 /// optional branch order can be honored exactly as declared by the schema.
 #[derive(Debug, Clone)]
 enum FieldPlan {
@@ -209,7 +371,6 @@ impl RecordEncoder {
     /// Encode a `RecordBatch` using this encoder plan.
     ///
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
-    #[inline]
     pub fn encode<W: Write>(&self, batch: &RecordBatch, out: &mut W) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         for row in 0..batch.num_rows() {
@@ -290,7 +451,6 @@ enum Encoder<'a> {
 
 impl<'a> Encoder<'a> {
     /// Encode the value at `idx`.
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         match self {
             Encoder::Boolean(e) => e.encode(idx, out),
@@ -312,7 +472,6 @@ impl<'a> Encoder<'a> {
 
 struct BooleanEncoder<'a>(&'a arrow_array::BooleanArray);
 impl BooleanEncoder<'_> {
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_bool(out, self.0.value(idx))
     }
@@ -321,7 +480,6 @@ impl BooleanEncoder<'_> {
 /// Generic Avro `int` encoder for primitive arrays with `i32` native values.
 struct IntEncoder<'a, P: ArrowPrimitiveType<Native = i32>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_int(out, self.0.value(idx))
     }
@@ -330,7 +488,6 @@ impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
 /// Generic Avro `long` encoder for primitive arrays with `i64` native values.
 struct LongEncoder<'a, P: ArrowPrimitiveType<Native = i64>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_long(out, self.0.value(idx))
     }
@@ -339,7 +496,6 @@ impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
 /// Unified binary encoder generic over offset size (i32/i64).
 struct BinaryEncoder<'a, O: OffsetSizeTrait>(&'a GenericBinaryArray<O>);
 impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_len_prefixed(out, self.0.value(idx))
     }
@@ -347,7 +503,6 @@ impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
 
 struct F32Encoder<'a>(&'a arrow_array::Float32Array);
 impl F32Encoder<'_> {
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         // Avro float: 4 bytes, IEEE-754 little-endian
         let bits = self.0.value(idx).to_bits();
@@ -358,7 +513,6 @@ impl F32Encoder<'_> {
 
 struct F64Encoder<'a>(&'a arrow_array::Float64Array);
 impl F64Encoder<'_> {
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         // Avro double: 8 bytes, IEEE-754 little-endian
         let bits = self.0.value(idx).to_bits();
@@ -370,7 +524,6 @@ impl F64Encoder<'_> {
 struct Utf8GenericEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
 impl<'a, O: OffsetSizeTrait> Utf8GenericEncoder<'a, O> {
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         write_len_prefixed(out, self.0.value(idx).as_bytes())
     }
@@ -378,171 +531,6 @@ impl<'a, O: OffsetSizeTrait> Utf8GenericEncoder<'a, O> {
 
 type Utf8Encoder<'a> = Utf8GenericEncoder<'a, i32>;
 type Utf8LargeEncoder<'a> = Utf8GenericEncoder<'a, i64>;
-
-/// Unified field encoder:
-/// - Holds the inner `Encoder` (by value)
-/// - Tracks the column/site null buffer and whether any nulls exist
-/// - Carries per-site Avro `Nullability` and precomputed union branch (fast path)
-pub struct FieldEncoder<'a> {
-    encoder: Encoder<'a>,
-    nulls: Option<NullBuffer>,
-    has_nulls: bool,
-    nullability: Option<Nullability>,
-    /// Precomputed constant branch byte if the site is nullable but contains no nulls
-    pre: Option<u8>,
-}
-
-impl<'a> FieldEncoder<'a> {
-    fn make_encoder(
-        array: &'a dyn Array,
-        field: &Field,
-        plan: PlanRef<'_>,
-    ) -> Result<Self, ArrowError> {
-        let nulls = array.nulls().cloned();
-        let has_nulls = array.null_count() > 0;
-        let encoder = match plan {
-            FieldPlan::Struct { encoders } => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<StructArray>()
-                    .ok_or_else(|| ArrowError::SchemaError("Expected StructArray".into()))?;
-                Encoder::Struct(Box::new(StructEncoder::try_new(arr, encoders)?))
-            }
-            FieldPlan::List {
-                items_nullability,
-                item_plan,
-            } => match array.data_type() {
-                DataType::List(_) => {
-                    let arr = array
-                        .as_any()
-                        .downcast_ref::<ListArray>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected ListArray".into()))?;
-                    Encoder::List(Box::new(ListEncoder32::try_new(
-                        arr,
-                        *items_nullability,
-                        item_plan.as_ref(),
-                    )?))
-                }
-                DataType::LargeList(_) => {
-                    let arr = array
-                        .as_any()
-                        .downcast_ref::<LargeListArray>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected LargeListArray".into()))?;
-                    Encoder::LargeList(Box::new(ListEncoder64::try_new(
-                        arr,
-                        *items_nullability,
-                        item_plan.as_ref(),
-                    )?))
-                }
-                other => {
-                    return Err(ArrowError::SchemaError(format!(
-                        "Avro array site requires Arrow List/LargeList, found: {other:?}"
-                    )))
-                }
-            },
-            FieldPlan::Scalar => match array.data_type() {
-                DataType::Boolean => Encoder::Boolean(BooleanEncoder(array.as_boolean())),
-                DataType::Utf8 => {
-                    Encoder::Utf8(Utf8GenericEncoder::<i32>(array.as_string::<i32>()))
-                }
-                DataType::LargeUtf8 => {
-                    Encoder::Utf8Large(Utf8GenericEncoder::<i64>(array.as_string::<i64>()))
-                }
-                DataType::Int32 => Encoder::Int(IntEncoder(array.as_primitive::<Int32Type>())),
-                DataType::Int64 => Encoder::Long(LongEncoder(array.as_primitive::<Int64Type>())),
-                DataType::Float32 => {
-                    Encoder::Float32(F32Encoder(array.as_primitive::<Float32Type>()))
-                }
-                DataType::Float64 => {
-                    Encoder::Float64(F64Encoder(array.as_primitive::<Float64Type>()))
-                }
-                DataType::Binary => Encoder::Binary(BinaryEncoder(array.as_binary::<i32>())),
-                DataType::LargeBinary => {
-                    Encoder::LargeBinary(BinaryEncoder(array.as_binary::<i64>()))
-                }
-                DataType::Timestamp(TimeUnit::Microsecond, _) => Encoder::Timestamp(LongEncoder(
-                    array.as_primitive::<TimestampMicrosecondType>(),
-                )),
-                other => {
-                    return Err(ArrowError::NotYetImplemented(format!(
-                        "Avro scalar type not yet supported: {other:?}"
-                    )));
-                }
-            },
-            other => {
-                return Err(ArrowError::NotYetImplemented(
-                    "Avro writer: {other:?} not yet supported".into(),
-                ));
-            }
-        };
-        Ok(Self {
-            encoder,
-            nulls,
-            has_nulls,
-            nullability: None,
-            pre: None,
-        })
-    }
-
-    #[inline]
-    fn has_nulls(&self) -> bool {
-        self.has_nulls
-    }
-
-    #[inline]
-    fn is_null(&self, idx: usize) -> bool {
-        self.nulls
-            .as_ref()
-            .is_some_and(|null_buffer| null_buffer.is_null(idx))
-    }
-
-    #[inline]
-    fn with_effective_nullability(mut self, order: Option<Nullability>) -> Self {
-        self.nullability = order;
-        self.pre = self.precomputed_union_value_branch(order);
-        self
-    }
-
-    #[inline]
-    fn precomputed_union_value_branch(&self, order: Option<Nullability>) -> Option<u8> {
-        // ... explanatory comment here ...
-        let null_order = order?;
-        (!self.has_nulls()).then(|| union_value_branch_byte(null_order, false))
-    }
-
-    #[inline]
-    fn encode_inner<W: Write + ?Sized>(
-        &mut self,
-        idx: usize,
-        out: &mut W,
-    ) -> Result<(), ArrowError> {
-        self.encoder.encode(idx, out)
-    }
-
-    #[inline]
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
-        if let Some(b) = self.pre {
-            out.write_all(&[b])
-                .map_err(|e| ArrowError::IoError(format!("write union value branch: {e}"), e))?;
-        } else if let Some(null_order) = self.nullability {
-            let is_null = self.is_null(idx);
-            write_optional_index(out, is_null, null_order)?;
-            if is_null {
-                return Ok(());
-            }
-        }
-        self.encode_inner(idx, out)
-    }
-}
-
-fn union_value_branch_byte(null_order: Nullability, is_null: bool) -> u8 {
-    let nulls_first = null_order == Nullability::NullFirst;
-    if nulls_first == is_null {
-        0x00
-    } else {
-        0x02
-    }
-}
 
 struct StructEncoder<'a> {
     encoders: Vec<FieldEncoder<'a>>,
@@ -580,7 +568,6 @@ impl<'a> StructEncoder<'a> {
         Ok(Self { encoders })
     }
 
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         for encoder in self.encoders.iter_mut() {
             encoder.encode(idx, out)?;
@@ -589,7 +576,6 @@ impl<'a> StructEncoder<'a> {
     }
 }
 
-#[inline]
 fn encode_blocked_range<W: Write + ?Sized, F>(
     out: &mut W,
     start: usize,
@@ -651,7 +637,6 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
         })
     }
 
-    #[inline]
     fn encode_list_range<W: Write + ?Sized>(
         &mut self,
         out: &mut W,
@@ -664,7 +649,6 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
         })
     }
 
-    #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         let offsets = self.list.offsets();
         let start = offsets[idx].to_usize().ok_or_else(|| {
@@ -680,16 +664,14 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
     }
 }
 
-#[inline]
 fn prepare_value_site_encoder<'a>(
     values_array: &'a dyn Array,
     value_field: &Field,
-    site_nullability: Option<Nullability>,
-    plan: PlanRef<'_>,
+    nullability: Option<Nullability>,
+    plan: &FieldPlan,
 ) -> Result<FieldEncoder<'a>, ArrowError> {
-    // Effective nullability is exactly the site's Avro-declared nullability.
-    Ok(FieldEncoder::make_encoder(values_array, value_field, plan)?
-        .with_effective_nullability(site_nullability))
+    // Effective nullability is computed here from the writer-declared site nullability and data.
+    FieldEncoder::make_encoder(values_array, value_field, plan, nullability)
 }
 
 #[cfg(test)]
@@ -727,11 +709,13 @@ mod tests {
         out
     }
 
-    fn encode_all(array: &dyn Array, plan: &FieldPlan, site: Option<Nullability>) -> Vec<u8> {
+    fn encode_all(
+        array: &dyn Array,
+        plan: &FieldPlan,
+        nullability: Option<Nullability>,
+    ) -> Vec<u8> {
         let field = Field::new("f", array.data_type().clone(), true);
-        let mut enc = FieldEncoder::make_encoder(array, &field, plan)
-            .unwrap()
-            .with_effective_nullability(site);
+        let mut enc = FieldEncoder::make_encoder(array, &field, plan, nullability).unwrap();
         let mut out = Vec::new();
         for i in 0..array.len() {
             enc.encode(i, &mut out).unwrap();

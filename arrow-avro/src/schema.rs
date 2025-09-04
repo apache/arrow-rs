@@ -57,7 +57,7 @@ pub fn compare_schemas(writer: &Schema, reader: &Schema) -> Result<bool, ArrowEr
 /// Avro types are not nullable, with nullability instead encoded as a union
 /// where one of the variants is the null type.
 ///
-/// To accommodate this we special case two-variant unions where one of the
+/// To accommodate this, we specially case two-variant unions where one of the
 /// variants is the null type, and use this to derive arrow's notion of nullability
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
 pub enum Nullability {
@@ -318,39 +318,11 @@ pub struct AvroSchema {
 impl TryFrom<&ArrowSchema> for AvroSchema {
     type Error = ArrowError;
 
+    /// Converts an `ArrowSchema` to `AvroSchema`, delegating to
+    /// `AvroSchema::from_arrow_with_options` with `None` so that the
+    /// union null ordering is decided by `Nullability::default()`.
     fn try_from(schema: &ArrowSchema) -> Result<Self, Self::Error> {
-        // Fast‑path: schema already contains Avro JSON
-        if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
-            return Ok(AvroSchema::new(json.clone()));
-        }
-        let mut name_gen = NameGenerator::default();
-        let fields_json = schema
-            .fields()
-            .iter()
-            .map(|f| arrow_field_to_avro(f, &mut name_gen))
-            .collect::<Result<Vec<_>, _>>()?;
-        // Assemble top‑level record
-        let record_name = schema
-            .metadata
-            .get(AVRO_NAME_METADATA_KEY)
-            .map_or("topLevelRecord", |s| s.as_str());
-        let mut record = JsonMap::with_capacity(schema.metadata.len() + 4);
-        record.insert("type".into(), Value::String("record".into()));
-        record.insert(
-            "name".into(),
-            Value::String(sanitise_avro_name(record_name)),
-        );
-        if let Some(ns) = schema.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
-            record.insert("namespace".into(), Value::String(ns.clone()));
-        }
-        if let Some(doc) = schema.metadata.get(AVRO_DOC_METADATA_KEY) {
-            record.insert("doc".into(), Value::String(doc.clone()));
-        }
-        record.insert("fields".into(), Value::Array(fields_json));
-        extend_with_passthrough_metadata(&mut record, &schema.metadata);
-        let json_string = serde_json::to_string(&Value::Object(record))
-            .map_err(|e| ArrowError::SchemaError(format!("Serialising Avro JSON failed: {e}")))?;
-        Ok(AvroSchema::new(json_string))
+        AvroSchema::from_arrow_with_options(schema, None)
     }
 }
 
@@ -381,17 +353,17 @@ impl AvroSchema {
     /// honoring `null_union_order` at **all nullable sites**.
     pub fn from_arrow_with_options(
         schema: &ArrowSchema,
-        null_union_order: Option<Nullability>,
+        null_order: Option<Nullability>,
     ) -> Result<AvroSchema, ArrowError> {
         if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
             return Ok(AvroSchema::new(json.clone()));
         }
-        let order = null_union_order.unwrap_or_default();
+        let order = null_order.unwrap_or_default();
         let mut name_gen = NameGenerator::default();
         let fields_json = schema
             .fields()
             .iter()
-            .map(|f| arrow_field_to_avro_with_order(f, &mut name_gen, order))
+            .map(|f| arrow_field_to_avro(f, &mut name_gen, order))
             .collect::<Result<Vec<_>, _>>()?;
         let record_name = schema
             .metadata
@@ -773,12 +745,8 @@ fn extend_with_passthrough_metadata(
     target: &mut JsonMap<String, Value>,
     metadata: &HashMap<String, String>,
 ) {
-    let schema_prefix = format!("{SCHEMA_METADATA_KEY}.");
     for (meta_key, meta_val) in metadata {
-        if meta_key.starts_with("avro.")
-            || meta_key.starts_with(schema_prefix.as_str())
-            || is_internal_arrow_key(meta_key)
-        {
+        if meta_key.starts_with("avro.") || is_internal_arrow_key(meta_key) {
             continue;
         }
         let json_val =
@@ -857,9 +825,9 @@ fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
     }
 }
 
-fn wrap_nullable(inner: Value, order: Nullability) -> Value {
+fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
     let null = Value::String("null".into());
-    let elements = match order {
+    let elements = match null_order {
         Nullability::NullFirst => vec![null, inner],
         Nullability::NullSecond => vec![inner, null],
     };
@@ -871,23 +839,7 @@ fn datatype_to_avro(
     field_name: &str,
     metadata: &HashMap<String, String>,
     name_gen: &mut NameGenerator,
-) -> Result<(Value, JsonMap<String, Value>), ArrowError> {
-    datatype_to_avro_with_order(dt, field_name, metadata, name_gen, Nullability::NullFirst)
-}
-
-fn arrow_field_to_avro(
-    field: &ArrowField,
-    name_gen: &mut NameGenerator,
-) -> Result<Value, ArrowError> {
-    arrow_field_to_avro_with_order(field, name_gen, Nullability::NullFirst)
-}
-
-fn datatype_to_avro_with_order(
-    dt: &DataType,
-    field_name: &str,
-    metadata: &HashMap<String, String>,
-    name_gen: &mut NameGenerator,
-    order: Nullability,
+    null_order: Nullability,
 ) -> Result<(Value, JsonMap<String, Value>), ArrowError> {
     let mut extras = JsonMap::new();
     let val = match dt {
@@ -1001,19 +953,14 @@ fn datatype_to_avro_with_order(
             if matches!(dt, DataType::LargeList(_)) {
                 extras.insert("arrowLargeList".into(), Value::Bool(true));
             }
-            let (items_inner, ie) = datatype_to_avro_with_order(
+            let items_schema = process_datatype(
                 child.data_type(),
                 child.name(),
                 child.metadata(),
                 name_gen,
-                order,
+                null_order,
+                child.is_nullable(),
             )?;
-            let items_with_meta = merge_extras(items_inner, ie);
-            let items_schema = if child.is_nullable() {
-                wrap_nullable(items_with_meta, order)
-            } else {
-                items_with_meta
-            };
             json!({
                 "type": "array",
                 "items": items_schema
@@ -1021,19 +968,14 @@ fn datatype_to_avro_with_order(
         }
         DataType::FixedSizeList(child, len) => {
             extras.insert("arrowFixedSize".into(), json!(len));
-            let (items_inner, ie) = datatype_to_avro_with_order(
+            let items_schema = process_datatype(
                 child.data_type(),
                 child.name(),
                 child.metadata(),
                 name_gen,
-                order,
+                null_order,
+                child.is_nullable(),
             )?;
-            let items_with_meta = merge_extras(items_inner, ie);
-            let items_schema = if child.is_nullable() {
-                wrap_nullable(items_with_meta, order)
-            } else {
-                items_with_meta
-            };
             json!({
                 "type": "array",
                 "items": items_schema
@@ -1048,19 +990,14 @@ fn datatype_to_avro_with_order(
                     ))
                 }
             };
-            let (val_schema, value_entry) = datatype_to_avro_with_order(
+            let values_schema = process_datatype(
                 value_field.data_type(),
                 value_field.name(),
                 value_field.metadata(),
                 name_gen,
-                order,
+                null_order,
+                value_field.is_nullable(),
             )?;
-            let values_with_meta = merge_extras(val_schema, value_entry);
-            let values_schema = if value_field.is_nullable() {
-                wrap_nullable(values_with_meta, order)
-            } else {
-                values_with_meta
-            };
             json!({
                 "type": "map",
                 "values": values_schema
@@ -1069,7 +1006,7 @@ fn datatype_to_avro_with_order(
         DataType::Struct(fields) => {
             let avro_fields = fields
                 .iter()
-                .map(|field| arrow_field_to_avro_with_order(field, name_gen, order))
+                .map(|field| arrow_field_to_avro(field, name_gen, null_order))
                 .collect::<Result<Vec<_>, _>>()?;
             json!({
                 "type": "record",
@@ -1087,26 +1024,24 @@ fn datatype_to_avro_with_order(
                     "symbols": symbols
                 })
             } else {
-                let (inner, ie) = datatype_to_avro_with_order(
+                process_datatype(
                     value.as_ref(),
                     field_name,
                     metadata,
                     name_gen,
-                    order,
-                )?;
-                merge_extras(inner, ie)
+                    null_order,
+                    false,
+                )?
             }
         }
-        DataType::RunEndEncoded(_, values) => {
-            let (inner, ie) = datatype_to_avro_with_order(
-                values.data_type(),
-                values.name(),
-                values.metadata(),
-                name_gen,
-                order,
-            )?;
-            merge_extras(inner, ie)
-        }
+        DataType::RunEndEncoded(_, values) => process_datatype(
+            values.data_type(),
+            values.name(),
+            values.metadata(),
+            name_gen,
+            null_order,
+            false,
+        )?,
         DataType::Union(_, _) => {
             return Err(ArrowError::NotYetImplemented(
                 "Arrow Union to Avro Union not yet supported".into(),
@@ -1121,26 +1056,37 @@ fn datatype_to_avro_with_order(
     Ok((val, extras))
 }
 
-fn arrow_field_to_avro_with_order(
+fn process_datatype(
+    dt: &DataType,
+    field_name: &str,
+    metadata: &HashMap<String, String>,
+    name_gen: &mut NameGenerator,
+    null_order: Nullability,
+    is_nullable: bool,
+) -> Result<Value, ArrowError> {
+    let (schema, extras) = datatype_to_avro(dt, field_name, metadata, name_gen, null_order)?;
+    let merged = merge_extras(schema, extras);
+    Ok(if is_nullable {
+        wrap_nullable(merged, null_order)
+    } else {
+        merged
+    })
+}
+
+fn arrow_field_to_avro(
     field: &ArrowField,
     name_gen: &mut NameGenerator,
-    order: Nullability,
+    null_order: Nullability,
 ) -> Result<Value, ArrowError> {
     let avro_name = sanitise_avro_name(field.name());
-    let (schema, extras) = datatype_to_avro_with_order(
+    let schema_value = process_datatype(
         field.data_type(),
         &avro_name,
         field.metadata(),
         name_gen,
-        order,
+        null_order,
+        field.is_nullable(),
     )?;
-    let merged = merge_extras(schema, extras);
-
-    let schema_value = if field.is_nullable() {
-        wrap_nullable(merged, order)
-    } else {
-        merged
-    };
     // Build the field map
     let mut map = JsonMap::with_capacity(field.metadata().len() + 3);
     map.insert("name".into(), Value::String(avro_name));
@@ -1968,5 +1914,16 @@ mod tests {
         );
 
         assert_eq!(arrow_field, expected);
+    }
+
+    #[test]
+    fn default_order_is_consistent() {
+        // Ensure TryFrom delegates to from_arrow_with_options(None)
+        let arrow_schema = ArrowSchema::new(vec![ArrowField::new("s", DataType::Utf8, true)]);
+        let a = AvroSchema::try_from(&arrow_schema).unwrap().json_string;
+        let b = AvroSchema::from_arrow_with_options(&arrow_schema, None)
+            .unwrap()
+            .json_string;
+        assert_eq!(a, b);
     }
 }

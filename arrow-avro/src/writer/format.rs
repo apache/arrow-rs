@@ -26,7 +26,6 @@ use std::io::Write;
 /// Format abstraction implemented by each container‐level writer.
 pub trait AvroFormat: Debug + Default {
     /// Write any bytes required at the very beginning of the output stream
-    /// (file header, etc.).
     /// Implementations **must not** write any record data.
     fn start_stream<W: Write>(
         &mut self,
@@ -66,7 +65,7 @@ impl AvroFormat for AvroOcfFormat {
             Some(CompressionCodec::Xz) => "xz",
             None => "null",
         };
-        write_long(writer, 2)?; // two entries
+        write_long(writer, 2)?;
         write_string(writer, SCHEMA_METADATA_KEY)?;
         write_bytes(writer, avro_schema.json_string.as_bytes())?;
         write_string(writer, CODEC_METADATA_KEY)?;
