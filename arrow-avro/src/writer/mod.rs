@@ -80,10 +80,9 @@ impl WriterBuilder {
         F: AvroFormat,
     {
         let mut format = F::default();
-        let avro_schema = if let Some(json) = self.schema.metadata.get(SCHEMA_METADATA_KEY) {
-            AvroSchema::new(json.clone())
-        } else {
-            AvroSchema::try_from(&self.schema)?
+        let avro_schema = match self.schema.metadata.get(SCHEMA_METADATA_KEY) {
+             Some(json) => AvroSchema::new(json.clone()),
+             None => AvroSchema::try_from(&self.schema)?,
         };
         let mut md = self.schema.metadata().clone();
         md.insert(
