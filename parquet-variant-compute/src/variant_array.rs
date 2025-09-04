@@ -19,11 +19,13 @@
 
 use arrow::array::{Array, ArrayData, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::Int32Type;
+use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
+
+use crate::type_conversion::primitive_conversion_single_value;
 
 /// An array of Parquet [`Variant`] values
 ///
@@ -584,8 +586,10 @@ impl StructArrayBuilder {
 fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '_> {
     match typed_value.data_type() {
         DataType::Int32 => {
-            let typed_value = typed_value.as_primitive::<Int32Type>();
-            Variant::from(typed_value.value(index))
+            primitive_conversion_single_value!(Int32Type, typed_value, index)
+        }
+        DataType::Int16 => {
+            primitive_conversion_single_value!(Int16Type, typed_value, index)
         }
         // todo other types here (note this is very similar to cast_to_variant.rs)
         // so it would be great to figure out how to share this code

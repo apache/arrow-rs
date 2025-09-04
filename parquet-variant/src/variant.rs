@@ -28,6 +28,7 @@ use std::ops::Deref;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use half::f16;
 use uuid::Uuid;
 
 mod decimal;
@@ -915,6 +916,37 @@ impl<'m, 'v> Variant<'m, 'v> {
             _ => None,
         }
     }
+
+    /// Converts this variant to an `f16` if possible.
+    ///
+    /// Returns `Some(f16)` for float and double variants,
+    /// `None` for non-floating-point variants.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use half::f16;
+    ///
+    /// // you can extract an f16 from a float variant
+    /// let v1 = Variant::from(std::f32::consts::PI);
+    /// assert_eq!(v1.as_f16(), Some(f16::from_f32(std::f32::consts::PI)));
+    ///
+    /// // and from a double variant (with loss of precision to nearest f16)
+    /// let v2 = Variant::from(std::f64::consts::PI);
+    /// assert_eq!(v2.as_f16(), Some(f16::from_f64(std::f64::consts::PI)));
+    ///
+    /// // but not from other variants
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_f16(), None);
+    pub fn as_f16(&self) -> Option<f16> {
+        match *self {
+            Variant::Float(i) => Some(f16::from_f32(i)),
+            Variant::Double(i) => Some(f16::from_f64(i)),
+            _ => None,
+        }
+    }
+
     /// Converts this variant to an `f32` if possible.
     ///
     /// Returns `Some(f32)` for float and double variants,
@@ -1149,7 +1181,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # list.append_value("bar");
     /// # list.append_value("baz");
     /// # list.finish();
-    /// # obj.finish().unwrap();
+    /// # obj.finish();
     /// # let (metadata, value) = builder.finish();
     /// // given a variant like `{"foo": ["bar", "baz"]}`
     /// let variant = Variant::new(&metadata, &value);
@@ -1275,6 +1307,12 @@ impl From<VariantDecimal8> for Variant<'_, '_> {
 impl From<VariantDecimal16> for Variant<'_, '_> {
     fn from(value: VariantDecimal16) -> Self {
         Variant::Decimal16(value)
+    }
+}
+
+impl From<half::f16> for Variant<'_, '_> {
+    fn from(value: half::f16) -> Self {
+        Variant::Float(value.into())
     }
 }
 
@@ -1578,7 +1616,7 @@ mod tests {
         let mut nested_obj = root_obj.new_object("nested_object");
         nested_obj.insert("inner_key1", "inner_value1");
         nested_obj.insert("inner_key2", 999i32);
-        nested_obj.finish().unwrap();
+        nested_obj.finish();
 
         // Add list with mixed types
         let mut mixed_list = root_obj.new_list("mixed_list");
@@ -1596,7 +1634,7 @@ mod tests {
 
         mixed_list.finish();
 
-        root_obj.finish().unwrap();
+        root_obj.finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
