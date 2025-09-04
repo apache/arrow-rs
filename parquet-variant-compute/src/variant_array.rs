@@ -19,7 +19,7 @@
 
 use arrow::array::{Array, ArrayData, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
-use arrow::datatypes::{Int16Type, Int32Type};
+use arrow::datatypes::{Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type, Float16Type, Float32Type, Float64Type};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use parquet_variant::Variant;
 use std::any::Any;
@@ -588,11 +588,38 @@ impl StructArrayBuilder {
 /// returns the non-null element at index as a Variant
 fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '_> {
     match typed_value.data_type() {
-        DataType::Int32 => {
-            primitive_conversion_single_value!(Int32Type, typed_value, index)
+        DataType::Int8 => {
+            primitive_conversion_single_value!(Int8Type, typed_value, index)
         }
         DataType::Int16 => {
             primitive_conversion_single_value!(Int16Type, typed_value, index)
+        }
+        DataType::Int32 => {
+            primitive_conversion_single_value!(Int32Type, typed_value, index)
+        }
+        DataType::Int64 => {
+            primitive_conversion_single_value!(Int64Type, typed_value, index)
+        }
+        DataType::UInt8 => {
+            primitive_conversion_single_value!(UInt8Type, typed_value, index)
+        }
+        DataType::UInt16 => {
+            primitive_conversion_single_value!(UInt16Type, typed_value, index)
+        }
+        DataType::UInt32 => {
+            primitive_conversion_single_value!(UInt32Type, typed_value, index)
+        }
+        DataType::UInt64 => {
+            primitive_conversion_single_value!(UInt64Type, typed_value, index)
+        }
+        DataType::Float16 => {
+            primitive_conversion_single_value!(Float16Type, typed_value, index)
+        }
+        DataType::Float32 => {
+            primitive_conversion_single_value!(Float32Type, typed_value, index)
+        }
+        DataType::Float64 => {
+            primitive_conversion_single_value!(Float64Type, typed_value, index)
         }
         // todo other types here (note this is very similar to cast_to_variant.rs)
         // so it would be great to figure out how to share this code

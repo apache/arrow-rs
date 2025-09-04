@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::array::ArrayRef;
+use arrow::compute::CastOptions;
 use arrow::datatypes;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::error::{ArrowError, Result};
@@ -29,6 +30,7 @@ pub(crate) fn make_shredding_row_builder<'a>(
     //metadata: &BinaryViewArray,
     path: VariantPath<'a>,
     data_type: Option<&'a datatypes::DataType>,
+    cast_options: &'a CastOptions,
 ) -> Result<Box<dyn VariantShreddingRowBuilder + 'a>> {
     use arrow::array::PrimitiveBuilder;
     use datatypes::Int32Type;
@@ -40,6 +42,7 @@ pub(crate) fn make_shredding_row_builder<'a>(
                 // Return PrimitiveInt32Builder for type conversion
                 let builder = PrimitiveVariantShreddingRowBuilder {
                     builder: PrimitiveBuilder::<Int32Type>::new(),
+                    cast_options,
                 };
                 Ok(Box::new(builder))
             }
@@ -74,6 +77,7 @@ pub(crate) fn make_shredding_row_builder<'a>(
             // Create a primitive builder and wrap it with path functionality
             let inner_builder = PrimitiveVariantShreddingRowBuilder {
                 builder: PrimitiveBuilder::<Int32Type>::new(),
+                cast_options,
             };
             wrap_with_path!(inner_builder)
         }
@@ -133,6 +137,24 @@ impl<T: VariantShreddingRowBuilder> VariantShreddingRowBuilder for VariantPathRo
 trait VariantAsPrimitive<T: ArrowPrimitiveType> {
     fn as_primitive(&self) -> Option<T::Native>;
 }
+
+/// Helper function to get a user-friendly type name
+fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
+    match std::any::type_name::<T>() {
+        "arrow_array::types::Int32Type" => "Int32",
+        "arrow_array::types::Int16Type" => "Int16",
+        "arrow_array::types::Int8Type" => "Int8",
+        "arrow_array::types::Int64Type" => "Int64",
+        "arrow_array::types::UInt32Type" => "UInt32",
+        "arrow_array::types::UInt16Type" => "UInt16",
+        "arrow_array::types::UInt8Type" => "UInt8",
+        "arrow_array::types::UInt64Type" => "UInt64",
+        "arrow_array::types::Float32Type" => "Float32",
+        "arrow_array::types::Float64Type" => "Float64",
+        "arrow_array::types::Float16Type" => "Float16",
+        _ => "Unknown",
+    }
+}
 impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
     fn as_primitive(&self) -> Option<i32> {
         self.as_int32()
@@ -145,11 +167,12 @@ impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
 }
 
 /// Builder for shredding variant values to primitive values
-struct PrimitiveVariantShreddingRowBuilder<T: ArrowPrimitiveType> {
+struct PrimitiveVariantShreddingRowBuilder<'a, T: ArrowPrimitiveType> {
     builder: arrow::array::PrimitiveBuilder<T>,
+    cast_options: &'a CastOptions<'a>,
 }
 
-impl<T> VariantShreddingRowBuilder for PrimitiveVariantShreddingRowBuilder<T>
+impl<'a, T> VariantShreddingRowBuilder for PrimitiveVariantShreddingRowBuilder<'a, T>
 where
     T: ArrowPrimitiveType,
     for<'m, 'v> Variant<'m, 'v>: VariantAsPrimitive<T>,
@@ -164,9 +187,15 @@ where
             self.builder.append_value(v);
             Ok(true)
         } else {
-            // append null on conversion failure (safe casting behavior)
-            // This matches the default CastOptions::safe = true behavior
-            // TODO: In future steps, respect CastOptions for safe vs unsafe casting
+            if !self.cast_options.safe {
+                // Unsafe casting: return error on conversion failure
+                return Err(ArrowError::CastError(format!(
+                    "Failed to extract primitive of type {} from variant {:?} at path VariantPath([])",
+                    get_type_name::<T>(),
+                    value
+                )));
+            }
+            // Safe casting: append null on conversion failure
             self.builder.append_null();
             Ok(false)
         }
