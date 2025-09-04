@@ -302,6 +302,7 @@ mod test {
         UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
+    use arrow::compute::CastOptions;
     use arrow_schema::{DataType, Field, FieldRef, Fields};
     use parquet_variant::{Variant, VariantPath};
 
@@ -1003,7 +1004,7 @@ mod test {
             let mut obj = builder.new_object();
             obj.insert("x", Variant::Int32(42));
             obj.insert("y", Variant::from("foo"));
-            obj.finish().unwrap();
+            obj.finish();
             builder.finish()
         };
 
@@ -1017,7 +1018,7 @@ mod test {
         let empty_object_value = {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
-            obj.finish().unwrap();
+            obj.finish();
             let (_, value) = builder.finish();
             value
         };
@@ -1377,7 +1378,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let mut obj = builder.new_object();
             obj.insert("x", Variant::from("foo"));
-            obj.finish().unwrap();
+            obj.finish();
             builder.finish()
         };
 
@@ -1390,7 +1391,7 @@ mod test {
         let empty_object_value = {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
-            obj.finish().unwrap();
+            obj.finish();
             let (_, value) = builder.finish();
             value
         };
@@ -1452,7 +1453,7 @@ mod test {
             let mut obj = builder.new_object();
             obj.insert("a", a_variant); 
             obj.insert("b", Variant::Int32(42));
-            obj.finish().unwrap();
+            obj.finish();
             builder.finish()
         };
 
@@ -1463,7 +1464,7 @@ mod test {
         let empty_object_value = {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
-            obj.finish().unwrap();
+            obj.finish();
             let (_, value) = builder.finish();
             value
         };
@@ -1474,7 +1475,7 @@ mod test {
             let mut builder = parquet_variant::VariantBuilder::new();
             let mut obj = builder.new_object();
             obj.insert("fallback", Variant::from("data"));
-            obj.finish().unwrap();
+            obj.finish();
             let (_, value) = builder.finish();
             value
         };
@@ -1500,7 +1501,7 @@ mod test {
         let a_value_data = {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
-            obj.finish().unwrap();
+            obj.finish();
             let (_, value) = builder.finish();
             value
         };
@@ -1581,7 +1582,7 @@ mod test {
         let empty_object_value = {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
-            obj.finish().unwrap();
+            obj.finish();
             let (_, value) = builder.finish();
             value
         };
@@ -1607,7 +1608,7 @@ mod test {
         let b_value_data = {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
-            obj.finish().unwrap();
+            obj.finish();
             let (_, value) = builder.finish();
             value
         };
@@ -1635,7 +1636,7 @@ mod test {
         let a_value_data = {
             let mut builder = parquet_variant::VariantBuilder::new();
             let obj = builder.new_object();
-            obj.finish().unwrap();
+            obj.finish();
             let (_, value) = builder.finish();
             value
         };
