@@ -196,8 +196,7 @@ impl WriterProperties {
     /// Converts this [`WriterProperties`] into a [`WriterPropertiesBuilder`]
     /// Used for mutating existing property settings
     pub fn into_builder(self) -> WriterPropertiesBuilder {
-        let builder: WriterPropertiesBuilder = self.into();
-        builder
+        self.into()
     }
 
     /// Returns data page size limit.
