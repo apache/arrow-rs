@@ -918,10 +918,37 @@ mod test {
             .with_reader_schema(reader_schema)
             .build(BufReader::new(file))
             .unwrap();
-
         let schema = reader.schema();
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         arrow::compute::concat_batches(&schema, &batches).unwrap()
+    }
+
+    fn make_reader_schema_with_selected_fields_in_order(
+        path: &str,
+        selected: &[&str],
+    ) -> AvroSchema {
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        let writer_fields = root
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record has fields");
+        let mut field_map: HashMap<String, Value> = HashMap::with_capacity(writer_fields.len());
+        for f in writer_fields {
+            if let Some(name) = f.get("name").and_then(|n| n.as_str()) {
+                field_map.insert(name.to_string(), f.clone());
+            }
+        }
+        let mut new_fields = Vec::with_capacity(selected.len());
+        for name in selected {
+            let f = field_map
+                .get(*name)
+                .unwrap_or_else(|| panic!("field '{name}' not found in writer schema"))
+                .clone();
+            new_fields.push(f);
+        }
+        root["fields"] = Value::Array(new_fields);
+        AvroSchema::new(root.to_string())
     }
 
     #[test]
@@ -1678,6 +1705,107 @@ mod test {
             RecordBatch::try_from_iter(vec![("str_field", Arc::new(array) as ArrayRef)]).unwrap();
 
         assert!(batch.column(0).as_any().is::<StringViewArray>());
+    }
+
+    #[test]
+    fn test_alltypes_skip_writer_fields_keep_double_only() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&file, &["double_col"]);
+        let batch = read_alltypes_with_reader_schema(&file, reader_schema);
+        let expected = RecordBatch::try_from_iter_with_nullable([(
+            "double_col",
+            Arc::new(Float64Array::from_iter_values(
+                (0..8).map(|x| (x % 2) as f64 * 10.1),
+            )) as _,
+            true,
+        )])
+        .unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn test_alltypes_skip_writer_fields_reorder_and_skip_many() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&file, &["timestamp_col", "id"]);
+        let batch = read_alltypes_with_reader_schema(&file, reader_schema);
+        let expected = RecordBatch::try_from_iter_with_nullable([
+            (
+                "timestamp_col",
+                Arc::new(
+                    TimestampMicrosecondArray::from_iter_values([
+                        1235865600000000, // 2009-03-01T00:00:00.000
+                        1235865660000000, // 2009-03-01T00:01:00.000
+                        1238544000000000, // 2009-04-01T00:00:00.000
+                        1238544060000000, // 2009-04-01T00:01:00.000
+                        1233446400000000, // 2009-02-01T00:00:00.000
+                        1233446460000000, // 2009-02-01T00:01:00.000
+                        1230768000000000, // 2009-01-01T00:00:00.000
+                        1230768060000000, // 2009-01-01T00:01:00.000
+                    ])
+                    .with_timezone("+00:00"),
+                ) as _,
+                true,
+            ),
+            (
+                "id",
+                Arc::new(Int32Array::from(vec![4, 5, 6, 7, 2, 3, 0, 1])) as _,
+                true,
+            ),
+        ])
+        .unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn test_skippable_types_project_each_field_individually() {
+        let path = "test/data/skippable_types.avro";
+        let full = read_file(path, 1024, false);
+        let schema_full = full.schema();
+        let num_rows = full.num_rows();
+        let writer_json = load_writer_schema_json(path);
+        assert_eq!(
+            writer_json["type"], "record",
+            "writer schema must be a record"
+        );
+        let fields_json = writer_json
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record has fields");
+        assert_eq!(
+            schema_full.fields().len(),
+            fields_json.len(),
+            "full read column count vs writer fields"
+        );
+        for (idx, f) in fields_json.iter().enumerate() {
+            let name = f
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or_else(|| panic!("field at index {idx} has no name"));
+            let reader_schema = make_reader_schema_with_selected_fields_in_order(path, &[name]);
+            let projected = read_alltypes_with_reader_schema(path, reader_schema);
+            assert_eq!(
+                projected.num_columns(),
+                1,
+                "projected batch should contain exactly the selected column '{name}'"
+            );
+            assert_eq!(
+                projected.num_rows(),
+                num_rows,
+                "row count mismatch for projected column '{name}'"
+            );
+            let field = schema_full.field(idx).clone();
+            let col = full.column(idx).clone();
+            let expected =
+                RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![col]).unwrap();
+            // Equality means: (1) read the right column values; and (2) all other
+            // writer fields were skipped correctly for this projection (no misalignment).
+            assert_eq!(
+                projected, expected,
+                "projected column '{name}' mismatch vs full read column"
+            );
+        }
     }
 
     #[test]
