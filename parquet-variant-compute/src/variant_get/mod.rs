@@ -186,11 +186,6 @@ fn shredded_get_path(
     }
 
     // Path exhausted! Create a new `VariantArray` for the location we landed on.
-    // Also union nulls from the final typed_value field we landed on
-    if let Some(typed_value) = shredding_state.typed_value_field() {
-        accumulated_nulls =
-            arrow::buffer::NullBuffer::union(accumulated_nulls.as_ref(), typed_value.nulls());
-    }
     let target = make_target_variant(
         shredding_state.value_field().cloned(),
         shredding_state.typed_value_field().cloned(),
