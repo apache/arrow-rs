@@ -32,7 +32,7 @@ pub(crate) fn make_shredding_row_builder<'a>(
 ) -> Result<Box<dyn VariantShreddingRowBuilder + 'a>> {
     use arrow::array::PrimitiveBuilder;
     use datatypes::Int32Type;
-    
+
     // support non-empty paths (field access) and some empty path cases
     if path.is_empty() {
         return match data_type {
@@ -207,5 +207,3 @@ impl VariantShreddingRowBuilder for VariantArrayShreddingRowBuilder {
         Ok(Arc::new(builder.build()))
     }
 }
-
-
