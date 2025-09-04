@@ -1442,16 +1442,14 @@ mod test {
         // Create metadata following the working pattern from shredded_object_with_x_field_variant_array
         let (metadata, _) = {
             // Create nested structure: {"a": {"x": 55}, "b": 42}
-            let a_variant = {
-                let mut a_builder = parquet_variant::VariantBuilder::new();
-                let mut a_obj = a_builder.new_object();
-                a_obj.insert("x", Variant::Int32(55));  // "a.x" field (shredded when possible)
-                a_obj.finish().unwrap()
-            };
-            
             let mut builder = parquet_variant::VariantBuilder::new();
             let mut obj = builder.new_object();
-            obj.insert("a", a_variant); 
+            
+            // Create the nested "a" object
+            let mut a_obj = obj.new_object("a");
+            a_obj.insert("x", Variant::Int32(55));
+            a_obj.finish();
+            
             obj.insert("b", Variant::Int32(42));
             obj.finish();
             builder.finish()
@@ -1555,24 +1553,17 @@ mod test {
         // Create metadata following the working pattern
         let (metadata, _) = {
             // Create deeply nested structure: {"a": {"b": {"x": 100}}}
-            let b_variant = {
-                let mut b_builder = parquet_variant::VariantBuilder::new();
-                let mut b_obj = b_builder.new_object();
-                b_obj.insert("x", Variant::Int32(100));
-                b_obj.finish().unwrap()
-            };
-            
-            let a_variant = {
-                let mut a_builder = parquet_variant::VariantBuilder::new();
-                let mut a_obj = a_builder.new_object();
-                a_obj.insert("b", b_variant);
-                a_obj.finish().unwrap()
-            };
-            
             let mut builder = parquet_variant::VariantBuilder::new();
             let mut obj = builder.new_object();
-            obj.insert("a", a_variant);  // "a" field containing b
-            obj.finish().unwrap();
+            
+            // Create the nested "a.b" structure
+            let mut a_obj = obj.new_object("a");
+            let mut b_obj = a_obj.new_object("b");
+            b_obj.insert("x", Variant::Int32(100));
+            b_obj.finish();
+            a_obj.finish();
+            
+            obj.finish();
             builder.finish()
         };
 
