@@ -88,14 +88,11 @@ fn write_bool<W: Write + ?Sized>(writer: &mut W, v: bool) -> Result<(), ArrowErr
 fn write_optional_index<W: Write + ?Sized>(
     writer: &mut W,
     is_null: bool,
-    order: Nullability,
+    null_order: Nullability,
 ) -> Result<(), ArrowError> {
     // For NullFirst: null => 0x00, value => 0x02
     // For NullSecond: value => 0x00, null => 0x02
-    let byte = match (order, is_null) {
-        (Nullability::NullFirst, true) | (Nullablility::NullSecond, false) => 0x00,
-        (Nullability::NullFirst, false) | (Nullability::NullSecond, true) => 0x02,
-    };
+    let byte = union_value_branch_byte(null_order, is_null);
     writer
         .write_all(&[byte])
         .map_err(|e| ArrowError::IoError(format!("write union branch: {e}"), e))
@@ -508,11 +505,9 @@ impl<'a> FieldEncoder<'a> {
 
     #[inline]
     fn precomputed_union_value_branch(&self, order: Option<Nullability>) -> Option<u8> {
-        match (order, self.has_nulls()) {
-            (Some(Nullability::NullFirst), false) => Some(0x02), // value branch index 1
-            (Some(Nullability::NullSecond), false) => Some(0x00), // value branch index 0
-            _ => None,
-        }
+        // ... explanatory comment here ...
+        let null_order = order?;
+        (!self.has_nulls()).then(|| union_value_branch_byte(null_order, false))
     }
 
     #[inline]
@@ -527,8 +522,7 @@ impl<'a> FieldEncoder<'a> {
     #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         if let Some(b) = self.pre {
-            out
-                .write_all(&[b])
+            out.write_all(&[b])
                 .map_err(|e| ArrowError::IoError(format!("write union value branch: {e}"), e))?;
         } else if let Some(null_order) = self.nullability {
             let is_null = self.is_null(idx);
@@ -538,6 +532,15 @@ impl<'a> FieldEncoder<'a> {
             }
         }
         self.encode_inner(idx, out)
+    }
+}
+
+fn union_value_branch_byte(null_order: Nullability, is_null: bool) -> u8 {
+    let nulls_first = null_order == Nullability::NullFirst;
+    if nulls_first == is_null {
+        0x00
+    } else {
+        0x02
     }
 }
 

@@ -59,9 +59,10 @@ pub fn compare_schemas(writer: &Schema, reader: &Schema) -> Result<bool, ArrowEr
 ///
 /// To accommodate this we special case two-variant unions where one of the
 /// variants is the null type, and use this to derive arrow's notion of nullability
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
 pub enum Nullability {
     /// The nulls are encoded as the first union variant
+    #[default]
     NullFirst,
     /// The nulls are encoded as the second union variant
     NullSecond,
@@ -121,7 +122,7 @@ pub struct Attributes<'a> {
 
     /// Additional JSON attributes
     #[serde(flatten)]
-    pub additional: HashMap<&'a str, serde_json::Value>,
+    pub additional: HashMap<&'a str, Value>,
 }
 
 impl Attributes<'_> {
