@@ -539,14 +539,12 @@ impl<'a> FieldEncoder<'a> {
     #[inline]
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         if let Some(b) = self.pre {
-            return out
+            out
                 .write_all(&[b])
-                .map_err(|e| ArrowError::IoError(format!("write union value branch: {e}"), e))
-                .and_then(|_| self.encode_inner(idx, out));
-        }
-        if let Some(order) = self.nullability {
+                .map_err(|e| ArrowError::IoError(format!("write union value branch: {e}"), e))?;
+        } else if let Some(null_order) = self.nullability {
             let is_null = self.is_null(idx);
-            write_optional_index(out, is_null, order)?;
+            write_optional_index(out, is_null, null_order)?;
             if is_null {
                 return Ok(());
             }
