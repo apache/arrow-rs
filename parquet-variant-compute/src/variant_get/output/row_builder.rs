@@ -34,8 +34,7 @@ pub(crate) fn make_shredding_row_builder<'a>(
 ) -> Result<Box<dyn VariantShreddingRowBuilder + 'a>> {
     use arrow::array::PrimitiveBuilder;
     use datatypes::{
-        Int8Type, Int16Type, Int32Type, Int64Type,
-        Float16Type, Float32Type, Float64Type,
+        Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     };
 
     // support non-empty paths (field access) and some empty path cases
@@ -95,12 +94,10 @@ pub(crate) fn make_shredding_row_builder<'a>(
                 let builder = VariantArrayShreddingRowBuilder::new(16);
                 Ok(Box::new(builder))
             }
-            _ => {
-                Err(ArrowError::NotYetImplemented(format!(
-                    "variant_get with empty path and data_type={:?} not yet implemented",
-                    data_type
-                )))
-            }
+            _ => Err(ArrowError::NotYetImplemented(format!(
+                "variant_get with empty path and data_type={:?} not yet implemented",
+                data_type
+            ))),
         };
     }
 
@@ -170,12 +167,10 @@ pub(crate) fn make_shredding_row_builder<'a>(
             let inner_builder = VariantArrayShreddingRowBuilder::new(16);
             wrap_with_path!(inner_builder)
         }
-        _ => {
-            Err(ArrowError::NotYetImplemented(format!(
-                "variant_get with path={:?} and data_type={:?} not yet implemented",
-                path, data_type
-            )))
-        }
+        _ => Err(ArrowError::NotYetImplemented(format!(
+            "variant_get with path={:?} and data_type={:?} not yet implemented",
+            path, data_type
+        ))),
     }
 }
 
@@ -258,6 +253,11 @@ impl VariantAsPrimitive<datatypes::Int64Type> for Variant<'_, '_> {
         self.as_int64()
     }
 }
+impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<half::f16> {
+        self.as_f16()
+    }
+}
 impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
     fn as_primitive(&self) -> Option<f32> {
         self.as_f32()
@@ -266,11 +266,6 @@ impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
 impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
     fn as_primitive(&self) -> Option<f64> {
         self.as_f64()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<half::f16> {
-        self.as_f16()
     }
 }
 
