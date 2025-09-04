@@ -33,15 +33,59 @@ pub(crate) fn make_shredding_row_builder<'a>(
     cast_options: &'a CastOptions,
 ) -> Result<Box<dyn VariantShreddingRowBuilder + 'a>> {
     use arrow::array::PrimitiveBuilder;
-    use datatypes::Int32Type;
+    use datatypes::{
+        Int8Type, Int16Type, Int32Type, Int64Type,
+        Float16Type, Float32Type, Float64Type,
+    };
 
     // support non-empty paths (field access) and some empty path cases
     if path.is_empty() {
         return match data_type {
+            Some(datatypes::DataType::Int8) => {
+                let builder = PrimitiveVariantShreddingRowBuilder {
+                    builder: PrimitiveBuilder::<Int8Type>::new(),
+                    cast_options,
+                };
+                Ok(Box::new(builder))
+            }
+            Some(datatypes::DataType::Int16) => {
+                let builder = PrimitiveVariantShreddingRowBuilder {
+                    builder: PrimitiveBuilder::<Int16Type>::new(),
+                    cast_options,
+                };
+                Ok(Box::new(builder))
+            }
             Some(datatypes::DataType::Int32) => {
-                // Return PrimitiveInt32Builder for type conversion
                 let builder = PrimitiveVariantShreddingRowBuilder {
                     builder: PrimitiveBuilder::<Int32Type>::new(),
+                    cast_options,
+                };
+                Ok(Box::new(builder))
+            }
+            Some(datatypes::DataType::Int64) => {
+                let builder = PrimitiveVariantShreddingRowBuilder {
+                    builder: PrimitiveBuilder::<Int64Type>::new(),
+                    cast_options,
+                };
+                Ok(Box::new(builder))
+            }
+            Some(datatypes::DataType::Float16) => {
+                let builder = PrimitiveVariantShreddingRowBuilder {
+                    builder: PrimitiveBuilder::<Float16Type>::new(),
+                    cast_options,
+                };
+                Ok(Box::new(builder))
+            }
+            Some(datatypes::DataType::Float32) => {
+                let builder = PrimitiveVariantShreddingRowBuilder {
+                    builder: PrimitiveBuilder::<Float32Type>::new(),
+                    cast_options,
+                };
+                Ok(Box::new(builder))
+            }
+            Some(datatypes::DataType::Float64) => {
+                let builder = PrimitiveVariantShreddingRowBuilder {
+                    builder: PrimitiveBuilder::<Float64Type>::new(),
                     cast_options,
                 };
                 Ok(Box::new(builder))
@@ -52,7 +96,6 @@ pub(crate) fn make_shredding_row_builder<'a>(
                 Ok(Box::new(builder))
             }
             _ => {
-                // only Int32 supported for empty paths
                 Err(ArrowError::NotYetImplemented(format!(
                     "variant_get with empty path and data_type={:?} not yet implemented",
                     data_type
@@ -73,10 +116,51 @@ pub(crate) fn make_shredding_row_builder<'a>(
     }
 
     match data_type {
+        Some(datatypes::DataType::Int8) => {
+            let inner_builder = PrimitiveVariantShreddingRowBuilder {
+                builder: PrimitiveBuilder::<Int8Type>::new(),
+                cast_options,
+            };
+            wrap_with_path!(inner_builder)
+        }
+        Some(datatypes::DataType::Int16) => {
+            let inner_builder = PrimitiveVariantShreddingRowBuilder {
+                builder: PrimitiveBuilder::<Int16Type>::new(),
+                cast_options,
+            };
+            wrap_with_path!(inner_builder)
+        }
         Some(datatypes::DataType::Int32) => {
-            // Create a primitive builder and wrap it with path functionality
             let inner_builder = PrimitiveVariantShreddingRowBuilder {
                 builder: PrimitiveBuilder::<Int32Type>::new(),
+                cast_options,
+            };
+            wrap_with_path!(inner_builder)
+        }
+        Some(datatypes::DataType::Int64) => {
+            let inner_builder = PrimitiveVariantShreddingRowBuilder {
+                builder: PrimitiveBuilder::<Int64Type>::new(),
+                cast_options,
+            };
+            wrap_with_path!(inner_builder)
+        }
+        Some(datatypes::DataType::Float16) => {
+            let inner_builder = PrimitiveVariantShreddingRowBuilder {
+                builder: PrimitiveBuilder::<Float16Type>::new(),
+                cast_options,
+            };
+            wrap_with_path!(inner_builder)
+        }
+        Some(datatypes::DataType::Float32) => {
+            let inner_builder = PrimitiveVariantShreddingRowBuilder {
+                builder: PrimitiveBuilder::<Float32Type>::new(),
+                cast_options,
+            };
+            wrap_with_path!(inner_builder)
+        }
+        Some(datatypes::DataType::Float64) => {
+            let inner_builder = PrimitiveVariantShreddingRowBuilder {
+                builder: PrimitiveBuilder::<Float64Type>::new(),
                 cast_options,
             };
             wrap_with_path!(inner_builder)
@@ -87,7 +171,6 @@ pub(crate) fn make_shredding_row_builder<'a>(
             wrap_with_path!(inner_builder)
         }
         _ => {
-            // only Int32 and VariantArray supported
             Err(ArrowError::NotYetImplemented(format!(
                 "variant_get with path={:?} and data_type={:?} not yet implemented",
                 path, data_type
@@ -160,9 +243,34 @@ impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
         self.as_int32()
     }
 }
+impl VariantAsPrimitive<datatypes::Int16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i16> {
+        self.as_int16()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int8Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i8> {
+        self.as_int8()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i64> {
+        self.as_int64()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<f32> {
+        self.as_f32()
+    }
+}
 impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
     fn as_primitive(&self) -> Option<f64> {
         self.as_f64()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<half::f16> {
+        self.as_f16()
     }
 }
 
