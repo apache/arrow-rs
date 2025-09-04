@@ -216,23 +216,6 @@ trait VariantAsPrimitive<T: ArrowPrimitiveType> {
     fn as_primitive(&self) -> Option<T::Native>;
 }
 
-/// Helper function to get a user-friendly type name
-fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
-    match std::any::type_name::<T>() {
-        "arrow_array::types::Int32Type" => "Int32",
-        "arrow_array::types::Int16Type" => "Int16",
-        "arrow_array::types::Int8Type" => "Int8",
-        "arrow_array::types::Int64Type" => "Int64",
-        "arrow_array::types::UInt32Type" => "UInt32",
-        "arrow_array::types::UInt16Type" => "UInt16",
-        "arrow_array::types::UInt8Type" => "UInt8",
-        "arrow_array::types::UInt64Type" => "UInt64",
-        "arrow_array::types::Float32Type" => "Float32",
-        "arrow_array::types::Float64Type" => "Float64",
-        "arrow_array::types::Float16Type" => "Float16",
-        _ => "Unknown",
-    }
-}
 impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
     fn as_primitive(&self) -> Option<i32> {
         self.as_int32()
@@ -266,6 +249,24 @@ impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
 impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
     fn as_primitive(&self) -> Option<f64> {
         self.as_f64()
+    }
+}
+
+/// Helper function to get a user-friendly type name
+fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
+    match std::any::type_name::<T>() {
+        "arrow_array::types::Int32Type" => "Int32",
+        "arrow_array::types::Int16Type" => "Int16",
+        "arrow_array::types::Int8Type" => "Int8",
+        "arrow_array::types::Int64Type" => "Int64",
+        "arrow_array::types::UInt32Type" => "UInt32",
+        "arrow_array::types::UInt16Type" => "UInt16",
+        "arrow_array::types::UInt8Type" => "UInt8",
+        "arrow_array::types::UInt64Type" => "UInt64",
+        "arrow_array::types::Float32Type" => "Float32",
+        "arrow_array::types::Float64Type" => "Float64",
+        "arrow_array::types::Float16Type" => "Float16",
+        _ => "Unknown",
     }
 }
 
