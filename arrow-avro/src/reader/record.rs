@@ -90,6 +90,15 @@ pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     use_utf8view: bool,
+    resolved: Option<ResolvedRuntime>,
+}
+
+#[derive(Debug)]
+struct ResolvedRuntime {
+    /// writer field index -> reader field index (or None if writer-only)
+    writer_to_reader: Arc<[Option<usize>]>,
+    /// per-writer-field skipper (Some only when writer-only)
+    skip_decoders: Vec<Option<Skipper>>,
 }
 
 impl RecordDecoder {
@@ -119,14 +128,35 @@ impl RecordDecoder {
         data_type: &AvroDataType,
         use_utf8view: bool,
     ) -> Result<Self, ArrowError> {
-        match Decoder::try_new(data_type)? {
-            Decoder::Record(fields, encodings) => Ok(Self {
-                schema: Arc::new(ArrowSchema::new(fields)),
-                fields: encodings,
-                use_utf8view,
-            }),
-            encoding => Err(ArrowError::ParseError(format!(
-                "Expected record got {encoding:?}"
+        match data_type.codec() {
+            Codec::Struct(reader_fields) => {
+                // Build Arrow schema fields and per-child decoders
+                let mut arrow_fields = Vec::with_capacity(reader_fields.len());
+                let mut encodings = Vec::with_capacity(reader_fields.len());
+                for avro_field in reader_fields.iter() {
+                    arrow_fields.push(avro_field.field());
+                    encodings.push(Decoder::try_new(avro_field.data_type())?);
+                }
+                // If this record carries resolution metadata, prepare top-level runtime helpers
+                let resolved = match data_type.resolution.as_ref() {
+                    Some(ResolutionInfo::Record(rec)) => {
+                        let skip_decoders = build_skip_decoders(&rec.skip_fields)?;
+                        Some(ResolvedRuntime {
+                            writer_to_reader: rec.writer_to_reader.clone(),
+                            skip_decoders,
+                        })
+                    }
+                    _ => None,
+                };
+                Ok(Self {
+                    schema: Arc::new(ArrowSchema::new(arrow_fields)),
+                    fields: encodings,
+                    use_utf8view,
+                    resolved,
+                })
+            }
+            other => Err(ArrowError::ParseError(format!(
+                "Expected record got {other:?}"
             ))),
         }
     }
@@ -139,9 +169,25 @@ impl RecordDecoder {
     /// Decode `count` records from `buf`
     pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
         let mut cursor = AvroCursor::new(buf);
-        for _ in 0..count {
-            for field in &mut self.fields {
-                field.decode(&mut cursor)?;
+        match self.resolved.as_mut() {
+            Some(runtime) => {
+                // Top-level resolved record: read writer fields in writer order,
+                // project into reader fields, and skip writer-only fields
+                for _ in 0..count {
+                    decode_with_resolution(
+                        &mut cursor,
+                        &mut self.fields,
+                        &runtime.writer_to_reader,
+                        &mut runtime.skip_decoders,
+                    )?;
+                }
+            }
+            None => {
+                for _ in 0..count {
+                    for field in &mut self.fields {
+                        field.decode(&mut cursor)?;
+                    }
+                }
             }
         }
         Ok(cursor.position())
@@ -156,6 +202,26 @@ impl RecordDecoder {
             .collect::<Result<Vec<_>, _>>()?;
         RecordBatch::try_new(self.schema.clone(), arrays)
     }
+}
+
+fn decode_with_resolution(
+    buf: &mut AvroCursor<'_>,
+    encodings: &mut [Decoder],
+    writer_to_reader: &[Option<usize>],
+    skippers: &mut [Option<Skipper>],
+) -> Result<(), ArrowError> {
+    for (w_idx, (target, skipper_opt)) in writer_to_reader.iter().zip(skippers).enumerate() {
+        match (*target, skipper_opt.as_mut()) {
+            (Some(r_idx), _) => encodings[r_idx].decode(buf)?,
+            (None, Some(sk)) => sk.skip(buf)?,
+            (None, None) => {
+                return Err(ArrowError::SchemaError(format!(
+                    "No skipper available for writer-only field at index {w_idx}",
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -202,6 +268,13 @@ enum Decoder {
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
+    /// Resolved record that needs writer->reader projection and skipping writer-only fields
+    RecordResolved {
+        fields: Fields,
+        encodings: Vec<Decoder>,
+        writer_to_reader: Arc<[Option<usize>]>,
+        skip_decoders: Vec<Option<Skipper>>,
+    },
 }
 
 impl Decoder {
@@ -314,10 +387,20 @@ impl Decoder {
                     arrow_fields.push(avro_field.field());
                     encodings.push(encoding);
                 }
-                Self::Record(arrow_fields.into(), encodings)
+                if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
+                    let skip_decoders = build_skip_decoders(&rec.skip_fields)?;
+                    Self::RecordResolved {
+                        fields: arrow_fields.into(),
+                        encodings,
+                        writer_to_reader: rec.writer_to_reader.clone(),
+                        skip_decoders,
+                    }
+                } else {
+                    Self::Record(arrow_fields.into(), encodings)
+                }
             }
             (Codec::Map(child), _) => {
-                let val_field = child.field_with_name("value").with_nullable(true);
+                let val_field = child.field_with_name("value");
                 let map_field = Arc::new(ArrowField::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
@@ -392,6 +475,9 @@ impl Decoder {
             Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null();
+            }
+            Self::RecordResolved { encodings, .. } => {
+                encodings.iter_mut().for_each(|e| e.append_null());
             }
         }
     }
@@ -486,13 +572,20 @@ impl Decoder {
                     Nullability::NullSecond => branch == 0,
                 };
                 if is_not_null {
-                    // It is mportant to decode before appending to null buffer in case of decode error
+                    // It is important to decode before appending to null buffer in case of decode error
                     encoding.decode(buf)?;
-                    nb.append(true);
                 } else {
                     encoding.append_null();
-                    nb.append(false);
                 }
+                nb.append(is_not_null);
+            }
+            Self::RecordResolved {
+                encodings,
+                writer_to_reader,
+                skip_decoders,
+                ..
+            } => {
+                decode_with_resolution(buf, encodings, writer_to_reader, skip_decoders)?;
             }
         }
         Ok(())
@@ -591,14 +684,16 @@ impl Decoder {
                         )));
                     }
                 }
-                let entries_struct = StructArray::new(
-                    Fields::from(vec![
-                        Arc::new(ArrowField::new("key", DataType::Utf8, false)),
-                        Arc::new(ArrowField::new("value", val_arr.data_type().clone(), true)),
-                    ]),
-                    vec![Arc::new(key_arr), val_arr],
-                    None,
-                );
+                let entries_fields = match map_field.data_type() {
+                    DataType::Struct(fields) => fields.clone(),
+                    other => {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Map entries field must be a Struct, got {other:?}"
+                        )))
+                    }
+                };
+                let entries_struct =
+                    StructArray::new(entries_fields, vec![Arc::new(key_arr), val_arr], None);
                 let map_arr = MapArray::new(map_field.clone(), moff, entries_struct, nulls, false);
                 Arc::new(map_arr)
             }
@@ -638,8 +733,35 @@ impl Decoder {
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(vals)
             }
+            Self::RecordResolved {
+                fields, encodings, ..
+            } => {
+                let arrays = encodings
+                    .iter_mut()
+                    .map(|x| x.flush(None))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Arc::new(StructArray::new(fields.clone(), arrays, nulls))
+            }
         })
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum NegativeBlockBehavior {
+    ProcessItems,
+    SkipBySize,
+}
+
+#[inline]
+fn skip_blocks(
+    buf: &mut AvroCursor,
+    mut skip_item: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
+) -> Result<usize, ArrowError> {
+    process_blockwise(
+        buf,
+        move |c| skip_item(c),
+        NegativeBlockBehavior::SkipBySize,
+    )
 }
 
 #[inline]
@@ -647,14 +769,14 @@ fn read_blocks(
     buf: &mut AvroCursor,
     decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
 ) -> Result<usize, ArrowError> {
-    read_blockwise_items(buf, true, decode_entry)
+    process_blockwise(buf, decode_entry, NegativeBlockBehavior::ProcessItems)
 }
 
 #[inline]
-fn read_blockwise_items(
+fn process_blockwise(
     buf: &mut AvroCursor,
-    read_size_after_negative: bool,
-    mut decode_fn: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
+    mut on_item: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
+    negative_behavior: NegativeBlockBehavior,
 ) -> Result<usize, ArrowError> {
     let mut total = 0usize;
     loop {
@@ -667,18 +789,26 @@ fn read_blockwise_items(
             Ordering::Equal => break,
             Ordering::Less => {
                 let count = (-block_count) as usize;
-                if read_size_after_negative {
-                    let _size_in_bytes = buf.get_long()?;
-                }
-                for _ in 0..count {
-                    decode_fn(buf)?;
+                // A negative count is followed by a long of the size in bytes
+                let size_in_bytes = buf.get_long()? as usize;
+                match negative_behavior {
+                    NegativeBlockBehavior::ProcessItems => {
+                        // Process items one-by-one after reading size
+                        for _ in 0..count {
+                            on_item(buf)?;
+                        }
+                    }
+                    NegativeBlockBehavior::SkipBySize => {
+                        // Skip the entire block payload at once
+                        let _ = buf.get_fixed(size_in_bytes)?;
+                    }
                 }
                 total += count;
             }
             Ordering::Greater => {
                 let count = block_count as usize;
-                for _i in 0..count {
-                    decode_fn(buf)?;
+                for _ in 0..count {
+                    on_item(buf)?;
                 }
                 total += count;
             }
@@ -776,6 +906,166 @@ fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
     }
     out[N - len..].copy_from_slice(raw);
     Ok(out)
+}
+
+/// Lightweight skipper for non‑projected writer fields
+/// (fields present in the writer schema but omitted by the reader/projection);
+/// per Avro 1.11.1 schema resolution these fields are ignored.
+///
+/// <https://avro.apache.org/docs/1.11.1/specification/#schema-resolution>
+#[derive(Debug)]
+enum Skipper {
+    Null,
+    Boolean,
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+    Bytes,
+    String,
+    Date32,
+    TimeMillis,
+    TimeMicros,
+    TimestampMillis,
+    TimestampMicros,
+    Fixed(usize),
+    Decimal(Option<usize>),
+    UuidString,
+    Enum,
+    DurationFixed12,
+    List(Box<Skipper>),
+    Map(Box<Skipper>),
+    Struct(Vec<Skipper>),
+    Nullable(Nullability, Box<Skipper>),
+}
+
+impl Skipper {
+    fn from_avro(dt: &AvroDataType) -> Result<Self, ArrowError> {
+        let mut base = match dt.codec() {
+            Codec::Null => Self::Null,
+            Codec::Boolean => Self::Boolean,
+            Codec::Int32 | Codec::Date32 | Codec::TimeMillis => Self::Int32,
+            Codec::Int64 => Self::Int64,
+            Codec::TimeMicros => Self::TimeMicros,
+            Codec::TimestampMillis(_) => Self::TimestampMillis,
+            Codec::TimestampMicros(_) => Self::TimestampMicros,
+            Codec::Float32 => Self::Float32,
+            Codec::Float64 => Self::Float64,
+            Codec::Binary => Self::Bytes,
+            Codec::Utf8 | Codec::Utf8View => Self::String,
+            Codec::Fixed(sz) => Self::Fixed(*sz as usize),
+            Codec::Decimal(_, _, size) => Self::Decimal(*size),
+            Codec::Uuid => Self::UuidString, // encoded as string
+            Codec::Enum(_) => Self::Enum,
+            Codec::List(item) => Self::List(Box::new(Skipper::from_avro(item)?)),
+            Codec::Struct(fields) => Self::Struct(
+                fields
+                    .iter()
+                    .map(|f| Skipper::from_avro(f.data_type()))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Codec::Map(values) => Self::Map(Box::new(Skipper::from_avro(values)?)),
+            Codec::Interval => Self::DurationFixed12,
+            _ => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "Skipper not implemented for codec {:?}",
+                    dt.codec()
+                )));
+            }
+        };
+        if let Some(n) = dt.nullability() {
+            base = Self::Nullable(n, Box::new(base));
+        }
+        Ok(base)
+    }
+
+    fn skip(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
+        match self {
+            Self::Null => Ok(()),
+            Self::Boolean => {
+                buf.get_bool()?;
+                Ok(())
+            }
+            Self::Int32 | Self::Date32 | Self::TimeMillis => {
+                buf.get_int()?;
+                Ok(())
+            }
+            Self::Int64 | Self::TimeMicros | Self::TimestampMillis | Self::TimestampMicros => {
+                buf.get_long()?;
+                Ok(())
+            }
+            Self::Float32 => {
+                buf.get_float()?;
+                Ok(())
+            }
+            Self::Float64 => {
+                buf.get_double()?;
+                Ok(())
+            }
+            Self::Bytes | Self::String | Self::UuidString => {
+                buf.get_bytes()?;
+                Ok(())
+            }
+            Self::Fixed(sz) => {
+                buf.get_fixed(*sz)?;
+                Ok(())
+            }
+            Self::Decimal(size) => {
+                if let Some(s) = size {
+                    buf.get_fixed(*s)
+                } else {
+                    buf.get_bytes()
+                }?;
+                Ok(())
+            }
+            Self::Enum => {
+                buf.get_int()?;
+                Ok(())
+            }
+            Self::DurationFixed12 => {
+                buf.get_fixed(12)?;
+                Ok(())
+            }
+            Self::List(item) => {
+                skip_blocks(buf, |c| item.skip(c))?;
+                Ok(())
+            }
+            Self::Map(value) => {
+                skip_blocks(buf, |c| {
+                    c.get_bytes()?; // key
+                    value.skip(c)
+                })?;
+                Ok(())
+            }
+            Self::Struct(fields) => {
+                for f in fields.iter_mut() {
+                    f.skip(buf)?
+                }
+                Ok(())
+            }
+            Self::Nullable(order, inner) => {
+                let branch = buf.read_vlq()?;
+                let is_not_null = match *order {
+                    Nullability::NullFirst => branch != 0,
+                    Nullability::NullSecond => branch == 0,
+                };
+                if is_not_null {
+                    inner.skip(buf)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[inline]
+fn build_skip_decoders(
+    skip_fields: &[Option<AvroDataType>],
+) -> Result<Vec<Option<Skipper>>, ArrowError> {
+    skip_fields
+        .iter()
+        .map(|opt| opt.as_ref().map(Skipper::from_avro).transpose())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1564,5 +1854,197 @@ mod tests {
         let int_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert!(int_array.is_null(0)); // row1 is null
         assert_eq!(int_array.value(1), 42); // row3 value is 42
+    }
+
+    fn make_record_resolved_decoder(
+        reader_fields: &[(&str, DataType, bool)],
+        writer_to_reader: Vec<Option<usize>>,
+        mut skip_decoders: Vec<Option<super::Skipper>>,
+    ) -> Decoder {
+        let mut field_refs: Vec<FieldRef> = Vec::with_capacity(reader_fields.len());
+        let mut encodings: Vec<Decoder> = Vec::with_capacity(reader_fields.len());
+        for (name, dt, nullable) in reader_fields {
+            field_refs.push(Arc::new(ArrowField::new(*name, dt.clone(), *nullable)));
+            let enc = match dt {
+                DataType::Int32 => Decoder::Int32(Vec::new()),
+                DataType::Int64 => Decoder::Int64(Vec::new()),
+                DataType::Utf8 => {
+                    Decoder::String(OffsetBufferBuilder::new(DEFAULT_CAPACITY), Vec::new())
+                }
+                other => panic!("Unsupported test reader field type: {other:?}"),
+            };
+            encodings.push(enc);
+        }
+        let fields: Fields = field_refs.into();
+        Decoder::RecordResolved {
+            fields,
+            encodings,
+            writer_to_reader: Arc::from(writer_to_reader),
+            skip_decoders,
+        }
+    }
+
+    #[test]
+    fn test_skip_writer_trailing_field_int32() {
+        let mut dec = make_record_resolved_decoder(
+            &[("id", arrow_schema::DataType::Int32, false)],
+            vec![Some(0), None],
+            vec![None, Some(super::Skipper::Int32)],
+        );
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(7));
+        data.extend_from_slice(&encode_avro_int(999));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        assert_eq!(cur.position(), data.len());
+        let arr = dec.flush(None).unwrap();
+        let struct_arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_arr.len(), 1);
+        let id = struct_arr
+            .column_by_name("id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id.value(0), 7);
+    }
+
+    #[test]
+    fn test_skip_writer_middle_field_string() {
+        let mut dec = make_record_resolved_decoder(
+            &[
+                ("id", DataType::Int32, false),
+                ("score", DataType::Int64, false),
+            ],
+            vec![Some(0), None, Some(1)],
+            vec![None, Some(Skipper::String), None],
+        );
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(42));
+        data.extend_from_slice(&encode_avro_bytes(b"abcdef"));
+        data.extend_from_slice(&encode_avro_long(1000));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        assert_eq!(cur.position(), data.len());
+        let arr = dec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let id = s
+            .column_by_name("id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let score = s
+            .column_by_name("score")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(id.value(0), 42);
+        assert_eq!(score.value(0), 1000);
+    }
+
+    #[test]
+    fn test_skip_writer_array_with_negative_block_count_fast() {
+        let mut dec = make_record_resolved_decoder(
+            &[("id", DataType::Int32, false)],
+            vec![None, Some(0)],
+            vec![Some(super::Skipper::List(Box::new(Skipper::Int32))), None],
+        );
+        let mut array_payload = Vec::new();
+        array_payload.extend_from_slice(&encode_avro_int(1));
+        array_payload.extend_from_slice(&encode_avro_int(2));
+        array_payload.extend_from_slice(&encode_avro_int(3));
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_long(-3));
+        data.extend_from_slice(&encode_avro_long(array_payload.len() as i64));
+        data.extend_from_slice(&array_payload);
+        data.extend_from_slice(&encode_avro_long(0));
+        data.extend_from_slice(&encode_avro_int(5));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        assert_eq!(cur.position(), data.len());
+        let arr = dec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let id = s
+            .column_by_name("id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id.len(), 1);
+        assert_eq!(id.value(0), 5);
+    }
+
+    #[test]
+    fn test_skip_writer_map_with_negative_block_count_fast() {
+        let mut dec = make_record_resolved_decoder(
+            &[("id", DataType::Int32, false)],
+            vec![None, Some(0)],
+            vec![Some(Skipper::Map(Box::new(Skipper::Int32))), None],
+        );
+        let mut entries = Vec::new();
+        entries.extend_from_slice(&encode_avro_bytes(b"k1"));
+        entries.extend_from_slice(&encode_avro_int(10));
+        entries.extend_from_slice(&encode_avro_bytes(b"k2"));
+        entries.extend_from_slice(&encode_avro_int(20));
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_long(-2));
+        data.extend_from_slice(&encode_avro_long(entries.len() as i64));
+        data.extend_from_slice(&entries);
+        data.extend_from_slice(&encode_avro_long(0));
+        data.extend_from_slice(&encode_avro_int(123));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        assert_eq!(cur.position(), data.len());
+        let arr = dec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let id = s
+            .column_by_name("id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id.len(), 1);
+        assert_eq!(id.value(0), 123);
+    }
+
+    #[test]
+    fn test_skip_writer_nullable_field_union_nullfirst() {
+        let mut dec = make_record_resolved_decoder(
+            &[("id", DataType::Int32, false)],
+            vec![None, Some(0)],
+            vec![
+                Some(super::Skipper::Nullable(
+                    Nullability::NullFirst,
+                    Box::new(super::Skipper::Int32),
+                )),
+                None,
+            ],
+        );
+        let mut row1 = Vec::new();
+        row1.extend_from_slice(&encode_avro_long(0));
+        row1.extend_from_slice(&encode_avro_int(5));
+        let mut row2 = Vec::new();
+        row2.extend_from_slice(&encode_avro_long(1));
+        row2.extend_from_slice(&encode_avro_int(123));
+        row2.extend_from_slice(&encode_avro_int(7));
+        let mut cur1 = AvroCursor::new(&row1);
+        let mut cur2 = AvroCursor::new(&row2);
+        dec.decode(&mut cur1).unwrap();
+        dec.decode(&mut cur2).unwrap();
+        assert_eq!(cur1.position(), row1.len());
+        assert_eq!(cur2.position(), row2.len());
+        let arr = dec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let id = s
+            .column_by_name("id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id.len(), 2);
+        assert_eq!(id.value(0), 5);
+        assert_eq!(id.value(1), 7);
     }
 }

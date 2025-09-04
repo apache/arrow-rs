@@ -897,6 +897,41 @@ impl<'a> Maker<'a> {
             (Schema::Union(writer_variants), Schema::Union(reader_variants)) => {
                 self.resolve_nullable_union(writer_variants, reader_variants, namespace)
             }
+            // if both sides are the same complex kind (non-record), adopt the reader type.
+            // This aligns with Avro spec: arrays, maps, and enums resolve recursively;
+            // for identical shapes we can just parse the reader schema.
+            (Schema::Complex(ComplexType::Array(_)), Schema::Complex(ComplexType::Array(_)))
+            | (Schema::Complex(ComplexType::Map(_)), Schema::Complex(ComplexType::Map(_)))
+            | (Schema::Complex(ComplexType::Fixed(_)), Schema::Complex(ComplexType::Fixed(_)))
+            | (Schema::Complex(ComplexType::Enum(_)), Schema::Complex(ComplexType::Enum(_))) => {
+                self.parse_type(reader_schema, namespace)
+            }
+            // Named-type references (equal on both sides) – parse reader side.
+            (Schema::TypeName(TypeName::Ref(_)), Schema::TypeName(TypeName::Ref(_)))
+            | (
+                Schema::Type(Type {
+                    r#type: TypeName::Ref(_),
+                    ..
+                }),
+                Schema::Type(Type {
+                    r#type: TypeName::Ref(_),
+                    ..
+                }),
+            )
+            | (
+                Schema::TypeName(TypeName::Ref(_)),
+                Schema::Type(Type {
+                    r#type: TypeName::Ref(_),
+                    ..
+                }),
+            )
+            | (
+                Schema::Type(Type {
+                    r#type: TypeName::Ref(_),
+                    ..
+                }),
+                Schema::TypeName(TypeName::Ref(_)),
+            ) => self.parse_type(reader_schema, namespace),
             _ => Err(ArrowError::NotYetImplemented(
                 "Other resolutions not yet implemented".to_string(),
             )),
@@ -1001,7 +1036,7 @@ impl<'a> Maker<'a> {
         // Prepare outputs
         let mut reader_fields: Vec<AvroField> = Vec::with_capacity(reader_record.fields.len());
         let mut writer_to_reader: Vec<Option<usize>> = vec![None; writer_record.fields.len()];
-        //let mut skip_fields: Vec<Option<AvroDataType>> = vec![None; writer_record.fields.len()];
+        let mut skip_fields: Vec<Option<AvroDataType>> = vec![None; writer_record.fields.len()];
         //let mut default_fields: Vec<usize> = Vec::new();
         // Build reader fields and mapping
         for (reader_idx, r_field) in reader_record.fields.iter().enumerate() {
@@ -1021,6 +1056,14 @@ impl<'a> Maker<'a> {
                 ));
             }
         }
+        // Any writer fields not mapped should be skipped
+        for (writer_idx, writer_field) in writer_record.fields.iter().enumerate() {
+            if writer_to_reader[writer_idx].is_none() {
+                // Parse writer field type to know how to skip data
+                let writer_dt = self.parse_type(&writer_field.r#type, writer_ns)?;
+                skip_fields[writer_idx] = Some(writer_dt);
+            }
+        }
         // Implement writer-only fields to skip in Follow-up PR here
         // Build resolved record AvroDataType
         let resolved = AvroDataType::new_with_resolution(
@@ -1030,7 +1073,7 @@ impl<'a> Maker<'a> {
             Some(ResolutionInfo::Record(ResolvedRecord {
                 writer_to_reader: Arc::from(writer_to_reader),
                 default_fields: Arc::default(),
-                skip_fields: Arc::default(),
+                skip_fields: Arc::from(skip_fields),
             })),
         );
         // Register a resolved record by reader name+namespace for potential named type refs
