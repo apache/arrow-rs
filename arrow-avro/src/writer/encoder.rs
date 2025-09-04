@@ -92,21 +92,9 @@ fn write_optional_index<W: Write + ?Sized>(
 ) -> Result<(), ArrowError> {
     // For NullFirst: null => 0x00, value => 0x02
     // For NullSecond: value => 0x00, null => 0x02
-    let byte = match order {
-        Nullability::NullFirst => {
-            if is_null {
-                0x00
-            } else {
-                0x02
-            }
-        }
-        Nullability::NullSecond => {
-            if is_null {
-                0x02
-            } else {
-                0x00
-            }
-        }
+    let byte = match (order, is_null) {
+        (Nullability::NullFirst, true) | (Nullablility::NullSecond, false) => 0x00,
+        (Nullability::NullFirst, false) | (Nullability::NullSecond, true) => 0x02,
     };
     writer
         .write_all(&[byte])
