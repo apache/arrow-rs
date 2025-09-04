@@ -857,10 +857,12 @@ fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
 }
 
 fn wrap_nullable(inner: Value, order: Nullability) -> Value {
-    match order {
-        Nullability::NullFirst => Value::Array(vec![Value::String("null".into()), inner]),
-        Nullability::NullSecond => Value::Array(vec![inner, Value::String("null".into())]),
-    }
+    let null = Value::String("null".into());
+    let elements = match order {
+        Nullability::NullFirst => vec![null, inner],
+        Nullability::NullSecond => vec![inner, null],
+    };
+    Value::Array(elements)
 }
 
 fn datatype_to_avro(
