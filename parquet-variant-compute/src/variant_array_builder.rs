@@ -20,7 +20,8 @@
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
-use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilder, VariantBuilderExt};
+use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
+use parquet_variant::{ParentState, ValueBuilder, WritableMetadataBuilder};
 use std::sync::Arc;
 
 /// A builder for [`VariantArray`]
@@ -49,8 +50,7 @@ use std::sync::Arc;
 /// let mut vb = builder.variant_builder();
 /// vb.new_object()
 ///   .with_field("foo", "bar")
-///   .finish()
-///   .unwrap();
+///   .finish();
 ///  vb.finish(); // must call finish to write the variant to the buffers
 ///
 /// // create the final VariantArray
@@ -72,12 +72,12 @@ use std::sync::Arc;
 pub struct VariantArrayBuilder {
     /// Nulls
     nulls: NullBufferBuilder,
-    /// buffer for all the metadata
-    metadata_buffer: Vec<u8>,
+    /// builder for all the metadata
+    metadata_builder: WritableMetadataBuilder,
     /// ending offset for each serialized metadata dictionary in the buffer
     metadata_offsets: Vec<usize>,
-    /// buffer for values
-    value_buffer: Vec<u8>,
+    /// builder for values
+    value_builder: ValueBuilder,
     /// ending offset for each serialized variant value in the buffer
     value_offsets: Vec<usize>,
     /// The fields of the final `StructArray`
@@ -95,9 +95,9 @@ impl VariantArrayBuilder {
 
         Self {
             nulls: NullBufferBuilder::new(row_capacity),
-            metadata_buffer: Vec::new(), // todo allocation capacity
+            metadata_builder: WritableMetadataBuilder::default(),
             metadata_offsets: Vec::with_capacity(row_capacity),
-            value_buffer: Vec::new(),
+            value_builder: ValueBuilder::new(),
             value_offsets: Vec::with_capacity(row_capacity),
             fields: Fields::from(vec![metadata_field, value_field]),
         }
@@ -107,15 +107,17 @@ impl VariantArrayBuilder {
     pub fn build(self) -> VariantArray {
         let Self {
             mut nulls,
-            metadata_buffer,
+            metadata_builder,
             metadata_offsets,
-            value_buffer,
+            value_builder,
             value_offsets,
             fields,
         } = self;
 
+        let metadata_buffer = metadata_builder.into_inner();
         let metadata_array = binary_view_array_from_buffers(metadata_buffer, metadata_offsets);
 
+        let value_buffer = value_builder.into_inner();
         let value_array = binary_view_array_from_buffers(value_buffer, value_offsets);
 
         // The build the final struct array
@@ -136,14 +138,14 @@ impl VariantArrayBuilder {
     pub fn append_null(&mut self) {
         self.nulls.append_null();
         // The subfields are expected to be non-nullable according to the parquet variant spec.
-        self.metadata_offsets.push(self.metadata_buffer.len());
-        self.value_offsets.push(self.value_buffer.len());
+        self.metadata_offsets.push(self.metadata_builder.offset());
+        self.value_offsets.push(self.value_builder.offset());
     }
 
     /// Append the [`Variant`] to the builder as the next row
     pub fn append_variant(&mut self, variant: Variant) {
         let mut direct_builder = self.variant_builder();
-        direct_builder.variant_builder.append_value(variant);
+        direct_builder.append_value(variant);
         direct_builder.finish()
     }
 
@@ -169,8 +171,7 @@ impl VariantArrayBuilder {
     /// variant_builder
     ///     .new_object()
     ///     .with_field("my_field", 42i64)
-    ///     .finish()
-    ///     .unwrap();
+    ///     .finish();
     /// variant_builder.finish();
     ///
     /// // finalize the array
@@ -194,32 +195,23 @@ impl VariantArrayBuilder {
 ///
 /// See [`VariantArrayBuilder::variant_builder`] for an example
 pub struct VariantArrayVariantBuilder<'a> {
-    /// was finish called?
-    finished: bool,
-    /// starting offset in the variant_builder's `metadata` buffer
-    metadata_offset: usize,
-    /// starting offset in the variant_builder's `value` buffer
-    value_offset: usize,
-    /// Parent array builder that this variant builder writes to. Buffers
-    /// have been moved into the variant builder, and must be returned on
-    /// drop
-    array_builder: &'a mut VariantArrayBuilder,
-    /// Builder for the in progress variant value, temporarily owns the buffers
-    /// from `array_builder`
-    variant_builder: VariantBuilder,
+    parent_state: ParentState<'a>,
+    metadata_offsets: &'a mut Vec<usize>,
+    value_offsets: &'a mut Vec<usize>,
+    nulls: &'a mut NullBufferBuilder,
 }
 
 impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        self.variant_builder.append_value(value);
+        ValueBuilder::append_variant(self.parent_state(), value.into());
     }
 
     fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
-        Ok(self.variant_builder.new_list())
+        Ok(ListBuilder::new(self.parent_state(), false))
     }
 
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
-        Ok(self.variant_builder.new_object())
+        Ok(ObjectBuilder::new(self.parent_state(), false))
     }
 }
 
@@ -228,29 +220,15 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     ///
     /// Note this is not public as this is a structure that is logically
     /// part of the [`VariantArrayBuilder`] and relies on its internal structure
-    fn new(array_builder: &'a mut VariantArrayBuilder) -> Self {
-        // append directly into the metadata and value buffers
-        let metadata_buffer = std::mem::take(&mut array_builder.metadata_buffer);
-        let value_buffer = std::mem::take(&mut array_builder.value_buffer);
-        let metadata_offset = metadata_buffer.len();
-        let value_offset = value_buffer.len();
+    fn new(builder: &'a mut VariantArrayBuilder) -> Self {
+        let parent_state =
+            ParentState::variant(&mut builder.value_builder, &mut builder.metadata_builder);
         VariantArrayVariantBuilder {
-            finished: false,
-            metadata_offset,
-            value_offset,
-            variant_builder: VariantBuilder::new_with_buffers(metadata_buffer, value_buffer),
-            array_builder,
+            parent_state,
+            metadata_offsets: &mut builder.metadata_offsets,
+            value_offsets: &mut builder.value_offsets,
+            nulls: &mut builder.nulls,
         }
-    }
-
-    /// Return a reference to the underlying `VariantBuilder`
-    pub fn inner(&self) -> &VariantBuilder {
-        &self.variant_builder
-    }
-
-    /// Return a mutable reference to the underlying `VariantBuilder`
-    pub fn inner_mut(&mut self) -> &mut VariantBuilder {
-        &mut self.variant_builder
     }
 
     /// Called to finish the in progress variant and write it to the underlying
@@ -259,72 +237,23 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     /// Note if you do not call finish, on drop any changes made to the
     /// underlying buffers will be rolled back.
     pub fn finish(mut self) {
-        self.finished = true;
+        // Record the ending offsets after finishing metadata and finish the parent state.
+        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
+        self.metadata_offsets.push(metadata_builder.finish());
+        self.value_offsets.push(value_builder.offset());
+        self.nulls.append_non_null();
+        self.parent_state.finish();
+    }
 
-        let metadata_offset = self.metadata_offset;
-        let value_offset = self.value_offset;
-        // get the buffers back from the variant builder
-        let (metadata_buffer, value_buffer) = std::mem::take(&mut self.variant_builder).finish();
-
-        // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost)
-        assert!(
-            metadata_offset <= metadata_buffer.len(),
-            "metadata length decreased unexpectedly"
-        );
-        assert!(
-            value_offset <= value_buffer.len(),
-            "value length decreased unexpectedly"
-        );
-
-        // commit the changes by putting the
-        // ending offsets into the parent array builder.
-        let builder = &mut self.array_builder;
-        builder.metadata_offsets.push(metadata_buffer.len());
-        builder.value_offsets.push(value_buffer.len());
-        builder.nulls.append_non_null();
-
-        // put the buffers back into the array builder
-        builder.metadata_buffer = metadata_buffer;
-        builder.value_buffer = value_buffer;
+    fn parent_state(&mut self) -> ParentState<'_> {
+        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
+        ParentState::variant(value_builder, metadata_builder)
     }
 }
 
+// Empty Drop to help with borrow checking - warns users if they forget to call finish()
 impl Drop for VariantArrayVariantBuilder<'_> {
-    /// If the builder was not finished, roll back any changes made to the
-    /// underlying buffers (by truncating them)
-    fn drop(&mut self) {
-        if self.finished {
-            return;
-        }
-
-        // if the object was not finished, need to rollback any changes by
-        // truncating the buffers to the original offsets
-        let metadata_offset = self.metadata_offset;
-        let value_offset = self.value_offset;
-
-        // get the buffers back from the variant builder
-        let (mut metadata_buffer, mut value_buffer) =
-            std::mem::take(&mut self.variant_builder).into_buffers();
-
-        // Sanity Check: if the buffers got smaller, something went wrong (previous data was lost) so panic immediately
-        metadata_buffer
-            .len()
-            .checked_sub(metadata_offset)
-            .expect("metadata length decreased unexpectedly");
-        value_buffer
-            .len()
-            .checked_sub(value_offset)
-            .expect("value length decreased unexpectedly");
-
-        // Note this truncate is fast because truncate doesn't free any memory:
-        // it just has to drop elements (and u8 doesn't have a destructor)
-        metadata_buffer.truncate(metadata_offset);
-        value_buffer.truncate(value_offset);
-
-        // put the buffers back into the array builder
-        self.array_builder.metadata_buffer = metadata_buffer;
-        self.array_builder.value_buffer = value_buffer;
-    }
+    fn drop(&mut self) {}
 }
 
 fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> BinaryViewArray {
@@ -388,11 +317,7 @@ mod test {
 
         // let's make a sub-object in the next row
         let mut sub_builder = builder.variant_builder();
-        sub_builder
-            .new_object()
-            .with_field("foo", "bar")
-            .finish()
-            .unwrap();
+        sub_builder.new_object().with_field("foo", "bar").finish();
         sub_builder.finish(); // must call finish to write the variant to the buffers
 
         // append a new list
@@ -426,29 +351,17 @@ mod test {
 
         // make a sub-object in the first row
         let mut sub_builder = builder.variant_builder();
-        sub_builder
-            .new_object()
-            .with_field("foo", 1i32)
-            .finish()
-            .unwrap();
+        sub_builder.new_object().with_field("foo", 1i32).finish();
         sub_builder.finish(); // must call finish to write the variant to the buffers
 
         // start appending an object but don't finish
         let mut sub_builder = builder.variant_builder();
-        sub_builder
-            .new_object()
-            .with_field("bar", 2i32)
-            .finish()
-            .unwrap();
+        sub_builder.new_object().with_field("bar", 2i32).finish();
         drop(sub_builder); // drop the sub builder without finishing it
 
         // make a third sub-object (this should reset the previous unfinished object)
         let mut sub_builder = builder.variant_builder();
-        sub_builder
-            .new_object()
-            .with_field("baz", 3i32)
-            .finish()
-            .unwrap();
+        sub_builder.new_object().with_field("baz", 3i32).finish();
         sub_builder.finish(); // must call finish to write the variant to the buffers
 
         let variant_array = builder.build();
@@ -457,12 +370,18 @@ mod test {
         assert_eq!(variant_array.len(), 2);
         assert!(!variant_array.is_null(0));
         let variant = variant_array.value(0);
-        let variant = variant.as_object().expect("variant to be an object");
-        assert_eq!(variant.get("foo").unwrap(), Variant::from(1i32));
+        assert_eq!(
+            variant.get_object_field("foo"),
+            Some(Variant::from(1i32)),
+            "Expected an object with field \"foo\", got: {variant:?}"
+        );
 
         assert!(!variant_array.is_null(1));
         let variant = variant_array.value(1);
-        let variant = variant.as_object().expect("variant to be an object");
-        assert_eq!(variant.get("baz").unwrap(), Variant::from(3i32));
+        assert_eq!(
+            variant.get_object_field("baz"),
+            Some(Variant::from(3i32)),
+            "Expected an object with field \"baz\", got: {variant:?}"
+        );
     }
 }

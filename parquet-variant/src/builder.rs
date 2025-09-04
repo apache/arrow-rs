@@ -24,6 +24,8 @@ use chrono::Timelike;
 use indexmap::{IndexMap, IndexSet};
 use uuid::Uuid;
 
+use std::collections::HashMap;
+
 const BASIC_TYPE_BITS: u8 = 2;
 const UNIX_EPOCH_DATE: chrono::NaiveDate = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
@@ -86,25 +88,46 @@ fn append_packed_u32(dest: &mut Vec<u8>, value: u32, value_size: usize) {
 ///
 /// You can reuse an existing `Vec<u8>` by using the `from` impl
 #[derive(Debug, Default)]
-struct ValueBuilder(Vec<u8>);
+pub struct ValueBuilder(Vec<u8>);
 
 impl ValueBuilder {
     /// Construct a ValueBuffer that will write to a new underlying `Vec`
-    fn new() -> Self {
+    pub fn new() -> Self {
         Default::default()
     }
 }
 
-impl From<Vec<u8>> for ValueBuilder {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
-    }
-}
-
-impl From<ValueBuilder> for Vec<u8> {
-    fn from(value_buffer: ValueBuilder) -> Self {
-        value_buffer.0
-    }
+/// Macro to generate the match statement for each append_variant, try_append_variant, and
+/// append_variant_bytes -- they each have slightly different handling for object and list handling.
+macro_rules! variant_append_value {
+    ($builder:expr, $value:expr, $object_pat:pat => $object_arm:expr, $list_pat:pat => $list_arm:expr) => {
+        match $value {
+            Variant::Null => $builder.append_null(),
+            Variant::BooleanTrue => $builder.append_bool(true),
+            Variant::BooleanFalse => $builder.append_bool(false),
+            Variant::Int8(v) => $builder.append_int8(v),
+            Variant::Int16(v) => $builder.append_int16(v),
+            Variant::Int32(v) => $builder.append_int32(v),
+            Variant::Int64(v) => $builder.append_int64(v),
+            Variant::Date(v) => $builder.append_date(v),
+            Variant::Time(v) => $builder.append_time_micros(v),
+            Variant::TimestampMicros(v) => $builder.append_timestamp_micros(v),
+            Variant::TimestampNtzMicros(v) => $builder.append_timestamp_ntz_micros(v),
+            Variant::TimestampNanos(v) => $builder.append_timestamp_nanos(v),
+            Variant::TimestampNtzNanos(v) => $builder.append_timestamp_ntz_nanos(v),
+            Variant::Decimal4(decimal4) => $builder.append_decimal4(decimal4),
+            Variant::Decimal8(decimal8) => $builder.append_decimal8(decimal8),
+            Variant::Decimal16(decimal16) => $builder.append_decimal16(decimal16),
+            Variant::Float(v) => $builder.append_float(v),
+            Variant::Double(v) => $builder.append_double(v),
+            Variant::Binary(v) => $builder.append_binary(v),
+            Variant::String(s) => $builder.append_string(s),
+            Variant::ShortString(s) => $builder.append_short_string(s),
+            Variant::Uuid(v) => $builder.append_uuid(v),
+            $object_pat => $object_arm,
+            $list_pat => $list_arm,
+        }
+    };
 }
 
 impl ValueBuilder {
@@ -120,8 +143,9 @@ impl ValueBuilder {
         self.0.push(primitive_header(primitive_type));
     }
 
-    fn into_inner(self) -> Vec<u8> {
-        self.into()
+    /// Returns the underlying buffer, consuming self
+    pub fn into_inner(self) -> Vec<u8> {
+        self.0
     }
 
     fn inner_mut(&mut self) -> &mut Vec<u8> {
@@ -258,7 +282,7 @@ impl ValueBuilder {
             object_builder.insert(field_name, value);
         }
 
-        object_builder.finish().unwrap();
+        object_builder.finish();
     }
 
     fn try_append_object(state: ParentState<'_>, obj: VariantObject) -> Result<(), ArrowError> {
@@ -269,7 +293,8 @@ impl ValueBuilder {
             object_builder.try_insert(field_name, value)?;
         }
 
-        object_builder.finish()
+        object_builder.finish();
+        Ok(())
     }
 
     fn append_list(state: ParentState<'_>, list: VariantList) {
@@ -292,7 +317,8 @@ impl ValueBuilder {
         Ok(())
     }
 
-    fn offset(&self) -> usize {
+    /// Returns the current size of the underlying buffer
+    pub fn offset(&self) -> usize {
         self.0.len()
     }
 
@@ -302,34 +328,14 @@ impl ValueBuilder {
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
-    fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
+    pub fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
         let builder = state.value_builder();
-        match variant {
-            Variant::Null => builder.append_null(),
-            Variant::BooleanTrue => builder.append_bool(true),
-            Variant::BooleanFalse => builder.append_bool(false),
-            Variant::Int8(v) => builder.append_int8(v),
-            Variant::Int16(v) => builder.append_int16(v),
-            Variant::Int32(v) => builder.append_int32(v),
-            Variant::Int64(v) => builder.append_int64(v),
-            Variant::Date(v) => builder.append_date(v),
-            Variant::Time(v) => builder.append_time_micros(v),
-            Variant::TimestampMicros(v) => builder.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => builder.append_timestamp_ntz_micros(v),
-            Variant::TimestampNanos(v) => builder.append_timestamp_nanos(v),
-            Variant::TimestampNtzNanos(v) => builder.append_timestamp_ntz_nanos(v),
-            Variant::Decimal4(decimal4) => builder.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => builder.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => builder.append_decimal16(decimal16),
-            Variant::Float(v) => builder.append_float(v),
-            Variant::Double(v) => builder.append_double(v),
-            Variant::Binary(v) => builder.append_binary(v),
-            Variant::String(s) => builder.append_string(s),
-            Variant::ShortString(s) => builder.append_short_string(s),
-            Variant::Uuid(v) => builder.append_uuid(v),
+        variant_append_value!(
+            builder,
+            variant,
             Variant::Object(obj) => return Self::append_object(state, obj),
-            Variant::List(list) => return Self::append_list(state, list),
-        }
+            Variant::List(list) => return Self::append_list(state, list)
+        );
         state.finish();
     }
 
@@ -342,35 +348,33 @@ impl ValueBuilder {
         variant: Variant<'_, '_>,
     ) -> Result<(), ArrowError> {
         let builder = state.value_builder();
-        match variant {
-            Variant::Null => builder.append_null(),
-            Variant::BooleanTrue => builder.append_bool(true),
-            Variant::BooleanFalse => builder.append_bool(false),
-            Variant::Int8(v) => builder.append_int8(v),
-            Variant::Int16(v) => builder.append_int16(v),
-            Variant::Int32(v) => builder.append_int32(v),
-            Variant::Int64(v) => builder.append_int64(v),
-            Variant::Date(v) => builder.append_date(v),
-            Variant::Time(v) => builder.append_time_micros(v),
-            Variant::TimestampMicros(v) => builder.append_timestamp_micros(v),
-            Variant::TimestampNtzMicros(v) => builder.append_timestamp_ntz_micros(v),
-            Variant::TimestampNanos(v) => builder.append_timestamp_nanos(v),
-            Variant::TimestampNtzNanos(v) => builder.append_timestamp_ntz_nanos(v),
-            Variant::Decimal4(decimal4) => builder.append_decimal4(decimal4),
-            Variant::Decimal8(decimal8) => builder.append_decimal8(decimal8),
-            Variant::Decimal16(decimal16) => builder.append_decimal16(decimal16),
-            Variant::Float(v) => builder.append_float(v),
-            Variant::Double(v) => builder.append_double(v),
-            Variant::Binary(v) => builder.append_binary(v),
-            Variant::String(s) => builder.append_string(s),
-            Variant::ShortString(s) => builder.append_short_string(s),
-            Variant::Uuid(v) => builder.append_uuid(v),
+        variant_append_value!(
+            builder,
+            variant,
             Variant::Object(obj) => return Self::try_append_object(state, obj),
-            Variant::List(list) => return Self::try_append_list(state, list),
-        }
-
+            Variant::List(list) => return Self::try_append_list(state, list)
+        );
         state.finish();
         Ok(())
+    }
+
+    /// Appends a variant to the buffer by copying raw bytes when possible.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy and without touching the metadata builder. For other variant
+    /// types, this falls back to the standard append behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary is already built and correct for
+    /// any objects or lists being appended.
+    pub fn append_variant_bytes(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
+        let builder = state.value_builder();
+        variant_append_value!(
+            builder,
+            variant,
+            Variant::Object(obj) => builder.append_slice(obj.value),
+            Variant::List(list) => builder.append_slice(list.value)
+        );
+        state.finish();
     }
 
     /// Writes out the header byte for a variant object or list, from the starting position
@@ -431,13 +435,111 @@ impl ValueBuilder {
     }
 }
 
+/// A trait for building variant metadata dictionaries, to be used in conjunction with a
+/// [`ValueBuilder`]. The trait provides methods for managing field names and their IDs, as well as
+/// rolling back a failed builder operation that might have created new field ids.
+pub trait MetadataBuilder: std::fmt::Debug {
+    /// Attempts to register a field name, returning the corresponding (possibly newly-created)
+    /// field id on success. Attempting to register the same field name twice will _generally_
+    /// produce the same field id both times, but the variant spec does not actually require it.
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError>;
+
+    /// Retrieves the field name for a given field id, which must be less than
+    /// [`Self::num_field_names`]. Panics if the field id is out of bounds.
+    fn field_name(&self, field_id: usize) -> &str;
+
+    /// Returns the number of field names stored in this metadata builder. Any number less than this
+    /// is a valid field id. The builder can be reverted back to this size later on (discarding any
+    /// newer/higher field ids) by calling [`Self::truncate_field_names`].
+    fn num_field_names(&self) -> usize;
+
+    /// Reverts the field names to a previous size, discarding any newly out of bounds field ids.
+    fn truncate_field_names(&mut self, new_size: usize);
+
+    /// Finishes the current metadata dictionary, returning the new size of the underlying buffer.
+    fn finish(&mut self) -> usize;
+}
+
+impl MetadataBuilder for WritableMetadataBuilder {
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        Ok(self.upsert_field_name(field_name))
+    }
+    fn field_name(&self, field_id: usize) -> &str {
+        self.field_name(field_id)
+    }
+    fn num_field_names(&self) -> usize {
+        self.num_field_names()
+    }
+    fn truncate_field_names(&mut self, new_size: usize) {
+        self.field_names.truncate(new_size)
+    }
+    fn finish(&mut self) -> usize {
+        self.finish()
+    }
+}
+
+/// A metadata builder that cannot register new field names, and merely returns the field id
+/// associated with a known field name. This is useful for variant unshredding operations, where the
+/// metadata column is fixed and -- per variant shredding spec -- already contains all field names
+/// from the typed_value column. It is also useful when projecting a subset of fields from a variant
+/// object value, since the bytes can be copied across directly without re-encoding their field ids.
+///
+/// NOTE: [`Self::finish`] is a no-op. If the intent is to make a copy of the underlying bytes each
+/// time `finish` is called, a different trait impl will be needed.
+#[derive(Debug)]
+pub struct ReadOnlyMetadataBuilder<'m> {
+    metadata: VariantMetadata<'m>,
+    // A cache that tracks field names this builder has already seen, because finding the field id
+    // for a given field name is expensive -- O(n) for a large and unsorted metadata dictionary.
+    known_field_names: HashMap<&'m str, u32>,
+}
+
+impl<'m> ReadOnlyMetadataBuilder<'m> {
+    /// Creates a new read-only metadata builder from the given metadata dictionary.
+    pub fn new(metadata: VariantMetadata<'m>) -> Self {
+        Self {
+            metadata,
+            known_field_names: HashMap::new(),
+        }
+    }
+}
+
+impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
+    fn try_upsert_field_name(&mut self, field_name: &str) -> Result<u32, ArrowError> {
+        if let Some(field_id) = self.known_field_names.get(field_name) {
+            return Ok(*field_id);
+        }
+
+        let Some((field_id, field_name)) = self.metadata.get_entry(field_name) else {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Field name '{field_name}' not found in metadata dictionary"
+            )));
+        };
+
+        self.known_field_names.insert(field_name, field_id);
+        Ok(field_id)
+    }
+    fn field_name(&self, field_id: usize) -> &str {
+        &self.metadata[field_id]
+    }
+    fn num_field_names(&self) -> usize {
+        self.metadata.len()
+    }
+    fn truncate_field_names(&mut self, new_size: usize) {
+        debug_assert_eq!(self.metadata.len(), new_size);
+    }
+    fn finish(&mut self) -> usize {
+        self.metadata.bytes.len()
+    }
+}
+
 /// Builder for constructing metadata for [`Variant`] values.
 ///
 /// This is used internally by the [`VariantBuilder`] to construct the metadata
 ///
 /// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
 #[derive(Default, Debug)]
-struct MetadataBuilder {
+pub struct WritableMetadataBuilder {
     // Field names -- field_ids are assigned in insert order
     field_names: IndexSet<String>,
 
@@ -448,17 +550,7 @@ struct MetadataBuilder {
     metadata_buffer: Vec<u8>,
 }
 
-/// Create a new MetadataBuilder that will write to the specified metadata buffer
-impl From<Vec<u8>> for MetadataBuilder {
-    fn from(metadata_buffer: Vec<u8>) -> Self {
-        Self {
-            metadata_buffer,
-            ..Default::default()
-        }
-    }
-}
-
-impl MetadataBuilder {
+impl WritableMetadataBuilder {
     /// Upsert field name to dictionary, return its ID
     fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
@@ -475,6 +567,11 @@ impl MetadataBuilder {
         }
 
         id as u32
+    }
+
+    /// The current length of the underlying metadata buffer
+    pub fn offset(&self) -> usize {
+        self.metadata_buffer.len()
     }
 
     /// Returns the number of field names stored in the metadata builder.
@@ -498,17 +595,18 @@ impl MetadataBuilder {
         self.field_names.iter().map(|k| k.len()).sum()
     }
 
-    fn finish(self) -> Vec<u8> {
+    /// Finalizes the metadata dictionary and appends its serialized bytes to the underlying buffer,
+    /// returning the resulting [`Self::offset`]. The builder state is reset and ready to start
+    /// building a new metadata dictionary.
+    pub fn finish(&mut self) -> usize {
         let nkeys = self.num_field_names();
 
         // Calculate metadata size
         let total_dict_size: usize = self.metadata_size();
 
-        let Self {
-            field_names,
-            is_sorted,
-            mut metadata_buffer,
-        } = self;
+        let metadata_buffer = &mut self.metadata_buffer;
+        let is_sorted = std::mem::take(&mut self.is_sorted);
+        let field_names = std::mem::take(&mut self.field_names);
 
         // Determine appropriate offset size based on the larger of dict size or total string size
         let max_offset = std::cmp::max(total_dict_size, nkeys);
@@ -524,32 +622,32 @@ impl MetadataBuilder {
         metadata_buffer.push(0x01 | (is_sorted as u8) << 4 | ((offset_size - 1) << 6));
 
         // Write dictionary size
-        write_offset(&mut metadata_buffer, nkeys, offset_size);
+        write_offset(metadata_buffer, nkeys, offset_size);
 
         // Write offsets
         let mut cur_offset = 0;
         for key in field_names.iter() {
-            write_offset(&mut metadata_buffer, cur_offset, offset_size);
+            write_offset(metadata_buffer, cur_offset, offset_size);
             cur_offset += key.len();
         }
         // Write final offset
-        write_offset(&mut metadata_buffer, cur_offset, offset_size);
+        write_offset(metadata_buffer, cur_offset, offset_size);
 
         // Write string data
         for key in field_names {
             metadata_buffer.extend_from_slice(key.as_bytes());
         }
 
-        metadata_buffer
+        metadata_buffer.len()
     }
 
-    /// Return the inner buffer, without finalizing any in progress metadata.
-    pub(crate) fn into_inner(self) -> Vec<u8> {
+    /// Returns the inner buffer, consuming self without finalizing any in progress metadata.
+    pub fn into_inner(self) -> Vec<u8> {
         self.metadata_buffer
     }
 }
 
-impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
+impl<S: AsRef<str>> FromIterator<S> for WritableMetadataBuilder {
     fn from_iter<T: IntoIterator<Item = S>>(iter: T) -> Self {
         let mut this = Self::default();
         this.extend(iter);
@@ -558,7 +656,7 @@ impl<S: AsRef<str>> FromIterator<S> for MetadataBuilder {
     }
 }
 
-impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
+impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
     fn extend<T: IntoIterator<Item = S>>(&mut self, iter: T) {
         let iter = iter.into_iter();
         let (min, _) = iter.size_hint();
@@ -585,18 +683,18 @@ impl<S: AsRef<str>> Extend<S> for MetadataBuilder {
 /// treat the variants as a union, so that accessing a `value_builder` or `metadata_builder` is
 /// branch-free.
 #[derive(Debug)]
-enum ParentState<'a> {
+pub enum ParentState<'a> {
     Variant {
         value_builder: &'a mut ValueBuilder,
         saved_value_builder_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         finished: bool,
     },
     List {
         value_builder: &'a mut ValueBuilder,
         saved_value_builder_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         offsets: &'a mut Vec<usize>,
         saved_offsets_size: usize,
@@ -605,7 +703,7 @@ enum ParentState<'a> {
     Object {
         value_builder: &'a mut ValueBuilder,
         saved_value_builder_offset: usize,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         saved_metadata_builder_dict_size: usize,
         fields: &'a mut IndexMap<u32, usize>,
         saved_fields_size: usize,
@@ -614,9 +712,12 @@ enum ParentState<'a> {
 }
 
 impl<'a> ParentState<'a> {
-    fn variant(
+    /// Creates a new instance suitable for a top-level variant builder
+    /// (e.g. [`VariantBuilder`]). The value and metadata builder state is checkpointed and will
+    /// roll back on drop, unless [`Self::finish`] is called.
+    pub fn variant(
         value_builder: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
     ) -> Self {
         ParentState::Variant {
             saved_value_builder_offset: value_builder.offset(),
@@ -627,9 +728,12 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn list(
+    /// Creates a new instance suitable for a [`ListBuilder`]. The value and metadata builder state
+    /// is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The new
+    /// element's offset is also captured eagerly and will also roll back if not finished.
+    pub fn list(
         value_builder: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         offsets: &'a mut Vec<usize>,
         saved_parent_value_builder_offset: usize,
     ) -> Self {
@@ -651,9 +755,14 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    fn try_object(
+    /// Creates a new instance suitable for an [`ObjectBuilder`]. The value and metadata builder state
+    /// is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The new
+    /// field's name and offset are also captured eagerly and will also roll back if not finished.
+    ///
+    /// The call fails if the field name is invalid (e.g. because it duplicates an existing field).
+    pub fn try_object(
         value_builder: &'a mut ValueBuilder,
-        metadata_builder: &'a mut MetadataBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
         fields: &'a mut IndexMap<u32, usize>,
         saved_parent_value_builder_offset: usize,
         field_name: &str,
@@ -665,7 +774,7 @@ impl<'a> ParentState<'a> {
         let saved_value_builder_offset = value_builder.offset();
         let saved_fields_size = fields.len();
         let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
-        let field_id = metadata_builder.upsert_field_name(field_name);
+        let field_id = metadata_builder.try_upsert_field_name(field_name)?;
         let field_start = saved_value_builder_offset - saved_parent_value_builder_offset;
         if fields.insert(field_id, field_start).is_some() && validate_unique_fields {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -688,7 +797,7 @@ impl<'a> ParentState<'a> {
         self.value_and_metadata_builders().0
     }
 
-    fn metadata_builder(&mut self) -> &mut MetadataBuilder {
+    fn metadata_builder(&mut self) -> &mut dyn MetadataBuilder {
         self.value_and_metadata_builders().1
     }
 
@@ -717,8 +826,8 @@ impl<'a> ParentState<'a> {
         }
     }
 
-    // Mark the insertion as having succeeded.
-    fn finish(&mut self) {
+    /// Mark the insertion as having succeeded. Internal state will no longer roll back on drop.
+    pub fn finish(&mut self) {
         *self.is_finished() = true
     }
 
@@ -754,9 +863,7 @@ impl<'a> ParentState<'a> {
                 value_builder
                     .inner_mut()
                     .truncate(*saved_value_builder_offset);
-                metadata_builder
-                    .field_names
-                    .truncate(*saved_metadata_builder_dict_size);
+                metadata_builder.truncate_field_names(*saved_metadata_builder_dict_size);
             }
         };
 
@@ -778,7 +885,7 @@ impl<'a> ParentState<'a> {
 
     /// Return mutable references to the value and metadata builders that this
     /// parent state is using.
-    fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut MetadataBuilder) {
+    pub fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut dyn MetadataBuilder) {
         match self {
             ParentState::Variant {
                 value_builder,
@@ -986,41 +1093,6 @@ impl Drop for ParentState<'_> {
 /// );
 ///
 /// ```
-/// # Example: Reusing Buffers
-///
-/// You can use the [`VariantBuilder`] to write into existing buffers (for
-/// example to write multiple variants back to back in the same buffer)
-///
-/// ```
-/// // we will write two variants back to back
-/// use parquet_variant::{Variant, VariantBuilder};
-/// // Append 12345
-/// let mut builder = VariantBuilder::new();
-/// builder.append_value(12345);
-/// let (metadata, value) = builder.finish();
-/// // remember where the first variant ends
-/// let (first_meta_offset, first_meta_len) = (0, metadata.len());
-/// let (first_value_offset, first_value_len) = (0, value.len());
-///
-/// // now, append a second variant to the same buffers
-/// let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-/// builder.append_value("Foo");
-/// let (metadata, value) = builder.finish();
-///
-/// // The variants can be referenced in their appropriate location
-/// let variant1 = Variant::new(
-///   &metadata[first_meta_offset..first_meta_len],
-///   &value[first_value_offset..first_value_len]
-///  );
-/// assert_eq!(variant1, Variant::Int32(12345));
-///
-/// let variant2 = Variant::new(
-///   &metadata[first_meta_len..],
-///   &value[first_value_len..]
-///  );
-/// assert_eq!(variant2, Variant::from("Foo"));
-/// ```
-///
 /// # Example: Unique Field Validation
 ///
 /// This example shows how enabling unique field validation will cause an error
@@ -1053,7 +1125,7 @@ impl Drop for ParentState<'_> {
 /// obj.insert("name", "Alice");
 /// obj.insert("age", 30);
 /// obj.insert("score", 95.5);
-/// obj.finish().unwrap();
+/// obj.finish();
 ///
 /// let (metadata, value) = builder.finish();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1071,7 +1143,7 @@ impl Drop for ParentState<'_> {
 /// obj.insert("name", "Bob"); // field id = 3
 /// obj.insert("age", 25);
 /// obj.insert("score", 88.0);
-/// obj.finish().unwrap();
+/// obj.finish();
 ///
 /// let (metadata, value) = builder.finish();
 /// let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1079,7 +1151,7 @@ impl Drop for ParentState<'_> {
 #[derive(Default, Debug)]
 pub struct VariantBuilder {
     value_builder: ValueBuilder,
-    metadata_builder: MetadataBuilder,
+    metadata_builder: WritableMetadataBuilder,
     validate_unique_fields: bool,
 }
 
@@ -1088,7 +1160,7 @@ impl VariantBuilder {
     pub fn new() -> Self {
         Self {
             value_builder: ValueBuilder::new(),
-            metadata_builder: MetadataBuilder::default(),
+            metadata_builder: WritableMetadataBuilder::default(),
             validate_unique_fields: false,
         }
     }
@@ -1098,16 +1170,6 @@ impl VariantBuilder {
         self.metadata_builder.extend(metadata.iter());
 
         self
-    }
-
-    /// Create a new VariantBuilder that will write the metadata and values to
-    /// the specified buffers.
-    pub fn new_with_buffers(metadata_buffer: Vec<u8>, value_buffer: Vec<u8>) -> Self {
-        Self {
-            value_builder: ValueBuilder::from(value_buffer),
-            metadata_builder: MetadataBuilder::from(metadata_buffer),
-            validate_unique_fields: false,
-        }
     }
 
     /// Enables validation of unique field keys in nested objects.
@@ -1126,7 +1188,7 @@ impl VariantBuilder {
     /// You can use this to pre-populate a [`VariantBuilder`] with a sorted dictionary if you
     /// know the field names beforehand. Sorted dictionaries can accelerate field access when
     /// reading [`Variant`]s.
-    pub fn with_field_names<'a>(mut self, field_names: impl Iterator<Item = &'a str>) -> Self {
+    pub fn with_field_names<'a>(mut self, field_names: impl IntoIterator<Item = &'a str>) -> Self {
         self.metadata_builder.extend(field_names);
 
         self
@@ -1214,20 +1276,22 @@ impl VariantBuilder {
         ValueBuilder::try_append_variant(state, value.into())
     }
 
-    /// Finish the builder and return the metadata and value buffers.
-    pub fn finish(self) -> (Vec<u8>, Vec<u8>) {
-        (
-            self.metadata_builder.finish(),
-            self.value_builder.into_inner(),
-        )
+    /// Appends a variant value to the builder by copying raw bytes when possible.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy and without touching the metadata builder. For other variant
+    /// types, this falls back to the standard append behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary entries are already built and correct for
+    /// any objects or lists being appended.
+    pub fn append_value_bytes<'m, 'd>(&mut self, value: impl Into<Variant<'m, 'd>>) {
+        let state = ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
+        ValueBuilder::append_variant_bytes(state, value.into());
     }
 
-    /// Return the inner metadata buffers and value buffer.
-    ///
-    /// This can be used to get the underlying buffers provided via
-    /// [`VariantBuilder::new_with_buffers`] without finalizing the metadata or
-    /// values (for rolling back changes).
-    pub fn into_buffers(self) -> (Vec<u8>, Vec<u8>) {
+    /// Finish the builder and return the metadata and value buffers.
+    pub fn finish(mut self) -> (Vec<u8>, Vec<u8>) {
+        self.metadata_builder.finish();
         (
             self.metadata_builder.into_inner(),
             self.value_builder.into_inner(),
@@ -1246,7 +1310,8 @@ pub struct ListBuilder<'a> {
 }
 
 impl<'a> ListBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    /// Creates a new list builder, nested on top of the given parent state.
+    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             offsets: vec![],
@@ -1310,6 +1375,19 @@ impl<'a> ListBuilder<'a> {
     ) -> Result<(), ArrowError> {
         let (state, _) = self.parent_state();
         ValueBuilder::try_append_variant(state, value.into())
+    }
+
+    /// Appends a variant value to this list by copying raw bytes when possible.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy. For other variant types, this falls back to the standard append
+    /// behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary is already built and correct for
+    /// any objects or lists being appended.
+    pub fn append_value_bytes<'m, 'd>(&mut self, value: impl Into<Variant<'m, 'd>>) {
+        let (state, _) = self.parent_state();
+        ValueBuilder::append_variant_bytes(state, value.into())
     }
 
     /// Builder-style API for appending a value to the list and returning self to enable method chaining.
@@ -1388,7 +1466,8 @@ pub struct ObjectBuilder<'a> {
 }
 
 impl<'a> ObjectBuilder<'a> {
-    fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    /// Creates a new object builder, nested on top of the given parent state.
+    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             fields: IndexMap::new(),
@@ -1417,7 +1496,8 @@ impl<'a> ObjectBuilder<'a> {
     /// - [`ObjectBuilder::insert`] for an infallible version that panics
     /// - [`ObjectBuilder::try_with_field`] for a builder-style API.
     ///
-    /// # Note Attempting to insert a duplicate field name produces an error if unique field
+    /// # Note
+    /// Attempting to insert a duplicate field name produces an error if unique field
     /// validation is enabled. Otherwise, the new value overwrites the previous field mapping
     /// without erasing the old value, resulting in a larger variant
     pub fn try_insert<'m, 'd, T: Into<Variant<'m, 'd>>>(
@@ -1427,6 +1507,45 @@ impl<'a> ObjectBuilder<'a> {
     ) -> Result<(), ArrowError> {
         let (state, _) = self.parent_state(key)?;
         ValueBuilder::try_append_variant(state, value.into())
+    }
+
+    /// Add a field with key and value to the object by copying raw bytes when possible.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy, and without touching the metadata builder. For other variant
+    /// types, this falls back to the standard append behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary is already built and correct for
+    /// any objects or lists being appended, but the value's new field name is handled normally.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if the variant contains duplicate field names in objects
+    /// when validation is enabled. For a fallible version, use [`ObjectBuilder::try_insert_bytes`]
+    pub fn insert_bytes<'m, 'd>(&mut self, key: &str, value: impl Into<Variant<'m, 'd>>) {
+        self.try_insert_bytes(key, value).unwrap()
+    }
+
+    /// Add a field with key and value to the object by copying raw bytes when possible.
+    ///
+    /// For objects and lists, this directly copies their underlying byte representation instead of
+    /// performing a logical copy, and without touching the metadata builder. For other variant
+    /// types, this falls back to the standard append behavior.
+    ///
+    /// The caller must ensure that the metadata dictionary is already built and correct for
+    /// any objects or lists being appended, but the value's new field name is handled normally.
+    ///
+    /// # Note
+    /// When inserting duplicate keys, the new value overwrites the previous mapping,
+    /// but the old value remains in the buffer, resulting in a larger variant
+    pub fn try_insert_bytes<'m, 'd>(
+        &mut self,
+        key: &str,
+        value: impl Into<Variant<'m, 'd>>,
+    ) -> Result<(), ArrowError> {
+        let (state, _) = self.parent_state(key)?;
+        ValueBuilder::append_variant_bytes(state, value.into());
+        Ok(())
     }
 
     /// Builder style API for adding a field with key and value to the object
@@ -1516,7 +1635,7 @@ impl<'a> ObjectBuilder<'a> {
     }
 
     /// Finalizes this object and appends it to its parent, which otherwise remains unmodified.
-    pub fn finish(mut self) -> Result<(), ArrowError> {
+    pub fn finish(mut self) {
         let metadata_builder = self.parent_state.metadata_builder();
 
         self.fields.sort_by(|&field_a_id, _, &field_b_id, _| {
@@ -1579,8 +1698,6 @@ impl<'a> ObjectBuilder<'a> {
                 offset_size,
             );
         self.parent_state.finish();
-
-        Ok(())
     }
 }
 
@@ -1589,18 +1706,27 @@ impl<'a> ObjectBuilder<'a> {
 /// Allows users to append values to a [`VariantBuilder`], [`ListBuilder`] or
 /// [`ObjectBuilder`]. using the same interface.
 pub trait VariantBuilderExt {
+    /// Appends a new variant value to this builder. See e.g. [`VariantBuilder::append_value`].
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
+    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Panics if the nested
+    /// builder cannot be created, see e.g. [`ObjectBuilder::new_list`].
     fn new_list(&mut self) -> ListBuilder<'_> {
         self.try_new_list().unwrap()
     }
 
+    /// Creates a nested object builder. See e.g. [`VariantBuilder::new_object`]. Panics if the
+    /// nested builder cannot be created, see e.g. [`ObjectBuilder::new_object`].
     fn new_object(&mut self) -> ObjectBuilder<'_> {
         self.try_new_object().unwrap()
     }
 
+    /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Returns an error if
+    /// the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_list`].
     fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
 
+    /// Creates a nested object builder. See e.g. [`VariantBuilder::new_object`]. Returns an error
+    /// if the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_object`].
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
 }
 
@@ -1779,8 +1905,7 @@ mod tests {
             .new_object()
             .with_field("name", "John")
             .with_field("age", 42i8)
-            .finish()
-            .unwrap();
+            .finish();
 
         let (metadata, value) = builder.finish();
         assert!(!metadata.is_empty());
@@ -1796,8 +1921,7 @@ mod tests {
             .with_field("zebra", "stripes")
             .with_field("apple", "red")
             .with_field("banana", "yellow")
-            .finish()
-            .unwrap();
+            .finish();
 
         let (_, value) = builder.finish();
 
@@ -1821,8 +1945,7 @@ mod tests {
             .new_object()
             .with_field("name", "Ron Artest")
             .with_field("name", "Metta World Peace") // Duplicate field
-            .finish()
-            .unwrap();
+            .finish();
 
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -1941,15 +2064,13 @@ mod tests {
             .new_object()
             .with_field("id", 1)
             .with_field("type", "Cauliflower")
-            .finish()
-            .unwrap();
+            .finish();
 
         list_builder
             .new_object()
             .with_field("id", 2)
             .with_field("type", "Beets")
-            .finish()
-            .unwrap();
+            .finish();
 
         list_builder.finish();
 
@@ -1986,17 +2107,9 @@ mod tests {
 
         let mut list_builder = builder.new_list();
 
-        list_builder
-            .new_object()
-            .with_field("a", 1)
-            .finish()
-            .unwrap();
+        list_builder.new_object().with_field("a", 1).finish();
 
-        list_builder
-            .new_object()
-            .with_field("b", 2)
-            .finish()
-            .unwrap();
+        list_builder.new_object().with_field("b", 2).finish();
 
         list_builder.finish();
 
@@ -2042,7 +2155,7 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("a", 1);
-            let _ = object_builder.finish();
+            object_builder.finish();
         }
 
         list_builder.append_value(2);
@@ -2050,7 +2163,7 @@ mod tests {
         {
             let mut object_builder = list_builder.new_object();
             object_builder.insert("b", 2);
-            let _ = object_builder.finish();
+            object_builder.finish();
         }
 
         list_builder.append_value(3);
@@ -2100,10 +2213,10 @@ mod tests {
             {
                 let mut inner_object_builder = outer_object_builder.new_object("c");
                 inner_object_builder.insert("b", "a");
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
-            let _ = outer_object_builder.finish();
+            outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -2142,11 +2255,11 @@ mod tests {
                 inner_object_builder.insert("b", false);
                 inner_object_builder.insert("c", "a");
 
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
             outer_object_builder.insert("b", false);
-            let _ = outer_object_builder.finish();
+            outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -2190,10 +2303,10 @@ mod tests {
                     .with_value(false)
                     .finish();
 
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
-            let _ = outer_object_builder.finish();
+            outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -2253,15 +2366,15 @@ mod tests {
                 {
                     let mut inner_inner_object_builder = inner_object_builder.new_object("c");
                     inner_inner_object_builder.insert("aa", "bb");
-                    let _ = inner_inner_object_builder.finish();
+                    inner_inner_object_builder.finish();
                 }
 
                 {
                     let mut inner_inner_object_builder = inner_object_builder.new_object("d");
                     inner_inner_object_builder.insert("cc", "dd");
-                    let _ = inner_inner_object_builder.finish();
+                    inner_inner_object_builder.finish();
                 }
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
             outer_object_builder.insert("b", true);
@@ -2285,10 +2398,10 @@ mod tests {
                     inner_list_builder.finish();
                 }
 
-                let _ = inner_object_builder.finish();
+                inner_object_builder.finish();
             }
 
-            let _ = outer_object_builder.finish();
+            outer_object_builder.finish();
         }
 
         let (metadata, value) = builder.finish();
@@ -2388,7 +2501,7 @@ mod tests {
                     let mut inner_object_builder = inner_list_builder.new_object();
                     inner_object_builder.insert("a", "b");
                     inner_object_builder.insert("b", "c");
-                    let _ = inner_object_builder.finish();
+                    inner_object_builder.finish();
                 }
 
                 {
@@ -2397,7 +2510,7 @@ mod tests {
                     let mut inner_object_builder = inner_list_builder.new_object();
                     inner_object_builder.insert("c", "d");
                     inner_object_builder.insert("d", "e");
-                    let _ = inner_object_builder.finish();
+                    inner_object_builder.finish();
                 }
 
                 inner_list_builder.finish();
@@ -2483,7 +2596,7 @@ mod tests {
         let mut obj = builder.new_object();
         obj.insert("a", 1);
         obj.insert("a", 2);
-        assert!(obj.finish().is_ok());
+        obj.finish();
 
         // Deeply nested list structure with duplicates
         let mut builder = VariantBuilder::new();
@@ -2493,12 +2606,8 @@ mod tests {
         nested_obj.insert("x", 1);
         nested_obj.insert("x", 2);
         nested_obj.new_list("x").with_value(3).finish();
-        nested_obj
-            .new_object("x")
-            .with_field("y", 4)
-            .finish()
-            .unwrap();
-        assert!(nested_obj.finish().is_ok());
+        nested_obj.new_object("x").with_field("y", 4).finish();
+        nested_obj.finish();
         inner_list.finish();
         outer_list.finish();
 
@@ -2558,14 +2667,14 @@ mod tests {
         valid_obj.insert("m", 1);
         valid_obj.insert("n", 2);
 
-        let valid_result = valid_obj.finish();
-        assert!(valid_result.is_ok());
+        valid_obj.finish();
+        list.finish();
     }
 
     #[test]
     fn test_sorted_dictionary() {
         // check if variant metadatabuilders are equivalent from different ways of constructing them
-        let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"].into_iter());
+        let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"]);
 
         let mut variant2 = {
             let mut builder = VariantBuilder::new();
@@ -2615,7 +2724,7 @@ mod tests {
     #[test]
     fn test_object_sorted_dictionary() {
         // predefine the list of field names
-        let mut variant1 = VariantBuilder::new().with_field_names(["a", "b", "c"].into_iter());
+        let mut variant1 = VariantBuilder::new().with_field_names(["a", "b", "c"]);
         let mut obj = variant1.new_object();
 
         obj.insert("c", true);
@@ -2628,7 +2737,7 @@ mod tests {
 
         // add a field name that wasn't pre-defined but doesn't break the sort order
         obj.insert("d", 2);
-        obj.finish().unwrap();
+        obj.finish();
 
         let (metadata, value) = variant1.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -2649,7 +2758,7 @@ mod tests {
     #[test]
     fn test_object_not_sorted_dictionary() {
         // predefine the list of field names
-        let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"].into_iter());
+        let mut variant1 = VariantBuilder::new().with_field_names(["b", "c", "d"]);
         let mut obj = variant1.new_object();
 
         obj.insert("c", true);
@@ -2662,7 +2771,7 @@ mod tests {
 
         // add a field name that wasn't pre-defined but breaks the sort order
         obj.insert("a", 2);
-        obj.finish().unwrap();
+        obj.finish();
 
         let (metadata, value) = variant1.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
@@ -2691,40 +2800,40 @@ mod tests {
         assert!(builder.metadata_builder.is_sorted);
         assert_eq!(builder.metadata_builder.num_field_names(), 1);
 
-        let builder = builder.with_field_names(["b", "c", "d"].into_iter());
+        let builder = builder.with_field_names(["b", "c", "d"]);
 
         assert!(builder.metadata_builder.is_sorted);
         assert_eq!(builder.metadata_builder.num_field_names(), 4);
 
-        let builder = builder.with_field_names(["z", "y"].into_iter());
+        let builder = builder.with_field_names(["z", "y"]);
         assert!(!builder.metadata_builder.is_sorted);
         assert_eq!(builder.metadata_builder.num_field_names(), 6);
     }
 
     #[test]
     fn test_metadata_builder_from_iter() {
-        let metadata = MetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
+        let metadata = WritableMetadataBuilder::from_iter(vec!["apple", "banana", "cherry"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "apple");
         assert_eq!(metadata.field_name(1), "banana");
         assert_eq!(metadata.field_name(2), "cherry");
         assert!(metadata.is_sorted);
 
-        let metadata = MetadataBuilder::from_iter(["zebra", "apple", "banana"]);
+        let metadata = WritableMetadataBuilder::from_iter(["zebra", "apple", "banana"]);
         assert_eq!(metadata.num_field_names(), 3);
         assert_eq!(metadata.field_name(0), "zebra");
         assert_eq!(metadata.field_name(1), "apple");
         assert_eq!(metadata.field_name(2), "banana");
         assert!(!metadata.is_sorted);
 
-        let metadata = MetadataBuilder::from_iter(Vec::<&str>::new());
+        let metadata = WritableMetadataBuilder::from_iter(Vec::<&str>::new());
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
     }
 
     #[test]
     fn test_metadata_builder_extend() {
-        let mut metadata = MetadataBuilder::default();
+        let mut metadata = WritableMetadataBuilder::default();
         assert_eq!(metadata.num_field_names(), 0);
         assert!(!metadata.is_sorted);
 
@@ -2749,7 +2858,7 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_extend_sort_order() {
-        let mut metadata = MetadataBuilder::default();
+        let mut metadata = WritableMetadataBuilder::default();
 
         metadata.extend(["middle"]);
         assert!(metadata.is_sorted);
@@ -2765,93 +2874,21 @@ mod tests {
     #[test]
     fn test_metadata_builder_from_iter_with_string_types() {
         // &str
-        let metadata = MetadataBuilder::from_iter(["a", "b", "c"]);
+        let metadata = WritableMetadataBuilder::from_iter(["a", "b", "c"]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // string
-        let metadata =
-            MetadataBuilder::from_iter(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        let metadata = WritableMetadataBuilder::from_iter(vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+        ]);
         assert_eq!(metadata.num_field_names(), 3);
 
         // mixed types (anything that implements AsRef<str>)
         let field_names: Vec<Box<str>> = vec!["a".into(), "b".into(), "c".into()];
-        let metadata = MetadataBuilder::from_iter(field_names);
+        let metadata = WritableMetadataBuilder::from_iter(field_names);
         assert_eq!(metadata.num_field_names(), 3);
-    }
-
-    /// Test reusing buffers with nested objects
-    #[test]
-    fn test_with_existing_buffers_nested() {
-        let mut builder = VariantBuilder::new();
-        append_test_list(&mut builder);
-        let (m1, v1) = builder.finish();
-        let variant1 = Variant::new(&m1, &v1);
-
-        let mut builder = VariantBuilder::new();
-        append_test_object(&mut builder);
-        let (m2, v2) = builder.finish();
-        let variant2 = Variant::new(&m2, &v2);
-
-        let mut builder = VariantBuilder::new();
-        builder.append_value("This is a string");
-        let (m3, v3) = builder.finish();
-        let variant3 = Variant::new(&m3, &v3);
-
-        // Now, append those three variants to the a new buffer that is reused
-        let mut builder = VariantBuilder::new();
-        append_test_list(&mut builder);
-        let (metadata, value) = builder.finish();
-        let (meta1_offset, meta1_end) = (0, metadata.len());
-        let (value1_offset, value1_end) = (0, value.len());
-
-        // reuse same buffer
-        let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-        append_test_object(&mut builder);
-        let (metadata, value) = builder.finish();
-        let (meta2_offset, meta2_end) = (meta1_end, metadata.len());
-        let (value2_offset, value2_end) = (value1_end, value.len());
-
-        // Append a string
-        let mut builder = VariantBuilder::new_with_buffers(metadata, value);
-        builder.append_value("This is a string");
-        let (metadata, value) = builder.finish();
-        let (meta3_offset, meta3_end) = (meta2_end, metadata.len());
-        let (value3_offset, value3_end) = (value2_end, value.len());
-
-        // verify we can read the variants back correctly
-        let roundtrip1 = Variant::new(
-            &metadata[meta1_offset..meta1_end],
-            &value[value1_offset..value1_end],
-        );
-        assert_eq!(roundtrip1, variant1,);
-
-        let roundtrip2 = Variant::new(
-            &metadata[meta2_offset..meta2_end],
-            &value[value2_offset..value2_end],
-        );
-        assert_eq!(roundtrip2, variant2,);
-
-        let roundtrip3 = Variant::new(
-            &metadata[meta3_offset..meta3_end],
-            &value[value3_offset..value3_end],
-        );
-        assert_eq!(roundtrip3, variant3);
-    }
-
-    /// append a simple List variant
-    fn append_test_list(builder: &mut VariantBuilder) {
-        builder
-            .new_list()
-            .with_value(1234)
-            .with_value("a string value")
-            .finish();
-    }
-
-    /// append an object variant
-    fn append_test_object(builder: &mut VariantBuilder) {
-        let mut obj = builder.new_object();
-        obj.insert("a", true);
-        obj.finish().unwrap();
     }
 
     #[test]
@@ -2978,7 +3015,7 @@ mod tests {
         // Create a nested object builder and finish it
         let mut nested_object_builder = list_builder.new_object();
         nested_object_builder.insert("name", "unknown");
-        nested_object_builder.finish().unwrap();
+        nested_object_builder.finish();
 
         // Drop the outer list builder without finishing it
         drop(list_builder);
@@ -3008,7 +3045,7 @@ mod tests {
         object_builder.insert("second", 2i8);
 
         // The parent object should only contain the original fields
-        object_builder.finish().unwrap();
+        object_builder.finish();
         let (metadata, value) = builder.finish();
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
@@ -3062,7 +3099,7 @@ mod tests {
         object_builder.insert("second", 2i8);
 
         // The parent object should only contain the original fields
-        object_builder.finish().unwrap();
+        object_builder.finish();
         let (metadata, value) = builder.finish();
 
         let metadata = VariantMetadata::try_new(&metadata).unwrap();
@@ -3086,7 +3123,7 @@ mod tests {
         // Create a nested object builder and finish it
         let mut nested_object_builder = object_builder.new_object("nested");
         nested_object_builder.insert("name", "unknown");
-        nested_object_builder.finish().unwrap();
+        nested_object_builder.finish();
 
         // Drop the outer object builder without finishing it
         drop(object_builder);
@@ -3124,7 +3161,7 @@ mod tests {
 
         obj.insert("b", true);
         obj.insert("a", false);
-        obj.finish().unwrap();
+        obj.finish();
         builder.finish()
     }
 
@@ -3153,10 +3190,10 @@ mod tests {
             {
                 let mut inner_obj = outer_obj.new_object("b");
                 inner_obj.insert("a", "inner_value");
-                inner_obj.finish().unwrap();
+                inner_obj.finish();
             }
 
-            outer_obj.finish().unwrap();
+            outer_obj.finish();
         }
 
         builder.finish()
@@ -3234,7 +3271,7 @@ mod tests {
                             }
                         }
                         if i % skip != 0 {
-                            object.finish().unwrap();
+                            object.finish();
                         }
                     }
                     if i % skip != 0 {
@@ -3242,7 +3279,7 @@ mod tests {
                     }
                 }
                 if i % skip != 0 {
-                    object.finish().unwrap();
+                    object.finish();
                 }
             }
             list.finish();
@@ -3254,5 +3291,412 @@ mod tests {
         let v2 = Variant::try_new(&metadata, &value).unwrap();
 
         assert_eq!(format!("{v1:?}"), format!("{v2:?}"));
+    }
+
+    #[test]
+    fn test_read_only_metadata_builder() {
+        // First create some metadata with a few field names
+        let mut default_builder = VariantBuilder::new();
+        default_builder.add_field_name("name");
+        default_builder.add_field_name("age");
+        default_builder.add_field_name("active");
+        let (metadata_bytes, _) = default_builder.finish();
+
+        // Use the metadata to build new variant values
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata);
+        let mut value_builder = ValueBuilder::new();
+
+        {
+            let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
+            let mut obj = ObjectBuilder::new(state, false);
+
+            // These should succeed because the fields exist in the metadata
+            obj.insert("name", "Alice");
+            obj.insert("age", 30i8);
+            obj.insert("active", true);
+            obj.finish();
+        }
+
+        let value = value_builder.into_inner();
+
+        // Verify the variant was built correctly
+        let variant = Variant::try_new(&metadata_bytes, &value).unwrap();
+        let obj = variant.as_object().unwrap();
+        assert_eq!(obj.get("name"), Some(Variant::from("Alice")));
+        assert_eq!(obj.get("age"), Some(Variant::Int8(30)));
+        assert_eq!(obj.get("active"), Some(Variant::from(true)));
+    }
+
+    #[test]
+    fn test_read_only_metadata_builder_fails_on_unknown_field() {
+        // Create metadata with only one field
+        let mut default_builder = VariantBuilder::new();
+        default_builder.add_field_name("known_field");
+        let (metadata_bytes, _) = default_builder.finish();
+
+        // Use the metadata to build new variant values
+        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata);
+        let mut value_builder = ValueBuilder::new();
+
+        {
+            let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
+            let mut obj = ObjectBuilder::new(state, false);
+
+            // This should succeed
+            obj.insert("known_field", "value");
+
+            // This should fail because "unknown_field" is not in the metadata
+            let result = obj.try_insert("unknown_field", "value");
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Field name 'unknown_field' not found"));
+        }
+    }
+
+    #[test]
+    fn test_append_variant_bytes_round_trip() {
+        // Create a complex variant with the normal builder
+        let mut builder = VariantBuilder::new();
+        {
+            let mut obj = builder.new_object();
+            obj.insert("name", "Alice");
+            obj.insert("age", 30i32);
+            {
+                let mut scores_list = obj.new_list("scores");
+                scores_list.append_value(95i32);
+                scores_list.append_value(87i32);
+                scores_list.append_value(92i32);
+                scores_list.finish();
+            }
+            {
+                let mut address = obj.new_object("address");
+                address.insert("street", "123 Main St");
+                address.insert("city", "Anytown");
+                address.finish();
+            }
+            obj.finish();
+        }
+        let (metadata, value1) = builder.finish();
+        let variant1 = Variant::try_new(&metadata, &value1).unwrap();
+
+        // Copy using the new bytes API
+        let metadata = VariantMetadata::new(&metadata);
+        let mut metadata = ReadOnlyMetadataBuilder::new(metadata);
+        let mut builder2 = ValueBuilder::new();
+        let state = ParentState::variant(&mut builder2, &mut metadata);
+        ValueBuilder::append_variant_bytes(state, variant1.clone());
+        let value2 = builder2.into_inner();
+
+        // The bytes should be identical, we merely copied them across.
+        assert_eq!(value1, value2);
+    }
+
+    #[test]
+    fn test_object_insert_bytes_subset() {
+        // Create an original object, making sure to inject the field names we'll add later.
+        let mut builder = VariantBuilder::new().with_field_names(["new_field", "another_field"]);
+        {
+            let mut obj = builder.new_object();
+            obj.insert("field1", "value1");
+            obj.insert("field2", 42i32);
+            obj.insert("field3", true);
+            obj.insert("field4", "value4");
+            obj.finish();
+        }
+        let (metadata1, value1) = builder.finish();
+        let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
+        let original_obj = original_variant.as_object().unwrap();
+
+        // Create a new object copying subset of fields interleaved with new ones
+        let metadata2 = VariantMetadata::new(&metadata1);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut builder2 = ValueBuilder::new();
+        let state = ParentState::variant(&mut builder2, &mut metadata2);
+        {
+            let mut obj = ObjectBuilder::new(state, true);
+
+            // Copy field1 using bytes API
+            obj.insert_bytes("field1", original_obj.get("field1").unwrap());
+
+            // Add new field
+            obj.insert("new_field", "new_value");
+
+            // Copy field3 using bytes API
+            obj.insert_bytes("field3", original_obj.get("field3").unwrap());
+
+            // Add another new field
+            obj.insert("another_field", 99i32);
+
+            // Copy field2 using bytes API
+            obj.insert_bytes("field2", original_obj.get("field2").unwrap());
+
+            obj.finish();
+        }
+        let value2 = builder2.into_inner();
+        let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
+        let result_obj = result_variant.as_object().unwrap();
+
+        // Verify the object contains expected fields
+        assert_eq!(result_obj.len(), 5);
+        assert_eq!(
+            result_obj.get("field1").unwrap().as_string().unwrap(),
+            "value1"
+        );
+        assert_eq!(result_obj.get("field2").unwrap().as_int32().unwrap(), 42);
+        assert!(result_obj.get("field3").unwrap().as_boolean().unwrap());
+        assert_eq!(
+            result_obj.get("new_field").unwrap().as_string().unwrap(),
+            "new_value"
+        );
+        assert_eq!(
+            result_obj.get("another_field").unwrap().as_int32().unwrap(),
+            99
+        );
+    }
+
+    #[test]
+    fn test_list_append_bytes_subset() {
+        // Create an original list
+        let mut builder = VariantBuilder::new();
+        {
+            let mut list = builder.new_list();
+            list.append_value("item1");
+            list.append_value(42i32);
+            list.append_value(true);
+            list.append_value("item4");
+            list.append_value(1.234f64);
+            list.finish();
+        }
+        let (metadata1, value1) = builder.finish();
+        let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
+        let original_list = original_variant.as_list().unwrap();
+
+        // Create a new list copying subset of elements interleaved with new ones
+        let metadata2 = VariantMetadata::new(&metadata1);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut builder2 = ValueBuilder::new();
+        let state = ParentState::variant(&mut builder2, &mut metadata2);
+        {
+            let mut list = ListBuilder::new(state, true);
+
+            // Copy first element using bytes API
+            list.append_value_bytes(original_list.get(0).unwrap());
+
+            // Add new element
+            list.append_value("new_item");
+
+            // Copy third element using bytes API
+            list.append_value_bytes(original_list.get(2).unwrap());
+
+            // Add another new element
+            list.append_value(99i32);
+
+            // Copy last element using bytes API
+            list.append_value_bytes(original_list.get(4).unwrap());
+
+            list.finish();
+        }
+        let value2 = builder2.into_inner();
+        let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
+        let result_list = result_variant.as_list().unwrap();
+
+        // Verify the list contains expected elements
+        assert_eq!(result_list.len(), 5);
+        assert_eq!(result_list.get(0).unwrap().as_string().unwrap(), "item1");
+        assert_eq!(result_list.get(1).unwrap().as_string().unwrap(), "new_item");
+        assert!(result_list.get(2).unwrap().as_boolean().unwrap());
+        assert_eq!(result_list.get(3).unwrap().as_int32().unwrap(), 99);
+        assert_eq!(result_list.get(4).unwrap().as_f64().unwrap(), 1.234);
+    }
+
+    #[test]
+    fn test_complex_nested_filtering_injection() {
+        // Create a complex nested structure: object -> list -> objects. Make sure to pre-register
+        // the extra field names we'll need later while manipulating variant bytes.
+        let mut builder = VariantBuilder::new().with_field_names([
+            "active_count",
+            "active_users",
+            "computed_score",
+            "processed_at",
+            "status",
+        ]);
+
+        {
+            let mut root_obj = builder.new_object();
+            root_obj.insert("metadata", "original");
+
+            {
+                let mut users_list = root_obj.new_list("users");
+
+                // User 1
+                {
+                    let mut user1 = users_list.new_object();
+                    user1.insert("id", 1i32);
+                    user1.insert("name", "Alice");
+                    user1.insert("active", true);
+                    user1.finish();
+                }
+
+                // User 2
+                {
+                    let mut user2 = users_list.new_object();
+                    user2.insert("id", 2i32);
+                    user2.insert("name", "Bob");
+                    user2.insert("active", false);
+                    user2.finish();
+                }
+
+                // User 3
+                {
+                    let mut user3 = users_list.new_object();
+                    user3.insert("id", 3i32);
+                    user3.insert("name", "Charlie");
+                    user3.insert("active", true);
+                    user3.finish();
+                }
+
+                users_list.finish();
+            }
+
+            root_obj.insert("total_count", 3i32);
+            root_obj.finish();
+        }
+        let (metadata1, value1) = builder.finish();
+        let original_variant = Variant::try_new(&metadata1, &value1).unwrap();
+        let original_obj = original_variant.as_object().unwrap();
+        let original_users = original_obj.get("users").unwrap();
+        let original_users = original_users.as_list().unwrap();
+
+        // Create filtered/modified version: only copy active users and inject new data
+        let metadata2 = VariantMetadata::new(&metadata1);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut builder2 = ValueBuilder::new();
+        let state = ParentState::variant(&mut builder2, &mut metadata2);
+        {
+            let mut root_obj = ObjectBuilder::new(state, true);
+
+            // Copy metadata using bytes API
+            root_obj.insert_bytes("metadata", original_obj.get("metadata").unwrap());
+
+            // Add processing timestamp
+            root_obj.insert("processed_at", "2024-01-01T00:00:00Z");
+
+            {
+                let mut filtered_users = root_obj.new_list("active_users");
+
+                // Copy only active users and inject additional data
+                for i in 0..original_users.len() {
+                    let user = original_users.get(i).unwrap();
+                    let user = user.as_object().unwrap();
+                    if user.get("active").unwrap().as_boolean().unwrap() {
+                        {
+                            let mut new_user = filtered_users.new_object();
+
+                            // Copy existing fields using bytes API
+                            new_user.insert_bytes("id", user.get("id").unwrap());
+                            new_user.insert_bytes("name", user.get("name").unwrap());
+
+                            // Inject new computed field
+                            let user_id = user.get("id").unwrap().as_int32().unwrap();
+                            new_user.insert("computed_score", user_id * 10);
+
+                            // Add status transformation (don't copy the 'active' field)
+                            new_user.insert("status", "verified");
+
+                            new_user.finish();
+                        }
+                    }
+                }
+
+                // Inject a completely new user
+                {
+                    let mut new_user = filtered_users.new_object();
+                    new_user.insert("id", 999i32);
+                    new_user.insert("name", "System User");
+                    new_user.insert("computed_score", 0i32);
+                    new_user.insert("status", "system");
+                    new_user.finish();
+                }
+
+                filtered_users.finish();
+            }
+
+            // Update count
+            root_obj.insert("active_count", 3i32); // 2 active + 1 new
+
+            root_obj.finish();
+        }
+        let value2 = builder2.into_inner();
+        let result_variant = Variant::try_new(&metadata1, &value2).unwrap();
+        let result_obj = result_variant.as_object().unwrap();
+
+        // Verify the filtered/modified structure
+        assert_eq!(
+            result_obj.get("metadata").unwrap().as_string().unwrap(),
+            "original"
+        );
+        assert_eq!(
+            result_obj.get("processed_at").unwrap().as_string().unwrap(),
+            "2024-01-01T00:00:00Z"
+        );
+        assert_eq!(
+            result_obj.get("active_count").unwrap().as_int32().unwrap(),
+            3
+        );
+
+        let active_users = result_obj.get("active_users").unwrap();
+        let active_users = active_users.as_list().unwrap();
+        assert_eq!(active_users.len(), 3);
+
+        // Verify Alice (id=1, was active)
+        let alice = active_users.get(0).unwrap();
+        let alice = alice.as_object().unwrap();
+        assert_eq!(alice.get("id").unwrap().as_int32().unwrap(), 1);
+        assert_eq!(alice.get("name").unwrap().as_string().unwrap(), "Alice");
+        assert_eq!(alice.get("computed_score").unwrap().as_int32().unwrap(), 10);
+        assert_eq!(
+            alice.get("status").unwrap().as_string().unwrap(),
+            "verified"
+        );
+        assert!(alice.get("active").is_none()); // This field was not copied
+
+        // Verify Charlie (id=3, was active) - Bob (id=2) was not active so not included
+        let charlie = active_users.get(1).unwrap();
+        let charlie = charlie.as_object().unwrap();
+        assert_eq!(charlie.get("id").unwrap().as_int32().unwrap(), 3);
+        assert_eq!(charlie.get("name").unwrap().as_string().unwrap(), "Charlie");
+        assert_eq!(
+            charlie.get("computed_score").unwrap().as_int32().unwrap(),
+            30
+        );
+        assert_eq!(
+            charlie.get("status").unwrap().as_string().unwrap(),
+            "verified"
+        );
+
+        // Verify injected system user
+        let system_user = active_users.get(2).unwrap();
+        let system_user = system_user.as_object().unwrap();
+        assert_eq!(system_user.get("id").unwrap().as_int32().unwrap(), 999);
+        assert_eq!(
+            system_user.get("name").unwrap().as_string().unwrap(),
+            "System User"
+        );
+        assert_eq!(
+            system_user
+                .get("computed_score")
+                .unwrap()
+                .as_int32()
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            system_user.get("status").unwrap().as_string().unwrap(),
+            "system"
+        );
     }
 }

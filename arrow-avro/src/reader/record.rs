@@ -484,11 +484,13 @@ impl Decoder {
                     Nullability::NullFirst => branch != 0,
                     Nullability::NullSecond => branch == 0,
                 };
-                nb.append(is_not_null);
                 if is_not_null {
+                    // It is mportant to decode before appending to null buffer in case of decode error
                     encoding.decode(buf)?;
+                    nb.append(true);
                 } else {
                     encoding.append_null();
+                    nb.append(false);
                 }
             }
         }
@@ -1432,5 +1434,41 @@ mod tests {
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let array = decoder.flush(None).unwrap();
         assert_eq!(array.len(), 0);
+    }
+
+    #[test]
+    fn test_nullable_decode_error_bitmap_corruption() {
+        // Nullable Int32 with ['T','null'] encoding (NullSecond)
+        let avro_type = AvroDataType::new(
+            Codec::Int32,
+            Default::default(),
+            Some(Nullability::NullSecond),
+        );
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+
+        // Row 1: union branch 1 (null)
+        let mut row1 = Vec::new();
+        row1.extend_from_slice(&encode_avro_int(1));
+
+        // Row 2: union branch 0 (non-null) but missing the int payload -> decode error
+        let mut row2 = Vec::new();
+        row2.extend_from_slice(&encode_avro_int(0)); // branch = 0 => non-null
+
+        // Row 3: union branch 0 (non-null) with correct int payload -> should succeed
+        let mut row3 = Vec::new();
+        row3.extend_from_slice(&encode_avro_int(0)); // branch
+        row3.extend_from_slice(&encode_avro_int(42)); // actual value
+
+        decoder.decode(&mut AvroCursor::new(&row1)).unwrap();
+        assert!(decoder.decode(&mut AvroCursor::new(&row2)).is_err()); // decode error
+        decoder.decode(&mut AvroCursor::new(&row3)).unwrap();
+
+        let array = decoder.flush(None).unwrap();
+
+        // Should contain 2 elements: row1 (null) and row3 (42)
+        assert_eq!(array.len(), 2);
+        let int_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert!(int_array.is_null(0)); // row1 is null
+        assert_eq!(int_array.value(1), 42); // row3 value is 42
     }
 }
