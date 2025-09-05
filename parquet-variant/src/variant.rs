@@ -830,7 +830,6 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///
     /// ```
     ///  use parquet_variant::{Variant, VariantDecimal4};
-    /// use parquet_variant::ParentState::Variant;
     ///
     ///  // you can read an int64 variant into an u8
     ///  let v1 = Variant::from(123i64);
@@ -841,7 +840,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u8(), Some(26u8));
     ///
-    ///  // but not a variant that cant fit into the range
+    ///  // but not a variant that can't fit into the range
     ///  let v3 = Variant::from(-1);
     ///  assert_eq!(v3.as_u8(), None);
     ///
@@ -877,7 +876,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u16(), Some(u16::MAX));
     ///
-    ///  // but not a variant that cant fit into the range
+    ///  // but not a variant that can't fit into the range
     ///  let v3 = Variant::from(-1);
     ///  assert_eq!(v3.as_u16(), None);
     ///
@@ -913,7 +912,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u32(), Some(u32::MAX));
     ///
-    ///  // but not a variant that cant fit into the range
+    ///  // but not a variant that can't fit into the range
     ///  let v3 = Variant::from(-1);
     ///  assert_eq!(v3.as_u32(), None);
     ///
@@ -949,7 +948,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     ///  let v2 = Variant::from(d);
     ///  assert_eq!(v2.as_u64(), Some(u64::MAX));
     ///
-    ///  // but not a variant that cant fit into the range
+    ///  // but not a variant that can't fit into the range
     ///  let v3 = Variant::from(-1);
     ///  assert_eq!(v3.as_u64(), None);
     ///
