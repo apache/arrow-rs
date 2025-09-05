@@ -171,16 +171,28 @@ pub(crate) fn decode_column_index(
 
     let index = match column_type {
         Type::BOOLEAN => {
-            ColumnIndexMetaData::BOOLEAN(PrimitiveColumnIndex::<bool>::try_new(index)?)
+            ColumnIndexMetaData::BOOLEAN(PrimitiveColumnIndex::<bool>::try_from_thrift(index)?)
         }
-        Type::INT32 => ColumnIndexMetaData::INT32(PrimitiveColumnIndex::<i32>::try_new(index)?),
-        Type::INT64 => ColumnIndexMetaData::INT64(PrimitiveColumnIndex::<i64>::try_new(index)?),
-        Type::INT96 => ColumnIndexMetaData::INT96(PrimitiveColumnIndex::<Int96>::try_new(index)?),
-        Type::FLOAT => ColumnIndexMetaData::FLOAT(PrimitiveColumnIndex::<f32>::try_new(index)?),
-        Type::DOUBLE => ColumnIndexMetaData::DOUBLE(PrimitiveColumnIndex::<f64>::try_new(index)?),
-        Type::BYTE_ARRAY => ColumnIndexMetaData::BYTE_ARRAY(ByteArrayColumnIndex::try_new(index)?),
+        Type::INT32 => {
+            ColumnIndexMetaData::INT32(PrimitiveColumnIndex::<i32>::try_from_thrift(index)?)
+        }
+        Type::INT64 => {
+            ColumnIndexMetaData::INT64(PrimitiveColumnIndex::<i64>::try_from_thrift(index)?)
+        }
+        Type::INT96 => {
+            ColumnIndexMetaData::INT96(PrimitiveColumnIndex::<Int96>::try_from_thrift(index)?)
+        }
+        Type::FLOAT => {
+            ColumnIndexMetaData::FLOAT(PrimitiveColumnIndex::<f32>::try_from_thrift(index)?)
+        }
+        Type::DOUBLE => {
+            ColumnIndexMetaData::DOUBLE(PrimitiveColumnIndex::<f64>::try_from_thrift(index)?)
+        }
+        Type::BYTE_ARRAY => {
+            ColumnIndexMetaData::BYTE_ARRAY(ByteArrayColumnIndex::try_from_thrift(index)?)
+        }
         Type::FIXED_LEN_BYTE_ARRAY => {
-            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(ByteArrayColumnIndex::try_new(index)?)
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(ByteArrayColumnIndex::try_from_thrift(index)?)
         }
     };
 

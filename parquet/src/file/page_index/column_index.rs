@@ -95,18 +95,26 @@ pub struct PrimitiveColumnIndex<T> {
 }
 
 impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
-    pub(super) fn try_new(index: ThriftColumnIndex) -> Result<Self> {
-        let len = index.null_pages.len();
+    pub(crate) fn try_new(
+        null_pages: Vec<bool>,
+        boundary_order: BoundaryOrder,
+        null_counts: Option<Vec<i64>>,
+        repetition_level_histograms: Option<Vec<i64>>,
+        definition_level_histograms: Option<Vec<i64>>,
+        min_bytes: Vec<&[u8]>,
+        max_bytes: Vec<&[u8]>,
+    ) -> Result<Self> {
+        let len = null_pages.len();
 
         let mut min_values = Vec::with_capacity(len);
         let mut max_values = Vec::with_capacity(len);
 
-        for (i, is_null) in index.null_pages.iter().enumerate().take(len) {
+        for (i, is_null) in null_pages.iter().enumerate().take(len) {
             if !is_null {
-                let min = index.min_values[i];
+                let min = min_bytes[i];
                 min_values.push(T::try_from_le_slice(min)?);
 
-                let max = index.max_values[i];
+                let max = max_bytes[i];
                 max_values.push(T::try_from_le_slice(max)?);
             } else {
                 // need placeholders
@@ -117,15 +125,27 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
 
         Ok(Self {
             column_index: ColumnIndex {
-                null_pages: index.null_pages,
-                boundary_order: index.boundary_order,
-                null_counts: index.null_counts,
-                repetition_level_histograms: index.repetition_level_histograms,
-                definition_level_histograms: index.definition_level_histograms,
+                null_pages,
+                boundary_order,
+                null_counts,
+                repetition_level_histograms,
+                definition_level_histograms,
             },
             min_values,
             max_values,
         })
+    }
+
+    pub(super) fn try_from_thrift(index: ThriftColumnIndex) -> Result<Self> {
+        Self::try_new(
+            index.null_pages,
+            index.boundary_order,
+            index.null_counts,
+            index.repetition_level_histograms,
+            index.definition_level_histograms,
+            index.min_values,
+            index.max_values,
+        )
     }
 }
 
@@ -262,11 +282,19 @@ pub struct ByteArrayColumnIndex {
 }
 
 impl ByteArrayColumnIndex {
-    pub(super) fn try_new(index: ThriftColumnIndex) -> Result<Self> {
-        let len = index.null_pages.len();
+    pub(crate) fn try_new(
+        null_pages: Vec<bool>,
+        boundary_order: BoundaryOrder,
+        null_counts: Option<Vec<i64>>,
+        repetition_level_histograms: Option<Vec<i64>>,
+        definition_level_histograms: Option<Vec<i64>>,
+        min_values: Vec<&[u8]>,
+        max_values: Vec<&[u8]>,
+    ) -> Result<Self> {
+        let len = null_pages.len();
 
-        let min_len = index.min_values.iter().map(|&v| v.len()).sum();
-        let max_len = index.max_values.iter().map(|&v| v.len()).sum();
+        let min_len = min_values.iter().map(|&v| v.len()).sum();
+        let max_len = max_values.iter().map(|&v| v.len()).sum();
         let mut min_bytes = vec![0u8; min_len];
         let mut max_bytes = vec![0u8; max_len];
 
@@ -276,15 +304,15 @@ impl ByteArrayColumnIndex {
         let mut min_pos = 0;
         let mut max_pos = 0;
 
-        for (i, is_null) in index.null_pages.iter().enumerate().take(len) {
+        for (i, is_null) in null_pages.iter().enumerate().take(len) {
             if !is_null {
-                let min = index.min_values[i];
+                let min = min_values[i];
                 let dst = &mut min_bytes[min_pos..min_pos + min.len()];
                 dst.copy_from_slice(min);
                 min_offsets[i] = min_pos;
                 min_pos += min.len();
 
-                let max = index.max_values[i];
+                let max = max_values[i];
                 let dst = &mut max_bytes[max_pos..max_pos + max.len()];
                 dst.copy_from_slice(max);
                 max_offsets[i] = max_pos;
@@ -300,18 +328,29 @@ impl ByteArrayColumnIndex {
 
         Ok(Self {
             column_index: ColumnIndex {
-                null_pages: index.null_pages,
-                boundary_order: index.boundary_order,
-                null_counts: index.null_counts,
-                repetition_level_histograms: index.repetition_level_histograms,
-                definition_level_histograms: index.definition_level_histograms,
+                null_pages,
+                boundary_order,
+                null_counts,
+                repetition_level_histograms,
+                definition_level_histograms,
             },
-
             min_bytes,
             min_offsets,
             max_bytes,
             max_offsets,
         })
+    }
+
+    pub(super) fn try_from_thrift(index: ThriftColumnIndex) -> Result<Self> {
+        Self::try_new(
+            index.null_pages,
+            index.boundary_order,
+            index.null_counts,
+            index.repetition_level_histograms,
+            index.definition_level_histograms,
+            index.min_values,
+            index.max_values,
+        )
     }
 
     /// Returns the min value for the page indexed by `idx`
@@ -697,7 +736,7 @@ mod tests {
             boundary_order: BoundaryOrder::UNORDERED,
         };
 
-        let err = PrimitiveColumnIndex::<i32>::try_new(column_index).unwrap_err();
+        let err = PrimitiveColumnIndex::<i32>::try_from_thrift(column_index).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Parquet error: error converting value, expected 4 bytes got 0"
