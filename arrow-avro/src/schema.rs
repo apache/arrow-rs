@@ -2138,7 +2138,7 @@ mod tests {
         // Ensure TryFrom delegates to from_arrow_with_options(None)
         let arrow_schema = ArrowSchema::new(vec![ArrowField::new("s", DataType::Utf8, true)]);
         let a = AvroSchema::try_from(&arrow_schema).unwrap().json_string;
-        let b = AvroSchema::from_arrow_with_options(&arrow_schema, None)
+        let b = AvroSchema::from_arrow_with_options(&arrow_schema, None);
         assert_eq!(a, b.unwrap().json_string);
     }
 }

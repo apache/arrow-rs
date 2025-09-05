@@ -206,20 +206,18 @@ impl<'a> FieldEncoder<'a> {
             }
             (Some(order), false) => {
                 // Optimization: drop any bitmap; emit a constant "value" branch byte.
-                let byte = union_value_branch_byte(order, false);
-                NullState::NullableNoNulls { byte }
+                NullState::NullableNoNulls {
+                    union_value_byte: union_value_branch_byte(order, false),
+                }
             }
             (Some(null_order), true) => {
-                let nulls = array.nulls().cloned().ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(format!(
+                let Some(nulls) = array.nulls().cloned() else {
+                    return Err(ArrowError::InvalidArgumentError(format!(
                         "Array for Avro site '{}' reports nulls but has no null buffer",
                         field.name()
-                    ))
-                })?;
-                NullState::Nullable {
-                    nulls: null_buffer,
-                    null_order,
-                }
+                    )));
+                };
+                NullState::Nullable { nulls, null_order }
             }
         };
         Ok(Self {
@@ -231,9 +229,9 @@ impl<'a> FieldEncoder<'a> {
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         match &self.null_state {
             NullState::NonNullable => {}
-            NullState::NullableNoNulls { byte } => out.write_all(&[*byte]).map_err(|e| {
-                ArrowError::IoError(format!("write union value branch: {e}"), e)
-            })?,
+            NullState::NullableNoNulls { union_value_byte } => out
+                .write_all(&[*union_value_byte])
+                .map_err(|e| ArrowError::IoError(format!("write union value branch: {e}"), e))?,
             NullState::Nullable { nulls, null_order } if nulls.is_null(idx) => {
                 return write_optional_index(out, true, *null_order); // no value to write
             }
@@ -305,7 +303,7 @@ impl<'a> RecordEncoderBuilder<'a> {
             ));
         };
         let mut columns = Vec::with_capacity(root_fields.len());
-        for root_field in root_fields {
+        for root_field in root_fields.as_ref() {
             let name = root_field.name();
             let arrow_index = self.arrow_schema.index_of(name).map_err(|e| {
                 ArrowError::SchemaError(format!("Schema mismatch for field '{name}': {e}"))
@@ -541,12 +539,9 @@ impl<'a> StructEncoder<'a> {
             let column = array.columns().get(idx).ok_or_else(|| {
                 ArrowError::SchemaError(format!("Struct child index {idx} out of range"))
             })?;
-            let field = fields
-                .get(idx)
-                .ok_or_else(|| {
-                    ArrowError::SchemaError(format!("Struct child index {idx} out of range"))
-                })?
-                .as_ref();
+            let field = fields.get(idx).ok_or_else(|| {
+                ArrowError::SchemaError(format!("Struct child index {idx} out of range"))
+            })?;
             let encoder = prepare_value_site_encoder(
                 column.as_ref(),
                 field,
