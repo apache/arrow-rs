@@ -299,13 +299,10 @@ impl<'a> RecordEncoderBuilder<'a> {
     /// resolving each field to an Arrow index by name.
     pub fn build(self) -> Result<RecordEncoder, ArrowError> {
         let avro_root_dt = self.avro_root.data_type();
-        let root_fields = match avro_root_dt.codec() {
-            Codec::Struct(fields) => fields,
-            _ => {
-                return Err(ArrowError::SchemaError(
-                    "Top-level Avro schema must be a record/struct".into(),
-                ))
-            }
+        let Codec::Struct(root_fields) = avro_root_dt.codec() else {
+            return Err(ArrowError::SchemaError(
+                "Top-level Avro schema must be a record/struct".into(),
+            ));
         };
         let mut columns = Vec::with_capacity(root_fields.len());
         for root_field in root_fields.iter() {
