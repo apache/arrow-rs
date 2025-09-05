@@ -27,7 +27,6 @@ use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::page_index::column_index::{
     ByteArrayColumnIndex, ColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
 };
-use crate::file::page_index::index::{Index, NativeIndex, PageIndex};
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics::{Statistics, ValueStatistics};
 use std::sync::Arc;
@@ -196,34 +195,6 @@ impl HeapSize for ByteArrayColumnIndex {
             + self.min_offsets.heap_size()
             + self.max_bytes.heap_size()
             + self.max_offsets.heap_size()
-    }
-}
-
-impl HeapSize for Index {
-    fn heap_size(&self) -> usize {
-        match self {
-            Index::NONE => 0,
-            Index::BOOLEAN(native_index) => native_index.heap_size(),
-            Index::INT32(native_index) => native_index.heap_size(),
-            Index::INT64(native_index) => native_index.heap_size(),
-            Index::INT96(native_index) => native_index.heap_size(),
-            Index::FLOAT(native_index) => native_index.heap_size(),
-            Index::DOUBLE(native_index) => native_index.heap_size(),
-            Index::BYTE_ARRAY(native_index) => native_index.heap_size(),
-            Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index.heap_size(),
-        }
-    }
-}
-
-impl<T: ParquetValueType> HeapSize for NativeIndex<T> {
-    fn heap_size(&self) -> usize {
-        self.indexes.heap_size() + self.boundary_order.heap_size()
-    }
-}
-
-impl<T: ParquetValueType> HeapSize for PageIndex<T> {
-    fn heap_size(&self) -> usize {
-        self.min.heap_size() + self.max.heap_size() + self.null_count.heap_size()
     }
 }
 
