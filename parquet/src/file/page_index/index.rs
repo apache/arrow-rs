@@ -264,6 +264,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
         let min_values = self
             .indexes

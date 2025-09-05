@@ -54,7 +54,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     schema: &'a TypePtr,
     schema_descr: &'a SchemaDescPtr,
     row_groups: Vec<crate::format::RowGroup>,
-    column_indexes: Option<&'a [Vec<Option<crate::format::ColumnIndex>>]>,
+    column_indexes: Option<&'a [Vec<Option<ColumnIndexMetaData>>]>,
     offset_indexes: Option<&'a [Vec<Option<OffsetIndexMetaData>>]>,
     key_value_metadata: Option<Vec<KeyValue>>,
     created_by: Option<String>,
@@ -103,7 +103,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     /// of the serialized column indexes.
     fn write_column_indexes(
         &mut self,
-        column_indexes: &[Vec<Option<crate::format::ColumnIndex>>],
+        column_indexes: &[Vec<Option<ColumnIndexMetaData>>],
     ) -> Result<()> {
         // iter row group
         // iter each column
@@ -223,7 +223,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
     pub fn with_column_indexes(
         mut self,
-        column_indexes: &'a [Vec<Option<crate::format::ColumnIndex>>],
+        column_indexes: &'a [Vec<Option<ColumnIndexMetaData>>],
     ) -> Self {
         self.column_indexes = Some(column_indexes);
         self
@@ -391,40 +391,14 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         Ok(())
     }
 
-    fn convert_column_indexes(&self) -> Vec<Vec<Option<crate::format::ColumnIndex>>> {
+    fn convert_column_indexes(&self) -> Vec<Vec<Option<ColumnIndexMetaData>>> {
         if let Some(row_group_column_indexes) = self.metadata.column_index() {
             (0..self.metadata.row_groups().len())
                 .map(|rg_idx| {
                     let column_indexes = &row_group_column_indexes[rg_idx];
                     column_indexes
                         .iter()
-                        .map(|column_index| match column_index {
-                            ColumnIndexMetaData::NONE => None,
-                            ColumnIndexMetaData::BOOLEAN(column_index) => {
-                                Some(column_index.to_thrift())
-                            }
-                            ColumnIndexMetaData::BYTE_ARRAY(column_index) => {
-                                Some(column_index.to_thrift())
-                            }
-                            ColumnIndexMetaData::DOUBLE(column_index) => {
-                                Some(column_index.to_thrift())
-                            }
-                            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => {
-                                Some(column_index.to_thrift())
-                            }
-                            ColumnIndexMetaData::FLOAT(column_index) => {
-                                Some(column_index.to_thrift())
-                            }
-                            ColumnIndexMetaData::INT32(column_index) => {
-                                Some(column_index.to_thrift())
-                            }
-                            ColumnIndexMetaData::INT64(column_index) => {
-                                Some(column_index.to_thrift())
-                            }
-                            ColumnIndexMetaData::INT96(column_index) => {
-                                Some(column_index.to_thrift())
-                            }
-                        })
+                        .map(|column_index| Some(column_index.clone()))
                         .collect()
                 })
                 .collect()
@@ -497,25 +471,25 @@ impl MetadataObjectWriter {
     /// Write a column [`OffsetIndex`] in Thrift format
     fn write_offset_index(
         &self,
-        offset_index: &crate::format::OffsetIndex,
+        offset_index: &OffsetIndexMetaData,
         _column_chunk: &crate::format::ColumnChunk,
         _row_group_idx: usize,
         _column_idx: usize,
         sink: impl Write,
     ) -> Result<()> {
-        Self::write_object(offset_index, sink)
+        Self::write_thrift_object(offset_index, sink)
     }
 
     /// Write a column [`ColumnIndex`] in Thrift format
     fn write_column_index(
         &self,
-        column_index: &crate::format::ColumnIndex,
+        column_index: &ColumnIndexMetaData,
         _column_chunk: &crate::format::ColumnChunk,
         _row_group_idx: usize,
         _column_idx: usize,
         sink: impl Write,
     ) -> Result<()> {
-        Self::write_object(column_index, sink)
+        Self::write_thrift_object(column_index, sink)
     }
 
     /// No-op implementation of row-group metadata encryption
@@ -609,14 +583,14 @@ impl MetadataObjectWriter {
     /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
         &self,
-        column_index: &crate::format::ColumnIndex,
+        column_index: &ColumnIndexMetaData,
         column_chunk: &crate::format::ColumnChunk,
         row_group_idx: usize,
         column_idx: usize,
         sink: impl Write,
     ) -> Result<()> {
         match &self.file_encryptor {
-            Some(file_encryptor) => Self::write_object_with_encryption(
+            Some(file_encryptor) => Self::write_thrift_object_with_encryption(
                 column_index,
                 sink,
                 file_encryptor,
@@ -625,7 +599,7 @@ impl MetadataObjectWriter {
                 row_group_idx,
                 column_idx,
             ),
-            None => Self::write_object(column_index, sink),
+            None => Self::write_thrift_object(column_index, sink),
         }
     }
 
@@ -656,49 +630,6 @@ impl MetadataObjectWriter {
                 .as_ref()
                 .map(|encryptor| encryptor.properties()),
         )
-    }
-
-    fn write_object_with_encryption(
-        object: &impl TSerializable,
-        mut sink: impl Write,
-        file_encryptor: &FileEncryptor,
-        column_metadata: &crate::format::ColumnChunk,
-        module_type: ModuleType,
-        row_group_index: usize,
-        column_index: usize,
-    ) -> Result<()> {
-        let column_path_vec = &column_metadata
-            .meta_data
-            .as_ref()
-            .ok_or_else(|| {
-                general_err!(
-                    "Column metadata not set for column {} when encrypting object",
-                    column_index
-                )
-            })?
-            .path_in_schema;
-
-        let joined_column_path;
-        let column_path = if column_path_vec.len() == 1 {
-            &column_path_vec[0]
-        } else {
-            joined_column_path = column_path_vec.join(".");
-            &joined_column_path
-        };
-
-        if file_encryptor.is_column_encrypted(column_path) {
-            let aad = create_module_aad(
-                file_encryptor.file_aad(),
-                module_type,
-                row_group_index,
-                column_index,
-                None,
-            )?;
-            let mut encryptor = file_encryptor.get_column_encryptor(column_path)?;
-            encrypt_object(object, &mut encryptor, &mut sink, &aad)
-        } else {
-            Self::write_object(object, sink)
-        }
     }
 
     fn write_thrift_object_with_encryption(

@@ -101,19 +101,20 @@ use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
 pub(crate) use crate::file::metadata::memory::HeapSize;
+use crate::file::page_index::column_index::{
+    ByteArrayColumnIndex, ColumnIndex, PrimitiveColumnIndex,
+};
+use crate::file::statistics::{self, Statistics};
 use crate::file::{
     page_encoding_stats::{self, PageEncodingStats},
     page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation},
-};
-use crate::file::{
-    page_index::index::PageIndex,
-    statistics::{self, Statistics},
 };
 use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
 };
+use crate::thrift_struct;
 use crate::{
     basic::BoundaryOrder,
     errors::{ParquetError, Result},
@@ -127,10 +128,6 @@ use crate::{
 };
 use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
-};
-use crate::{
-    file::page_index::index::{Index, NativeIndex},
-    thrift_struct,
 };
 pub use reader::{FooterTail, PageIndexPolicy, ParquetMetaDataReader};
 use std::io::Write;
@@ -1630,135 +1627,141 @@ impl ColumnIndexBuilder {
     /// Build and get the column index
     ///
     /// Note: callers should check [`Self::valid`] before calling this method
-    pub fn build(self) -> Result<Index> {
+    pub fn build(self) -> Result<ColumnIndexMetaData> {
         Ok(match self.column_type {
             Type::BOOLEAN => {
-                let (indexes, boundary_order) = self.build_page_index()?;
-                Index::BOOLEAN(NativeIndex {
-                    indexes,
-                    boundary_order,
-                })
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::BOOLEAN(index)
             }
             Type::INT32 => {
-                let (indexes, boundary_order) = self.build_page_index()?;
-                Index::INT32(NativeIndex {
-                    indexes,
-                    boundary_order,
-                })
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::INT32(index)
             }
             Type::INT64 => {
-                let (indexes, boundary_order) = self.build_page_index()?;
-                Index::INT64(NativeIndex {
-                    indexes,
-                    boundary_order,
-                })
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::INT64(index)
             }
             Type::INT96 => {
-                let (indexes, boundary_order) = self.build_page_index()?;
-                Index::INT96(NativeIndex {
-                    indexes,
-                    boundary_order,
-                })
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::INT96(index)
             }
             Type::FLOAT => {
-                let (indexes, boundary_order) = self.build_page_index()?;
-                Index::FLOAT(NativeIndex {
-                    indexes,
-                    boundary_order,
-                })
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::FLOAT(index)
             }
             Type::DOUBLE => {
-                let (indexes, boundary_order) = self.build_page_index()?;
-                Index::DOUBLE(NativeIndex {
-                    indexes,
-                    boundary_order,
-                })
+                let index = self.build_page_index()?;
+                ColumnIndexMetaData::DOUBLE(index)
             }
             Type::BYTE_ARRAY => {
-                let (indexes, boundary_order) = self.build_page_index()?;
-                Index::BYTE_ARRAY(NativeIndex {
-                    indexes,
-                    boundary_order,
-                })
+                let index = self.build_byte_array_index()?;
+                ColumnIndexMetaData::BYTE_ARRAY(index)
             }
             Type::FIXED_LEN_BYTE_ARRAY => {
-                let (indexes, boundary_order) = self.build_page_index()?;
-                Index::FIXED_LEN_BYTE_ARRAY(NativeIndex {
-                    indexes,
-                    boundary_order,
-                })
+                let index = self.build_byte_array_index()?;
+                ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index)
             }
         })
     }
 
-    fn build_page_index<T>(self) -> Result<(Vec<PageIndex<T>>, BoundaryOrder)>
+    fn build_page_index<T>(self) -> Result<PrimitiveColumnIndex<T>>
     where
         T: ParquetValueType,
     {
-        let len = self.min_values.len();
-
-        let null_counts = self
-            .null_counts
-            .iter()
-            .map(|x| Some(*x))
-            .collect::<Vec<_>>();
-
-        // histograms are a 1D array encoding a 2D num_pages X num_levels matrix.
-        let to_page_histograms = |opt_hist: Option<Vec<i64>>| {
-            if let Some(hist) = opt_hist {
-                // TODO: should we assert (hist.len() % len) == 0?
-                let num_levels = hist.len() / len;
-                let mut res = Vec::with_capacity(len);
-                for i in 0..len {
-                    let page_idx = i * num_levels;
-                    let page_hist = hist[page_idx..page_idx + num_levels].to_vec();
-                    res.push(Some(LevelHistogram::from(page_hist)));
-                }
-                res
-            } else {
-                vec![None; len]
-            }
+        let column_index = ColumnIndex {
+            null_pages: self.null_pages,
+            boundary_order: self.boundary_order,
+            null_counts: Some(self.null_counts),
+            repetition_level_histograms: self.repetition_level_histograms,
+            definition_level_histograms: self.definition_level_histograms,
         };
 
-        let rep_hists: Vec<Option<LevelHistogram>> =
-            to_page_histograms(self.repetition_level_histograms);
-        let def_hists: Vec<Option<LevelHistogram>> =
-            to_page_histograms(self.definition_level_histograms);
-
-        let indexes = self
+        // TODO(ets): refactor this into column index
+        let min_values = self
             .min_values
             .iter()
-            .zip(self.max_values.iter())
-            .zip(self.null_pages.into_iter())
-            .zip(null_counts.into_iter())
-            .zip(rep_hists.into_iter())
-            .zip(def_hists.into_iter())
-            .map(
-                |(
-                    ((((min, max), is_null), null_count), repetition_level_histogram),
-                    definition_level_histogram,
-                )| {
-                    let (min, max) = if is_null {
-                        (None, None)
-                    } else {
-                        (
-                            Some(T::try_from_le_slice(min)?),
-                            Some(T::try_from_le_slice(max)?),
-                        )
-                    };
-                    Ok(PageIndex {
-                        min,
-                        max,
-                        null_count,
-                        repetition_level_histogram,
-                        definition_level_histogram,
-                    })
-                },
-            )
+            .zip(column_index.null_pages.iter())
+            .map(|(min, is_null)| {
+                if *is_null {
+                    Ok(Default::default())
+                } else {
+                    Ok(T::try_from_le_slice(min)?)
+                }
+            })
             .collect::<Result<Vec<_>, ParquetError>>()?;
 
-        let boundary_order = self.boundary_order;
-        Ok((indexes, boundary_order))
+        let max_values = self
+            .max_values
+            .iter()
+            .zip(column_index.null_pages.iter())
+            .map(|(max, is_null)| {
+                if *is_null {
+                    Ok(Default::default())
+                } else {
+                    Ok(T::try_from_le_slice(max)?)
+                }
+            })
+            .collect::<Result<Vec<_>, ParquetError>>()?;
+
+        Ok(PrimitiveColumnIndex {
+            column_index,
+            min_values,
+            max_values,
+        })
+    }
+
+    fn build_byte_array_index(self) -> Result<ByteArrayColumnIndex> {
+        // TODO(ets): refactor this into column index so we can reuse all this code
+        let len = self.null_pages.len();
+
+        let min_len = self.min_values.iter().map(|v| v.len()).sum();
+        let max_len = self.max_values.iter().map(|v| v.len()).sum();
+        let mut min_bytes = vec![0u8; min_len];
+        let mut max_bytes = vec![0u8; max_len];
+
+        let mut min_offsets = vec![0usize; len + 1];
+        let mut max_offsets = vec![0usize; len + 1];
+
+        let mut min_pos = 0;
+        let mut max_pos = 0;
+
+        for (i, is_null) in self.null_pages.iter().enumerate().take(len) {
+            if !is_null {
+                let min = &self.min_values[i];
+                let dst = &mut min_bytes[min_pos..min_pos + min.len()];
+                dst.copy_from_slice(min);
+                min_offsets[i] = min_pos;
+                min_pos += min.len();
+
+                let max = &self.max_values[i];
+                let dst = &mut max_bytes[max_pos..max_pos + max.len()];
+                dst.copy_from_slice(max);
+                max_offsets[i] = max_pos;
+                max_pos += max.len();
+            } else {
+                min_offsets[i] = min_pos;
+                max_offsets[i] = max_pos;
+            }
+        }
+
+        min_offsets[len] = min_pos;
+        max_offsets[len] = max_pos;
+
+        let column_index = ColumnIndex {
+            null_pages: self.null_pages,
+            boundary_order: self.boundary_order,
+            null_counts: Some(self.null_counts),
+            repetition_level_histograms: self.repetition_level_histograms,
+            definition_level_histograms: self.definition_level_histograms,
+        };
+
+        Ok(ByteArrayColumnIndex {
+            column_index,
+            min_bytes,
+            min_offsets,
+            max_bytes,
+            max_offsets,
+        })
     }
 }
 

@@ -22,7 +22,10 @@
 
 use crate::{
     data_type::{ByteArray, FixedLenByteArray},
-    errors::Result,
+    errors::{ParquetError, Result},
+    parquet_thrift::{
+        ElementType, FieldType, ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
+    },
 };
 use std::ops::Deref;
 
@@ -124,35 +127,6 @@ impl<T: ParquetValueType> PrimitiveColumnIndex<T> {
             max_values,
         })
     }
-
-    pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
-        let min_values = self
-            .min_values
-            .iter()
-            .map(|x| x.as_bytes().to_vec())
-            .collect::<Vec<_>>();
-
-        let max_values = self
-            .max_values
-            .iter()
-            .map(|x| x.as_bytes().to_vec())
-            .collect::<Vec<_>>();
-
-        let null_counts = self.null_counts.clone();
-        let repetition_level_histograms = self.repetition_level_histograms.clone();
-        let definition_level_histograms = self.definition_level_histograms.clone();
-        let null_pages = self.null_pages.clone();
-
-        crate::format::ColumnIndex::new(
-            null_pages,
-            min_values,
-            max_values,
-            self.boundary_order.into(),
-            null_counts,
-            repetition_level_histograms,
-            definition_level_histograms,
-        )
-    }
 }
 
 impl<T> PrimitiveColumnIndex<T> {
@@ -226,6 +200,53 @@ impl<T> Deref for PrimitiveColumnIndex<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.column_index
+    }
+}
+
+impl<T: ParquetValueType> WriteThrift for PrimitiveColumnIndex<T> {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+    fn write_thrift<W: std::io::Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+    ) -> Result<()> {
+        self.null_pages.write_thrift_field(writer, 1, 0)?;
+
+        // need to handle min/max manually
+        let len = self.null_pages.len();
+        writer.write_field_begin(FieldType::List, 2, 1)?;
+        writer.write_list_begin(ElementType::Binary, len)?;
+        for i in 0..len {
+            let min = self.min_value(i).map(|m| m.as_bytes()).unwrap_or(&[]);
+            min.write_thrift(writer)?;
+        }
+        writer.write_field_begin(FieldType::List, 3, 2)?;
+        writer.write_list_begin(ElementType::Binary, len)?;
+        for i in 0..len {
+            let max = self.max_value(i).map(|m| m.as_bytes()).unwrap_or(&[]);
+            max.write_thrift(writer)?;
+        }
+        let mut last_field_id = self.boundary_order.write_thrift_field(writer, 4, 3)?;
+        if self.null_counts.is_some() {
+            last_field_id =
+                self.null_counts
+                    .as_ref()
+                    .unwrap()
+                    .write_thrift_field(writer, 5, last_field_id)?;
+        }
+        if self.repetition_level_histograms.is_some() {
+            last_field_id = self
+                .repetition_level_histograms
+                .as_ref()
+                .unwrap()
+                .write_thrift_field(writer, 6, last_field_id)?;
+        }
+        if self.definition_level_histograms.is_some() {
+            self.definition_level_histograms
+                .as_ref()
+                .unwrap()
+                .write_thrift_field(writer, 7, last_field_id)?;
+        }
+        writer.write_struct_end()
     }
 }
 
@@ -344,33 +365,6 @@ impl ByteArrayColumnIndex {
             }
         })
     }
-
-    pub(crate) fn to_thrift(&self) -> crate::format::ColumnIndex {
-        let mut min_values = Vec::with_capacity(self.num_pages() as usize);
-        for i in 0..self.num_pages() as usize {
-            min_values.push(self.min_value(i).unwrap_or(&[]).to_owned());
-        }
-
-        let mut max_values = Vec::with_capacity(self.num_pages() as usize);
-        for i in 0..self.num_pages() as usize {
-            max_values.push(self.max_value(i).unwrap_or(&[]).to_owned());
-        }
-
-        let null_counts = self.null_counts.clone();
-        let repetition_level_histograms = self.repetition_level_histograms.clone();
-        let definition_level_histograms = self.definition_level_histograms.clone();
-        let null_pages = self.null_pages.clone();
-
-        crate::format::ColumnIndex::new(
-            null_pages,
-            min_values,
-            max_values,
-            self.boundary_order.into(),
-            null_counts,
-            repetition_level_histograms,
-            definition_level_histograms,
-        )
-    }
 }
 
 impl Deref for ByteArrayColumnIndex {
@@ -378,6 +372,53 @@ impl Deref for ByteArrayColumnIndex {
 
     fn deref(&self) -> &Self::Target {
         &self.column_index
+    }
+}
+
+impl WriteThrift for ByteArrayColumnIndex {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+    fn write_thrift<W: std::io::Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+    ) -> Result<()> {
+        self.null_pages.write_thrift_field(writer, 1, 0)?;
+
+        // need to handle min/max manually
+        let len = self.null_pages.len();
+        writer.write_field_begin(FieldType::List, 2, 1)?;
+        writer.write_list_begin(ElementType::Binary, len)?;
+        for i in 0..len {
+            let min = self.min_value(i).unwrap_or(&[]);
+            min.write_thrift(writer)?;
+        }
+        writer.write_field_begin(FieldType::List, 3, 2)?;
+        writer.write_list_begin(ElementType::Binary, len)?;
+        for i in 0..len {
+            let max = self.max_value(i).unwrap_or(&[]);
+            max.write_thrift(writer)?;
+        }
+        let mut last_field_id = self.boundary_order.write_thrift_field(writer, 4, 3)?;
+        if self.null_counts.is_some() {
+            last_field_id =
+                self.null_counts
+                    .as_ref()
+                    .unwrap()
+                    .write_thrift_field(writer, 5, last_field_id)?;
+        }
+        if self.repetition_level_histograms.is_some() {
+            last_field_id = self
+                .repetition_level_histograms
+                .as_ref()
+                .unwrap()
+                .write_thrift_field(writer, 6, last_field_id)?;
+        }
+        if self.definition_level_histograms.is_some() {
+            self.definition_level_histograms
+                .as_ref()
+                .unwrap()
+                .write_thrift_field(writer, 7, last_field_id)?;
+        }
+        writer.write_struct_end()
     }
 }
 
@@ -567,3 +608,24 @@ column_index_iters!(ByteArray, BYTE_ARRAY, |v| v
     .map(|v| ByteArray::from(v.to_owned())));
 column_index_iters!(FixedLenByteArray, FIXED_LEN_BYTE_ARRAY, |v| v
     .map(|v| FixedLenByteArray::from(v.to_owned())));
+
+impl WriteThrift for ColumnIndexMetaData {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: std::io::Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+    ) -> Result<()> {
+        match self {
+            ColumnIndexMetaData::BOOLEAN(index) => index.write_thrift(writer),
+            ColumnIndexMetaData::INT32(index) => index.write_thrift(writer),
+            ColumnIndexMetaData::INT64(index) => index.write_thrift(writer),
+            ColumnIndexMetaData::INT96(index) => index.write_thrift(writer),
+            ColumnIndexMetaData::FLOAT(index) => index.write_thrift(writer),
+            ColumnIndexMetaData::DOUBLE(index) => index.write_thrift(writer),
+            ColumnIndexMetaData::BYTE_ARRAY(index) => index.write_thrift(writer),
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => index.write_thrift(writer),
+            _ => Err(general_err!("Cannot serialize NONE index")),
+        }
+    }
+}
