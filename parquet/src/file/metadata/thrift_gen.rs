@@ -68,12 +68,12 @@ pub(crate) struct SchemaElement<'a> {
 );
 
 thrift_struct!(
-pub(crate) struct AesGcmV1<'a> {
+pub(crate) struct AesGcmV1 {
   /// AAD prefix
-  1: optional binary<'a> aad_prefix
+  1: optional binary aad_prefix
 
   /// Unique file identifier part of AAD suffix
-  2: optional binary<'a> aad_file_unique
+  2: optional binary aad_file_unique
 
   /// In files encrypted with AAD prefix without storing it,
   /// readers must supply the prefix
@@ -82,12 +82,12 @@ pub(crate) struct AesGcmV1<'a> {
 );
 
 thrift_struct!(
-pub(crate) struct AesGcmCtrV1<'a> {
+pub(crate) struct AesGcmCtrV1 {
   /// AAD prefix
-  1: optional binary<'a> aad_prefix
+  1: optional binary aad_prefix
 
   /// Unique file identifier part of AAD suffix
-  2: optional binary<'a> aad_file_unique
+  2: optional binary aad_file_unique
 
   /// In files encrypted with AAD prefix without storing it,
   /// readers must supply the prefix
@@ -96,24 +96,24 @@ pub(crate) struct AesGcmCtrV1<'a> {
 );
 
 thrift_union!(
-union EncryptionAlgorithm<'a> {
-  1: (AesGcmV1<'a>) AES_GCM_V1
-  2: (AesGcmCtrV1<'a>) AES_GCM_CTR_V1
+union EncryptionAlgorithm {
+  1: (AesGcmV1) AES_GCM_V1
+  2: (AesGcmCtrV1) AES_GCM_CTR_V1
 }
 );
 
 #[cfg(feature = "encryption")]
 thrift_struct!(
 /// Crypto metadata for files with encrypted footer
-pub(crate) struct FileCryptoMetaData<'a> {
+pub(crate) struct FileCryptoMetaData {
   /// Encryption algorithm. This field is only used for files
   /// with encrypted footer. Files with plaintext footer store algorithm id
   /// inside footer (FileMetaData structure).
-  1: required EncryptionAlgorithm<'a> encryption_algorithm
+  1: required EncryptionAlgorithm encryption_algorithm
 
   /** Retrieval metadata of key used for encryption of footer,
    *  and (possibly) columns **/
-  2: optional binary<'a> key_metadata
+  2: optional binary key_metadata
 }
 );
 
@@ -135,8 +135,8 @@ struct FileMetaData<'a> {
   5: optional list<KeyValue> key_value_metadata
   6: optional string created_by
   7: optional list<ColumnOrder> column_orders;
-  8: optional EncryptionAlgorithm<'a> encryption_algorithm
-  9: optional binary<'a> footer_signing_key_metadata
+  8: optional EncryptionAlgorithm encryption_algorithm
+  9: optional binary footer_signing_key_metadata
 }
 );
 
@@ -204,6 +204,32 @@ struct ColumnMetaData<'a> {
   17: optional GeospatialStatistics geospatial_statistics;
 }
 );
+
+pub(crate) fn column_meta_data_from_chunk<'a>(
+    column_chunk: &'a ColumnChunkMetaData,
+) -> ColumnMetaData<'a> {
+    ColumnMetaData {
+        type_: column_chunk.column_type(),
+        encodings: column_chunk.encodings.clone(),
+        codec: column_chunk.compression,
+        num_values: column_chunk.num_values,
+        total_uncompressed_size: column_chunk.total_uncompressed_size,
+        total_compressed_size: column_chunk.total_compressed_size,
+        data_page_offset: column_chunk.data_page_offset,
+        index_page_offset: column_chunk.index_page_offset,
+        dictionary_page_offset: column_chunk.dictionary_page_offset,
+        statistics: column_chunk.statistics(),
+        encoding_stats: column_chunk.encoding_stats.clone(),
+        bloom_filter_offset: column_chunk.bloom_filter_offset,
+        bloom_filter_length: column_chunk.bloom_filter_length,
+        size_statistics: Some(SizeStatistics {
+            unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
+            repetition_level_histogram: column_chunk.repetition_level_histogram,
+            definition_level_histogram: column_chunk.definition_level_histogram,
+        }),
+        geospatial_statistics: None,
+    }
+}
 
 thrift_struct!(
 struct BoundingBox {
@@ -337,8 +363,6 @@ fn convert_column(
     let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
     let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
 
-    // FIXME: need column crypto
-
     let result = ColumnChunkMetaData {
         column_descr,
         encodings,
@@ -364,6 +388,8 @@ fn convert_column(
         definition_level_histogram,
         #[cfg(feature = "encryption")]
         column_crypto_metadata: column.crypto_metadata,
+        #[cfg(feature = "encryption")]
+        encrypted_column_metadata: None,
     };
     Ok(result)
 }
@@ -632,7 +658,7 @@ pub(crate) fn parquet_metadata_with_encryption(
             }
             let decryptor = get_file_decryptor(
                 t_file_crypto_metadata.encryption_algorithm,
-                t_file_crypto_metadata.key_metadata,
+                t_file_crypto_metadata.key_metadata.as_ref(),
                 file_decryption_properties,
             )?;
             let footer_decryptor = decryptor.get_footer_decryptor();
@@ -672,7 +698,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         // File has a plaintext footer but encryption algorithm is set
         let file_decryptor_value = get_file_decryptor(
             algo,
-            file_meta.footer_signing_key_metadata,
+            file_meta.footer_signing_key_metadata.as_ref(),
             file_decryption_properties,
         )?;
         if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
@@ -733,7 +759,7 @@ pub(crate) fn parquet_metadata_with_encryption(
 #[cfg(feature = "encryption")]
 pub(super) fn get_file_decryptor(
     encryption_algorithm: EncryptionAlgorithm,
-    footer_key_metadata: Option<&[u8]>,
+    footer_key_metadata: Option<&Vec<u8>>,
     file_decryption_properties: &FileDecryptionProperties,
 ) -> Result<FileDecryptor> {
     match encryption_algorithm {
@@ -750,7 +776,7 @@ pub(super) fn get_file_decryptor(
 
             FileDecryptor::new(
                 file_decryption_properties,
-                footer_key_metadata,
+                footer_key_metadata.map(|v| v.as_slice()),
                 aad_file_unique,
                 aad_prefix,
             )

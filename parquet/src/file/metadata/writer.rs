@@ -15,22 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "encryption")]
-use crate::encryption::{
-    encrypt::{
-        encrypt_object, encrypt_object_to_vec, write_signed_plaintext_object, FileEncryptor,
-    },
-    modules::{create_footer_aad, create_module_aad, ModuleType},
-};
-#[cfg(feature = "encryption")]
-use crate::errors::ParquetError;
-use crate::format::EncryptionAlgorithm;
-#[cfg(feature = "encryption")]
-use crate::format::{AesGcmV1, ColumnCryptoMetaData};
-use crate::schema::types;
+use crate::file::metadata::thrift_gen::EncryptionAlgorithm;
+use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
+use crate::{
+    basic::ColumnOrder,
+    file::metadata::{FileMetaData, ParquetMetaDataBuilder},
+    schema::types,
+};
+#[cfg(feature = "encryption")]
+use crate::{
+    encryption::{
+        encrypt::{encrypt_object, write_signed_plaintext_object, FileEncryptor},
+        modules::{create_footer_aad, create_module_aad, ModuleType},
+    },
+    file::metadata::thrift_gen::FileCryptoMetaData,
+};
 use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
+#[cfg(feature = "encryption")]
+use crate::{
+    file::column_crypto_metadata::ColumnCryptoMetaData, file::metadata::thrift_gen::AesGcmV1,
+};
 use crate::{
     file::writer::{get_file_magic, TrackedWrite},
     parquet_thrift::WriteThrift,
@@ -53,7 +59,7 @@ pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     buf: &'a mut TrackedWrite<W>,
     schema: &'a TypePtr,
     schema_descr: &'a SchemaDescPtr,
-    row_groups: Vec<crate::format::RowGroup>,
+    row_groups: Vec<RowGroupMetaData>,
     column_indexes: Option<&'a [Vec<Option<ColumnIndexMetaData>>]>,
     offset_indexes: Option<&'a [Vec<Option<OffsetIndexMetaData>>]>,
     key_value_metadata: Option<Vec<KeyValue>>,
@@ -130,7 +136,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Assembles and writes the final metadata to self.buf
-    pub fn finish(mut self) -> Result<crate::format::FileMetaData> {
+    pub fn finish(mut self) -> Result<ParquetMetaData> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
 
         // Write column indexes and offset indexes
@@ -146,35 +152,42 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // for all leaf nodes.
         // Even if the column has an undefined sort order, such as INTERVAL, this
         // is still technically the defined TYPEORDER so it should still be set.
-        let column_orders = (0..self.schema_descr.num_columns())
-            .map(|_| crate::format::ColumnOrder::TYPEORDER(crate::format::TypeDefinedOrder {}))
+        let column_orders = self
+            .schema_descr
+            .columns()
+            .iter()
+            .map(|col| {
+                let sort_order = ColumnOrder::get_sort_order(
+                    col.logical_type(),
+                    col.converted_type(),
+                    col.physical_type(),
+                );
+                ColumnOrder::TYPE_DEFINED_ORDER(sort_order)
+            })
             .collect();
+
         // This field is optional, perhaps in cases where no min/max fields are set
         // in any Statistics or ColumnIndex object in the whole file.
         // But for simplicity we always set this field.
         let column_orders = Some(column_orders);
+
         let (row_groups, unencrypted_row_groups) = self
             .object_writer
             .apply_row_group_encryption(self.row_groups)?;
 
         let (encryption_algorithm, footer_signing_key_metadata) =
             self.object_writer.get_plaintext_footer_crypto_metadata();
-        let key_value_metadata = self.key_value_metadata.map(|vkv| {
-            vkv.into_iter()
-                .map(|kv| crate::format::KeyValue::new(kv.key, kv.value))
-                .collect::<Vec<crate::format::KeyValue>>()
-        });
-        let mut file_metadata = crate::format::FileMetaData {
+
+        let mut file_metadata = FileMetaData::new(
+            self.writer_version,
             num_rows,
-            row_groups,
-            key_value_metadata,
-            version: self.writer_version,
-            schema: types::to_thrift(self.schema.as_ref())?,
-            created_by: self.created_by.clone(),
+            self.created_by,
+            self.key_value_metadata,
+            self.schema_descr.clone(),
             column_orders,
-            encryption_algorithm,
-            footer_signing_key_metadata,
-        };
+        );
+
+        let schema = types::to_thrift(self.schema.as_ref())?;
 
         // Write file metadata
         let start_pos = self.buf.bytes_written();
@@ -196,14 +209,20 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             file_metadata.row_groups = row_groups;
         }
 
-        Ok(file_metadata)
+        let builder = ParquetMetaDataBuilder::new(file_metadata);
+        builder.set_row_groups(self.row_groups.clone());
+
+        builder.set_column_index(self.column_indexes.map(|ci| ci.to_vec()));
+        builder.set_offset_index(self.offset_indexes.map(|oi| oi.to_vec()));
+
+        Ok(builder.build())
     }
 
     pub fn new(
         buf: &'a mut TrackedWrite<W>,
         schema: &'a TypePtr,
         schema_descr: &'a SchemaDescPtr,
-        row_groups: Vec<crate::format::RowGroup>,
+        row_groups: &'a mut Vec<RowGroupMetaData>,
         created_by: Option<String>,
         writer_version: i32,
     ) -> Self {
@@ -361,12 +380,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         let schema_descr = Arc::new(SchemaDescriptor::new(schema.clone()));
         let created_by = file_metadata.created_by().map(str::to_string);
 
-        let row_groups = self
-            .metadata
-            .row_groups()
-            .iter()
-            .map(|rg| rg.to_thrift())
-            .collect::<Vec<_>>();
+        let mut row_groups = self.metadata.row_groups.clone();
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 
@@ -377,7 +391,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             &mut self.buf,
             &schema,
             &schema_descr,
-            row_groups,
+            &mut row_groups,
             created_by,
             file_metadata.version(),
         );
@@ -472,7 +486,7 @@ impl MetadataObjectWriter {
     fn write_offset_index(
         &self,
         offset_index: &OffsetIndexMetaData,
-        _column_chunk: &crate::format::ColumnChunk,
+        _column_chunk: &ColumnChunkMetaData,
         _row_group_idx: usize,
         _column_idx: usize,
         sink: impl Write,
@@ -484,7 +498,7 @@ impl MetadataObjectWriter {
     fn write_column_index(
         &self,
         column_index: &ColumnIndexMetaData,
-        _column_chunk: &crate::format::ColumnChunk,
+        _column_chunk: &ColumnChunkMetaData,
         _row_group_idx: usize,
         _column_idx: usize,
         sink: impl Write,
@@ -559,7 +573,7 @@ impl MetadataObjectWriter {
     fn write_offset_index(
         &self,
         offset_index: &OffsetIndexMetaData,
-        column_chunk: &crate::format::ColumnChunk,
+        column_chunk: &ColumnChunkMetaData,
         row_group_idx: usize,
         column_idx: usize,
         sink: impl Write,
@@ -584,7 +598,7 @@ impl MetadataObjectWriter {
     fn write_column_index(
         &self,
         column_index: &ColumnIndexMetaData,
-        column_chunk: &crate::format::ColumnChunk,
+        column_chunk: &ColumnChunkMetaData,
         row_group_idx: usize,
         column_idx: usize,
         sink: impl Write,
@@ -608,11 +622,8 @@ impl MetadataObjectWriter {
     /// and possibly unencrypted metadata to be returned to clients if data was encrypted.
     fn apply_row_group_encryption(
         &self,
-        row_groups: Vec<crate::format::RowGroup>,
-    ) -> Result<(
-        Vec<crate::format::RowGroup>,
-        Option<Vec<crate::format::RowGroup>>,
-    )> {
+        row_groups: Vec<RowGroupMetaData>,
+    ) -> Result<(Vec<RowGroupMetaData>, Option<Vec<RowGroupMetaData>>)> {
         match &self.file_encryptor {
             Some(file_encryptor) => {
                 let unencrypted_row_groups = row_groups.clone();
@@ -636,21 +647,12 @@ impl MetadataObjectWriter {
         object: &impl WriteThrift,
         mut sink: impl Write,
         file_encryptor: &FileEncryptor,
-        column_metadata: &crate::format::ColumnChunk,
+        column_metadata: &ColumnChunkMetaData,
         module_type: ModuleType,
         row_group_index: usize,
         column_index: usize,
     ) -> Result<()> {
-        let column_path_vec = &column_metadata
-            .meta_data
-            .as_ref()
-            .ok_or_else(|| {
-                general_err!(
-                    "Column metadata not set for column {} when encrypting object",
-                    column_index
-                )
-            })?
-            .path_in_schema;
+        let column_path_vec = column_metadata.column_path().as_ref();
 
         let joined_column_path;
         let column_path = if column_path_vec.len() == 1 {
@@ -699,36 +701,34 @@ impl MetadataObjectWriter {
             .aad_prefix()
             .map(|_| !file_encryptor.properties().store_aad_prefix());
         let aad_prefix = if file_encryptor.properties().store_aad_prefix() {
-            file_encryptor.properties().aad_prefix().cloned()
+            file_encryptor.properties().aad_prefix()
         } else {
             None
         };
-        EncryptionAlgorithm::AESGCMV1(AesGcmV1 {
-            aad_prefix,
+        EncryptionAlgorithm::AES_GCM_V1(AesGcmV1 {
+            aad_prefix: aad_prefix.cloned(),
             aad_file_unique: Some(file_encryptor.aad_file_unique().clone()),
             supply_aad_prefix,
         })
     }
 
-    fn file_crypto_metadata(
-        file_encryptor: &FileEncryptor,
-    ) -> Result<crate::format::FileCryptoMetaData> {
+    fn file_crypto_metadata(file_encryptor: &FileEncryptor) -> Result<FileCryptoMetaData> {
         let properties = file_encryptor.properties();
-        Ok(crate::format::FileCryptoMetaData {
+        Ok(FileCryptoMetaData {
             encryption_algorithm: Self::encryption_algorithm_from_encryptor(file_encryptor),
             key_metadata: properties.footer_key_metadata().cloned(),
         })
     }
 
     fn encrypt_row_groups(
-        row_groups: Vec<crate::format::RowGroup>,
+        row_groups: Vec<RowGroupMetaData>,
         file_encryptor: &Arc<FileEncryptor>,
-    ) -> Result<Vec<crate::format::RowGroup>> {
+    ) -> Result<Vec<RowGroupMetaData>> {
         row_groups
             .into_iter()
             .enumerate()
             .map(|(rg_idx, mut rg)| {
-                let cols: Result<Vec<crate::format::ColumnChunk>> = rg
+                let cols: Result<Vec<ColumnChunkMetaData>> = rg
                     .columns
                     .into_iter()
                     .enumerate()
@@ -744,26 +744,27 @@ impl MetadataObjectWriter {
 
     /// Apply column encryption to column chunk metadata
     fn encrypt_column_chunk(
-        mut column_chunk: crate::format::ColumnChunk,
+        mut column_chunk: ColumnChunkMetaData,
         file_encryptor: &Arc<FileEncryptor>,
         row_group_index: usize,
         column_index: usize,
-    ) -> Result<crate::format::ColumnChunk> {
+    ) -> Result<ColumnChunkMetaData> {
         // Column crypto metadata should have already been set when the column was created.
         // Here we apply the encryption by encrypting the column metadata if required.
-        match column_chunk.crypto_metadata.as_ref() {
+        match column_chunk.column_crypto_metadata.as_ref() {
             None => {}
-            Some(ColumnCryptoMetaData::ENCRYPTIONWITHFOOTERKEY(_)) => {
+            Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY) => {
                 // When uniform encryption is used the footer is already encrypted,
                 // so the column chunk does not need additional encryption.
             }
-            Some(ColumnCryptoMetaData::ENCRYPTIONWITHCOLUMNKEY(col_key)) => {
+            Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(col_key)) => {
+                use crate::{
+                    encryption::encrypt::encrypt_thrift_object_to_vec,
+                    file::metadata::thrift_gen::column_meta_data_from_chunk,
+                };
+
                 let column_path = col_key.path_in_schema.join(".");
                 let mut column_encryptor = file_encryptor.get_column_encryptor(&column_path)?;
-                let meta_data = column_chunk
-                    .meta_data
-                    .take()
-                    .ok_or_else(|| general_err!("Column metadata not set for encryption"))?;
                 let aad = create_module_aad(
                     file_encryptor.file_aad(),
                     ModuleType::ColumnMetaData,
@@ -771,10 +772,11 @@ impl MetadataObjectWriter {
                     column_index,
                     None,
                 )?;
-                let ciphertext = encrypt_object_to_vec(&meta_data, &mut column_encryptor, &aad)?;
+                // TODO: create temp ColumnMetaData that we can encrypt
+                let cc = column_meta_data_from_chunk(&column_chunk);
+                let ciphertext = encrypt_thrift_object_to_vec(&cc, &mut column_encryptor, &aad)?;
 
                 column_chunk.encrypted_column_metadata = Some(ciphertext);
-                debug_assert!(column_chunk.meta_data.is_none());
             }
         }
 

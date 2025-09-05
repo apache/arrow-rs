@@ -2553,8 +2553,8 @@ mod tests {
         }
         let file_metadata = file_writer.close().unwrap();
 
-        assert_eq!(file_metadata.num_rows, 25);
-        assert_eq!(file_metadata.row_groups.len(), 5);
+        assert_eq!(file_metadata.file_metadata().num_rows(), 25);
+        assert_eq!(file_metadata.num_row_groups(), 5);
 
         // read only the 3rd row group
         let read_options = ReadOptionsBuilder::new()

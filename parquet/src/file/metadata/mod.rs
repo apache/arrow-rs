@@ -843,6 +843,8 @@ pub struct ColumnChunkMetaData {
     definition_level_histogram: Option<LevelHistogram>,
     #[cfg(feature = "encryption")]
     column_crypto_metadata: Option<ColumnCryptoMetaData>,
+    #[cfg(feature = "encryption")]
+    encrypted_column_metadata: Option<Vec<u8>>,
 }
 
 /// Histograms for repetition and definition levels.
@@ -1227,6 +1229,8 @@ impl ColumnChunkMetaData {
             definition_level_histogram,
             #[cfg(feature = "encryption")]
             column_crypto_metadata,
+            #[cfg(feature = "encryption")]
+            encrypted_column_metadata: None,
         };
         Ok(result)
     }
@@ -1365,6 +1369,8 @@ impl ColumnChunkMetaDataBuilder {
             definition_level_histogram: None,
             #[cfg(feature = "encryption")]
             column_crypto_metadata: None,
+            #[cfg(feature = "encryption")]
+            encrypted_column_metadata: None,
         })
     }
 

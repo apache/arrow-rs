@@ -1185,6 +1185,7 @@ mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
+    use crate::file::metadata::ParquetMetaData;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -2913,7 +2914,7 @@ mod tests {
         schema: TypePtr,
         field: Option<Field>,
         opts: &TestOptions,
-    ) -> Result<crate::format::FileMetaData> {
+    ) -> Result<ParquetMetaData> {
         let mut writer_props = opts.writer_props();
         if let Some(field) = field {
             let arrow_schema = Schema::new(vec![field]);

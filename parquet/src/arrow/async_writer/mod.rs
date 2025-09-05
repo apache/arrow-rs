@@ -64,7 +64,7 @@ use crate::{
     arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
     errors::{ParquetError, Result},
     file::{
-        metadata::{KeyValue, RowGroupMetaData},
+        metadata::{KeyValue, ParquetMetaData, RowGroupMetaData},
         properties::WriterProperties,
     },
 };
@@ -246,7 +246,7 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub async fn finish(&mut self) -> Result<crate::format::FileMetaData> {
+    pub async fn finish(&mut self) -> Result<ParquetMetaData> {
         let metadata = self.sync_writer.finish()?;
 
         // Force to flush the remaining data.
@@ -259,7 +259,7 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Close and finalize the writer.
     ///
     /// All the data in the inner buffer will be force flushed.
-    pub async fn close(mut self) -> Result<crate::format::FileMetaData> {
+    pub async fn close(mut self) -> Result<ParquetMetaData> {
         self.finish().await
     }
 

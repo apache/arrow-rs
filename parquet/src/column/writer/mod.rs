@@ -3587,19 +3587,14 @@ mod tests {
         col_writer.close().unwrap();
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
-        let stats = file_metadata.row_groups[0].columns[0]
-            .meta_data
-            .as_ref()
-            .unwrap()
-            .statistics
-            .as_ref()
+        let stats = file_metadata.row_group(0).column(0)
+            .statistics()
             .unwrap();
-        assert!(!stats.is_max_value_exact.unwrap());
+        assert!(!stats.max_is_exact());
         // Truncation of invalid UTF-8 should fall back to binary truncation, so last byte should
         // be incremented by 1.
         assert_eq!(
-            stats.max_value,
+            stats.max_bytes_opt().map(|v| v.to_vec()),
             Some([128, 128, 128, 128, 128, 128, 128, 129].to_vec())
         );
     }
