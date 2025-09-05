@@ -273,7 +273,7 @@ enum FieldPlan {
 struct FieldBinding {
     /// Index of the Arrow field/column associated with this Avro field site
     arrow_index: usize,
-    /// Nullability/order for this site (None if required)
+    /// Nullability/order for this site (None for required fields)
     nullability: Option<Nullability>,
     /// Nested plan for this site
     plan: FieldPlan,
