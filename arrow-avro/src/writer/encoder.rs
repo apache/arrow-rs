@@ -532,9 +532,8 @@ impl<'a> StructEncoder<'a> {
         array: &'a StructArray,
         field_bindings: &[FieldBinding],
     ) -> Result<Self, ArrowError> {
-        let fields = match array.data_type() {
-            DataType::Struct(struct_fields) => struct_fields,
-            _ => return Err(ArrowError::SchemaError("Expected Struct".into())),
+        let DataType::Struct(fields) = array.data_type() else {
+            return Err(ArrowError::SchemaError("Expected Struct".into()));
         };
         let mut encoders = Vec::with_capacity(field_bindings.len());
         for field_binding in field_bindings {
