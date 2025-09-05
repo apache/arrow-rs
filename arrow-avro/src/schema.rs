@@ -1207,12 +1207,11 @@ fn process_datatype(
     is_nullable: bool,
 ) -> Result<Value, ArrowError> {
     let (schema, extras) = datatype_to_avro(dt, field_name, metadata, name_gen, null_order)?;
-    let merged = merge_extras(schema, extras);
-    Ok(if is_nullable {
-        wrap_nullable(merged, null_order)
-    } else {
-        merged
-    })
+    let mut merged = merge_extras(schema, extras);
+    if is_nullable {
+        merged = wrap_nullable(merged, null_order)
+    }
+    Ok(merged)
 }
 
 fn arrow_field_to_avro(
