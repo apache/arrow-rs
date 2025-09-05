@@ -96,7 +96,7 @@ fn write_optional_index<W: Write + ?Sized>(
 enum NullState {
     NonNullable,
     NullableNoNulls {
-        byte: u8,
+        union_value_byte: u8,
     },
     Nullable {
         nulls: NullBuffer,
