@@ -196,7 +196,7 @@ impl<'a> FieldEncoder<'a> {
             }
         };
         // Compute the effective null state from writer-declared nullability and data nulls.
-        let null_state = match (nullability, has_nulls) {
+        let null_state = match (nullability, array.null_count() > 0) {
             (None, false) => NullState::NonNullable,
             (None, true) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
