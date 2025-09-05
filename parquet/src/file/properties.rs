@@ -193,6 +193,12 @@ impl WriterProperties {
         WriterPropertiesBuilder::default()
     }
 
+    /// Converts this [`WriterProperties`] into a [`WriterPropertiesBuilder`]
+    /// Used for mutating existing property settings
+    pub fn into_builder(self) -> WriterPropertiesBuilder {
+        self.into()
+    }
+
     /// Returns data page size limit.
     ///
     /// Note: this is a best effort limit based on the write batch size
@@ -435,6 +441,7 @@ impl WriterProperties {
 /// Builder for  [`WriterProperties`] Parquet writer configuration.
 ///
 /// See example on [`WriterProperties`]
+#[derive(Debug, Clone)]
 pub struct WriterPropertiesBuilder {
     data_page_size_limit: usize,
     data_page_row_count_limit: usize,
@@ -934,6 +941,30 @@ impl WriterPropertiesBuilder {
     }
 }
 
+impl From<WriterProperties> for WriterPropertiesBuilder {
+    fn from(props: WriterProperties) -> Self {
+        WriterPropertiesBuilder {
+            data_page_size_limit: props.data_page_size_limit,
+            data_page_row_count_limit: props.data_page_row_count_limit,
+            write_batch_size: props.write_batch_size,
+            max_row_group_size: props.max_row_group_size,
+            bloom_filter_position: props.bloom_filter_position,
+            writer_version: props.writer_version,
+            created_by: props.created_by,
+            offset_index_disabled: props.offset_index_disabled,
+            key_value_metadata: props.key_value_metadata,
+            default_column_properties: props.default_column_properties,
+            column_properties: props.column_properties,
+            sorting_columns: props.sorting_columns,
+            column_index_truncate_length: props.column_index_truncate_length,
+            statistics_truncate_length: props.statistics_truncate_length,
+            coerce_types: props.coerce_types,
+            #[cfg(feature = "encryption")]
+            file_encryption_properties: props.file_encryption_properties,
+        }
+    }
+}
+
 /// Controls the level of statistics to be computed by the writer and stored in
 /// the parquet file.
 ///
@@ -1377,50 +1408,59 @@ mod tests {
             .set_column_bloom_filter_fpp(ColumnPath::from("col"), 0.1)
             .build();
 
-        assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
-        assert_eq!(props.data_page_size_limit(), 10);
-        assert_eq!(props.dictionary_page_size_limit(), 20);
-        assert_eq!(props.write_batch_size(), 30);
-        assert_eq!(props.max_row_group_size(), 40);
-        assert_eq!(props.created_by(), "default");
-        assert_eq!(
-            props.key_value_metadata(),
-            Some(&vec![
-                KeyValue::new("key".to_string(), "value".to_string(),)
-            ])
-        );
+        fn test_props(props: &WriterProperties) {
+            assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
+            assert_eq!(props.data_page_size_limit(), 10);
+            assert_eq!(props.dictionary_page_size_limit(), 20);
+            assert_eq!(props.write_batch_size(), 30);
+            assert_eq!(props.max_row_group_size(), 40);
+            assert_eq!(props.created_by(), "default");
+            assert_eq!(
+                props.key_value_metadata(),
+                Some(&vec![
+                    KeyValue::new("key".to_string(), "value".to_string(),)
+                ])
+            );
 
-        assert_eq!(
-            props.encoding(&ColumnPath::from("a")),
-            Some(Encoding::DELTA_BINARY_PACKED)
-        );
-        assert_eq!(
-            props.compression(&ColumnPath::from("a")),
-            Compression::GZIP(Default::default())
-        );
-        assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
-        assert_eq!(
-            props.statistics_enabled(&ColumnPath::from("a")),
-            EnabledStatistics::None
-        );
+            assert_eq!(
+                props.encoding(&ColumnPath::from("a")),
+                Some(Encoding::DELTA_BINARY_PACKED)
+            );
+            assert_eq!(
+                props.compression(&ColumnPath::from("a")),
+                Compression::GZIP(Default::default())
+            );
+            assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
+            assert_eq!(
+                props.statistics_enabled(&ColumnPath::from("a")),
+                EnabledStatistics::None
+            );
 
-        assert_eq!(
-            props.encoding(&ColumnPath::from("col")),
-            Some(Encoding::RLE)
-        );
-        assert_eq!(
-            props.compression(&ColumnPath::from("col")),
-            Compression::SNAPPY
-        );
-        assert!(props.dictionary_enabled(&ColumnPath::from("col")));
-        assert_eq!(
-            props.statistics_enabled(&ColumnPath::from("col")),
-            EnabledStatistics::Chunk
-        );
-        assert_eq!(
-            props.bloom_filter_properties(&ColumnPath::from("col")),
-            Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })
-        );
+            assert_eq!(
+                props.encoding(&ColumnPath::from("col")),
+                Some(Encoding::RLE)
+            );
+            assert_eq!(
+                props.compression(&ColumnPath::from("col")),
+                Compression::SNAPPY
+            );
+            assert!(props.dictionary_enabled(&ColumnPath::from("col")));
+            assert_eq!(
+                props.statistics_enabled(&ColumnPath::from("col")),
+                EnabledStatistics::Chunk
+            );
+            assert_eq!(
+                props.bloom_filter_properties(&ColumnPath::from("col")),
+                Some(&BloomFilterProperties { fpp: 0.1, ndv: 100 })
+            );
+        }
+
+        // Test direct build of properties
+        test_props(&props);
+
+        // Test that into_builder() gives the same result
+        let props_into_builder_and_back = props.into_builder().build();
+        test_props(&props_into_builder_and_back);
     }
 
     #[test]
