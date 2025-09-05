@@ -26,7 +26,7 @@ use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 use parquet::format::{
     ColumnChunk, ColumnMetaData, CompressionCodec, Encoding, FieldRepetitionType, FileMetaData,
-    RowGroup, SchemaElement, Type,
+    PageEncodingStats, PageType, RowGroup, SchemaElement, Type,
 };
 use parquet::thrift::TSerializable;
 
@@ -94,7 +94,18 @@ fn encoded_meta() -> Vec<u8> {
                         index_page_offset: Some(rng.random()),
                         dictionary_page_offset: Some(rng.random()),
                         statistics: Some(stats.clone()),
-                        encoding_stats: None,
+                        encoding_stats: Some(vec![
+                            PageEncodingStats {
+                                page_type: PageType::DICTIONARY_PAGE,
+                                encoding: Encoding::PLAIN,
+                                count: 1,
+                            },
+                            PageEncodingStats {
+                                page_type: PageType::DATA_PAGE,
+                                encoding: Encoding::RLE_DICTIONARY,
+                                count: 10,
+                            },
+                        ]),
                         bloom_filter_offset: None,
                         bloom_filter_length: None,
                         size_statistics: None,
@@ -164,6 +175,7 @@ fn rewrite_file(bytes: Bytes) -> (Bytes, FileMetaData) {
         .expect("parquet open");
     let writer_properties = WriterProperties::builder()
         .set_statistics_enabled(EnabledStatistics::Page)
+        .set_write_page_header_statistics(true)
         .build();
     let mut output = Vec::new();
     let mut parquet_writer = ArrowWriter::try_new(
@@ -211,12 +223,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("decode parquet metadata new", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_file_metadata(&meta_data).unwrap();
-        })
-    });
-
     let buf: Bytes = black_box(encoded_meta()).into();
     c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
@@ -227,12 +233,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("decode thrift file metadata (wide)", |b| {
         b.iter(|| {
             parquet::thrift::bench_file_metadata(&buf);
-        })
-    });
-
-    c.bench_function("decode parquet metadata new (wide)", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_file_metadata(&buf).unwrap();
         })
     });
 
