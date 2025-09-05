@@ -805,6 +805,126 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    fn generic_convert_unsigned_primitive<T>(&self) -> Option<T>
+    where
+        T: TryFrom<i8> + TryFrom<i16> + TryFrom<i32> + TryFrom<i64> + TryFrom<i128>,
+    {
+        match *self {
+            Variant::Int8(i) => i.try_into().ok(),
+            Variant::Int16(i) => i.try_into().ok(),
+            Variant::Int32(i) => i.try_into().ok(),
+            Variant::Int64(i) => i.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `u8` if possible.
+    ///
+    /// Returns `Some(u8)` for integer variants that fit in `u8`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::Variant;
+    ///
+    ///  // you can read an int64 variant into an u8
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u8(), Some(123u8));
+    ///
+    ///  // but not a variant that cant fit into the range
+    ///  let v2 = Variant::from(-1);
+    ///  assert_eq!(v2.as_u8(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v3 = Variant::from("hello!");
+    ///  assert_eq!(v3.as_u8(), None);
+    /// ```
+    pub fn as_u8(&self) -> Option<u8> {
+        self.generic_convert_unsigned_primitive::<u8>()
+    }
+
+    /// Converts this variant to an `u16` if possible.
+    ///
+    /// Returns `Some(u16)` for integer variants that fit in `u16`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::Variant;
+    ///
+    ///  // you can read an int64 variant into an u16
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u16(), Some(123u16));
+    ///
+    ///  // but not a variant that cant fit into the range
+    ///  let v2 = Variant::from(-1);
+    ///  assert_eq!(v2.as_u16(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v3 = Variant::from("hello!");
+    ///  assert_eq!(v3.as_u16(), None);
+    /// ```
+    pub fn as_u16(&self) -> Option<u16> {
+        self.generic_convert_unsigned_primitive::<u16>()
+    }
+
+    /// Converts this variant to an `u32` if possible.
+    ///
+    /// Returns `Some(u32)` for integer variants that fit in `u32`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::Variant;
+    ///
+    ///  // you can read an int64 variant into an u32
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u32(), Some(123u32));
+    ///
+    ///  // but not a variant that cant fit into the range
+    ///  let v2 = Variant::from(-1);
+    ///  assert_eq!(v2.as_u32(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v3 = Variant::from("hello!");
+    ///  assert_eq!(v3.as_u32(), None);
+    /// ```
+    pub fn as_u32(&self) -> Option<u32> {
+        self.generic_convert_unsigned_primitive::<u32>()
+    }
+
+    /// Converts this variant to an `u64` if possible.
+    ///
+    /// Returns `Some(u64)` for integer variants that fit in `u64`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::Variant;
+    ///
+    ///  // you can read an int64 variant into an u64
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u64(), Some(123u64));
+    ///
+    ///  // but not a variant that cant fit into the range
+    ///  let v2 = Variant::from(-1);
+    ///  assert_eq!(v2.as_u64(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v3 = Variant::from("hello!");
+    ///  assert_eq!(v3.as_u64(), None);
+    /// ```
+    pub fn as_u64(&self) -> Option<u64> {
+        self.generic_convert_unsigned_primitive::<u64>()
+    }
+
     /// Converts this variant to tuple with a 4-byte unscaled value if possible.
     ///
     /// Returns `Some((i32, u8))` for decimal variants where the unscaled value
