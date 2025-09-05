@@ -4247,4 +4247,33 @@ mod tests {
             .unwrap();
         ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
     }
+
+    #[test]
+    fn test_page_v2_snappy_compression_fallback() {
+        // Test that PageV2 sets is_compressed to false when Snappy compression increases data size
+        let page_writer = TestPageWriter {};
+
+        // Create WriterProperties with PageV2 and Snappy compression
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            // Disable dictionary to ensure data is written directly
+            .set_dictionary_enabled(false)
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let mut column_writer =
+            get_test_column_writer::<ByteArrayType>(Box::new(page_writer), 0, 0, Arc::new(props));
+
+        // Create small, simple data that Snappy compression will likely increase in size
+        // due to compression overhead for very small data
+        let values = vec![ByteArray::from("a")];
+
+        column_writer.write_batch(&values, None, None).unwrap();
+
+        let result = column_writer.close().unwrap();
+        assert_eq!(
+            result.metadata.uncompressed_size(),
+            result.metadata.compressed_size()
+        );
+    }
 }
