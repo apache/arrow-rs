@@ -210,7 +210,7 @@ impl<'a> FieldEncoder<'a> {
                 NullState::NullableNoNulls { byte }
             }
             (Some(null_order), true) => {
-                let null_buffer = array.nulls().cloned().ok_or_else(|| {
+                let nulls = array.nulls().cloned().ok_or_else(|| {
                     ArrowError::InvalidArgumentError(format!(
                         "Array for Avro site '{}' reports nulls but has no null buffer",
                         field.name()
