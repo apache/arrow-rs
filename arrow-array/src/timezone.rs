@@ -53,6 +53,7 @@ mod private {
     use super::*;
     use chrono::offset::TimeZone;
     use chrono::{LocalResult, NaiveDate, NaiveDateTime, Offset};
+    use std::fmt::Display;
     use std::str::FromStr;
 
     /// An [`Offset`] for [`Tz`]
@@ -93,6 +94,15 @@ mod private {
                 None => Ok(Self(TzInner::Timezone(tz.parse().map_err(|e| {
                     ArrowError::ParseError(format!("Invalid timezone \"{tz}\": {e}"))
                 })?))),
+            }
+        }
+    }
+
+    impl Display for Tz {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0 {
+                TzInner::Timezone(tz) => tz.fmt(f),
+                TzInner::Offset(offset) => offset.fmt(f),
             }
         }
     }
@@ -227,6 +237,15 @@ mod private {
                     .fix(),
                 sydney_offset_with_dst
             );
+        }
+
+        #[test]
+        fn test_timezone_display() {
+            let test_cases = ["UTC", "America/Los_Angeles", "-08:00", "+05:30"];
+            for &case in &test_cases {
+                let tz: Tz = case.parse().unwrap();
+                assert_eq!(tz.to_string(), case);
+            }
         }
     }
 }
