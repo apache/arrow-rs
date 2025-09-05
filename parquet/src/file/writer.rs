@@ -340,7 +340,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             .collect::<Vec<_>>();
 
         let column_indexes = self.convert_column_indexes();
-        let offset_indexes = self.convert_offset_index();
 
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
@@ -361,7 +360,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         }
 
         encoder = encoder.with_column_indexes(&column_indexes);
-        encoder = encoder.with_offset_indexes(&offset_indexes);
+        encoder = encoder.with_offset_indexes(&self.offset_indexes);
         encoder.finish()
     }
 
@@ -383,17 +382,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
                             Index::INT96(column_index) => column_index.to_thrift(),
                         })
                     })
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn convert_offset_index(&self) -> Vec<Vec<Option<crate::format::OffsetIndex>>> {
-        self.offset_indexes
-            .iter()
-            .map(|ois| {
-                ois.iter()
-                    .map(|oi| oi.as_ref().map(|offset_index| offset_index.to_thrift()))
                     .collect()
             })
             .collect()

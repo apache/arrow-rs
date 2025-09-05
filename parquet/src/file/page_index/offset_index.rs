@@ -102,14 +102,6 @@ impl OffsetIndexMetaData {
         self.unencoded_byte_array_data_bytes.as_ref()
     }
 
-    pub(crate) fn to_thrift(&self) -> crate::format::OffsetIndex {
-        let page_locations = self.page_locations.iter().map(|loc| loc.into()).collect();
-        crate::format::OffsetIndex::new(
-            page_locations,
-            self.unencoded_byte_array_data_bytes.clone(),
-        )
-    }
-
     // Fast-path read of offset index. This works because we expect all field deltas to be 1,
     // and there's no nesting beyond PageLocation, so no need to save the last field id. Like
     // read_page_locations(), this will fail if absolute field id's are used.
