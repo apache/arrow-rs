@@ -829,19 +829,30 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    ///  use parquet_variant::Variant;
+    ///  use parquet_variant::{Variant, VariantDecimal4};
+    /// use parquet_variant::ParentState::Variant;
     ///
     ///  // you can read an int64 variant into an u8
     ///  let v1 = Variant::from(123i64);
     ///  assert_eq!(v1.as_u8(), Some(123u8));
     ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal4::try_new(26, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u8(), Some(26u8));
+    ///
     ///  // but not a variant that cant fit into the range
-    ///  let v2 = Variant::from(-1);
-    ///  assert_eq!(v2.as_u8(), None);
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u8(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal4::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u8(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v3 = Variant::from("hello!");
-    ///  assert_eq!(v3.as_u8(), None);
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u8(), None);
     /// ```
     pub fn as_u8(&self) -> Option<u8> {
         self.generic_convert_unsigned_primitive::<u8>()
@@ -855,19 +866,29 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    ///  use parquet_variant::Variant;
+    ///  use parquet_variant::{Variant, VariantDecimal4};
     ///
     ///  // you can read an int64 variant into an u16
     ///  let v1 = Variant::from(123i64);
     ///  assert_eq!(v1.as_u16(), Some(123u16));
     ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal4::try_new(u16::MAX as i32, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u16(), Some(u16::MAX));
+    ///
     ///  // but not a variant that cant fit into the range
-    ///  let v2 = Variant::from(-1);
-    ///  assert_eq!(v2.as_u16(), None);
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u16(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal4::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u16(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v3 = Variant::from("hello!");
-    ///  assert_eq!(v3.as_u16(), None);
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u16(), None);
     /// ```
     pub fn as_u16(&self) -> Option<u16> {
         self.generic_convert_unsigned_primitive::<u16>()
@@ -881,19 +902,29 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    ///  use parquet_variant::Variant;
+    ///  use parquet_variant::{Variant, VariantDecimal8};
     ///
     ///  // you can read an int64 variant into an u32
     ///  let v1 = Variant::from(123i64);
     ///  assert_eq!(v1.as_u32(), Some(123u32));
     ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal8::try_new(u32::MAX as i64, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u32(), Some(u32::MAX));
+    ///
     ///  // but not a variant that cant fit into the range
-    ///  let v2 = Variant::from(-1);
-    ///  assert_eq!(v2.as_u32(), None);
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u32(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal8::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u32(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v3 = Variant::from("hello!");
-    ///  assert_eq!(v3.as_u32(), None);
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u32(), None);
     /// ```
     pub fn as_u32(&self) -> Option<u32> {
         self.generic_convert_unsigned_primitive::<u32>()
@@ -907,19 +938,29 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// # Examples
     ///
     /// ```
-    ///  use parquet_variant::Variant;
+    ///  use parquet_variant::{Variant, VariantDecimal16};
     ///
     ///  // you can read an int64 variant into an u64
     ///  let v1 = Variant::from(123i64);
     ///  assert_eq!(v1.as_u64(), Some(123u64));
     ///
+    ///  // or a Decimal16 with scale 0 into u8
+    ///  let d = VariantDecimal16::try_new(u64::MAX as i128, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u64(), Some(u64::MAX));
+    ///
     ///  // but not a variant that cant fit into the range
-    ///  let v2 = Variant::from(-1);
-    ///  assert_eq!(v2.as_u64(), None);
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u64(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    /// let d = VariantDecimal16::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u64(), None);
     ///
     ///  // or not a variant that cannot be cast into an integer
-    ///  let v3 = Variant::from("hello!");
-    ///  assert_eq!(v3.as_u64(), None);
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u64(), None);
     /// ```
     pub fn as_u64(&self) -> Option<u64> {
         self.generic_convert_unsigned_primitive::<u64>()
