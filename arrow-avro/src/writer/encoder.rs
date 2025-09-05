@@ -305,7 +305,7 @@ impl<'a> RecordEncoderBuilder<'a> {
             ));
         };
         let mut columns = Vec::with_capacity(root_fields.len());
-        for root_field in root_fields.iter() {
+        for root_field in root_fields {
             let name = root_field.name();
             let arrow_index = self.arrow_schema.index_of(name).map_err(|e| {
                 ArrowError::SchemaError(format!("Schema mismatch for field '{name}': {e}"))
