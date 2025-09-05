@@ -177,7 +177,7 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
 
     fn write_ocf_block(&mut self, batch: &RecordBatch, sync: &[u8; 16]) -> Result<(), ArrowError> {
         let mut buf = Vec::<u8>::with_capacity(1024);
-        self.encoder.encode(batch, &mut buf)?;
+        self.encoder.encode(&mut buf, batch)?;
         let encoded = match self.compression {
             Some(codec) => codec.compress(&buf)?,
             None => buf,
@@ -194,7 +194,7 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
     }
 
     fn write_stream(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
-        self.encoder.encode(batch, &mut self.writer)
+        self.encoder.encode(&mut self.writer, batch)
     }
 }
 

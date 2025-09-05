@@ -39,7 +39,7 @@ use uuid::Uuid;
 ///
 /// Spec: <https://avro.apache.org/docs/1.11.1/specification/#binary-encoding>
 #[inline]
-pub fn write_long<W: Write + ?Sized>(writer: &mut W, value: i64) -> Result<(), ArrowError> {
+pub fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(), ArrowError> {
     let mut zz = ((value << 1) ^ (value >> 63)) as u64;
     // At most 10 bytes for 64-bit varint
     let mut buf = [0u8; 10];
@@ -51,28 +51,25 @@ pub fn write_long<W: Write + ?Sized>(writer: &mut W, value: i64) -> Result<(), A
     }
     buf[i] = (zz & 0x7F) as u8;
     i += 1;
-    writer
-        .write_all(&buf[..i])
+    out.write_all(&buf[..i])
         .map_err(|e| ArrowError::IoError(format!("write long: {e}"), e))
 }
 
 #[inline]
-fn write_int<W: Write + ?Sized>(writer: &mut W, value: i32) -> Result<(), ArrowError> {
-    write_long(writer, value as i64)
+fn write_int<W: Write + ?Sized>(out: &mut W, value: i32) -> Result<(), ArrowError> {
+    write_long(out, value as i64)
 }
 
 #[inline]
-fn write_len_prefixed<W: Write + ?Sized>(writer: &mut W, bytes: &[u8]) -> Result<(), ArrowError> {
-    write_long(writer, bytes.len() as i64)?;
-    writer
-        .write_all(bytes)
+fn write_len_prefixed<W: Write + ?Sized>(out: &mut W, bytes: &[u8]) -> Result<(), ArrowError> {
+    write_long(out, bytes.len() as i64)?;
+    out.write_all(bytes)
         .map_err(|e| ArrowError::IoError(format!("write bytes: {e}"), e))
 }
 
 #[inline]
-fn write_bool<W: Write + ?Sized>(writer: &mut W, v: bool) -> Result<(), ArrowError> {
-    writer
-        .write_all(&[if v { 1 } else { 0 }])
+fn write_bool<W: Write + ?Sized>(out: &mut W, v: bool) -> Result<(), ArrowError> {
+    out.write_all(&[if v { 1 } else { 0 }])
         .map_err(|e| ArrowError::IoError(format!("write bool: {e}"), e))
 }
 
@@ -82,13 +79,12 @@ fn write_bool<W: Write + ?Sized>(writer: &mut W, v: bool) -> Result<(), ArrowErr
 /// - Null-first (default): null => 0, value => 1
 /// - Null-second (Impala): value => 0, null => 1
 fn write_optional_index<W: Write + ?Sized>(
-    writer: &mut W,
+    out: &mut W,
     is_null: bool,
     null_order: Nullability,
 ) -> Result<(), ArrowError> {
     let byte = union_value_branch_byte(null_order, is_null);
-    writer
-        .write_all(&[byte])
+    out.write_all(&[byte])
         .map_err(|e| ArrowError::IoError(format!("write union branch: {e}"), e))
 }
 
@@ -226,7 +222,7 @@ impl<'a> FieldEncoder<'a> {
         })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         match &self.null_state {
             NullState::NonNullable => {}
             NullState::NullableNoNulls { union_value_byte } => out
@@ -239,7 +235,7 @@ impl<'a> FieldEncoder<'a> {
                 write_optional_index(out, false, *null_order)?;
             }
         }
-        self.encoder.encode(idx, out)
+        self.encoder.encode(out, idx)
     }
 }
 
@@ -360,11 +356,11 @@ impl RecordEncoder {
     /// Encode a `RecordBatch` using this encoder plan.
     ///
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
-    pub fn encode<W: Write>(&self, batch: &RecordBatch, out: &mut W) -> Result<(), ArrowError> {
+    pub fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         for row in 0..batch.num_rows() {
             for encoder in column_encoders.iter_mut() {
-                encoder.encode(row, out)?;
+                encoder.encode(out, row)?;
             }
         }
         Ok(())
@@ -440,28 +436,28 @@ enum Encoder<'a> {
 
 impl<'a> Encoder<'a> {
     /// Encode the value at `idx`.
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         match self {
-            Encoder::Boolean(e) => e.encode(idx, out),
-            Encoder::Int(e) => e.encode(idx, out),
-            Encoder::Long(e) => e.encode(idx, out),
-            Encoder::Timestamp(e) => e.encode(idx, out),
-            Encoder::Float32(e) => e.encode(idx, out),
-            Encoder::Float64(e) => e.encode(idx, out),
-            Encoder::Binary(e) => e.encode(idx, out),
-            Encoder::LargeBinary(e) => e.encode(idx, out),
-            Encoder::Utf8(e) => e.encode(idx, out),
-            Encoder::Utf8Large(e) => e.encode(idx, out),
-            Encoder::List(e) => e.encode(idx, out),
-            Encoder::LargeList(e) => e.encode(idx, out),
-            Encoder::Struct(e) => e.encode(idx, out),
+            Encoder::Boolean(e) => e.encode(out, idx),
+            Encoder::Int(e) => e.encode(out, idx),
+            Encoder::Long(e) => e.encode(out, idx),
+            Encoder::Timestamp(e) => e.encode(out, idx),
+            Encoder::Float32(e) => e.encode(out, idx),
+            Encoder::Float64(e) => e.encode(out, idx),
+            Encoder::Binary(e) => e.encode(out, idx),
+            Encoder::LargeBinary(e) => e.encode(out, idx),
+            Encoder::Utf8(e) => e.encode(out, idx),
+            Encoder::Utf8Large(e) => e.encode(out, idx),
+            Encoder::List(e) => e.encode(out, idx),
+            Encoder::LargeList(e) => e.encode(out, idx),
+            Encoder::Struct(e) => e.encode(out, idx),
         }
     }
 }
 
 struct BooleanEncoder<'a>(&'a arrow_array::BooleanArray);
 impl BooleanEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         write_bool(out, self.0.value(idx))
     }
 }
@@ -469,7 +465,7 @@ impl BooleanEncoder<'_> {
 /// Generic Avro `int` encoder for primitive arrays with `i32` native values.
 struct IntEncoder<'a, P: ArrowPrimitiveType<Native = i32>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         write_int(out, self.0.value(idx))
     }
 }
@@ -477,7 +473,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
 /// Generic Avro `long` encoder for primitive arrays with `i64` native values.
 struct LongEncoder<'a, P: ArrowPrimitiveType<Native = i64>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         write_long(out, self.0.value(idx))
     }
 }
@@ -485,14 +481,14 @@ impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
 /// Unified binary encoder generic over offset size (i32/i64).
 struct BinaryEncoder<'a, O: OffsetSizeTrait>(&'a GenericBinaryArray<O>);
 impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         write_len_prefixed(out, self.0.value(idx))
     }
 }
 
 struct F32Encoder<'a>(&'a arrow_array::Float32Array);
 impl F32Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         // Avro float: 4 bytes, IEEE-754 little-endian
         let bits = self.0.value(idx).to_bits();
         out.write_all(&bits.to_le_bytes())
@@ -502,7 +498,7 @@ impl F32Encoder<'_> {
 
 struct F64Encoder<'a>(&'a arrow_array::Float64Array);
 impl F64Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         // Avro double: 8 bytes, IEEE-754 little-endian
         let bits = self.0.value(idx).to_bits();
         out.write_all(&bits.to_le_bytes())
@@ -513,7 +509,7 @@ impl F64Encoder<'_> {
 struct Utf8GenericEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
 impl<'a, O: OffsetSizeTrait> Utf8GenericEncoder<'a, O> {
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         write_len_prefixed(out, self.0.value(idx).as_bytes())
     }
 }
@@ -553,14 +549,17 @@ impl<'a> StructEncoder<'a> {
         Ok(Self { encoders })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         for encoder in self.encoders.iter_mut() {
-            encoder.encode(idx, out)?;
+            encoder.encode(out, idx)?;
         }
         Ok(())
     }
 }
 
+/// Encode a blocked range of items with Avro array block framing.
+///
+/// `write_item` must take `(out, index)` to maintain the "out-first" convention.
 fn encode_blocked_range<W: Write + ?Sized, F>(
     out: &mut W,
     start: usize,
@@ -568,7 +567,7 @@ fn encode_blocked_range<W: Write + ?Sized, F>(
     mut write_item: F,
 ) -> Result<(), ArrowError>
 where
-    F: FnMut(usize, &mut W) -> Result<(), ArrowError>,
+    F: FnMut(&mut W, usize) -> Result<(), ArrowError>,
 {
     let len = end.saturating_sub(start);
     if len == 0 {
@@ -578,8 +577,8 @@ where
     }
     // Emit a single positive block for performance, then the end marker.
     write_long(out, len as i64)?;
-    for j in start..end {
-        write_item(j, out)?;
+    for row in start..end {
+        write_item(out, row)?;
     }
     write_long(out, 0)?;
     Ok(())
@@ -628,13 +627,13 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
         start: usize,
         end: usize,
     ) -> Result<(), ArrowError> {
-        encode_blocked_range(out, start, end, |row, out| {
+        encode_blocked_range(out, start, end, |out, row| {
             self.values
-                .encode(row.saturating_sub(self.values_offset), out)
+                .encode(out, row.saturating_sub(self.values_offset))
         })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         let offsets = self.list.offsets();
         let start = offsets[idx].to_usize().ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!("Error converting offset[{idx}] to usize"))
@@ -703,7 +702,7 @@ mod tests {
         let mut enc = FieldEncoder::make_encoder(array, &field, plan, nullability).unwrap();
         let mut out = Vec::new();
         for i in 0..array.len() {
-            enc.encode(i, &mut out).unwrap();
+            enc.encode(&mut out, i).unwrap();
         }
         out
     }
