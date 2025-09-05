@@ -22,7 +22,7 @@ use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
-use crate::format as parquet;
+use crate::format::{self as parquet, EdgeInterpolationAlgorithm, GeographyType, GeometryType};
 
 use crate::errors::{ParquetError, Result};
 
@@ -231,9 +231,18 @@ pub enum LogicalType {
     /// A Variant value.
     Variant,
     /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
-    Geometry,
+    Geometry {
+        /// A custom CRS. If unset, it defaults to "OGC:CRS84", which means that the geometries
+        /// must be stored in longitude, latitude based on the WGS84 datum.
+        crs: Option<String>,
+    },
     /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
-    Geography,
+    Geography {
+        /// A custom CRS. If unset, the CRS defaults to "OGC:CRS84".
+        crs: Option<String>,
+        /// Edge interpolation method.
+        algorithm: Option<EdgeInterpolationAlgorithm>,
+    },
 }
 
 // ----------------------------------------------------------------------
@@ -584,9 +593,9 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
-                LogicalType::Variant | LogicalType::Geometry | LogicalType::Geography => {
-                    SortOrder::UNDEFINED
-                }
+                LogicalType::Variant
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -850,8 +859,11 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::UUID(_) => LogicalType::Uuid,
             parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
             parquet::LogicalType::VARIANT(_) => LogicalType::Variant,
-            parquet::LogicalType::GEOMETRY(_) => LogicalType::Geometry,
-            parquet::LogicalType::GEOGRAPHY(_) => LogicalType::Geography,
+            parquet::LogicalType::GEOMETRY(t) => LogicalType::Geometry { crs: t.crs },
+            parquet::LogicalType::GEOGRAPHY(t) => LogicalType::Geography {
+                crs: t.crs,
+                algorithm: t.algorithm,
+            },
         }
     }
 }
@@ -894,8 +906,10 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
             LogicalType::Variant => parquet::LogicalType::VARIANT(Default::default()),
-            LogicalType::Geometry => parquet::LogicalType::GEOMETRY(Default::default()),
-            LogicalType::Geography => parquet::LogicalType::GEOGRAPHY(Default::default()),
+            LogicalType::Geometry { crs } => parquet::LogicalType::GEOMETRY(GeometryType { crs }),
+            LogicalType::Geography { crs, algorithm } => {
+                parquet::LogicalType::GEOGRAPHY(GeographyType { crs, algorithm })
+            }
         }
     }
 }
@@ -948,8 +962,8 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Uuid
                 | LogicalType::Float16
                 | LogicalType::Variant
-                | LogicalType::Geometry
-                | LogicalType::Geography
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. }
                 | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
