@@ -230,24 +230,18 @@ impl<'a> FieldEncoder<'a> {
 
     fn encode<W: Write + ?Sized>(&mut self, idx: usize, out: &mut W) -> Result<(), ArrowError> {
         match &self.null_state {
-            NullState::NonNullable => self.encoder.encode(idx, out),
-            NullState::NullableNoNulls { byte } => {
-                // Constant non-null branch byte, then value.
-                out.write_all(&[*byte]).map_err(|e| {
-                    ArrowError::IoError(format!("write union value branch: {e}"), e)
-                })?;
-                self.encoder.encode(idx, out)
+            NullState::NonNullable => {}
+            NullState::NullableNoNulls { byte } => out.write_all(&[*byte]).map_err(|e| {
+                ArrowError::IoError(format!("write union value branch: {e}"), e)
+            })?,
+            NullState::Nullable { nulls, null_order } if nulls.is_null(idx) => {
+                return write_optional_index(out, true, *null_order); // no value to write
             }
-            NullState::Nullable { nulls, null_order } => {
-                let is_null = nulls.is_null(idx);
-                write_optional_index(out, is_null, *null_order)?;
-                if is_null {
-                    Ok(())
-                } else {
-                    self.encoder.encode(idx, out)
-                }
+            NullState::Nullable { null_order, .. } => {
+                write_optional_index(out, false, *null_order)?;
             }
         }
+        self.encoder.encode(idx, out)
     }
 }
 
