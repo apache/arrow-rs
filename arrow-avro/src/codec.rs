@@ -967,6 +967,61 @@ impl<'a> Maker<'a> {
         }
     }
 
+    // Resolve writer vs. reader enum schemas according to Avro 1.11.1.
+    //
+    // # How enums resolve (writer to reader)
+    // Per “Schema Resolution”:
+    // * The two schemas must refer to the same (unqualified) enum name (or match
+    //   via alias rewriting).
+    // * If the writer’s symbol is not present in the reader’s enum and the reader
+    //   enum has a `default`, that `default` symbol must be used; otherwise,
+    //   error.
+    //   https://avro.apache.org/docs/1.11.1/specification/#schema-resolution
+    // * Avro “Aliases” are applied from the reader side to rewrite the writer’s
+    //   names during resolution. For robustness across ecosystems, we also accept
+    //   symmetry here (see note below).
+    //   https://avro.apache.org/docs/1.11.1/specification/#aliases
+    //
+    // # Rationale for this code path
+    // 1. Do the work once at schema‑resolution time. Avro serializes an enum as a
+    //    writer‑side position. Mapping positions on the hot decoder path is expensive
+    //    if done with string lookups. This method builds a `writer_index to reader_index`
+    //    vector once, so decoding just does an O(1) table lookup.
+    // 2. Adopt the reader’s symbol set and order. We return an Arrow
+    //    `Dictionary(Int32, Utf8)` whose dictionary values are the reader enum
+    //    symbols. This makes downstream semantics match the reader schema, including
+    //    Avro’s sort order rule that orders enums by symbol position in the schema.
+    //    https://avro.apache.org/docs/1.11.1/specification/#sort-order
+    // 3. Honor Avro’s `default` for enums. Avro 1.9+ allows a type‑level default
+    //    on the enum. When the writer emits a symbol unknown to the reader, we map it
+    //    to the reader’s validated `default` symbol if present; otherwise we signal an
+    //    error at decoding time.
+    //    https://avro.apache.org/docs/1.11.1/specification/#enums
+    //
+    // # Implementation notes
+    // * We first check that enum names match or are*alias‑equivalent. The Avro
+    //   spec describes alias rewriting using reader aliases; this implementation
+    //   additionally treats writer aliases as acceptable for name matching to be
+    //   resilient with schemas produced by different tooling.
+    // * We build `EnumMapping`:
+    //   - `mapping[i]` = reader index of the writer symbol at writer index `i`.
+    //   - If the writer symbol is absent and the reader has a default, we store the
+    //     reader index of that default.
+    //   - Otherwise we store `-1` as a sentinel meaning unresolvable; the decoder
+    //     must treat encountering such a value as an error, per the spec.
+    // * We persist the reader symbol list in field metadata under
+    //   `AVRO_ENUM_SYMBOLS_METADATA_KEY`, so consumers can inspect the dictionary
+    //   without needing the original Avro schema.
+    // * The Arrow representation is `Dictionary(Int32, Utf8)`, which aligns with
+    //   Avro’s integer index encoding for enums.
+    //
+    // # Examples
+    // * Writer `["A","B","C"]`, Reader `["A","B"]`, Reader default `"A"`
+    //     `mapping = [0, 1, 0]`, `default_index = 0`.
+    // * Writer `["A","B"]`, Reader `["B","A"]` (no default)
+    //     `mapping = [1, 0]`, `default_index = -1`.
+    // * Writer `["A","B","C"]`, Reader `["A","B"]` (no default)
+    //     `mapping = [0, 1, -1]` (decode must error on `"C"`).
     fn resolve_enums(
         &mut self,
         writer_enum: &Enum<'a>,
