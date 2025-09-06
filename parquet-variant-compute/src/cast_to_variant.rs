@@ -24,13 +24,13 @@ use crate::type_conversion::{
 };
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
-    Array, AsArray, OffsetSizeTrait, TimestampMicrosecondArray, TimestampMillisecondArray,
+    AnyDictionaryArray, Array, AsArray, OffsetSizeTrait, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    i256, ArrowNativeType, ArrowPrimitiveType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
+    i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
     Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, LargeBinaryType, RunEndIndexType, Time32MillisecondType,
     Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type,
@@ -69,6 +69,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder<'a, Int16Type>),
     RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder<'a, Int32Type>),
     RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder<'a, Int64Type>),
+    Dictionary(DictionaryArrowToVariantBuilder<'a>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -91,6 +92,7 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::RunEndEncodedInt16(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::RunEndEncodedInt32(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::RunEndEncodedInt64(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Dictionary(b) => b.append_row(index, builder),
         }
     }
 }
@@ -311,6 +313,44 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
     }
 }
 
+/// Dictionary array builder with simple O(1) indexing
+pub(crate) struct DictionaryArrowToVariantBuilder<'a> {
+    dict_array: &'a dyn arrow::array::AnyDictionaryArray,
+    normalized_keys: Vec<usize>,
+    values_builder: Box<ArrowToVariantRowBuilder<'a>>,
+}
+
+impl<'a> DictionaryArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
+        let dict_array = array.as_any_dictionary();
+        let normalized_keys = dict_array.normalized_keys().to_vec();
+        
+        let values_builder = make_arrow_to_variant_row_builder(
+            dict_array.values().data_type(),
+            dict_array.values().as_ref(),
+        )?;
+        
+        Ok(Self {
+            dict_array,
+            normalized_keys,
+            values_builder: Box::new(values_builder),
+        })
+    }
+    
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        // Dictionary indexing is trivial - just a direct lookup using normalized keys!
+        let keys = self.dict_array.keys();
+        
+        if keys.is_null(index) {
+            builder.append_null();
+        } else {
+            let normalized_key = self.normalized_keys[index];
+            self.values_builder.append_row(normalized_key, builder)?;
+        }
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -346,6 +386,11 @@ fn make_arrow_to_variant_row_builder<'a>(
                 DataType::Int64 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder::new(array)?)),
                 _ => Err(ArrowError::CastError(format!("Unsupported run-end type: {run_ends:?}"))),
             }
+        }
+        
+        // Dictionary types
+        DataType::Dictionary(_, _) => {
+            Ok(ArrowToVariantRowBuilder::Dictionary(DictionaryArrowToVariantBuilder::new(array)?))
         }
         
         // TODO: Add other types (Binary, Date, Time, Decimal, etc.)
@@ -2677,7 +2722,7 @@ mod tests {
 #[cfg(test)]
 mod row_builder_tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray, BooleanArray};
+    use arrow::array::{ArrayRef, Int32Array, StringArray, BooleanArray};
 
     #[test]
     fn test_primitive_row_builder() {
@@ -2905,5 +2950,138 @@ mod row_builder_tests {
         assert!(variant_array.is_null(2)); // Run 1 (null)
         assert!(variant_array.is_null(3)); // Run 1 (null)
         assert_eq!(variant_array.value(4), Variant::from("B")); // Run 2
+    }
+
+    #[test]
+    fn test_dictionary_row_builder() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+        
+        // Create a dictionary array: keys=[0, 1, 0, 2, 1], values=["apple", "banana", "cherry"]
+        let values = StringArray::from(vec!["apple", "banana", "cherry"]);
+        let keys = Int32Array::from(vec![0, 1, 0, 2, 1]);
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
+        let mut array_builder = VariantArrayBuilder::new(5);
+        
+        // Test sequential access
+        for i in 0..5 {
+            let mut variant_builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut variant_builder).unwrap();
+            variant_builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 5);
+        
+        // Verify the values match the dictionary lookup
+        assert_eq!(variant_array.value(0), Variant::from("apple"));   // keys[0] = 0 -> values[0] = "apple"
+        assert_eq!(variant_array.value(1), Variant::from("banana"));  // keys[1] = 1 -> values[1] = "banana"
+        assert_eq!(variant_array.value(2), Variant::from("apple"));   // keys[2] = 0 -> values[0] = "apple"
+        assert_eq!(variant_array.value(3), Variant::from("cherry"));  // keys[3] = 2 -> values[2] = "cherry"
+        assert_eq!(variant_array.value(4), Variant::from("banana"));  // keys[4] = 1 -> values[1] = "banana"
+    }
+
+    #[test]
+    fn test_dictionary_with_nulls() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+        
+        // Create a dictionary array with null keys: keys=[0, null, 1, null, 2], values=["x", "y", "z"]
+        let values = StringArray::from(vec!["x", "y", "z"]);
+        let keys = Int32Array::from(vec![Some(0), None, Some(1), None, Some(2)]);
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
+        let mut array_builder = VariantArrayBuilder::new(5);
+        
+        // Test sequential access
+        for i in 0..5 {
+            let mut variant_builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut variant_builder).unwrap();
+            variant_builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 5);
+        
+        // Verify the values and nulls
+        assert_eq!(variant_array.value(0), Variant::from("x"));  // keys[0] = 0 -> values[0] = "x"
+        assert!(variant_array.is_null(1));                      // keys[1] = null
+        assert_eq!(variant_array.value(2), Variant::from("y"));  // keys[2] = 1 -> values[1] = "y"
+        assert!(variant_array.is_null(3));                      // keys[3] = null
+        assert_eq!(variant_array.value(4), Variant::from("z"));  // keys[4] = 2 -> values[2] = "z"
+    }
+
+    #[test]
+    fn test_dictionary_random_access() {
+        use arrow::array::{DictionaryArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+        
+        // Create a dictionary array: keys=[0, 1, 2, 0, 1, 2], values=["red", "green", "blue"]
+        let values = StringArray::from(vec!["red", "green", "blue"]);
+        let keys = Int32Array::from(vec![0, 1, 2, 0, 1, 2]);
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
+        
+        // Test random access pattern
+        let access_pattern = [5, 0, 3, 1, 4, 2]; // Random order
+        let expected_values = ["blue", "red", "red", "green", "green", "blue"];
+        
+        for (i, &index) in access_pattern.iter().enumerate() {
+            let mut array_builder = VariantArrayBuilder::new(1);
+            let mut variant_builder = array_builder.variant_builder();
+            row_builder.append_row(index, &mut variant_builder).unwrap();
+            variant_builder.finish();
+            
+            let variant_array = array_builder.build();
+            assert_eq!(variant_array.value(0), Variant::from(expected_values[i]));
+        }
+    }
+
+    #[test]
+    fn test_nested_dictionary() {
+        use arrow::array::{DictionaryArray, Int32Array, StructArray};
+        use arrow::datatypes::{Int32Type, Field};
+        
+        // Create a dictionary with struct values
+        let id_array = Int32Array::from(vec![1, 2, 3]);
+        let name_array = StringArray::from(vec!["Alice", "Bob", "Charlie"]);
+        let struct_array = StructArray::from(vec![
+            (Arc::new(Field::new("id", DataType::Int32, false)), Arc::new(id_array) as ArrayRef),
+            (Arc::new(Field::new("name", DataType::Utf8, false)), Arc::new(name_array) as ArrayRef),
+        ]);
+        
+        let keys = Int32Array::from(vec![0, 1, 0, 2, 1]);
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(struct_array)).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
+        let mut array_builder = VariantArrayBuilder::new(5);
+        
+        // Test sequential access
+        for i in 0..5 {
+            let mut variant_builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut variant_builder).unwrap();
+            variant_builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 5);
+        
+        // Verify the nested struct values
+        let first_variant = variant_array.value(0);
+        assert_eq!(first_variant.get_object_field("id"), Some(Variant::from(1)));
+        assert_eq!(first_variant.get_object_field("name"), Some(Variant::from("Alice")));
+        
+        let second_variant = variant_array.value(1);
+        assert_eq!(second_variant.get_object_field("id"), Some(Variant::from(2)));
+        assert_eq!(second_variant.get_object_field("name"), Some(Variant::from("Bob")));
+        
+        // Test that repeated keys give same values
+        let third_variant = variant_array.value(2);
+        assert_eq!(third_variant.get_object_field("id"), Some(Variant::from(1)));
+        assert_eq!(third_variant.get_object_field("name"), Some(Variant::from("Alice")));
     }
 }
