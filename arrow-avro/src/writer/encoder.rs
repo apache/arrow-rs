@@ -21,19 +21,15 @@ use crate::codec::{AvroDataType, AvroField, Codec};
 use crate::schema::Nullability;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalMonthDayNanoType,
-    TimestampMicrosecondType,
+    ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{
-    Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray,
-    FixedSizeBinaryArray, GenericBinaryArray, GenericListArray, GenericStringArray, LargeListArray,
-    ListArray, MapArray, OffsetSizeTrait, PrimitiveArray, RecordBatch, StringArray, StructArray,
+    Array, GenericBinaryArray, GenericListArray, GenericStringArray, LargeListArray, ListArray,
+    OffsetSizeTrait, PrimitiveArray, RecordBatch, StructArray,
 };
 use arrow_buffer::NullBuffer;
-use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, Schema as ArrowSchema, TimeUnit};
 use std::io::Write;
-use std::sync::Arc;
-use uuid::Uuid;
 
 /// Encode a single Avro-`long` using ZigZag + variable length, buffered.
 ///
@@ -570,7 +566,7 @@ where
 {
     let len = end.saturating_sub(start);
     if len == 0 {
-        // Zero-length terminator per Avro spec
+        // Zero-length terminator per Avro spec.
         write_long(out, 0)?;
         return Ok(());
     }
