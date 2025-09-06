@@ -587,6 +587,63 @@ impl<'a> Resolver<'a> {
     }
 }
 
+fn names_match(
+    writer_name: &str,
+    writer_aliases: &[&str],
+    reader_name: &str,
+    reader_aliases: &[&str],
+) -> bool {
+    writer_name == reader_name
+        || reader_aliases.contains(&writer_name)
+        || writer_aliases.contains(&reader_name)
+}
+
+fn ensure_names_match(
+    data_type: &str,
+    writer_name: &str,
+    writer_aliases: &[&str],
+    reader_name: &str,
+    reader_aliases: &[&str],
+) -> Result<(), ArrowError> {
+    if names_match(writer_name, writer_aliases, reader_name, reader_aliases) {
+        Ok(())
+    } else {
+        Err(ArrowError::ParseError(format!(
+            "{data_type} name mismatch writer={writer_name}, reader={reader_name}"
+        )))
+    }
+}
+
+fn primitive_of(schema: &Schema) -> Option<PrimitiveType> {
+    match schema {
+        Schema::TypeName(TypeName::Primitive(primitive)) => Some(*primitive),
+        Schema::Type(Type {
+            r#type: TypeName::Primitive(primitive),
+            ..
+        }) => Some(*primitive),
+        _ => None,
+    }
+}
+
+fn nullable_union_variants<'x, 'y>(
+    variant: &'y [Schema<'x>],
+) -> Option<(Nullability, &'y Schema<'x>)> {
+    if variant.len() != 2 {
+        return None;
+    }
+    let is_null = |schema: &Schema<'x>| {
+        matches!(
+            schema,
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Null))
+        )
+    };
+    match (is_null(&variant[0]), is_null(&variant[1])) {
+        (true, false) => Some((Nullability::NullFirst, &variant[1])),
+        (false, true) => Some((Nullability::NullSecond, &variant[0])),
+        _ => None,
+    }
+}
+
 /// Resolves Avro type names to [`AvroDataType`]
 ///
 /// See <https://avro.apache.org/docs/1.11.1/specification/#names>
@@ -815,35 +872,12 @@ impl<'a> Maker<'a> {
         reader_schema: &'s Schema<'a>,
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
+        if let (Some(write_primitive), Some(read_primitive)) =
+            (primitive_of(writer_schema), primitive_of(reader_schema))
+        {
+            return self.resolve_primitives(write_primitive, read_primitive, reader_schema);
+        }
         match (writer_schema, reader_schema) {
-            (
-                Schema::TypeName(TypeName::Primitive(writer_primitive)),
-                Schema::TypeName(TypeName::Primitive(reader_primitive)),
-            ) => self.resolve_primitives(*writer_primitive, *reader_primitive, reader_schema),
-            (
-                Schema::Type(Type {
-                    r#type: TypeName::Primitive(writer_primitive),
-                    ..
-                }),
-                Schema::Type(Type {
-                    r#type: TypeName::Primitive(reader_primitive),
-                    ..
-                }),
-            ) => self.resolve_primitives(*writer_primitive, *reader_primitive, reader_schema),
-            (
-                Schema::TypeName(TypeName::Primitive(writer_primitive)),
-                Schema::Type(Type {
-                    r#type: TypeName::Primitive(reader_primitive),
-                    ..
-                }),
-            ) => self.resolve_primitives(*writer_primitive, *reader_primitive, reader_schema),
-            (
-                Schema::Type(Type {
-                    r#type: TypeName::Primitive(writer_primitive),
-                    ..
-                }),
-                Schema::TypeName(TypeName::Primitive(reader_primitive)),
-            ) => self.resolve_primitives(*writer_primitive, *reader_primitive, reader_schema),
             (
                 Schema::Complex(ComplexType::Record(writer_record)),
                 Schema::Complex(ComplexType::Record(reader_record)),
@@ -851,45 +885,23 @@ impl<'a> Maker<'a> {
             (
                 Schema::Complex(ComplexType::Enum(writer_enum)),
                 Schema::Complex(ComplexType::Enum(reader_enum)),
-            ) => self.resolve_enums(writer_enum, reader_enum, namespace),
-            (Schema::Union(writer_variants), Schema::Union(reader_variants)) => {
-                self.resolve_nullable_union(writer_variants, reader_variants, namespace)
-            }
+            ) => self.resolve_enums(writer_enum, reader_enum, reader_schema, namespace),
+            (Schema::Union(writer_variants), Schema::Union(reader_variants)) => self
+                .resolve_nullable_union(
+                    writer_variants.as_slice(),
+                    reader_variants.as_slice(),
+                    namespace,
+                ),
+            (Schema::TypeName(TypeName::Ref(_)), _) => self.parse_type(reader_schema, namespace),
+            (_, Schema::TypeName(TypeName::Ref(_))) => self.parse_type(reader_schema, namespace),
             // if both sides are the same complex kind (non-record), adopt the reader type.
             // This aligns with Avro spec: arrays, maps, and enums resolve recursively;
             // for identical shapes we can just parse the reader schema.
             (Schema::Complex(ComplexType::Array(_)), Schema::Complex(ComplexType::Array(_)))
             | (Schema::Complex(ComplexType::Map(_)), Schema::Complex(ComplexType::Map(_)))
-            | (Schema::Complex(ComplexType::Fixed(_)), Schema::Complex(ComplexType::Fixed(_)))
-            | (Schema::Complex(ComplexType::Enum(_)), Schema::Complex(ComplexType::Enum(_))) => {
+            | (Schema::Complex(ComplexType::Fixed(_)), Schema::Complex(ComplexType::Fixed(_))) => {
                 self.parse_type(reader_schema, namespace)
             }
-            // Named-type references (equal on both sides) – parse reader side.
-            (Schema::TypeName(TypeName::Ref(_)), Schema::TypeName(TypeName::Ref(_)))
-            | (
-                Schema::Type(Type {
-                    r#type: TypeName::Ref(_),
-                    ..
-                }),
-                Schema::Type(Type {
-                    r#type: TypeName::Ref(_),
-                    ..
-                }),
-            )
-            | (
-                Schema::TypeName(TypeName::Ref(_)),
-                Schema::Type(Type {
-                    r#type: TypeName::Ref(_),
-                    ..
-                }),
-            )
-            | (
-                Schema::Type(Type {
-                    r#type: TypeName::Ref(_),
-                    ..
-                }),
-                Schema::TypeName(TypeName::Ref(_)),
-            ) => self.parse_type(reader_schema, namespace),
             _ => Err(ArrowError::NotYetImplemented(
                 "Other resolutions not yet implemented".to_string(),
             )),
@@ -925,43 +937,24 @@ impl<'a> Maker<'a> {
         Ok(datatype)
     }
 
-    fn resolve_nullable_union(
+    fn resolve_nullable_union<'s>(
         &mut self,
-        writer_variants: &[Schema<'a>],
-        reader_variants: &[Schema<'a>],
+        writer_variants: &'s [Schema<'a>],
+        reader_variants: &'s [Schema<'a>],
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
-        // Only support unions with exactly two branches, one of which is `null` on both sides
-        if writer_variants.len() != 2 || reader_variants.len() != 2 {
-            return Err(ArrowError::NotYetImplemented(
-                "Only 2-branch unions are supported for schema resolution".to_string(),
-            ));
-        }
-        let is_null = |s: &Schema<'a>| {
-            matches!(
-                s,
-                Schema::TypeName(TypeName::Primitive(PrimitiveType::Null))
-            )
-        };
-        let w_null_pos = writer_variants.iter().position(is_null);
-        let r_null_pos = reader_variants.iter().position(is_null);
-        match (w_null_pos, r_null_pos) {
-            (Some(wp), Some(rp)) => {
-                // Extract a non-null branch on each side
-                let w_nonnull = &writer_variants[1 - wp];
-                let r_nonnull = &reader_variants[1 - rp];
-                // Resolve the non-null branch
-                let mut dt = self.make_data_type(w_nonnull, Some(r_nonnull), namespace)?;
+        match (
+            nullable_union_variants(writer_variants),
+            nullable_union_variants(reader_variants),
+        ) {
+            (Some((_, write_nonnull)), Some((read_nb, read_nonnull))) => {
+                let mut dt = self.make_data_type(write_nonnull, Some(read_nonnull), namespace)?;
                 // Adopt reader union null ordering
-                dt.nullability = Some(match rp {
-                    0 => Nullability::NullFirst,
-                    1 => Nullability::NullSecond,
-                    _ => unreachable!(),
-                });
+                dt.nullability = Some(read_nb);
                 Ok(dt)
             }
             _ => Err(ArrowError::NotYetImplemented(
-                "Union resolution requires both writer and reader to be nullable unions"
+                "Union resolution requires both writer and reader to be 2-branch nullable unions"
                     .to_string(),
             )),
         }
@@ -1026,60 +1019,56 @@ impl<'a> Maker<'a> {
         &mut self,
         writer_enum: &Enum<'a>,
         reader_enum: &Enum<'a>,
+        reader_schema: &Schema<'a>,
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
-        let names_match = writer_enum.name == reader_enum.name
-            || reader_enum.aliases.contains(&writer_enum.name)
-            || writer_enum.aliases.contains(&reader_enum.name);
-        if !names_match {
-            return Err(ArrowError::ParseError(format!(
-                "Enum name mismatch writer={}, reader={}",
-                writer_enum.name, reader_enum.name
-            )));
+        ensure_names_match(
+            "Enum",
+            writer_enum.name,
+            &writer_enum.aliases,
+            reader_enum.name,
+            &reader_enum.aliases,
+        )?;
+        if writer_enum.symbols == reader_enum.symbols {
+            return self.parse_type(reader_schema, namespace);
         }
-        let reader_index: HashMap<&str, usize> = reader_enum
+        let reader_index: HashMap<&str, i32> = reader_enum
             .symbols
             .iter()
             .enumerate()
-            .map(|(i, &s)| (s, i))
+            .map(|(index, &symbol)| (symbol, index as i32))
             .collect();
         let default_index: i32 = match reader_enum.default {
-            Some(symbol) => match reader_index.get(symbol) {
-                Some(&idx) => idx as i32,
-                None => {
-                    return Err(ArrowError::SchemaError(format!(
-                        "Reader enum '{}' default symbol '{symbol}' not found in symbols list",
-                        reader_enum.name,
-                    )))
-                }
-            },
+            Some(symbol) => *reader_index.get(symbol).ok_or_else(|| {
+                ArrowError::SchemaError(format!(
+                    "Reader enum '{}' default symbol '{symbol}' not found in symbols list",
+                    reader_enum.name,
+                ))
+            })?,
             None => -1,
         };
         let mapping: Vec<i32> = writer_enum
             .symbols
             .iter()
-            .map(|&w_symbol| match reader_index.get(w_symbol) {
-                Some(&idx) => idx as i32,
-                None if default_index >= 0 => default_index,
-                None => -1,
+            .map(|&write_symbol| {
+                reader_index
+                    .get(write_symbol)
+                    .copied()
+                    .unwrap_or(default_index)
             })
             .collect();
-        let reader_ns = reader_enum.namespace.or(namespace);
-        let symbols_arc: Arc<[String]> = reader_enum
-            .symbols
-            .iter()
-            .map(|&symbol| symbol.to_string())
-            .collect();
-        let mut metadata = reader_enum.attributes.field_metadata();
-        let symbols_json = serde_json::to_string(&reader_enum.symbols).map_err(|e| {
-            ArrowError::ParseError(format!("Failed to serialize enum symbols: {e}"))
-        })?;
-        metadata.insert(AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(), symbols_json);
-        let mut dt = AvroDataType::new(Codec::Enum(symbols_arc), metadata, None);
+        if self.strict_mode && mapping.iter().any(|&m| m < 0) {
+            return Err(ArrowError::SchemaError(format!(
+                "Reader enum '{}' does not cover all writer symbols and no default is provided",
+                reader_enum.name
+            )));
+        }
+        let mut dt = self.parse_type(reader_schema, namespace)?;
         dt.resolution = Some(ResolutionInfo::EnumMapping(EnumMapping {
             mapping: Arc::from(mapping),
             default_index,
         }));
+        let reader_ns = reader_enum.namespace.or(namespace);
         self.resolver
             .register(reader_enum.name, reader_ns, dt.clone());
         Ok(dt)
@@ -1091,16 +1080,13 @@ impl<'a> Maker<'a> {
         reader_record: &Record<'a>,
         namespace: Option<&'a str>,
     ) -> Result<AvroDataType, ArrowError> {
-        // Names must match or be aliased
-        let names_match = writer_record.name == reader_record.name
-            || reader_record.aliases.contains(&writer_record.name)
-            || writer_record.aliases.contains(&reader_record.name);
-        if !names_match {
-            return Err(ArrowError::ParseError(format!(
-                "Record name mismatch writer={}, reader={}",
-                writer_record.name, reader_record.name
-            )));
-        }
+        ensure_names_match(
+            "Record",
+            writer_record.name,
+            &writer_record.aliases,
+            reader_record.name,
+            &reader_record.aliases,
+        )?;
         let writer_ns = writer_record.namespace.or(namespace);
         let reader_ns = reader_record.namespace.or(namespace);
         // Map writer field name -> index
