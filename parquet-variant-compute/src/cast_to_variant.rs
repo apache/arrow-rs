@@ -238,8 +238,8 @@ impl NullArrowToVariantBuilder {
 
 /// Run-end encoded array builder with efficient sequential access
 pub(crate) struct RunEndEncodedArrowToVariantBuilder<'a, R: RunEndIndexType> {
-    run_array: &'a arrow::array::RunEndEncodedArray,
-    values_builder: ArrowToVariantRowBuilder<'a>,
+    run_array: &'a arrow::array::RunArray<R>,
+    values_builder: Box<ArrowToVariantRowBuilder<'a>>,
     
     run_ends: &'a [R::Native],
     run_number: usize,     // Physical index into run_ends and values
@@ -248,22 +248,22 @@ pub(crate) struct RunEndEncodedArrowToVariantBuilder<'a, R: RunEndIndexType> {
 
 impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
-        let run_array = array.as_run_end_encoded().ok_or_else(|| {
-            ArrowError::CastError("Expected RunEndEncodedArray".to_string())
-        })?;
+        let Some(run_array) = array.as_run_opt() else {
+            return Err(ArrowError::CastError("Expected RunArray".to_string()));
+        };
         
-        let run_ends = run_array.run_ends().values();
+        let values_array = run_array.values();
         let values_builder = make_arrow_to_variant_row_builder(
-            run_array.values().data_type(),
-            run_array.values().as_ref(),
+            values_array.data_type(),
+            values_array.as_ref(),
         )?;
         
         Ok(Self {
             run_array,
-            values_builder,
-            run_ends,
+            values_builder: Box::new(values_builder),
+            run_ends: run_array.run_ends().values(),
             run_number: 0,
-            run_start: 0,  // First run starts at logical index 0
+            run_start: 0,
         })
     }
     
@@ -275,9 +275,11 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
             // Case 1: Still in same run - O(1)
             // No need to update run_number or run_start
         } else if self.run_number < self.run_ends.len() && 
-                  index == self.run_ends[self.run_number].as_usize() {
+            index == self.run_ends[self.run_number].as_usize()
+        {
             // Case 2: Advanced to next run - O(1)
-            self.advance_to_next_run();
+            self.run_start = self.run_ends[self.run_number].as_usize();
+            self.run_number += 1;
         } else {
             // Case 3: Binary search for any other case - O(log n)
             self.find_run_containing(index)?;
@@ -298,11 +300,6 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
         self.values_builder.append_row(self.run_number, builder)?;
         
         Ok(())
-    }
-    
-    fn advance_to_next_run(&mut self) {
-        self.run_start = self.run_ends[self.run_number].as_usize();
-        self.run_number += 1;
     }
     
     fn find_run_containing(&mut self, index: usize) -> Result<(), ArrowError> {
@@ -2779,7 +2776,6 @@ mod row_builder_tests {
         // Create a struct array with int and string fields
         let int_field = Field::new("id", DataType::Int32, true);
         let string_field = Field::new("name", DataType::Utf8, true);
-        let struct_field = Field::new("person", DataType::Struct(vec![int_field.clone(), string_field.clone()].into()), false);
         
         let int_array = Int32Array::from(vec![Some(1), None, Some(3)]);
         let string_array = StringArray::from(vec![Some("Alice"), Some("Bob"), None]);
@@ -2831,7 +2827,7 @@ mod row_builder_tests {
 
     #[test]
     fn test_run_end_encoded_row_builder() {
-        use arrow::array::{RunEndEncodedArray, Int32Array};
+        use arrow::array::{RunArray, Int32Array};
         use arrow::datatypes::Int32Type;
         
         // Create a run-end encoded array: [A, A, B, B, B, C]
@@ -2839,7 +2835,7 @@ mod row_builder_tests {
         // values: ["A", "B", "C"]
         let values = StringArray::from(vec!["A", "B", "C"]);
         let run_ends = Int32Array::from(vec![2, 5, 6]);
-        let run_array = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
         
         let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
         let mut array_builder = VariantArrayBuilder::new(6);
@@ -2865,13 +2861,13 @@ mod row_builder_tests {
 
     #[test]
     fn test_run_end_encoded_random_access() {
-        use arrow::array::{RunEndEncodedArray, Int32Array};
+        use arrow::array::{RunArray, Int32Array};
         use arrow::datatypes::Int32Type;
         
         // Create a run-end encoded array: [A, A, B, B, B, C]
         let values = StringArray::from(vec!["A", "B", "C"]);
         let run_ends = Int32Array::from(vec![2, 5, 6]);
-        let run_array = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
         
         let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
         
@@ -2892,13 +2888,13 @@ mod row_builder_tests {
 
     #[test]
     fn test_run_end_encoded_with_nulls() {
-        use arrow::array::{RunEndEncodedArray, Int32Array};
+        use arrow::array::{RunArray, Int32Array};
         use arrow::datatypes::Int32Type;
         
         // Create a run-end encoded array with null values: [A, A, null, null, B]
         let values = StringArray::from(vec![Some("A"), None, Some("B")]);
         let run_ends = Int32Array::from(vec![2, 4, 5]);
-        let run_array = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
         
         let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
         let mut array_builder = VariantArrayBuilder::new(5);
