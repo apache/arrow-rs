@@ -179,3 +179,4 @@ pub mod record;
 pub mod schema;
 
 pub mod thrift;
+experimental!(pub mod geospatial);
