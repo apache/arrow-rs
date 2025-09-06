@@ -47,7 +47,7 @@ use std::sync::Arc;
 
 #[test]
 fn test_to_pyarrow() {
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
     let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
     let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
@@ -56,7 +56,7 @@ fn test_to_pyarrow() {
     let input = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap();
     println!("input: {input:?}");
 
-    let res = Python::with_gil(|py| {
+    let res = Python::attach(|py| {
         let py_input = input.to_pyarrow(py)?;
         let records = RecordBatch::from_pyarrow_bound(py_input.bind(py))?;
         let py_records = records.to_pyarrow(py)?;
@@ -69,7 +69,7 @@ fn test_to_pyarrow() {
 
 #[test]
 fn test_to_pyarrow_byte_view() {
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
     for num_variadic_buffers in 0..=2 {
         let string_view: ArrayRef = Arc::new(string_view_column(num_variadic_buffers));
@@ -82,7 +82,7 @@ fn test_to_pyarrow_byte_view() {
         .unwrap();
 
         println!("input: {input:?}");
-        let res = Python::with_gil(|py| {
+        let res = Python::attach(|py| {
             let py_input = input.to_pyarrow(py)?;
             let records = RecordBatch::from_pyarrow_bound(py_input.bind(py))?;
             let py_records = records.to_pyarrow(py)?;

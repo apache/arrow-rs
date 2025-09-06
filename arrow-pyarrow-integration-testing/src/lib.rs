@@ -41,7 +41,7 @@ fn to_py_err(err: ArrowError) -> PyErr {
 
 /// Returns `array + array` of an int64 array.
 #[pyfunction]
-fn double(array: &Bound<PyAny>, py: Python) -> PyResult<PyObject> {
+fn double(array: &Bound<PyAny>, py: Python) -> PyResult<Py<PyAny>> {
     // import
     let array = make_array(ArrayData::from_pyarrow_bound(array)?);
 
@@ -75,7 +75,7 @@ fn double_py(lambda: &Bound<PyAny>, py: Python) -> PyResult<bool> {
 }
 
 #[pyfunction]
-fn make_empty_array(datatype: PyArrowType<DataType>, py: Python) -> PyResult<PyObject> {
+fn make_empty_array(datatype: PyArrowType<DataType>, py: Python) -> PyResult<Py<PyAny>> {
     let array = new_empty_array(&datatype.0);
 
     array.to_data().to_pyarrow(py)
@@ -95,7 +95,7 @@ fn substring(array: PyArrowType<ArrayData>, start: i64) -> PyResult<PyArrowType<
 
 /// Returns the concatenate
 #[pyfunction]
-fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<PyObject> {
+fn concatenate(array: PyArrowType<ArrayData>, py: Python) -> PyResult<Py<PyAny>> {
     let array = make_array(array.0);
 
     // concat
