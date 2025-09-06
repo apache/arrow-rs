@@ -43,8 +43,150 @@ use arrow::temporal_conversions::{
 use arrow_schema::{ArrowError, DataType, FieldRef, TimeUnit, UnionFields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use parquet_variant::{
-    Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+    Variant, VariantBuilder, VariantBuilderExt, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
+
+// ============================================================================
+// Row-oriented builders for efficient Arrow-to-Variant conversion
+// ============================================================================
+
+/// Row builder for converting Arrow arrays to VariantArray row by row
+pub(crate) trait ArrowToVariantRowBuilder {
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()>;
+    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<()>;
+}
+
+/// Generic primitive builder for all Arrow primitive types
+struct PrimitiveArrowToVariantBuilder<'a, T: ArrowNativeType> {
+    array: &'a arrow::array::PrimitiveArray<T>,
+}
+
+impl<'a, T: ArrowNativeType> PrimitiveArrowToVariantBuilder<'a, T> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_primitive(),
+        }
+    }
+}
+
+impl<'a, T: ArrowNativeType> ArrowToVariantRowBuilder for PrimitiveArrowToVariantBuilder<'a, T> {
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()> {
+        builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<()> {
+        let value = self.array.value(index);
+        builder.append_value(value);
+        Ok(())
+    }
+}
+
+/// Boolean builder for BooleanArray
+struct BooleanArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::BooleanArray,
+}
+
+impl<'a> BooleanArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_boolean(),
+        }
+    }
+}
+
+impl<'a> ArrowToVariantRowBuilder for BooleanArrowToVariantBuilder<'a> {
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()> {
+        builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<()> {
+        let value = self.array.value(index);
+        builder.append_value(value);
+        Ok(())
+    }
+}
+
+/// String builder for StringArray (both Utf8 and LargeUtf8)
+struct StringArrowToVariantBuilder<'a> {
+    array: &'a dyn Array,
+}
+
+impl<'a> StringArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self { array }
+    }
+}
+
+impl<'a> ArrowToVariantRowBuilder for StringArrowToVariantBuilder<'a> {
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()> {
+        builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<()> {
+        let value = match self.array.data_type() {
+            DataType::Utf8 => {
+                let string_array = self.array.as_string::<i32>();
+                string_array.value(index)
+            }
+            DataType::LargeUtf8 => {
+                let string_array = self.array.as_string::<i64>();
+                string_array.value(index)
+            }
+            _ => return Err(ArrowError::CastError("Expected string array".to_string())),
+        };
+        builder.append_value(value);
+        Ok(())
+    }
+}
+
+/// Null builder that always appends null
+struct NullArrowToVariantBuilder;
+
+impl ArrowToVariantRowBuilder for NullArrowToVariantBuilder {
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()> {
+        builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, _index: usize, builder: &mut impl VariantBuilderExt) -> Result<()> {
+        builder.append_null();
+        Ok(())
+    }
+}
+
+/// Factory function to create the appropriate row builder for a given DataType
+fn make_arrow_to_variant_row_builder<'a>(
+    data_type: &'a DataType,
+    array: &'a dyn Array,
+) -> Result<Box<dyn ArrowToVariantRowBuilder + 'a>, ArrowError> {
+    match data_type {
+        // All integer types
+        DataType::Int8 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<Int8Type>::new(array))),
+        DataType::Int16 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<Int16Type>::new(array))),
+        DataType::Int32 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<Int32Type>::new(array))),
+        DataType::Int64 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<Int64Type>::new(array))),
+        DataType::UInt8 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<UInt8Type>::new(array))),
+        DataType::UInt16 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<UInt16Type>::new(array))),
+        DataType::UInt32 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<UInt32Type>::new(array))),
+        DataType::UInt64 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<UInt64Type>::new(array))),
+        
+        // Float types
+        DataType::Float32 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<Float32Type>::new(array))),
+        DataType::Float64 => Ok(Box::new(PrimitiveArrowToVariantBuilder::<Float64Type>::new(array))),
+        
+        // Special types
+        DataType::Boolean => Ok(Box::new(BooleanArrowToVariantBuilder::new(array))),
+        DataType::Utf8 => Ok(Box::new(StringArrowToVariantBuilder::new(array))),
+        DataType::LargeUtf8 => Ok(Box::new(StringArrowToVariantBuilder::new(array))),
+        DataType::Null => Ok(Box::new(NullArrowToVariantBuilder)),
+        
+        // TODO: Add other types (Binary, Date, Time, Decimal, etc.)
+        _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
+    }
+}
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
 /// need to convert a specific data type
@@ -2364,5 +2506,74 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod row_builder_tests {
+    use super::*;
+    use arrow::array::{Int32Array, StringArray, BooleanArray};
+
+    #[test]
+    fn test_primitive_row_builder() {
+        // Test Int32Array
+        let int_array = Int32Array::from(vec![Some(42), None, Some(100)]);
+        let mut row_builder = make_arrow_to_variant_row_builder(int_array.data_type(), &int_array).unwrap();
+        
+        let mut variant_builder = VariantArrayBuilder::new(3);
+        
+        // Test first value
+        row_builder.append_value(0, &mut variant_builder).unwrap();
+        assert_eq!(variant_builder.len(), 1);
+        
+        // Test null value
+        row_builder.append_null(&mut variant_builder).unwrap();
+        assert_eq!(variant_builder.len(), 2);
+        
+        // Test second value
+        row_builder.append_value(2, &mut variant_builder).unwrap();
+        assert_eq!(variant_builder.len(), 3);
+        
+        let variant_array = variant_builder.finish();
+        assert_eq!(variant_array.len(), 3);
+        assert_eq!(variant_array.value(0), Variant::Int32(42));
+        assert!(variant_array.is_null(1));
+        assert_eq!(variant_array.value(2), Variant::Int32(100));
+    }
+
+    #[test]
+    fn test_string_row_builder() {
+        let string_array = StringArray::from(vec![Some("hello"), None, Some("world")]);
+        let mut row_builder = make_arrow_to_variant_row_builder(string_array.data_type(), &string_array).unwrap();
+        
+        let mut variant_builder = VariantArrayBuilder::new(3);
+        
+        row_builder.append_value(0, &mut variant_builder).unwrap();
+        row_builder.append_null(&mut variant_builder).unwrap();
+        row_builder.append_value(2, &mut variant_builder).unwrap();
+        
+        let variant_array = variant_builder.finish();
+        assert_eq!(variant_array.len(), 3);
+        assert_eq!(variant_array.value(0), Variant::String("hello".to_string()));
+        assert!(variant_array.is_null(1));
+        assert_eq!(variant_array.value(2), Variant::String("world".to_string()));
+    }
+
+    #[test]
+    fn test_boolean_row_builder() {
+        let bool_array = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let mut row_builder = make_arrow_to_variant_row_builder(bool_array.data_type(), &bool_array).unwrap();
+        
+        let mut variant_builder = VariantArrayBuilder::new(3);
+        
+        row_builder.append_value(0, &mut variant_builder).unwrap();
+        row_builder.append_null(&mut variant_builder).unwrap();
+        row_builder.append_value(2, &mut variant_builder).unwrap();
+        
+        let variant_array = variant_builder.finish();
+        assert_eq!(variant_array.len(), 3);
+        assert_eq!(variant_array.value(0), Variant::Boolean(true));
+        assert!(variant_array.is_null(1));
+        assert_eq!(variant_array.value(2), Variant::Boolean(false));
     }
 }
