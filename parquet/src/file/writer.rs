@@ -2100,7 +2100,10 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rfile_metadata = reader.metadata().file_metadata();
-        assert_eq!(rfile_metadata.num_rows(), file_metadata.file_metadata().num_rows());
+        assert_eq!(
+            rfile_metadata.num_rows(),
+            file_metadata.file_metadata().num_rows()
+        );
         assert_eq!(reader.num_row_groups(), 1);
         let rowgroup = reader.get_row_group(0).unwrap();
         assert_eq!(rowgroup.num_columns(), 1);
@@ -2251,7 +2254,10 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rfile_metadata = reader.metadata().file_metadata();
-        assert_eq!(rfile_metadata.num_rows(), file_metadata.file_metadata().num_rows());
+        assert_eq!(
+            rfile_metadata.num_rows(),
+            file_metadata.file_metadata().num_rows()
+        );
         assert_eq!(reader.num_row_groups(), 1);
         let rowgroup = reader.get_row_group(0).unwrap();
         assert_eq!(rowgroup.num_columns(), 1);

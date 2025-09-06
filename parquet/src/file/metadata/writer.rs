@@ -758,11 +758,6 @@ impl MetadataObjectWriter {
                 // so the column chunk does not need additional encryption.
             }
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(col_key)) => {
-                use crate::{
-                    encryption::encrypt::encrypt_thrift_object_to_vec,
-                    file::metadata::thrift_gen::column_meta_data_from_chunk,
-                };
-
                 let column_path = col_key.path_in_schema.join(".");
                 let mut column_encryptor = file_encryptor.get_column_encryptor(&column_path)?;
                 let aad = create_module_aad(
@@ -772,14 +767,92 @@ impl MetadataObjectWriter {
                     column_index,
                     None,
                 )?;
-                // TODO: create temp ColumnMetaData that we can encrypt
-                let cc = column_meta_data_from_chunk(&column_chunk);
-                let ciphertext = encrypt_thrift_object_to_vec(&cc, &mut column_encryptor, &aad)?;
+                // create temp ColumnMetaData that we can encrypt
+                let cc = Self::serialize_column_meta_data(&column_chunk)?;
+                let ciphertext = column_encryptor.encrypt(&cc, &aad)?;
 
+                // TODO: remember to not serialize column meta data if encrypted_column_metadata
+                // is Some
                 column_chunk.encrypted_column_metadata = Some(ciphertext);
             }
         }
 
         Ok(column_chunk)
+    }
+
+    // serialize the bits of the column chunk needed for a thrift ColumnMetaData
+    // struct ColumnMetaData {
+    //   1: required Type type
+    //   2: required list<Encoding> encodings
+    //   3: required list<string> path_in_schema
+    //   4: required CompressionCodec codec
+    //   5: required i64 num_values
+    //   6: required i64 total_uncompressed_size
+    //   7: required i64 total_compressed_size
+    //   8: optional list<KeyValue> key_value_metadata
+    //   9: required i64 data_page_offset
+    //   10: optional i64 index_page_offset
+    //   11: optional i64 dictionary_page_offset
+    //   12: optional Statistics statistics;
+    //   13: optional list<PageEncodingStats> encoding_stats;
+    //   14: optional i64 bloom_filter_offset;
+    //   15: optional i32 bloom_filter_length;
+    //   16: optional SizeStatistics size_statistics;
+    //   17: optional GeospatialStatistics geospatial_statistics;
+    // }
+    fn serialize_column_meta_data(column_chunk: &ColumnChunkMetaData) -> Result<Vec<u8>> {
+        use crate::{file::statistics::page_stats_to_thrift, parquet_thrift::WriteThriftField};
+
+        let mut buf = Vec::new();
+        let mut w = ThriftCompactOutputProtocol::new(&mut buf);
+
+        column_chunk
+            .column_type()
+            .write_thrift_field(&mut w, 1, 0)?;
+        column_chunk.encodings.write_thrift_field(&mut w, 2, 1)?;
+        let path = column_chunk.column_descr.path().parts();
+        let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
+        path.write_thrift_field(&mut w, 3, 2)?;
+        column_chunk.compression.write_thrift_field(&mut w, 4, 3)?;
+        column_chunk.num_values.write_thrift_field(&mut w, 5, 4)?;
+        column_chunk
+            .total_uncompressed_size
+            .write_thrift_field(&mut w, 6, 5)?;
+        column_chunk
+            .total_compressed_size
+            .write_thrift_field(&mut w, 7, 6)?;
+        // no key_value_metadata here
+        let mut last_field_id = column_chunk
+            .data_page_offset
+            .write_thrift_field(&mut w, 9, 7)?;
+        if let Some(index_page_offset) = column_chunk.index_page_offset {
+            last_field_id = index_page_offset.write_thrift_field(&mut w, 10, last_field_id)?;
+        }
+        if let Some(dictionary_page_offset) = column_chunk.dictionary_page_offset {
+            last_field_id = dictionary_page_offset.write_thrift_field(&mut w, 11, last_field_id)?;
+        }
+        // PageStatistics is the same as thrift Statistics, but writable
+        let stats = page_stats_to_thrift(column_chunk.statistics());
+        if let Some(stats) = stats {
+            last_field_id = stats.write_thrift_field(&mut w, 12, last_field_id)?;
+        }
+        if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
+            last_field_id = page_encoding_stats.write_thrift_field(&mut w, 13, last_field_id)?;
+        }
+        if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
+            last_field_id = bloom_filter_offset.write_thrift_field(&mut w, 14, last_field_id)?;
+        }
+        if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
+            last_field_id = bloom_filter_length.write_thrift_field(&mut w, 15, last_field_id)?;
+        }
+        if let Some(index_page_offset) = column_chunk.index_page_offset {
+            // uncomment when we add geo spatial
+            //last_field_id = index_page_offset.write_thrift_field(&mut w, 16, last_field_id)?;
+            index_page_offset.write_thrift_field(&mut w, 16, last_field_id)?;
+        }
+        // TODO: geo spatial here
+        w.write_struct_end()?;
+
+        Ok(buf)
     }
 }

@@ -3587,9 +3587,7 @@ mod tests {
         col_writer.close().unwrap();
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
-        let stats = file_metadata.row_group(0).column(0)
-            .statistics()
-            .unwrap();
+        let stats = file_metadata.row_group(0).column(0).statistics().unwrap();
         assert!(!stats.max_is_exact());
         // Truncation of invalid UTF-8 should fall back to binary truncation, so last byte should
         // be incremented by 1.

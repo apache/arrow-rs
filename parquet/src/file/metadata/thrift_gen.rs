@@ -205,32 +205,6 @@ struct ColumnMetaData<'a> {
 }
 );
 
-pub(crate) fn column_meta_data_from_chunk<'a>(
-    column_chunk: &'a ColumnChunkMetaData,
-) -> ColumnMetaData<'a> {
-    ColumnMetaData {
-        type_: column_chunk.column_type(),
-        encodings: column_chunk.encodings.clone(),
-        codec: column_chunk.compression,
-        num_values: column_chunk.num_values,
-        total_uncompressed_size: column_chunk.total_uncompressed_size,
-        total_compressed_size: column_chunk.total_compressed_size,
-        data_page_offset: column_chunk.data_page_offset,
-        index_page_offset: column_chunk.index_page_offset,
-        dictionary_page_offset: column_chunk.dictionary_page_offset,
-        statistics: column_chunk.statistics(),
-        encoding_stats: column_chunk.encoding_stats.clone(),
-        bloom_filter_offset: column_chunk.bloom_filter_offset,
-        bloom_filter_length: column_chunk.bloom_filter_length,
-        size_statistics: Some(SizeStatistics {
-            unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
-            repetition_level_histogram: column_chunk.repetition_level_histogram,
-            definition_level_histogram: column_chunk.definition_level_histogram,
-        }),
-        geospatial_statistics: None,
-    }
-}
-
 thrift_struct!(
 struct BoundingBox {
   1: required double xmin;

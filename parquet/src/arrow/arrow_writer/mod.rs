@@ -4322,8 +4322,16 @@ mod tests {
 
         assert_eq!(file_metadata.num_row_groups(), 1);
         assert_eq!(file_metadata.row_group(0).num_columns(), 1);
-        assert!(file_metadata.row_group(0).column(0).page_encoding_stats().is_some());
-        let chunk_page_stats = file_metadata.row_group(0).column(0).page_encoding_stats().unwrap();
+        assert!(file_metadata
+            .row_group(0)
+            .column(0)
+            .page_encoding_stats()
+            .is_some());
+        let chunk_page_stats = file_metadata
+            .row_group(0)
+            .column(0)
+            .page_encoding_stats()
+            .unwrap();
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();
