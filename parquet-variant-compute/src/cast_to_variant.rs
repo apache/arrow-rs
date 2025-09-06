@@ -67,8 +67,8 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     Null(NullArrowToVariantBuilder),
 }
 
-impl<'a, B: VariantBuilderExt> ArrowToVariantRowBuilder<'a> {
-    pub fn append_row(&mut self, index: usize, builder: &mut B) -> Result<(), ArrowError> {
+impl<'a> ArrowToVariantRowBuilder<'a> {
+    pub fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         match self {
             ArrowToVariantRowBuilder::PrimitiveInt8(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::PrimitiveInt16(b) => b.append_row(index, builder),
@@ -88,18 +88,26 @@ impl<'a, B: VariantBuilderExt> ArrowToVariantRowBuilder<'a> {
 }
 
 /// Generic primitive builder for all Arrow primitive types
-struct PrimitiveArrowToVariantBuilder<'a, T: ArrowPrimitiveType> {
+pub(crate) struct PrimitiveArrowToVariantBuilder<'a, T>
+where
+    T : ArrowPrimitiveType,
+    T::Native: Into<Variant<'a, 'a>>,
+{
     array: &'a arrow::array::PrimitiveArray<T>,
 }
 
-impl<'a, T: ArrowPrimitiveType> PrimitiveArrowToVariantBuilder<'a, T> {
+impl<'a, T> PrimitiveArrowToVariantBuilder<'a, T> 
+where
+    T : ArrowPrimitiveType,
+    T::Native: Into<Variant<'a, 'a>>,
+{
     fn new(array: &'a dyn Array) -> Self {
         Self {
             array: array.as_primitive(),
         }
     }
     
-    fn append_row<B: VariantBuilderExt>(&mut self, index: usize, builder: &mut B) -> Result<(), ArrowError> {
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         if self.array.is_null(index) {
             builder.append_null();
         } else {
@@ -111,7 +119,7 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveArrowToVariantBuilder<'a, T> {
 }
 
 /// Boolean builder for BooleanArray
-struct BooleanArrowToVariantBuilder<'a> {
+pub(crate) struct BooleanArrowToVariantBuilder<'a> {
     array: &'a arrow::array::BooleanArray,
 }
 
@@ -122,7 +130,7 @@ impl<'a> BooleanArrowToVariantBuilder<'a> {
         }
     }
     
-    fn append_row<B: VariantBuilderExt>(&mut self, index: usize, builder: &mut B) -> Result<(), ArrowError> {
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         if self.array.is_null(index) {
             builder.append_null();
         } else {
@@ -134,7 +142,7 @@ impl<'a> BooleanArrowToVariantBuilder<'a> {
 }
 
 /// String builder for StringArray (both Utf8 and LargeUtf8)
-struct StringArrowToVariantBuilder<'a> {
+pub(crate) struct StringArrowToVariantBuilder<'a> {
     array: &'a dyn Array,
 }
 
@@ -143,7 +151,7 @@ impl<'a> StringArrowToVariantBuilder<'a> {
         Self { array }
     }
     
-    fn append_row<B: VariantBuilderExt>(&mut self, index: usize, builder: &mut B) -> Result<(), ArrowError> {
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         if self.array.is_null(index) {
             builder.append_null();
         } else {
@@ -165,10 +173,10 @@ impl<'a> StringArrowToVariantBuilder<'a> {
 }
 
 /// Null builder that always appends null
-struct NullArrowToVariantBuilder;
+pub(crate) struct NullArrowToVariantBuilder;
 
 impl NullArrowToVariantBuilder {
-    fn append_row<B: VariantBuilderExt>(&mut self, _index: usize, builder: &mut B) -> Result<(), ArrowError> {
+    fn append_row(&mut self, _index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         builder.append_null();
         Ok(())
     }
@@ -2537,21 +2545,24 @@ mod row_builder_tests {
         let int_array = Int32Array::from(vec![Some(42), None, Some(100)]);
         let mut row_builder = make_arrow_to_variant_row_builder(int_array.data_type(), &int_array).unwrap();
         
-        let mut variant_builder = VariantArrayBuilder::new(3);
+        let mut array_builder = VariantArrayBuilder::new(3);
         
         // Test first value
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(0, &mut variant_builder).unwrap();
-        assert_eq!(variant_builder.len(), 1);
+        variant_builder.finish();
         
         // Test null value
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(1, &mut variant_builder).unwrap();
-        assert_eq!(variant_builder.len(), 2);
+        variant_builder.finish();
         
         // Test second value
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(2, &mut variant_builder).unwrap();
-        assert_eq!(variant_builder.len(), 3);
+        variant_builder.finish();
         
-        let variant_array = variant_builder.finish();
+        let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
         assert_eq!(variant_array.value(0), Variant::Int32(42));
         assert!(variant_array.is_null(1));
@@ -2563,17 +2574,23 @@ mod row_builder_tests {
         let string_array = StringArray::from(vec![Some("hello"), None, Some("world")]);
         let mut row_builder = make_arrow_to_variant_row_builder(string_array.data_type(), &string_array).unwrap();
         
-        let mut variant_builder = VariantArrayBuilder::new(3);
+        let mut array_builder = VariantArrayBuilder::new(3);
         
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(0, &mut variant_builder).unwrap();
+        variant_builder.finish();
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(1, &mut variant_builder).unwrap();
+        variant_builder.finish();
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(2, &mut variant_builder).unwrap();
-        
-        let variant_array = variant_builder.finish();
+        variant_builder.finish();
+
+        let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        assert_eq!(variant_array.value(0), Variant::String("hello".to_string()));
+        assert_eq!(variant_array.value(0), Variant::from("hello"));
         assert!(variant_array.is_null(1));
-        assert_eq!(variant_array.value(2), Variant::String("world".to_string()));
+        assert_eq!(variant_array.value(2), Variant::from("world"));
     }
 
     #[test]
@@ -2581,16 +2598,22 @@ mod row_builder_tests {
         let bool_array = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let mut row_builder = make_arrow_to_variant_row_builder(bool_array.data_type(), &bool_array).unwrap();
         
-        let mut variant_builder = VariantArrayBuilder::new(3);
+        let mut array_builder = VariantArrayBuilder::new(3);
         
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(0, &mut variant_builder).unwrap();
+        variant_builder.finish();
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(1, &mut variant_builder).unwrap();
+        variant_builder.finish();
+        let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(2, &mut variant_builder).unwrap();
-        
-        let variant_array = variant_builder.finish();
+        variant_builder.finish();
+
+        let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        assert_eq!(variant_array.value(0), Variant::Boolean(true));
+        assert_eq!(variant_array.value(0), Variant::from(true));
         assert!(variant_array.is_null(1));
-        assert_eq!(variant_array.value(2), Variant::Boolean(false));
+        assert_eq!(variant_array.value(2), Variant::from(false));
     }
 }
