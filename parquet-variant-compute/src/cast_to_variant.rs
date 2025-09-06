@@ -64,6 +64,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     PrimitiveFloat64(PrimitiveArrowToVariantBuilder<'a, Float64Type>),
     Boolean(BooleanArrowToVariantBuilder<'a>),
     String(StringArrowToVariantBuilder<'a>),
+    Struct(StructArrowToVariantBuilder<'a>),
     Null(NullArrowToVariantBuilder),
 }
 
@@ -82,6 +83,7 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::PrimitiveFloat64(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Boolean(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::String(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Struct(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Null(b) => b.append_row(index, builder),
         }
     }
@@ -172,6 +174,52 @@ impl<'a> StringArrowToVariantBuilder<'a> {
     }
 }
 
+/// Struct builder for StructArray
+pub(crate) struct StructArrowToVariantBuilder<'a> {
+    struct_array: &'a arrow::array::StructArray,
+    field_builders: Vec<(&'a str, ArrowToVariantRowBuilder<'a>)>,
+}
+
+impl<'a> StructArrowToVariantBuilder<'a> {
+    fn new(struct_array: &'a arrow::array::StructArray) -> Result<Self, ArrowError> {
+        let mut field_builders = Vec::new();
+        
+        // Create a row builder for each field
+        for (field_name, field_array) in struct_array.column_names().iter()
+            .zip(struct_array.columns().iter()) 
+        {
+            let field_builder = make_arrow_to_variant_row_builder(
+                field_array.data_type(),
+                field_array.as_ref(),
+            )?;
+            field_builders.push((*field_name, field_builder));
+        }
+        
+        Ok(Self {
+            struct_array,
+            field_builders,
+        })
+    }
+    
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.struct_array.is_null(index) {
+            builder.append_null();
+        } else {
+            // Create object builder for this struct row
+            let mut obj_builder = builder.try_new_object()?;
+            
+            // Process each field
+            for (field_name, row_builder) in &mut self.field_builders {
+                let mut field_builder = parquet_variant::ObjectFieldBuilder::new(field_name, &mut obj_builder);
+                row_builder.append_row(index, &mut field_builder)?;
+            }
+            
+            obj_builder.finish();
+        }
+        Ok(())
+    }
+}
+
 /// Null builder that always appends null
 pub(crate) struct NullArrowToVariantBuilder;
 
@@ -206,6 +254,7 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Boolean => Ok(ArrowToVariantRowBuilder::Boolean(BooleanArrowToVariantBuilder::new(array))),
         DataType::Utf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
         DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
+        DataType::Struct(_) => Ok(ArrowToVariantRowBuilder::Struct(StructArrowToVariantBuilder::new(array.as_struct())?)),
         DataType::Null => Ok(ArrowToVariantRowBuilder::Null(NullArrowToVariantBuilder)),
         
         // TODO: Add other types (Binary, Date, Time, Decimal, etc.)
@@ -2615,5 +2664,64 @@ mod row_builder_tests {
         assert_eq!(variant_array.value(0), Variant::from(true));
         assert!(variant_array.is_null(1));
         assert_eq!(variant_array.value(2), Variant::from(false));
+    }
+
+    #[test]
+    fn test_struct_row_builder() {
+        use arrow::array::{StructArray, Int32Array, StringArray, ArrayRef};
+        use arrow_schema::{DataType, Field};
+        use std::sync::Arc;
+        
+        // Create a struct array with int and string fields
+        let int_field = Field::new("id", DataType::Int32, true);
+        let string_field = Field::new("name", DataType::Utf8, true);
+        let struct_field = Field::new("person", DataType::Struct(vec![int_field.clone(), string_field.clone()].into()), false);
+        
+        let int_array = Int32Array::from(vec![Some(1), None, Some(3)]);
+        let string_array = StringArray::from(vec![Some("Alice"), Some("Bob"), None]);
+        
+        let struct_array = StructArray::try_new(
+            vec![int_field, string_field].into(),
+            vec![Arc::new(int_array) as ArrayRef, Arc::new(string_array) as ArrayRef],
+            None,
+        )
+        .unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(struct_array.data_type(), &struct_array).unwrap();
+        
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        // Test first row
+        let mut variant_builder = array_builder.variant_builder();
+        row_builder.append_row(0, &mut variant_builder).unwrap();
+        variant_builder.finish();
+        
+        // Test second row (with null int field)
+        let mut variant_builder = array_builder.variant_builder();
+        row_builder.append_row(1, &mut variant_builder).unwrap();
+        variant_builder.finish();
+        
+        // Test third row (with null string field)
+        let mut variant_builder = array_builder.variant_builder();
+        row_builder.append_row(2, &mut variant_builder).unwrap();
+        variant_builder.finish();
+
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Check first row - should have both fields
+        let first_variant = variant_array.value(0);
+        assert_eq!(first_variant.get_object_field("id"), Some(Variant::from(1)));
+        assert_eq!(first_variant.get_object_field("name"), Some(Variant::from("Alice")));
+        
+        // Check second row - should have name field but not id (null field omitted)
+        let second_variant = variant_array.value(1);
+        assert_eq!(second_variant.get_object_field("id"), None); // null field omitted
+        assert_eq!(second_variant.get_object_field("name"), Some(Variant::from("Bob")));
+        
+        // Check third row - should have id field but not name (null field omitted)
+        let third_variant = variant_array.value(2);
+        assert_eq!(third_variant.get_object_field("id"), Some(Variant::from(3)));
+        assert_eq!(third_variant.get_object_field("name"), None); // null field omitted
     }
 }
