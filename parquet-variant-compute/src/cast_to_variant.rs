@@ -24,13 +24,13 @@ use crate::type_conversion::{
 };
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
-    AnyDictionaryArray, Array, AsArray, OffsetSizeTrait, TimestampMicrosecondArray, TimestampMillisecondArray,
+    Array, AsArray, OffsetSizeTrait, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
+    i256, ArrowNativeType, ArrowPrimitiveType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
     Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, LargeBinaryType, RunEndIndexType, Time32MillisecondType,
     Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type,
@@ -315,7 +315,7 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
 
 /// Dictionary array builder with simple O(1) indexing
 pub(crate) struct DictionaryArrowToVariantBuilder<'a> {
-    dict_array: &'a dyn arrow::array::AnyDictionaryArray,
+    keys: &'a dyn Array, // only needed for null checks
     normalized_keys: Vec<usize>,
     values_builder: Box<ArrowToVariantRowBuilder<'a>>,
 }
@@ -323,25 +323,27 @@ pub(crate) struct DictionaryArrowToVariantBuilder<'a> {
 impl<'a> DictionaryArrowToVariantBuilder<'a> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
         let dict_array = array.as_any_dictionary();
-        let normalized_keys = dict_array.normalized_keys().to_vec();
-        
+        let values = dict_array.values();
         let values_builder = make_arrow_to_variant_row_builder(
-            dict_array.values().data_type(),
-            dict_array.values().as_ref(),
+            values.data_type(),
+            values.as_ref(),
         )?;
         
+        // WARNING: normalized_keys panics if values is empty
+        let normalized_keys = match values.len() {
+            0 => Vec::new(),
+            _ => dict_array.normalized_keys(),
+        };
+        
         Ok(Self {
-            dict_array,
+            keys: dict_array.keys(),
             normalized_keys,
             values_builder: Box::new(values_builder),
         })
     }
     
     fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        // Dictionary indexing is trivial - just a direct lookup using normalized keys!
-        let keys = self.dict_array.keys();
-        
-        if keys.is_null(index) {
+        if self.keys.is_null(index) {
             builder.append_null();
         } else {
             let normalized_key = self.normalized_keys[index];
