@@ -910,6 +910,53 @@ mod test {
         AvroSchema::new(root.to_string())
     }
 
+    fn make_reader_schema_with_enum_remap(
+        path: &str,
+        remap: &HashMap<&str, Vec<&str>>,
+    ) -> AvroSchema {
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        let fields = root
+            .get_mut("fields")
+            .and_then(|f| f.as_array_mut())
+            .expect("record has fields");
+
+        fn to_symbols_array(symbols: &[&str]) -> Value {
+            Value::Array(symbols.iter().map(|s| Value::String((*s).into())).collect())
+        }
+
+        fn update_enum_symbols(ty: &mut Value, symbols: &Value) {
+            match ty {
+                Value::Object(map) => {
+                    if matches!(map.get("type"), Some(Value::String(t)) if t == "enum") {
+                        map.insert("symbols".to_string(), symbols.clone());
+                    }
+                }
+                Value::Array(arr) => {
+                    for b in arr.iter_mut() {
+                        if let Value::Object(map) = b {
+                            if matches!(map.get("type"), Some(Value::String(t)) if t == "enum") {
+                                map.insert("symbols".to_string(), symbols.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for f in fields.iter_mut() {
+            let Some(name) = f.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            if let Some(new_symbols) = remap.get(name) {
+                let symbols_val = to_symbols_array(new_symbols);
+                let ty = f.get_mut("type").expect("field has a type");
+                update_enum_symbols(ty, &symbols_val);
+            }
+        }
+        AvroSchema::new(root.to_string())
+    }
+
     fn read_alltypes_with_reader_schema(path: &str, reader_schema: AvroSchema) -> RecordBatch {
         let file = File::open(path).unwrap();
         let reader = ReaderBuilder::new()
@@ -1287,6 +1334,52 @@ mod test {
             msg.contains("Illegal promotion") || msg.contains("illegal promotion"),
             "unexpected error: {msg}"
         );
+    }
+
+    #[test]
+    fn test_simple_enum_with_reader_schema_mapping() {
+        let file = arrow_test_data("avro/simple_enum.avro");
+        let mut remap: HashMap<&str, Vec<&str>> = HashMap::new();
+        remap.insert("f1", vec!["d", "c", "b", "a"]);
+        remap.insert("f2", vec!["h", "g", "f", "e"]);
+        remap.insert("f3", vec!["k", "i", "j"]);
+        let reader_schema = make_reader_schema_with_enum_remap(&file, &remap);
+        let actual = read_alltypes_with_reader_schema(&file, reader_schema);
+        let dict_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let f1_keys = Int32Array::from(vec![3, 2, 1, 0]);
+        let f1_vals = StringArray::from(vec!["d", "c", "b", "a"]);
+        let f1 = DictionaryArray::<Int32Type>::try_new(f1_keys, Arc::new(f1_vals)).unwrap();
+        let mut md_f1 = HashMap::new();
+        md_f1.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["d","c","b","a"]"#.to_string(),
+        );
+        let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
+        let f2_keys = Int32Array::from(vec![1, 0, 3, 2]);
+        let f2_vals = StringArray::from(vec!["h", "g", "f", "e"]);
+        let f2 = DictionaryArray::<Int32Type>::try_new(f2_keys, Arc::new(f2_vals)).unwrap();
+        let mut md_f2 = HashMap::new();
+        md_f2.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["h","g","f","e"]"#.to_string(),
+        );
+        let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
+        let f3_keys = Int32Array::from(vec![Some(2), Some(0), None, Some(1)]);
+        let f3_vals = StringArray::from(vec!["k", "i", "j"]);
+        let f3 = DictionaryArray::<Int32Type>::try_new(f3_keys, Arc::new(f3_vals)).unwrap();
+        let mut md_f3 = HashMap::new();
+        md_f3.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["k","i","j"]"#.to_string(),
+        );
+        let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
+        let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
+        let expected = RecordBatch::try_new(
+            expected_schema,
+            vec![Arc::new(f1) as ArrayRef, Arc::new(f2), Arc::new(f3)],
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
     }
 
     #[test]
