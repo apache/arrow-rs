@@ -268,27 +268,7 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
     }
     
     fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        // Three cases for run tracking
-        if self.run_number < self.run_ends.len() && 
-           self.run_start <= index && 
-           index < self.run_ends[self.run_number].as_usize() {
-            // Case 1: Still in same run - O(1)
-            // No need to update run_number or run_start
-        } else if self.run_number < self.run_ends.len() && 
-            index == self.run_ends[self.run_number].as_usize()
-        {
-            // Case 2: Advanced to next run - O(1)
-            self.run_start = self.run_ends[self.run_number].as_usize();
-            self.run_number += 1;
-        } else {
-            // Case 3: Binary search for any other case - O(log n)
-            self.find_run_containing(index)?;
-        }
-        
-        // Verify we have a valid run
-        if self.run_number >= self.run_ends.len() {
-            return Err(ArrowError::CastError(format!("Index {} beyond run array", index)));
-        }
+        self.set_run_for_index(index)?;
         
         // Handle null values
         if self.run_array.values().is_null(self.run_number) {
@@ -302,21 +282,31 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
         Ok(())
     }
     
-    fn find_run_containing(&mut self, index: usize) -> Result<(), ArrowError> {
+    fn set_run_for_index(&mut self, index: usize) -> Result<(), ArrowError> {
+        if index >= self.run_start {
+            let Some(run_end) = self.run_ends.get(self.run_number) else {
+                return Err(ArrowError::CastError(format!("Index {} beyond run array", index)));
+            };
+            if index < run_end.as_usize() {
+                return Ok(());
+            }
+            if index == run_end.as_usize() {
+                self.run_number += 1;
+                self.run_start = run_end.as_usize();
+                return Ok(());
+            }
+        }
+
         // Use partition_point for all non-sequential cases
-        self.run_number = self.run_ends.partition_point(|&run_end| run_end.as_usize() <= index);
-        
-        if self.run_number >= self.run_ends.len() {
+        let run_number = self.run_ends.partition_point(|&run_end| run_end.as_usize() <= index);
+        if run_number >= self.run_ends.len() {
             return Err(ArrowError::CastError(format!("Index {} beyond run array", index)));
         }
-        
-        // Set run_start
-        self.run_start = if self.run_number == 0 { 
-            0 
-        } else { 
-            self.run_ends[self.run_number - 1].as_usize() 
+        self.run_number = run_number;
+        self.run_start = match run_number {
+            0 => 0,
+            _ => self.run_ends[run_number - 1].as_usize(),
         };
-        
         Ok(())
     }
 }
