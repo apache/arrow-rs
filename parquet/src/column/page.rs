@@ -207,7 +207,6 @@ impl CompressedPage {
             type_: page_type.into(),
             uncompressed_page_size: uncompressed_size as i32,
             compressed_page_size: compressed_size as i32,
-            // TODO: Add support for crc checksum
             crc: None,
             data_page_header: None,
             index_page_header: None,

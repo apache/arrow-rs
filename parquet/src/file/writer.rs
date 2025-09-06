@@ -966,7 +966,19 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         let mut spec = PageWriteSpec::new();
         spec.page_type = page_type;
         spec.uncompressed_size = page.uncompressed_size() + header_size;
+        if spec.uncompressed_size > i32::MAX as usize {
+            return Err(general_err!(
+                "Page uncompressed size overflow: {}",
+                spec.uncompressed_size
+            ));
+        }
         spec.compressed_size = page.compressed_size() + header_size;
+        if spec.compressed_size > i32::MAX as usize {
+            return Err(general_err!(
+                "Page compressed size overflow: {}",
+                spec.compressed_size
+            ));
+        }
         spec.offset = start_pos;
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
