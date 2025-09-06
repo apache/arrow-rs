@@ -66,6 +66,9 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     String(StringArrowToVariantBuilder<'a>),
     Struct(StructArrowToVariantBuilder<'a>),
     Null(NullArrowToVariantBuilder),
+    RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder<'a, Int16Type>),
+    RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder<'a, Int32Type>),
+    RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder<'a, Int64Type>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -85,6 +88,9 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::String(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Struct(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Null(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::RunEndEncodedInt16(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::RunEndEncodedInt32(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::RunEndEncodedInt64(b) => b.append_row(index, builder),
         }
     }
 }
@@ -230,6 +236,94 @@ impl NullArrowToVariantBuilder {
     }
 }
 
+/// Run-end encoded array builder with efficient sequential access
+pub(crate) struct RunEndEncodedArrowToVariantBuilder<'a, R: RunEndIndexType> {
+    run_array: &'a arrow::array::RunEndEncodedArray,
+    values_builder: ArrowToVariantRowBuilder<'a>,
+    
+    run_ends: &'a [R::Native],
+    run_number: usize,     // Physical index into run_ends and values
+    run_start: usize,      // Logical start index of current run
+}
+
+impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
+    fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
+        let run_array = array.as_run_end_encoded().ok_or_else(|| {
+            ArrowError::CastError("Expected RunEndEncodedArray".to_string())
+        })?;
+        
+        let run_ends = run_array.run_ends().values();
+        let values_builder = make_arrow_to_variant_row_builder(
+            run_array.values().data_type(),
+            run_array.values().as_ref(),
+        )?;
+        
+        Ok(Self {
+            run_array,
+            values_builder,
+            run_ends,
+            run_number: 0,
+            run_start: 0,  // First run starts at logical index 0
+        })
+    }
+    
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        // Three cases for run tracking
+        if self.run_number < self.run_ends.len() && 
+           self.run_start <= index && 
+           index < self.run_ends[self.run_number].as_usize() {
+            // Case 1: Still in same run - O(1)
+            // No need to update run_number or run_start
+        } else if self.run_number < self.run_ends.len() && 
+                  index == self.run_ends[self.run_number].as_usize() {
+            // Case 2: Advanced to next run - O(1)
+            self.advance_to_next_run();
+        } else {
+            // Case 3: Binary search for any other case - O(log n)
+            self.find_run_containing(index)?;
+        }
+        
+        // Verify we have a valid run
+        if self.run_number >= self.run_ends.len() {
+            return Err(ArrowError::CastError(format!("Index {} beyond run array", index)));
+        }
+        
+        // Handle null values
+        if self.run_array.values().is_null(self.run_number) {
+            builder.append_null();
+            return Ok(());
+        }
+        
+        // Re-encode the value
+        self.values_builder.append_row(self.run_number, builder)?;
+        
+        Ok(())
+    }
+    
+    fn advance_to_next_run(&mut self) {
+        self.run_start = self.run_ends[self.run_number].as_usize();
+        self.run_number += 1;
+    }
+    
+    fn find_run_containing(&mut self, index: usize) -> Result<(), ArrowError> {
+        // Use partition_point for all non-sequential cases
+        self.run_number = self.run_ends.partition_point(|&run_end| run_end.as_usize() <= index);
+        
+        if self.run_number >= self.run_ends.len() {
+            return Err(ArrowError::CastError(format!("Index {} beyond run array", index)));
+        }
+        
+        // Set run_start
+        self.run_start = if self.run_number == 0 { 
+            0 
+        } else { 
+            self.run_ends[self.run_number - 1].as_usize() 
+        };
+        
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -256,6 +350,16 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
         DataType::Struct(_) => Ok(ArrowToVariantRowBuilder::Struct(StructArrowToVariantBuilder::new(array.as_struct())?)),
         DataType::Null => Ok(ArrowToVariantRowBuilder::Null(NullArrowToVariantBuilder)),
+        
+        // Run-end encoded types
+        DataType::RunEndEncoded(run_ends, _) => {
+            match run_ends.data_type() {
+                DataType::Int16 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder::new(array)?)),
+                DataType::Int32 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder::new(array)?)),
+                DataType::Int64 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder::new(array)?)),
+                _ => Err(ArrowError::CastError(format!("Unsupported run-end type: {run_ends:?}"))),
+            }
+        }
         
         // TODO: Add other types (Binary, Date, Time, Decimal, etc.)
         _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
@@ -2723,5 +2827,97 @@ mod row_builder_tests {
         let third_variant = variant_array.value(2);
         assert_eq!(third_variant.get_object_field("id"), Some(Variant::from(3)));
         assert_eq!(third_variant.get_object_field("name"), None); // null field omitted
+    }
+
+    #[test]
+    fn test_run_end_encoded_row_builder() {
+        use arrow::array::{RunEndEncodedArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+        
+        // Create a run-end encoded array: [A, A, B, B, B, C]
+        // run_ends: [2, 5, 6]
+        // values: ["A", "B", "C"]
+        let values = StringArray::from(vec!["A", "B", "C"]);
+        let run_ends = Int32Array::from(vec![2, 5, 6]);
+        let run_array = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
+        let mut array_builder = VariantArrayBuilder::new(6);
+        
+        // Test sequential access (most common case)
+        for i in 0..6 {
+            let mut variant_builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut variant_builder).unwrap();
+            variant_builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 6);
+        
+        // Verify the values
+        assert_eq!(variant_array.value(0), Variant::from("A")); // Run 0
+        assert_eq!(variant_array.value(1), Variant::from("A")); // Run 0
+        assert_eq!(variant_array.value(2), Variant::from("B")); // Run 1
+        assert_eq!(variant_array.value(3), Variant::from("B")); // Run 1
+        assert_eq!(variant_array.value(4), Variant::from("B")); // Run 1
+        assert_eq!(variant_array.value(5), Variant::from("C")); // Run 2
+    }
+
+    #[test]
+    fn test_run_end_encoded_random_access() {
+        use arrow::array::{RunEndEncodedArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+        
+        // Create a run-end encoded array: [A, A, B, B, B, C]
+        let values = StringArray::from(vec!["A", "B", "C"]);
+        let run_ends = Int32Array::from(vec![2, 5, 6]);
+        let run_array = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
+        
+        // Test random access pattern (backward jumps, forward jumps)
+        let access_pattern = [0, 5, 2, 4, 1, 3]; // Mix of all cases
+        let expected_values = ["A", "C", "B", "B", "A", "B"];
+        
+        for (i, &index) in access_pattern.iter().enumerate() {
+            let mut array_builder = VariantArrayBuilder::new(1);
+            let mut variant_builder = array_builder.variant_builder();
+            row_builder.append_row(index, &mut variant_builder).unwrap();
+            variant_builder.finish();
+            
+            let variant_array = array_builder.build();
+            assert_eq!(variant_array.value(0), Variant::from(expected_values[i]));
+        }
+    }
+
+    #[test]
+    fn test_run_end_encoded_with_nulls() {
+        use arrow::array::{RunEndEncodedArray, Int32Array};
+        use arrow::datatypes::Int32Type;
+        
+        // Create a run-end encoded array with null values: [A, A, null, null, B]
+        let values = StringArray::from(vec![Some("A"), None, Some("B")]);
+        let run_ends = Int32Array::from(vec![2, 4, 5]);
+        let run_array = RunEndEncodedArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
+        let mut array_builder = VariantArrayBuilder::new(5);
+        
+        // Test sequential access
+        for i in 0..5 {
+            let mut variant_builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut variant_builder).unwrap();
+            variant_builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 5);
+        
+        // Verify the values
+        assert_eq!(variant_array.value(0), Variant::from("A")); // Run 0
+        assert_eq!(variant_array.value(1), Variant::from("A")); // Run 0
+        assert!(variant_array.is_null(2)); // Run 1 (null)
+        assert!(variant_array.is_null(3)); // Run 1 (null)
+        assert_eq!(variant_array.value(4), Variant::from("B")); // Run 2
     }
 }
