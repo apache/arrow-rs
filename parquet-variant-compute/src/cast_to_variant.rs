@@ -30,7 +30,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    i256, ArrowNativeType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
+    i256, ArrowNativeType, ArrowPrimitiveType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
     Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, LargeBinaryType, RunEndIndexType, Time32MillisecondType,
     Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type,
@@ -52,16 +52,16 @@ use parquet_variant::{
 
 /// Row builder for converting Arrow arrays to VariantArray row by row
 pub(crate) trait ArrowToVariantRowBuilder {
-    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()>;
-    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<()>;
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError>;
+    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError>;
 }
 
 /// Generic primitive builder for all Arrow primitive types
-struct PrimitiveArrowToVariantBuilder<'a, T: ArrowNativeType> {
+struct PrimitiveArrowToVariantBuilder<'a, T: ArrowPrimitiveType> {
     array: &'a arrow::array::PrimitiveArray<T>,
 }
 
-impl<'a, T: ArrowNativeType> PrimitiveArrowToVariantBuilder<'a, T> {
+impl<'a, T: ArrowPrimitiveType> PrimitiveArrowToVariantBuilder<'a, T> {
     fn new(array: &'a dyn Array) -> Self {
         Self {
             array: array.as_primitive(),
@@ -69,13 +69,13 @@ impl<'a, T: ArrowNativeType> PrimitiveArrowToVariantBuilder<'a, T> {
     }
 }
 
-impl<'a, T: ArrowNativeType> ArrowToVariantRowBuilder for PrimitiveArrowToVariantBuilder<'a, T> {
-    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()> {
+impl<'a, T: ArrowPrimitiveType> ArrowToVariantRowBuilder for PrimitiveArrowToVariantBuilder<'a, T> {
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         builder.append_null();
         Ok(())
     }
 
-    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<()> {
+    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         let value = self.array.value(index);
         builder.append_value(value);
         Ok(())
@@ -96,12 +96,12 @@ impl<'a> BooleanArrowToVariantBuilder<'a> {
 }
 
 impl<'a> ArrowToVariantRowBuilder for BooleanArrowToVariantBuilder<'a> {
-    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()> {
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         builder.append_null();
         Ok(())
     }
 
-    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<()> {
+    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         let value = self.array.value(index);
         builder.append_value(value);
         Ok(())
@@ -120,12 +120,12 @@ impl<'a> StringArrowToVariantBuilder<'a> {
 }
 
 impl<'a> ArrowToVariantRowBuilder for StringArrowToVariantBuilder<'a> {
-    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<()> {
+    fn append_null(&mut self, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         builder.append_null();
         Ok(())
     }
 
-    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<()> {
+    fn append_value(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         let value = match self.array.data_type() {
             DataType::Utf8 => {
                 let string_array = self.array.as_string::<i32>();
