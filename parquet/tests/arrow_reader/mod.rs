@@ -91,6 +91,10 @@ enum Scenario {
     Float16,
     Float32,
     Float64,
+    /// Float tests with Parquet sort order set to IEEE 754 total order
+    Float16TotalOrder,
+    Float32TotalOrder,
+    Float64TotalOrder,
     Decimal32,
     Decimal64,
     Decimal128,
@@ -743,7 +747,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
         Scenario::NumericLimits => {
             vec![make_numeric_limit_batch()]
         }
-        Scenario::Float16 => {
+        Scenario::Float16 | Scenario::Float16TotalOrder => {
             vec![
                 make_f16_batch(
                     vec![-5.0, -4.0, -3.0, -2.0, -1.0]
@@ -771,7 +775,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 ),
             ]
         }
-        Scenario::Float32 => {
+        Scenario::Float32 | Scenario::Float32TotalOrder => {
             vec![
                 make_f32_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
                 make_f32_batch(vec![-4.0, -3.0, -2.0, -1.0, 0.0]),
@@ -779,7 +783,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_f32_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
             ]
         }
-        Scenario::Float64 => {
+        Scenario::Float64 | Scenario::Float64TotalOrder => {
             vec![
                 make_f64_batch(vec![-5.0, -4.0, -3.0, -2.0, -1.0]),
                 make_f64_batch(vec![-4.0, -3.0, -2.0, -1.0, 0.0]),
@@ -1127,10 +1131,16 @@ async fn make_test_file_rg(scenario: Scenario, row_per_group: usize) -> NamedTem
         .tempfile()
         .expect("tempfile creation");
 
+    let total_order = matches!(
+        scenario,
+        Scenario::Float16TotalOrder | Scenario::Float32TotalOrder | Scenario::Float64TotalOrder
+    );
+
     let mut builder = WriterProperties::builder()
         .set_max_row_group_size(row_per_group)
         .set_bloom_filter_enabled(true)
-        .set_statistics_enabled(EnabledStatistics::Page);
+        .set_statistics_enabled(EnabledStatistics::Page)
+        .set_ieee754_total_order(total_order);
     if scenario.truncate_stats() {
         // The same as default `column_index_truncate_length` to check both stats with one value
         builder = builder.set_statistics_truncate_length(DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH);
