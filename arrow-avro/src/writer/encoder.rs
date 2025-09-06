@@ -115,7 +115,6 @@ impl<'a> FieldEncoder<'a> {
         plan: &FieldPlan,
         nullability: Option<Nullability>,
     ) -> Result<Self, ArrowError> {
-        let has_nulls = array.null_count() > 0;
         let encoder = match plan {
             FieldPlan::Struct { encoders } => {
                 let arr = array
