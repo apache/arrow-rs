@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CAPACITY"],"enum":["Decoder","NegativeBlockBehavior","Skipper"],"fn":["build_skip_decoders","decode_with_resolution","flush_dict","flush_offsets","flush_primitive","flush_values","process_blockwise","read_blocks","sign_extend_to","skip_blocks"],"struct":["RecordDecoder","RecordDecoderBuilder","ResolvedRuntime"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":["cast_partially_shredded_primitive"],"struct":["VariantOutputBuilder"]};

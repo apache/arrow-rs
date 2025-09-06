@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Encoder"],"fn":["encode_record_batch","encode_record_batch_with_options","make_encoder","write_bool","write_int","write_len_prefixed","write_long","write_optional_branch"],"struct":["BinaryEncoder","BooleanEncoder","EncoderOptions","F32Encoder","F64Encoder","IntEncoder","LongEncoder","NullableEncoder"]};
