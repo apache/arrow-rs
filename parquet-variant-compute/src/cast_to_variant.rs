@@ -361,29 +361,22 @@ impl<'a> DictionaryArrowToVariantBuilder<'a> {
 pub(crate) struct ListArrowToVariantBuilder<'a, O: OffsetSizeTrait> {
     list_array: &'a arrow::array::GenericListArray<O>,
     values_builder: Box<ArrowToVariantRowBuilder<'a>>,
-    first_offset: O,
 }
 
 impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
         let list_array = array.as_list::<O>();
         let values = list_array.values();
-        let offsets = list_array.offsets();
         
-        // Required for correctness when list array is sliced
-        let first_offset = *offsets.first().expect("There should be an offset");
-        let length = *offsets.last().expect("There should be an offset") - first_offset;
-        let sliced_values = values.slice(first_offset.as_usize(), length.as_usize());
-        
+        // Create builder for the values array directly - no slicing needed
         let values_builder = make_arrow_to_variant_row_builder(
-            sliced_values.data_type(),
-            sliced_values.as_ref(),
+            values.data_type(),
+            values.as_ref(),
         )?;
         
         Ok(Self {
             list_array,
             values_builder: Box::new(values_builder),
-            first_offset,
         })
     }
     
@@ -394,8 +387,8 @@ impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
         }
         
         let offsets = self.list_array.offsets();
-        let start = (offsets[index] - self.first_offset).as_usize();
-        let end = (offsets[index + 1] - self.first_offset).as_usize();
+        let start = offsets[index].as_usize();      // Direct offset - no adjustment needed
+        let end = offsets[index + 1].as_usize();    // Direct offset - no adjustment needed
         
         let mut list_builder = builder.try_new_list()?;
         for value_index in start..end {
