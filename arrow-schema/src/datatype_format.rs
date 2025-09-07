@@ -106,8 +106,7 @@ impl fmt::Debug for DataType {
                         .iter()
                         .map(|field| {
                             let name = field.name();
-                            // let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
-                            let maybe_nullable = ""; // TODO: add support for this in `fn parse_struct`
+                            let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
                             let data_type = field.data_type();
                             let metadata_str = format_metadata(field.metadata());
                             format!("{name} {maybe_nullable}{data_type}{metadata_str}")
