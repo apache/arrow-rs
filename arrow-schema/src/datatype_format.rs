@@ -2,13 +2,21 @@ use std::{collections::HashMap, fmt};
 
 use crate::DataType;
 
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // NOTE: `Display` and `Debug` formatting are ALWAYS the same,
+        // because we want BOTH to be easy to read AND reversible!
+        write!(f, "{self:?}")
+    }
+}
+
 impl fmt::Debug for DataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn format_metadata(metadata: &HashMap<String, String>) -> String {
             if metadata.is_empty() {
                 String::new()
             } else {
-                format!(", metadata = {metadata:?}")
+                format!(", metadata: {metadata:?}")
             }
         }
 
@@ -65,7 +73,7 @@ impl fmt::Debug for DataType {
                 let field_name_str = if name == "item" {
                     String::default()
                 } else {
-                    format!(", field = '{name}'")
+                    format!(", field: '{name}'")
                 };
                 let metadata_str = format_metadata(field.metadata());
 
@@ -82,7 +90,7 @@ impl fmt::Debug for DataType {
                 let field_name_str = if name == "item" {
                     String::default()
                 } else {
-                    format!(", field = '{name}'")
+                    format!(", field: '{name}'")
                 };
                 let metadata_str = format_metadata(field.metadata());
 
@@ -129,14 +137,6 @@ impl fmt::Debug for DataType {
     }
 }
 
-impl fmt::Display for DataType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // NOTE: `Display` and `Debug` formatting are ALWAYS the same,
-        // because we want BOTH to be easy to read AND reversible!
-        write!(f, "{self:?}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -158,7 +158,7 @@ mod tests {
     fn test_display_list_with_named_field() {
         let list_data_type = DataType::List(Arc::new(Field::new("foo", DataType::UInt64, false)));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(UInt64, field = 'foo')";
+        let expected_string = "List(UInt64, field: 'foo')";
         assert_eq!(list_data_type_string, expected_string);
     }
 
@@ -180,7 +180,7 @@ mod tests {
         field.set_metadata(metadata);
         let list_data_type = DataType::List(Arc::new(field));
         let list_data_type_string = list_data_type.to_string();
-        let expected_string = "List(nullable Int32, metadata = {\"foo1\": \"value1\"})";
+        let expected_string = "List(nullable Int32, metadata: {\"foo1\": \"value1\"})";
 
         assert_eq!(list_data_type_string, expected_string);
     }
@@ -197,7 +197,7 @@ mod tests {
         let large_list_named =
             DataType::LargeList(Arc::new(Field::new("bar", DataType::UInt64, false)));
         let large_list_named_string = large_list_named.to_string();
-        let expected_named_string = "LargeList(UInt64, field = 'bar')";
+        let expected_named_string = "LargeList(UInt64, field: 'bar')";
         assert_eq!(large_list_named_string, expected_named_string);
 
         // Test with metadata
@@ -207,7 +207,7 @@ mod tests {
         let large_list_metadata = DataType::LargeList(Arc::new(field));
         let large_list_metadata_string = large_list_metadata.to_string();
         let expected_metadata_string =
-            "LargeList(nullable Int32, metadata = {\"key1\": \"value1\"})";
+            "LargeList(nullable Int32, metadata: {\"key1\": \"value1\"})";
         assert_eq!(large_list_metadata_string, expected_metadata_string);
     }
 
@@ -223,7 +223,7 @@ mod tests {
         let fixed_size_named =
             DataType::FixedSizeList(Arc::new(Field::new("baz", DataType::UInt64, false)), 3);
         let fixed_size_named_string = fixed_size_named.to_string();
-        let expected_named_string = "FixedSizeList(3 x UInt64, field = 'baz')";
+        let expected_named_string = "FixedSizeList(3 x UInt64, field: 'baz')";
         assert_eq!(fixed_size_named_string, expected_named_string);
 
         // Test with metadata
@@ -233,7 +233,7 @@ mod tests {
         let fixed_size_metadata = DataType::FixedSizeList(Arc::new(field), 4);
         let fixed_size_metadata_string = fixed_size_metadata.to_string();
         let expected_metadata_string =
-            "FixedSizeList(4 x nullable Int32, metadata = {\"key2\": \"value2\"})";
+            "FixedSizeList(4 x nullable Int32, metadata: {\"key2\": \"value2\"})";
         assert_eq!(fixed_size_metadata_string, expected_metadata_string);
     }
 
