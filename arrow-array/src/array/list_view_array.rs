@@ -283,6 +283,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns ith value of this list view array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
@@ -292,6 +296,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     }
 
     /// Returns ith value of this list view array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if the index is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
@@ -475,7 +483,7 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
             _ => unreachable!(),
         };
         let mut acc = 0_usize;
-        let iter = std::iter::repeat(size).take(value.len());
+        let iter = std::iter::repeat_n(size, value.len());
         let mut sizes = Vec::with_capacity(iter.size_hint().0);
         let mut offsets = Vec::with_capacity(iter.size_hint().0);
 

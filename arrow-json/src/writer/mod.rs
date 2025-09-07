@@ -413,6 +413,19 @@ where
         Ok(())
     }
 
+    /// Gets a reference to the underlying writer.
+    pub fn get_ref(&self) -> &W {
+        &self.writer
+    }
+
+    /// Gets a mutable reference to the underlying writer.
+    ///
+    /// Writing to the underlying writer must be done with care
+    /// to avoid corrupting the output JSON.
+    pub fn get_mut(&mut self) -> &mut W {
+        &mut self.writer
+    }
+
     /// Unwraps this `Writer<W>`, returning the underlying writer
     pub fn into_inner(self) -> W {
         self.writer
@@ -1917,6 +1930,54 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal32_encoder() {
+        let array = Decimal32Array::from_iter_values([1234, 5678, 9012])
+            .with_precision_and_scale(8, 2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":12.34}
+{"decimal":56.78}
+{"decimal":90.12}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_decimal64_encoder() {
+        let array = Decimal64Array::from_iter_values([1234, 5678, 9012])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let field = Arc::new(Field::new("decimal", array.data_type().clone(), true));
+        let schema = Schema::new(vec![field]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"decimal":12.34}
+{"decimal":56.78}
+{"decimal":90.12}
+"#,
+        );
+    }
+
+    #[test]
     fn test_decimal128_encoder() {
         let array = Decimal128Array::from_iter_values([1234, 5678, 9012])
             .with_precision_and_scale(10, 2)
@@ -2078,7 +2139,7 @@ mod tests {
                     None => out.extend_from_slice(b"null"),
                     Some(UnionValue::Int32(v)) => out.extend_from_slice(v.to_string().as_bytes()),
                     Some(UnionValue::String(v)) => {
-                        out.extend_from_slice(format!("\"{}\"", v).as_bytes())
+                        out.extend_from_slice(format!("\"{v}\"").as_bytes())
                     }
                 }
             }

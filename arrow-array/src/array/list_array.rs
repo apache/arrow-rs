@@ -42,16 +42,20 @@ pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
     const IS_LARGE: bool;
     /// Prefix for the offset size
     const PREFIX: &'static str;
+    /// The max `usize` offset
+    const MAX_OFFSET: usize;
 }
 
 impl OffsetSizeTrait for i32 {
     const IS_LARGE: bool = false;
     const PREFIX: &'static str = "";
+    const MAX_OFFSET: usize = i32::MAX as usize;
 }
 
 impl OffsetSizeTrait for i64 {
     const IS_LARGE: bool = true;
     const PREFIX: &'static str = "Large";
+    const MAX_OFFSET: usize = i64::MAX as usize;
 }
 
 /// An array of [variable length lists], similar to JSON arrays
@@ -323,6 +327,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns ith value of this list array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
@@ -332,6 +340,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns ith value of this list array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
         let end = self.value_offsets()[i + 1].as_usize();
         let start = self.value_offsets()[i].as_usize();
@@ -450,7 +464,7 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListArray<
             _ => unreachable!(),
         };
 
-        let offsets = OffsetBuffer::from_lengths(std::iter::repeat(size).take(value.len()));
+        let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(size, value.len()));
 
         Self {
             data_type: Self::DATA_TYPE_CONSTRUCTOR(field.clone()),

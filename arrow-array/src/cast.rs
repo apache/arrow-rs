@@ -365,6 +365,12 @@ macro_rules! downcast_primitive {
             $crate::repeat_pat!($crate::cast::__private::DataType::Float64, $($data_type),+) => {
                 $m!($crate::types::Float64Type $(, $args)*)
             }
+            $crate::repeat_pat!($crate::cast::__private::DataType::Decimal32(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal32Type $(, $args)*)
+            }
+            $crate::repeat_pat!($crate::cast::__private::DataType::Decimal64(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal64Type $(, $args)*)
+            }
             $crate::repeat_pat!($crate::cast::__private::DataType::Decimal128(_, _), $($data_type),+) => {
                 $m!($crate::types::Decimal128Type $(, $args)*)
             }
@@ -956,6 +962,14 @@ pub trait AsArray: private::Sealed {
         self.as_dictionary_opt().expect("dictionary array")
     }
 
+    /// Downcast this to a [`RunArray`] returning `None` if not possible
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>>;
+
+    /// Downcast this to a [`RunArray`] panicking if not possible
+    fn as_run<K: RunEndIndexType>(&self) -> &RunArray<K> {
+        self.as_run_opt().expect("run array")
+    }
+
     /// Downcasts this to a [`AnyDictionaryArray`] returning `None` if not possible
     fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray>;
 
@@ -1012,6 +1026,10 @@ impl AsArray for dyn Array + '_ {
     }
 
     fn as_dictionary_opt<K: ArrowDictionaryKeyType>(&self) -> Option<&DictionaryArray<K>> {
+        self.as_any().downcast_ref()
+    }
+
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>> {
         self.as_any().downcast_ref()
     }
 
@@ -1077,6 +1095,14 @@ impl AsArray for ArrayRef {
     fn as_any_dictionary_opt(&self) -> Option<&dyn AnyDictionaryArray> {
         self.as_ref().as_any_dictionary_opt()
     }
+
+    fn as_run_opt<K: RunEndIndexType>(&self) -> Option<&RunArray<K>> {
+        self.as_ref().as_run_opt()
+    }
+
+    fn as_string_opt<O: OffsetSizeTrait>(&self) -> Option<&GenericStringArray<O>> {
+        self.as_ref().as_string_opt()
+    }
 }
 
 #[cfg(test)]
@@ -1104,6 +1130,18 @@ mod tests {
         // should also work when wrapped in an Arc
         let array: ArrayRef = Arc::new(array);
         assert!(!as_string_array(&array).is_empty())
+    }
+
+    #[test]
+    fn test_decimal32array() {
+        let a = Decimal32Array::from_iter_values([1, 2, 4, 5]);
+        assert!(!as_primitive_array::<Decimal32Type>(&a).is_empty());
+    }
+
+    #[test]
+    fn test_decimal64array() {
+        let a = Decimal64Array::from_iter_values([1, 2, 4, 5]);
+        assert!(!as_primitive_array::<Decimal64Type>(&a).is_empty());
     }
 
     #[test]

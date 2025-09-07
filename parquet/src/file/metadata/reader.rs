@@ -17,17 +17,16 @@
 
 use std::{io::Read, ops::Range, sync::Arc};
 
-use bytes::Bytes;
-
 use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::{FileDecryptionProperties, FileDecryptor},
     modules::create_footer_aad,
 };
+use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
@@ -41,6 +40,9 @@ use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::CryptoContext;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
 ///
@@ -70,14 +72,35 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 #[derive(Default)]
 pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
-    column_index: bool,
-    offset_index: bool,
+    column_index: PageIndexPolicy,
+    offset_index: PageIndexPolicy,
     prefetch_hint: Option<usize>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
     #[cfg(feature = "encryption")]
     file_decryption_properties: Option<FileDecryptionProperties>,
+}
+
+/// Describes the policy for reading page indexes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PageIndexPolicy {
+    /// Do not read the page index.
+    #[default]
+    Skip,
+    /// Read the page index if it exists, otherwise do not error.
+    Optional,
+    /// Require the page index to exist, and error if it does not.
+    Required,
+}
+
+impl From<bool> for PageIndexPolicy {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Self::Required,
+            false => Self::Skip,
+        }
+    }
 }
 
 /// Describes how the footer metadata is stored
@@ -116,27 +139,49 @@ impl ParquetMetaDataReader {
     }
 
     /// Enable or disable reading the page index structures described in
-    /// "[Parquet page index]: Layout to Support Page Skipping". Equivalent to:
-    /// `self.with_column_indexes(val).with_offset_indexes(val)`
+    /// "[Parquet page index]: Layout to Support Page Skipping".
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    #[deprecated(since = "56.1.0", note = "Use `with_page_index_policy` instead")]
     pub fn with_page_indexes(self, val: bool) -> Self {
-        self.with_column_indexes(val).with_offset_indexes(val)
+        let policy = PageIndexPolicy::from(val);
+        self.with_column_index_policy(policy)
+            .with_offset_index_policy(policy)
     }
 
     /// Enable or disable reading the Parquet [ColumnIndex] structure.
     ///
     /// [ColumnIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    pub fn with_column_indexes(mut self, val: bool) -> Self {
-        self.column_index = val;
-        self
+    #[deprecated(since = "56.1.0", note = "Use `with_column_index_policy` instead")]
+    pub fn with_column_indexes(self, val: bool) -> Self {
+        let policy = PageIndexPolicy::from(val);
+        self.with_column_index_policy(policy)
     }
 
     /// Enable or disable reading the Parquet [OffsetIndex] structure.
     ///
     /// [OffsetIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    pub fn with_offset_indexes(mut self, val: bool) -> Self {
-        self.offset_index = val;
+    #[deprecated(since = "56.1.0", note = "Use `with_offset_index_policy` instead")]
+    pub fn with_offset_indexes(self, val: bool) -> Self {
+        let policy = PageIndexPolicy::from(val);
+        self.with_offset_index_policy(policy)
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the column and offset indexes
+    pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
+        self.with_column_index_policy(policy)
+            .with_offset_index_policy(policy)
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the column index
+    pub fn with_column_index_policy(mut self, policy: PageIndexPolicy) -> Self {
+        self.column_index = policy;
+        self
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the offset index
+    pub fn with_offset_index_policy(mut self, policy: PageIndexPolicy) -> Self {
+        self.offset_index = policy;
         self
     }
 
@@ -275,7 +320,7 @@ impl ParquetMetaDataReader {
     ///             bytes = get_bytes(&file, len - needed as u64..len);
     ///             // If file metadata was read only read page indexes, otherwise continue loop
     ///             if reader.has_metadata() {
-    ///                 reader.read_page_indexes_sized(&bytes, len);
+    ///                 reader.read_page_indexes_sized(&bytes, len).unwrap();
     ///                 break;
     ///             }
     ///         }
@@ -305,7 +350,8 @@ impl ParquetMetaDataReader {
         };
 
         // we can return if page indexes aren't requested
-        if !self.column_index && !self.offset_index {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -334,15 +380,6 @@ impl ParquetMetaDataReader {
             ));
         }
 
-        // FIXME: there are differing implementations in the case where page indexes are missing
-        // from the file. `MetadataLoader` will leave them as `None`, while the parser in
-        // `index_reader::read_columns_indexes` returns a vector of empty vectors.
-        // It is best for this function to replicate the latter behavior for now, but in a future
-        // breaking release, the two paths to retrieve metadata should be made consistent. Note that this is only
-        // an issue if the user requested page indexes, so there is no need to provide empty
-        // vectors in `try_parse_sized()`.
-        // https://github.com/apache/arrow-rs/issues/6447
-
         // Get bounds needed for page indexes (if any are present in the file).
         let Some(range) = self.range_for_page_index() else {
             return Ok(());
@@ -355,8 +392,7 @@ impl ParquetMetaDataReader {
             // Requested range starts beyond EOF
             if range.end > file_size {
                 return Err(eof_err!(
-                    "Parquet file too small. Range {:?} is beyond file bounds {file_size}",
-                    range
+                    "Parquet file too small. Range {range:?} is beyond file bounds {file_size}",
                 ));
             } else {
                 // Ask for a larger buffer
@@ -372,9 +408,7 @@ impl ParquetMetaDataReader {
             let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
             if range.end > metadata_range.start {
                 return Err(eof_err!(
-                    "Parquet file too small. Page index range {:?} overlaps with file metadata {:?}",
-                    range,
-                    metadata_range
+                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}" ,
                 ));
             }
         }
@@ -431,7 +465,8 @@ impl ParquetMetaDataReader {
         self.metadata = Some(metadata);
 
         // we can return if page indexes aren't requested
-        if !self.column_index && !self.offset_index {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -453,7 +488,8 @@ impl ParquetMetaDataReader {
         self.metadata = Some(metadata);
 
         // we can return if page indexes aren't requested
-        if !self.column_index && !self.offset_index {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -507,53 +543,158 @@ impl ParquetMetaDataReader {
 
     fn parse_column_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
-        if self.column_index {
+        if self.column_index != PageIndexPolicy::Skip {
             let index = metadata
                 .row_groups()
                 .iter()
-                .map(|x| {
+                .enumerate()
+                .map(|(rg_idx, x)| {
                     x.columns()
                         .iter()
-                        .map(|c| match c.column_index_range() {
+                        .enumerate()
+                        .map(|(col_idx, c)| match c.column_index_range() {
                             Some(r) => {
                                 let r_start = usize::try_from(r.start - start_offset)?;
                                 let r_end = usize::try_from(r.end - start_offset)?;
-                                decode_column_index(&bytes[r_start..r_end], c.column_type())
+                                Self::parse_single_column_index(
+                                    &bytes[r_start..r_end],
+                                    metadata,
+                                    c,
+                                    rg_idx,
+                                    col_idx,
+                                )
                             }
                             None => Ok(Index::NONE),
                         })
                         .collect::<Result<Vec<_>>>()
                 })
                 .collect::<Result<Vec<_>>>()?;
+
             metadata.set_column_index(Some(index));
         }
         Ok(())
     }
 
+    #[cfg(feature = "encryption")]
+    fn parse_single_column_index(
+        bytes: &[u8],
+        metadata: &ParquetMetaData,
+        column: &ColumnChunkMetaData,
+        row_group_index: usize,
+        col_index: usize,
+    ) -> Result<Index> {
+        match &column.column_crypto_metadata {
+            Some(crypto_metadata) => {
+                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
+                    general_err!("Cannot decrypt column index, no file decryptor set")
+                })?;
+                let crypto_context = CryptoContext::for_column(
+                    file_decryptor,
+                    crypto_metadata,
+                    row_group_index,
+                    col_index,
+                )?;
+                let column_decryptor = crypto_context.metadata_decryptor();
+                let aad = crypto_context.create_column_index_aad()?;
+                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
+                decode_column_index(&plaintext, column.column_type())
+            }
+            None => decode_column_index(bytes, column.column_type()),
+        }
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn parse_single_column_index(
+        bytes: &[u8],
+        _metadata: &ParquetMetaData,
+        column: &ColumnChunkMetaData,
+        _row_group_index: usize,
+        _col_index: usize,
+    ) -> Result<Index> {
+        decode_column_index(bytes, column.column_type())
+    }
+
     fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
         let metadata = self.metadata.as_mut().unwrap();
-        if self.offset_index {
-            let index = metadata
-                .row_groups()
-                .iter()
-                .map(|x| {
-                    x.columns()
-                        .iter()
-                        .map(|c| match c.offset_index_range() {
-                            Some(r) => {
-                                let r_start = usize::try_from(r.start - start_offset)?;
-                                let r_end = usize::try_from(r.end - start_offset)?;
-                                decode_offset_index(&bytes[r_start..r_end])
-                            }
-                            None => Err(general_err!("missing offset index")),
-                        })
-                        .collect::<Result<Vec<_>>>()
-                })
-                .collect::<Result<Vec<_>>>()?;
+        if self.offset_index != PageIndexPolicy::Skip {
+            let row_groups = metadata.row_groups();
+            let mut all_indexes = Vec::with_capacity(row_groups.len());
+            for (rg_idx, x) in row_groups.iter().enumerate() {
+                let mut row_group_indexes = Vec::with_capacity(x.columns().len());
+                for (col_idx, c) in x.columns().iter().enumerate() {
+                    let result = match c.offset_index_range() {
+                        Some(r) => {
+                            let r_start = usize::try_from(r.start - start_offset)?;
+                            let r_end = usize::try_from(r.end - start_offset)?;
+                            Self::parse_single_offset_index(
+                                &bytes[r_start..r_end],
+                                metadata,
+                                c,
+                                rg_idx,
+                                col_idx,
+                            )
+                        }
+                        None => Err(general_err!("missing offset index")),
+                    };
 
-            metadata.set_offset_index(Some(index));
+                    match result {
+                        Ok(index) => row_group_indexes.push(index),
+                        Err(e) => {
+                            if self.offset_index == PageIndexPolicy::Required {
+                                return Err(e);
+                            } else {
+                                // Invalidate and return
+                                metadata.set_column_index(None);
+                                metadata.set_offset_index(None);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                all_indexes.push(row_group_indexes);
+            }
+            metadata.set_offset_index(Some(all_indexes));
         }
         Ok(())
+    }
+
+    #[cfg(feature = "encryption")]
+    fn parse_single_offset_index(
+        bytes: &[u8],
+        metadata: &ParquetMetaData,
+        column: &ColumnChunkMetaData,
+        row_group_index: usize,
+        col_index: usize,
+    ) -> Result<OffsetIndexMetaData> {
+        match &column.column_crypto_metadata {
+            Some(crypto_metadata) => {
+                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
+                    general_err!("Cannot decrypt offset index, no file decryptor set")
+                })?;
+                let crypto_context = CryptoContext::for_column(
+                    file_decryptor,
+                    crypto_metadata,
+                    row_group_index,
+                    col_index,
+                )?;
+                let column_decryptor = crypto_context.metadata_decryptor();
+                let aad = crypto_context.create_offset_index_aad()?;
+                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
+                decode_offset_index(&plaintext)
+            }
+            None => decode_offset_index(bytes),
+        }
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn parse_single_offset_index(
+        bytes: &[u8],
+        _metadata: &ParquetMetaData,
+        _column: &ColumnChunkMetaData,
+        _row_group_index: usize,
+        _col_index: usize,
+    ) -> Result<OffsetIndexMetaData> {
+        decode_offset_index(bytes)
     }
 
     fn range_for_page_index(&self) -> Option<Range<u64>> {
@@ -564,10 +705,10 @@ impl ParquetMetaDataReader {
         let mut range = None;
         let metadata = self.metadata.as_ref().unwrap();
         for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-            if self.column_index {
+            if self.column_index != PageIndexPolicy::Skip {
                 range = acc_range(range, c.column_index_range());
             }
-            if self.offset_index {
+            if self.offset_index != PageIndexPolicy::Skip {
                 range = acc_range(range, c.offset_index_range());
             }
         }
@@ -762,7 +903,7 @@ impl ParquetMetaDataReader {
     }
 
     /// Decodes the Parquet footer, returning the metadata length in bytes
-    #[deprecated(note = "use decode_footer_tail instead")]
+    #[deprecated(since = "54.3.0", note = "Use decode_footer_tail instead")]
     pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
         Self::decode_footer_tail(slice).map(|f| f.metadata_length)
     }
@@ -870,11 +1011,15 @@ impl ParquetMetaDataReader {
             file_decryption_properties,
         ) {
             // File has a plaintext footer but encryption algorithm is set
-            file_decryptor = Some(get_file_decryptor(
+            let file_decryptor_value = get_file_decryptor(
                 algo,
                 t_file_metadata.footer_signing_key_metadata.as_deref(),
                 file_decryption_properties,
-            )?);
+            )?;
+            if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
+                file_decryptor_value.verify_plaintext_footer_signature(buf)?;
+            }
+            file_decryptor = Some(file_decryptor_value);
         }
 
         let mut row_groups = Vec::new();
@@ -1094,6 +1239,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_try_parse() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();
@@ -1211,6 +1357,10 @@ mod tests {
 #[cfg(all(feature = "async", feature = "arrow", test))]
 mod async_tests {
     use super::*;
+
+    use arrow::{array::Int32Array, datatypes::DataType};
+    use arrow_array::RecordBatch;
+    use arrow_schema::{Field, Schema};
     use bytes::Bytes;
     use futures::future::BoxFuture;
     use futures::FutureExt;
@@ -1219,7 +1369,10 @@ mod async_tests {
     use std::io::{Read, Seek, SeekFrom};
     use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tempfile::NamedTempFile;
 
+    use crate::arrow::ArrowWriter;
+    use crate::file::properties::WriterProperties;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
 
@@ -1471,6 +1624,7 @@ mod async_tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_page_index() {
         let mut file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();
@@ -1556,5 +1710,51 @@ mod async_tests {
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+    }
+
+    fn write_parquet_file(offset_index_disabled: bool) -> Result<NamedTempFile> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let file = NamedTempFile::new().unwrap();
+
+        // Write properties with page index disabled
+        let props = WriterProperties::builder()
+            .set_offset_index_disabled(offset_index_disabled)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file.reopen()?, schema, Some(props))?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        Ok(file)
+    }
+
+    fn read_and_check(file: &File, policy: PageIndexPolicy) -> Result<ParquetMetaData> {
+        let mut reader = ParquetMetaDataReader::new().with_page_index_policy(policy);
+        reader.try_parse(file)?;
+        reader.finish()
+    }
+
+    #[test]
+    fn test_page_index_policy() {
+        // With page index
+        let f = write_parquet_file(false).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Required).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
+
+        // Without page index
+        let f = write_parquet_file(true).unwrap();
+        let res = read_and_check(f.as_file(), PageIndexPolicy::Required);
+        assert!(matches!(
+            res,
+            Err(ParquetError::General(e)) if e == "missing offset index"
+        ));
+        read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
     }
 }

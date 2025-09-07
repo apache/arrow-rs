@@ -489,7 +489,7 @@ macro_rules! decimal_display {
     };
 }
 
-decimal_display!(Decimal128Type, Decimal256Type);
+decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
 fn write_timestamp(
     f: &mut dyn Write,
@@ -590,6 +590,12 @@ temporal_display!(time32ms_to_time, time_format, Time32MillisecondType);
 temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
 temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 
+/// Derive [`DisplayIndexState`] for `PrimitiveArray<$t>`
+///
+/// Arguments
+/// * `$convert` - function to convert the value to an `Duration`
+/// * `$t` - [`ArrowPrimitiveType`] of the array
+/// * `$scale` - scale of the duration (passed to `duration_fmt`)
 macro_rules! duration_display {
     ($convert:ident, $t:ty, $scale:tt) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
@@ -604,6 +610,34 @@ macro_rules! duration_display {
                 match fmt {
                     DurationFormat::ISO8601 => write!(f, "{}", $convert(v))?,
                     DurationFormat::Pretty => duration_fmt!(f, v, $scale)?,
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+/// Similar to [`duration_display`] but `$convert` returns an `Option`
+macro_rules! duration_option_display {
+    ($convert:ident, $t:ty, $scale:tt) => {
+        impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
+            type State = DurationFormat;
+
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+                Ok(options.duration_format)
+            }
+
+            fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+                let v = self.value(idx);
+                match fmt {
+                    DurationFormat::ISO8601 => match $convert(v) {
+                        Some(td) => write!(f, "{}", td)?,
+                        None => write!(f, "<invalid>")?,
+                    },
+                    DurationFormat::Pretty => match $convert(v) {
+                        Some(_) => duration_fmt!(f, v, $scale)?,
+                        None => write!(f, "<invalid>")?,
+                    },
                 }
                 Ok(())
             }
@@ -657,8 +691,8 @@ macro_rules! duration_fmt {
     }};
 }
 
-duration_display!(duration_s_to_duration, DurationSecondType, 0);
-duration_display!(duration_ms_to_duration, DurationMillisecondType, 3);
+duration_option_display!(try_duration_s_to_duration, DurationSecondType, 0);
+duration_option_display!(try_duration_ms_to_duration, DurationMillisecondType, 3);
 duration_display!(duration_us_to_duration, DurationMicrosecondType, 6);
 duration_display!(duration_ns_to_duration, DurationNanosecondType, 9);
 
@@ -742,12 +776,12 @@ impl Display for NanosecondsFormatter<'_> {
         let nanoseconds = self.nanoseconds % 1_000_000_000;
 
         if hours != 0 {
-            write!(f, "{prefix}{} hours", hours)?;
+            write!(f, "{prefix}{hours} hours")?;
             prefix = " ";
         }
 
         if mins != 0 {
-            write!(f, "{prefix}{} mins", mins)?;
+            write!(f, "{prefix}{mins} mins")?;
             prefix = " ";
         }
 
@@ -785,12 +819,12 @@ impl Display for MillisecondsFormatter<'_> {
         let milliseconds = self.milliseconds % 1_000;
 
         if hours != 0 {
-            write!(f, "{prefix}{} hours", hours,)?;
+            write!(f, "{prefix}{hours} hours")?;
             prefix = " ";
         }
 
         if mins != 0 {
-            write!(f, "{prefix}{} mins", mins,)?;
+            write!(f, "{prefix}{mins} mins")?;
             prefix = " ";
         }
 
@@ -1071,9 +1105,8 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::builder::StringRunBuilder;
-
     use super::*;
+    use arrow_array::builder::StringRunBuilder;
 
     /// Test to verify options can be constant. See #4580
     const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()

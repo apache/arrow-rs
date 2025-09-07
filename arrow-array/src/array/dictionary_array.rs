@@ -485,6 +485,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 
     /// Returns `PrimitiveDictionaryBuilder` of this dictionary array for mutating
     /// its keys and values if the underlying data buffer is not shared by others.
+    #[allow(clippy::result_large_err)]
     pub fn into_primitive_dict_builder<V>(self) -> Result<PrimitiveDictionaryBuilder<K, V>, Self>
     where
         V: ArrowPrimitiveType,
@@ -541,6 +542,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// assert_eq!(typed.value(1), 11);
     /// assert_eq!(typed.value(2), 21);
     /// ```
+    #[allow(clippy::result_large_err)]
     pub fn unary_mut<F, V>(self, op: F) -> Result<DictionaryArray<K>, DictionaryArray<K>>
     where
         V: ArrowPrimitiveType,

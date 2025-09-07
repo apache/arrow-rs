@@ -43,6 +43,7 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         (DataType::Int32 | DataType::Int64, DataType::Timestamp(_, _)) => hint,
         (DataType::Int32, DataType::Time32(_)) => hint,
         (DataType::Int64, DataType::Time64(_)) => hint,
+        (DataType::Int64, DataType::Duration(_)) => hint,
 
         // Date64 doesn't have a corresponding LogicalType / ConvertedType
         (DataType::Int64, DataType::Date64) => hint,
@@ -84,7 +85,9 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Determine interval time unit (#1666)
         (DataType::Interval(_), DataType::Interval(_)) => hint,
 
-        // Promote to Decimal256
+        // Promote to Decimal256 or narrow to Decimal32 or Decimal64
+        (DataType::Decimal128(_, _), DataType::Decimal32(_, _)) => hint,
+        (DataType::Decimal128(_, _), DataType::Decimal64(_, _)) => hint,
         (DataType::Decimal128(_, _), DataType::Decimal256(_, _)) => hint,
 
         // Potentially preserve dictionary encoding

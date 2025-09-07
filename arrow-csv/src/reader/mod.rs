@@ -132,30 +132,30 @@ use arrow_cast::parse::{parse_decimal, string_to_datetime, Parser};
 use arrow_schema::*;
 use chrono::{TimeZone, Utc};
 use csv::StringRecord;
-use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 use std::fmt::{self, Debug};
 use std::fs::File;
 use std::io::{BufRead, BufReader as StdBufReader, Read};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::map_csv_error;
 use crate::reader::records::{RecordDecoder, StringRecords};
 use arrow_array::timezone::Tz;
 
-lazy_static! {
-    /// Order should match [`InferredDataType`]
-    static ref REGEX_SET: RegexSet = RegexSet::new([
+/// Order should match [`InferredDataType`]
+static REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
+    RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$", //INTEGER
+        r"^-?(\d+)$",                   //INTEGER
         r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
-        r"^\d{4}-\d\d-\d\d$", //DATE32
+        r"^\d{4}-\d\d-\d\d$",           //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,6}(?:[^\d].*)?$", //Timestamp(Microsecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}(?:[^\d].*)?$", //Timestamp(Nanosecond)
-    ]).unwrap();
-}
+    ])
+    .unwrap()
+});
 
 /// A wrapper over `Option<Regex>` to check if the value is `NULL`.
 #[derive(Debug, Clone, Default)]
@@ -654,6 +654,22 @@ fn parse(
             let field = &fields[i];
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i, null_regex),
+                DataType::Decimal32(precision, scale) => build_decimal_array::<Decimal32Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
+                DataType::Decimal64(precision, scale) => build_decimal_array::<Decimal64Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
                 DataType::Decimal128(precision, scale) => build_decimal_array::<Decimal128Type>(
                     line_number,
                     rows,
@@ -1301,6 +1317,54 @@ mod tests {
             .column(2)
             .as_any()
             .downcast_ref::<Decimal256Array>()
+            .unwrap();
+
+        assert_eq!("-3.335724", lng.value_as_string(0));
+        assert_eq!("-2.179404", lng.value_as_string(1));
+        assert_eq!("-1.778197", lng.value_as_string(2));
+        assert_eq!("-3.179090", lng.value_as_string(3));
+        assert_eq!("-3.179090", lng.value_as_string(4));
+        assert_eq!("0.290472", lng.value_as_string(5));
+        assert_eq!("0.290472", lng.value_as_string(6));
+        assert_eq!("0.290472", lng.value_as_string(7));
+        assert_eq!("0.290472", lng.value_as_string(8));
+        assert_eq!("0.290472", lng.value_as_string(9));
+    }
+
+    #[test]
+    fn test_csv_reader_with_decimal_3264() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("city", DataType::Utf8, false),
+            Field::new("lat", DataType::Decimal32(9, 6), false),
+            Field::new("lng", DataType::Decimal64(16, 6), false),
+        ]));
+
+        let file = File::open("test/data/decimal_test.csv").unwrap();
+
+        let mut csv = ReaderBuilder::new(schema).build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+        // access data from a primitive array
+        let lat = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Decimal32Array>()
+            .unwrap();
+
+        assert_eq!("57.653484", lat.value_as_string(0));
+        assert_eq!("53.002666", lat.value_as_string(1));
+        assert_eq!("52.412811", lat.value_as_string(2));
+        assert_eq!("51.481583", lat.value_as_string(3));
+        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("50.760000", lat.value_as_string(5));
+        assert_eq!("0.123000", lat.value_as_string(6));
+        assert_eq!("123.000000", lat.value_as_string(7));
+        assert_eq!("123.000000", lat.value_as_string(8));
+        assert_eq!("-50.760000", lat.value_as_string(9));
+
+        let lng = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Decimal64Array>()
             .unwrap();
 
         assert_eq!("-3.335724", lng.value_as_string(0));
@@ -2633,7 +2697,7 @@ mod tests {
             .infer_schema(&mut read, None);
         assert!(result.is_err());
         // Include line number in the error message to help locate and fix the issue
-        assert_eq!(result.err().unwrap().to_string(), "Csv error: Encountered unequal lengths between records on CSV file. Expected 2 records, found 3 records at line 3");
+        assert_eq!(result.err().unwrap().to_string(), "Csv error: Encountered unequal lengths between records on CSV file. Expected 3 records, found 2 records at line 3");
     }
 
     #[test]

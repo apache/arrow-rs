@@ -50,8 +50,9 @@ object_store = { version = "0.12.0", default-features = false, optional = true }
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
-brotli = { version = "7.0", default-features = false, features = ["std"], optional = true }
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
+brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
+# To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
+flate2 = { version = "1.1", default-features = false, optional = true }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
@@ -64,20 +65,21 @@ serde_json = { version = "1.0", default-features = false, features = ["std"], op
 seq-macro = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
-hashbrown = { version = "0.15", default-features = false }
+hashbrown = { version = "0.16", default-features = false }
 twox-hash = { version = "2.0", default-features = false, features = ["xxhash64"] }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
-simdutf8 = { version = "0.1.5", optional = true, default-features = false }
+simdutf8 = { workspace = true , optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
-criterion = { version = "0.5", default-features = false }
+criterion = { version = "0.5", default-features = false, features = ["async_futures"]  }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
-brotli = { version = "7.0", default-features = false, features = ["std"] }
+insta = "1.43.1"
+brotli = { version = "8.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
 zstd = { version = "0.13", default-features = false }
@@ -86,13 +88,13 @@ arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "jso
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { version = "0.12.0", default-features = false, features = ["azure", "fs"] }
-sysinfo = { version = "0.34.0", default-features = false, features = ["system"] }
+sysinfo = { version = "0.36.0", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "simdutf8"]
+default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
@@ -119,6 +121,9 @@ crc = ["dep:crc32fast"]
 simdutf8 = ["dep:simdutf8"]
 # Enable Parquet modular encryption support
 encryption = ["dep:ring"]
+# Explicitely enabling rust_backend and zlib-rs features for flate2
+flate2-rust_backened = ["flate2/rust_backend"]
+flate2-zlib-rs = ["flate2/zlib-rs"]
 
 
 [[example]]
@@ -211,6 +216,15 @@ name = "arrow_statistics"
 required-features = ["arrow"]
 harness = false
 
+[[bench]]
+name = "arrow_reader_row_filter"
+required-features = ["arrow", "async"]
+harness = false
+
+[[bench]]
+name = "arrow_reader_clickbench"
+required-features = ["arrow", "async"]
+harness = false
 
 [[bench]]
 name = "compression"
