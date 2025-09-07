@@ -72,6 +72,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     Dictionary(DictionaryArrowToVariantBuilder<'a>),
     List(ListArrowToVariantBuilder<'a, i32>),
     LargeList(ListArrowToVariantBuilder<'a, i64>),
+    Map(MapArrowToVariantBuilder<'a>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -97,6 +98,7 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::Dictionary(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::List(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::LargeList(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Map(b) => b.append_row(index, builder),
         }
     }
 }
@@ -398,6 +400,61 @@ impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
     }
 }
 
+/// Map builder for MapArray types
+pub(crate) struct MapArrowToVariantBuilder<'a> {
+    map_array: &'a arrow::array::MapArray,
+    key_strings: arrow::array::StringArray,
+    values_builder: Box<ArrowToVariantRowBuilder<'a>>,
+}
+
+impl<'a> MapArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
+        let map_array = array.as_map();
+        
+        // Pre-cast keys to strings once (like existing convert_map code)
+        let keys = cast(map_array.keys(), &DataType::Utf8)?;
+        let key_strings = keys.as_string::<i32>().clone();
+        
+        // Create recursive builder for values
+        let values = map_array.values();
+        let values_builder = make_arrow_to_variant_row_builder(
+            values.data_type(),
+            values.as_ref(),
+        )?;
+        
+        Ok(Self {
+            map_array,
+            key_strings,
+            values_builder: Box::new(values_builder),
+        })
+    }
+    
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        // Check for NULL map first (via null bitmap)
+        if self.map_array.is_null(index) {
+            builder.append_null();
+            return Ok(());
+        }
+        
+        let offsets = self.map_array.offsets();
+        let start = offsets[index].as_usize();
+        let end = offsets[index + 1].as_usize();
+        
+        // Create object builder for this map (even if empty)
+        let mut object_builder = builder.try_new_object()?;
+        
+        // Add each key-value pair (loop does nothing for empty maps - correct!)
+        for kv_index in start..end {
+            let key = self.key_strings.value(kv_index);
+            let mut field_builder = object_builder.field(key);
+            self.values_builder.append_row(kv_index, &mut field_builder)?;
+        }
+        
+        object_builder.finish(); // Empty map becomes empty object {}
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -443,6 +500,9 @@ fn make_arrow_to_variant_row_builder<'a>(
         // List types
         DataType::List(_) => Ok(ArrowToVariantRowBuilder::List(ListArrowToVariantBuilder::new(array)?)),
         DataType::LargeList(_) => Ok(ArrowToVariantRowBuilder::LargeList(ListArrowToVariantBuilder::new(array)?)),
+        
+        // Map types
+        DataType::Map(_, _) => Ok(ArrowToVariantRowBuilder::Map(MapArrowToVariantBuilder::new(array)?)),
         
         // TODO: Add other types (Binary, Date, Time, Decimal, etc.)
         _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
@@ -893,29 +953,29 @@ fn convert_map(
             let values = cast_to_variant(map_array.values())?;
             let offsets = map_array.offsets();
 
-            let mut start_offset = offsets[0];
-            for end_offset in offsets.iter().skip(1) {
-                if start_offset >= *end_offset {
+            for i in 0..map_array.len() {
+                // Check for NULL map first (FIXED: was checking offsets before)
+                if map_array.is_null(i) {
                     builder.append_null();
                     continue;
                 }
-
-                let length = (end_offset - start_offset) as usize;
+                
+                let start = offsets[i].as_usize();
+                let end = offsets[i + 1].as_usize();
 
                 let mut variant_builder = VariantBuilder::new();
                 let mut object_builder = variant_builder.new_object();
 
-                for i in start_offset..*end_offset {
-                    let value = values.value(i as usize);
-                    object_builder.insert(key_strings.value(i as usize), value);
+                // Add key-value pairs (empty range = empty object, FIXED)
+                for j in start..end {
+                    let value = values.value(j);
+                    object_builder.insert(key_strings.value(j), value);
                 }
+                
                 object_builder.finish();
                 let (metadata, value) = variant_builder.finish();
                 let variant = Variant::try_new(&metadata, &value)?;
-
                 builder.append_variant(variant);
-
-                start_offset += length as i32;
             }
         }
         _ => {
@@ -2502,35 +2562,63 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_to_variant_map_with_nulls() {
-        let keys = vec!["key1", "key2", "key3"];
-        let values_data = Int32Array::from(vec![1, 2, 3]);
-        let entry_offsets = vec![0, 1, 1, 3];
-        let map_array =
-            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
-                .unwrap();
+    fn test_cast_to_variant_map_with_nulls_and_empty() {
+        use arrow::array::{MapArray, Int32Array, StringArray, StructArray};
+        use arrow::buffer::{OffsetBuffer, NullBuffer};
+        use arrow::datatypes::{DataType, Field, Fields};
+        use std::sync::Arc;
+
+        // Create entries struct array
+        let keys = StringArray::from(vec!["key1", "key2", "key3"]);
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let entries_fields = Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+        ]);
+        let entries = StructArray::new(
+            entries_fields.clone(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+
+        // Create offsets for 4 maps: [0..1], [1..1], [1..1], [1..3]
+        let offsets = OffsetBuffer::new(vec![0, 1, 1, 1, 3].into());
+        
+        // Create null buffer - map at index 2 is NULL
+        let null_buffer = Some(NullBuffer::from(vec![true, true, false, true]));
+        
+        let map_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields),
+            false,
+        ));
+        
+        let map_array = MapArray::try_new(
+            map_field,
+            offsets,
+            entries,
+            null_buffer,
+            false,
+        ).unwrap();
 
         let result = cast_to_variant(&map_array).unwrap();
-        // [{"key1":1}]
-        let variant1 = result.value(0);
-        assert_eq!(
-            variant1.as_object().unwrap().get("key1").unwrap(),
-            Variant::from(1)
-        );
-
-        // None
-        assert!(result.is_null(1));
-
-        // [{"key2":2},{"key3":3}]
-        let variant2 = result.value(2);
-        assert_eq!(
-            variant2.as_object().unwrap().get("key2").unwrap(),
-            Variant::from(2)
-        );
-        assert_eq!(
-            variant2.as_object().unwrap().get("key3").unwrap(),
-            Variant::from(3)
-        );
+        
+        // Map 0: {"key1": 1}
+        let variant0 = result.value(0);
+        assert_eq!(variant0.as_object().unwrap().get("key1").unwrap(), Variant::from(1));
+        
+        // Map 1: {} (empty, not null) - FIXED: was incorrectly null before
+        let variant1 = result.value(1);
+        let obj1 = variant1.as_object().unwrap();
+        assert_eq!(obj1.len(), 0); // Empty object
+        
+        // Map 2: null (actual NULL)
+        assert!(result.is_null(2));
+        
+        // Map 3: {"key2": 2, "key3": 3}
+        let variant3 = result.value(3);
+        assert_eq!(variant3.as_object().unwrap().get("key2").unwrap(), Variant::from(2));
+        assert_eq!(variant3.as_object().unwrap().get("key3").unwrap(), Variant::from(3));
     }
 
     #[test]
@@ -3327,5 +3415,91 @@ mod row_builder_tests {
         
         // Row 1: null
         assert!(variant_array.is_null(1));
+    }
+
+    #[test]
+    fn test_map_row_builder() {
+        use arrow::array::{MapArray, Int32Array, StringArray, StructArray};
+        use arrow::buffer::{OffsetBuffer, NullBuffer};
+        use arrow::datatypes::{DataType, Field, Fields};
+        use std::sync::Arc;
+
+        // Create the entries struct array (key-value pairs)
+        let keys = StringArray::from(vec!["key1", "key2", "key3"]);
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let entries_fields = Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+        ]);
+        let entries = StructArray::new(
+            entries_fields.clone(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None, // No nulls in the entries themselves
+        );
+
+        // Create offsets for 4 maps: [0..1], [1..1], [1..1], [1..3]
+        // Map 0: {"key1": 1}    (1 entry)
+        // Map 1: {}             (0 entries - empty)  
+        // Map 2: null           (0 entries but NULL via null buffer)
+        // Map 3: {"key2": 2, "key3": 3}  (2 entries)
+        let offsets = OffsetBuffer::new(vec![0, 1, 1, 1, 3].into());
+        
+        // Create null buffer - map at index 2 is NULL
+        let null_buffer = Some(NullBuffer::from(vec![true, true, false, true]));
+        
+        // Create the map field
+        let map_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields),
+            false, // Keys are non-nullable
+        ));
+        
+        // Create MapArray using try_new
+        let map_array = MapArray::try_new(
+            map_field,
+            offsets,
+            entries,
+            null_buffer,
+            false, // not ordered
+        ).unwrap();
+
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            map_array.data_type(), 
+            &map_array
+        ).unwrap();
+        let mut variant_array_builder = VariantArrayBuilder::new(4);
+        
+        // Test each row
+        for i in 0..4 {
+            let mut builder = variant_array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = variant_array_builder.build();
+        
+        // Verify results
+        assert_eq!(variant_array.len(), 4);
+        
+        // Map 0: {"key1": 1}
+        let map0 = variant_array.value(0);
+        let obj0 = map0.as_object().unwrap();
+        assert_eq!(obj0.len(), 1);
+        assert_eq!(obj0.get("key1"), Some(Variant::from(1)));
+        
+        // Map 1: {} (empty object, not null)
+        let map1 = variant_array.value(1);
+        let obj1 = map1.as_object().unwrap();
+        assert_eq!(obj1.len(), 0); // Empty object
+        
+        // Map 2: null (actual NULL)
+        assert!(variant_array.is_null(2));
+        
+        // Map 3: {"key2": 2, "key3": 3}
+        let map3 = variant_array.value(3);
+        let obj3 = map3.as_object().unwrap();
+        assert_eq!(obj3.len(), 2);
+        assert_eq!(obj3.get("key2"), Some(Variant::from(2)));
+        assert_eq!(obj3.get("key3"), Some(Variant::from(3)));
     }
 }
