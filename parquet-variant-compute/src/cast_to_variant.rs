@@ -466,11 +466,11 @@ pub(crate) struct UnionArrowToVariantBuilder<'a> {
 impl<'a> UnionArrowToVariantBuilder<'a> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
         let union_array = array.as_union();
-        let union_fields = union_array.union_fields();
+        let type_ids = union_array.type_ids();
         
         // Create child builders for each union field
         let mut child_builders = HashMap::new();
-        for (type_id, _field) in union_fields.iter() {
+        for &type_id in type_ids {
             let child_array = union_array.child(type_id);
             let child_builder = make_arrow_to_variant_row_builder(
                 child_array.data_type(),
@@ -489,12 +489,10 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
         let type_id = self.union_array.type_id(index);
         let value_offset = self.union_array.value_offset(index);
         
-        if let Some(child_builder) = self.child_builders.get_mut(&type_id) {
-            // Delegate to the appropriate child builder
-            child_builder.append_row(value_offset, builder)?;
-        } else {
-            // Invalid type_id - should not happen in valid union, handle gracefully
-            builder.append_null();
+        // Delegate to the appropriate child builder, or append null to handle an invalid type_id
+        match self.child_builders.get_mut(&type_id) {
+            Some(child_builder) => child_builder.append_row(value_offset, builder)?,
+            None => builder.append_null(),
         }
         
         Ok(())
@@ -3544,7 +3542,7 @@ mod row_builder_tests {
     fn test_union_sparse_row_builder() {
         use arrow::array::{Int32Array, Float64Array, StringArray, UnionArray};
         use arrow::buffer::ScalarBuffer;
-        use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+        use arrow::datatypes::{DataType, Field, UnionFields};
         use std::sync::Arc;
 
         // Create a sparse union array with mixed types (int, float, string)
@@ -3577,14 +3575,16 @@ mod row_builder_tests {
         .unwrap();
 
         // Test the row builder
-        let mut builder = make_arrow_to_variant_row_builder(
+        let mut row_builder = make_arrow_to_variant_row_builder(
             union_array.data_type(),
             &union_array,
         ).unwrap();
 
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
-            builder.append_row(i, &mut variant_builder).unwrap();
+            let mut builder = variant_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
         }
         let variant_array = variant_builder.build();
 
@@ -3614,7 +3614,7 @@ mod row_builder_tests {
     fn test_union_dense_row_builder() {
         use arrow::array::{Int32Array, Float64Array, StringArray, UnionArray};
         use arrow::buffer::ScalarBuffer;
-        use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+        use arrow::datatypes::{DataType, Field, UnionFields};
         use std::sync::Arc;
 
         // Create a dense union array with mixed types (int, float, string)
@@ -3650,14 +3650,16 @@ mod row_builder_tests {
         .unwrap();
 
         // Test the row builder
-        let mut builder = make_arrow_to_variant_row_builder(
+        let mut row_builder = make_arrow_to_variant_row_builder(
             union_array.data_type(),
             &union_array,
         ).unwrap();
 
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
-            builder.append_row(i, &mut variant_builder).unwrap();
+            let mut builder = variant_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
         }
         let variant_array = variant_builder.build();
 
@@ -3687,7 +3689,7 @@ mod row_builder_tests {
     fn test_union_sparse_type_ids_row_builder() {
         use arrow::array::{Int32Array, StringArray, UnionArray};
         use arrow::buffer::ScalarBuffer;
-        use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+        use arrow::datatypes::{DataType, Field, UnionFields};
         use std::sync::Arc;
 
         // Create a sparse union with non-contiguous type IDs (1, 3)
@@ -3717,14 +3719,16 @@ mod row_builder_tests {
         .unwrap();
 
         // Test the row builder
-        let mut builder = make_arrow_to_variant_row_builder(
+        let mut row_builder = make_arrow_to_variant_row_builder(
             union_array.data_type(),
             &union_array,
         ).unwrap();
 
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
-            builder.append_row(i, &mut variant_builder).unwrap();
+            let mut builder = variant_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
         }
         let variant_array = variant_builder.build();
 
