@@ -15,28 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::file::metadata::thrift_gen::EncryptionAlgorithm;
-use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+use crate::file::metadata::thrift_gen::{EncryptionAlgorithm, FileMeta};
+use crate::file::metadata::{
+    ColumnChunkMetaData, ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData,
+};
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::thrift::TSerializable;
 use crate::{
     basic::ColumnOrder,
     file::metadata::{FileMetaData, ParquetMetaDataBuilder},
-    schema::types,
 };
 #[cfg(feature = "encryption")]
 use crate::{
     encryption::{
-        encrypt::{encrypt_object, write_signed_plaintext_object, FileEncryptor},
+        encrypt::{encrypt_thrift_object, write_signed_plaintext_thrift_object, FileEncryptor},
         modules::{create_footer_aad, create_module_aad, ModuleType},
     },
-    file::metadata::thrift_gen::FileCryptoMetaData,
+    file::column_crypto_metadata::ColumnCryptoMetaData,
+    file::metadata::thrift_gen::{AesGcmV1, FileCryptoMetaData},
 };
 use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
-#[cfg(feature = "encryption")]
-use crate::{
-    file::column_crypto_metadata::ColumnCryptoMetaData, file::metadata::thrift_gen::AesGcmV1,
-};
+
 use crate::{
     file::writer::{get_file_magic, TrackedWrite},
     parquet_thrift::WriteThrift,
@@ -178,7 +177,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let (encryption_algorithm, footer_signing_key_metadata) =
             self.object_writer.get_plaintext_footer_crypto_metadata();
 
-        let mut file_metadata = FileMetaData::new(
+        let file_metadata = FileMetaData::new(
             self.writer_version,
             num_rows,
             self.created_by,
@@ -187,12 +186,17 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             column_orders,
         );
 
-        let schema = types::to_thrift(self.schema.as_ref())?;
+        let file_meta = FileMeta {
+            file_metadata: &file_metadata,
+            row_groups: &row_groups,
+            encryption_algorithm,
+            footer_signing_key_metadata,
+        };
 
         // Write file metadata
         let start_pos = self.buf.bytes_written();
         self.object_writer
-            .write_file_metadata(&file_metadata, &mut self.buf)?;
+            .write_file_metadata(&file_meta, &mut self.buf)?;
         let end_pos = self.buf.bytes_written();
 
         // Write footer
@@ -201,19 +205,44 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         self.buf.write_all(&metadata_len.to_le_bytes())?;
         self.buf.write_all(self.object_writer.get_file_magic())?;
 
-        if let Some(row_groups) = unencrypted_row_groups {
-            // If row group metadata was encrypted, we replace the encrypted row groups with
-            // unencrypted metadata before it is returned to users. This allows the metadata
-            // to be usable for retrieving the row group statistics for example, without users
-            // needing to decrypt the metadata.
-            file_metadata.row_groups = row_groups;
-        }
+        // If row group metadata was encrypted, we replace the encrypted row groups with
+        // unencrypted metadata before it is returned to users. This allows the metadata
+        // to be usable for retrieving the row group statistics for example, without users
+        // needing to decrypt the metadata.
+        let mut builder = ParquetMetaDataBuilder::new(file_metadata);
 
-        let builder = ParquetMetaDataBuilder::new(file_metadata);
-        builder.set_row_groups(self.row_groups.clone());
+        builder = match unencrypted_row_groups {
+            Some(rg) => builder.set_row_groups(rg),
+            None => builder.set_row_groups(row_groups),
+        };
 
-        builder.set_column_index(self.column_indexes.map(|ci| ci.to_vec()));
-        builder.set_offset_index(self.offset_indexes.map(|oi| oi.to_vec()));
+        let column_indexes: Option<ParquetColumnIndex> = self.column_indexes.map(|ovvi| {
+            ovvi.iter()
+                .map(|vi| {
+                    vi.iter()
+                        .map(|oi| {
+                            oi.as_ref()
+                                .map(|i| i.clone())
+                                .unwrap_or(ColumnIndexMetaData::NONE)
+                        })
+                        .collect()
+                })
+                .collect()
+        });
+
+        // FIXME(ets): this will panic if there's a missing index.
+        let offset_indexes: Option<ParquetOffsetIndex> = self.offset_indexes.map(|ovvi| {
+            ovvi.iter()
+                .map(|vi| {
+                    vi.iter()
+                        .map(|oi| oi.as_ref().map(|i| i.clone()).unwrap())
+                        .collect()
+                })
+                .collect()
+        });
+
+        builder = builder.set_column_index(column_indexes);
+        builder = builder.set_offset_index(offset_indexes);
 
         Ok(builder.build())
     }
@@ -222,7 +251,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         buf: &'a mut TrackedWrite<W>,
         schema: &'a TypePtr,
         schema_descr: &'a SchemaDescPtr,
-        row_groups: &'a mut Vec<RowGroupMetaData>,
+        row_groups: Vec<RowGroupMetaData>,
         created_by: Option<String>,
         writer_version: i32,
     ) -> Self {
@@ -380,7 +409,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         let schema_descr = Arc::new(SchemaDescriptor::new(schema.clone()));
         let created_by = file_metadata.created_by().map(str::to_string);
 
-        let mut row_groups = self.metadata.row_groups.clone();
+        let row_groups = self.metadata.row_groups.clone();
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 
@@ -391,7 +420,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
             &mut self.buf,
             &schema,
             &schema_descr,
-            &mut row_groups,
+            row_groups,
             created_by,
             file_metadata.version(),
         );
@@ -406,6 +435,8 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     }
 
     fn convert_column_indexes(&self) -> Vec<Vec<Option<ColumnIndexMetaData>>> {
+        // FIXME(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
+        // but then converting back to ParquetColumnIndex in the end. need to unify this.
         if let Some(row_group_column_indexes) = self.metadata.column_index() {
             (0..self.metadata.row_groups().len())
                 .map(|rg_idx| {
@@ -474,12 +505,8 @@ impl MetadataObjectWriter {
 #[cfg(not(feature = "encryption"))]
 impl MetadataObjectWriter {
     /// Write [`FileMetaData`] in Thrift format
-    fn write_file_metadata(
-        &self,
-        file_metadata: &crate::format::FileMetaData,
-        sink: impl Write,
-    ) -> Result<()> {
-        Self::write_object(file_metadata, sink)
+    fn write_file_metadata(&self, file_metadata: &FileMeta, sink: impl Write) -> Result<()> {
+        Self::write_thrift_object(file_metadata, sink)
     }
 
     /// Write a column [`OffsetIndex`] in Thrift format
@@ -509,11 +536,8 @@ impl MetadataObjectWriter {
     /// No-op implementation of row-group metadata encryption
     fn apply_row_group_encryption(
         &self,
-        row_groups: Vec<crate::format::RowGroup>,
-    ) -> Result<(
-        Vec<crate::format::RowGroup>,
-        Option<Vec<crate::format::RowGroup>>,
-    )> {
+        row_groups: Vec<RowGroupMetaData>,
+    ) -> Result<(Vec<RowGroupMetaData>, Option<Vec<RowGroupMetaData>>)> {
         Ok((row_groups, None))
     }
 
@@ -541,29 +565,25 @@ impl MetadataObjectWriter {
     /// Write [`FileMetaData`] in Thrift format, possibly encrypting it if required
     ///
     /// [`FileMetaData`]: crate::format::FileMetaData
-    fn write_file_metadata(
-        &self,
-        file_metadata: &crate::format::FileMetaData,
-        mut sink: impl Write,
-    ) -> Result<()> {
+    fn write_file_metadata(&self, file_metadata: &FileMeta, mut sink: impl Write) -> Result<()> {
         match self.file_encryptor.as_ref() {
             Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {
                 // First write FileCryptoMetadata
                 let crypto_metadata = Self::file_crypto_metadata(file_encryptor)?;
-                let mut protocol = TCompactOutputProtocol::new(&mut sink);
-                crypto_metadata.write_to_out_protocol(&mut protocol)?;
+                let mut protocol = ThriftCompactOutputProtocol::new(&mut sink);
+                crypto_metadata.write_thrift(&mut protocol)?;
 
                 // Then write encrypted footer
                 let aad = create_footer_aad(file_encryptor.file_aad())?;
                 let mut encryptor = file_encryptor.get_footer_encryptor()?;
-                encrypt_object(file_metadata, &mut encryptor, &mut sink, &aad)
+                encrypt_thrift_object(file_metadata, &mut encryptor, &mut sink, &aad)
             }
             Some(file_encryptor) if file_metadata.encryption_algorithm.is_some() => {
                 let aad = create_footer_aad(file_encryptor.file_aad())?;
                 let mut encryptor = file_encryptor.get_footer_encryptor()?;
-                write_signed_plaintext_object(file_metadata, &mut encryptor, &mut sink, &aad)
+                write_signed_plaintext_thrift_object(file_metadata, &mut encryptor, &mut sink, &aad)
             }
-            _ => Self::write_object(file_metadata, &mut sink),
+            _ => Self::write_thrift_object(file_metadata, &mut sink),
         }
     }
 
@@ -663,8 +683,6 @@ impl MetadataObjectWriter {
         };
 
         if file_encryptor.is_column_encrypted(column_path) {
-            use crate::encryption::encrypt::encrypt_thrift_object;
-
             let aad = create_module_aad(
                 file_encryptor.file_aad(),
                 module_type,
@@ -758,6 +776,8 @@ impl MetadataObjectWriter {
                 // so the column chunk does not need additional encryption.
             }
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(col_key)) => {
+                use crate::file::metadata::thrift_gen::serialize_column_meta_data;
+
                 let column_path = col_key.path_in_schema.join(".");
                 let mut column_encryptor = file_encryptor.get_column_encryptor(&column_path)?;
                 let aad = create_module_aad(
@@ -768,8 +788,12 @@ impl MetadataObjectWriter {
                     None,
                 )?;
                 // create temp ColumnMetaData that we can encrypt
-                let cc = Self::serialize_column_meta_data(&column_chunk)?;
-                let ciphertext = column_encryptor.encrypt(&cc, &aad)?;
+                let mut buffer: Vec<u8> = vec![];
+                {
+                    let mut prot = ThriftCompactOutputProtocol::new(&mut buffer);
+                    serialize_column_meta_data(&column_chunk, &mut prot)?;
+                }
+                let ciphertext = column_encryptor.encrypt(&buffer, &aad)?;
 
                 // TODO: remember to not serialize column meta data if encrypted_column_metadata
                 // is Some
@@ -778,81 +802,5 @@ impl MetadataObjectWriter {
         }
 
         Ok(column_chunk)
-    }
-
-    // serialize the bits of the column chunk needed for a thrift ColumnMetaData
-    // struct ColumnMetaData {
-    //   1: required Type type
-    //   2: required list<Encoding> encodings
-    //   3: required list<string> path_in_schema
-    //   4: required CompressionCodec codec
-    //   5: required i64 num_values
-    //   6: required i64 total_uncompressed_size
-    //   7: required i64 total_compressed_size
-    //   8: optional list<KeyValue> key_value_metadata
-    //   9: required i64 data_page_offset
-    //   10: optional i64 index_page_offset
-    //   11: optional i64 dictionary_page_offset
-    //   12: optional Statistics statistics;
-    //   13: optional list<PageEncodingStats> encoding_stats;
-    //   14: optional i64 bloom_filter_offset;
-    //   15: optional i32 bloom_filter_length;
-    //   16: optional SizeStatistics size_statistics;
-    //   17: optional GeospatialStatistics geospatial_statistics;
-    // }
-    fn serialize_column_meta_data(column_chunk: &ColumnChunkMetaData) -> Result<Vec<u8>> {
-        use crate::{file::statistics::page_stats_to_thrift, parquet_thrift::WriteThriftField};
-
-        let mut buf = Vec::new();
-        let mut w = ThriftCompactOutputProtocol::new(&mut buf);
-
-        column_chunk
-            .column_type()
-            .write_thrift_field(&mut w, 1, 0)?;
-        column_chunk.encodings.write_thrift_field(&mut w, 2, 1)?;
-        let path = column_chunk.column_descr.path().parts();
-        let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
-        path.write_thrift_field(&mut w, 3, 2)?;
-        column_chunk.compression.write_thrift_field(&mut w, 4, 3)?;
-        column_chunk.num_values.write_thrift_field(&mut w, 5, 4)?;
-        column_chunk
-            .total_uncompressed_size
-            .write_thrift_field(&mut w, 6, 5)?;
-        column_chunk
-            .total_compressed_size
-            .write_thrift_field(&mut w, 7, 6)?;
-        // no key_value_metadata here
-        let mut last_field_id = column_chunk
-            .data_page_offset
-            .write_thrift_field(&mut w, 9, 7)?;
-        if let Some(index_page_offset) = column_chunk.index_page_offset {
-            last_field_id = index_page_offset.write_thrift_field(&mut w, 10, last_field_id)?;
-        }
-        if let Some(dictionary_page_offset) = column_chunk.dictionary_page_offset {
-            last_field_id = dictionary_page_offset.write_thrift_field(&mut w, 11, last_field_id)?;
-        }
-        // PageStatistics is the same as thrift Statistics, but writable
-        let stats = page_stats_to_thrift(column_chunk.statistics());
-        if let Some(stats) = stats {
-            last_field_id = stats.write_thrift_field(&mut w, 12, last_field_id)?;
-        }
-        if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
-            last_field_id = page_encoding_stats.write_thrift_field(&mut w, 13, last_field_id)?;
-        }
-        if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
-            last_field_id = bloom_filter_offset.write_thrift_field(&mut w, 14, last_field_id)?;
-        }
-        if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
-            last_field_id = bloom_filter_length.write_thrift_field(&mut w, 15, last_field_id)?;
-        }
-        if let Some(index_page_offset) = column_chunk.index_page_offset {
-            // uncomment when we add geo spatial
-            //last_field_id = index_page_offset.write_thrift_field(&mut w, 16, last_field_id)?;
-            index_page_offset.write_thrift_field(&mut w, 16, last_field_id)?;
-        }
-        // TODO: geo spatial here
-        w.write_struct_end()?;
-
-        Ok(buf)
     }
 }

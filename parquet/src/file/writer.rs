@@ -337,7 +337,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             &mut self.buf,
             &self.schema,
             &self.descr,
-            &mut self.row_groups,
+            self.row_groups.clone(), // FIXME(ets): I really want the writer to take ownership of everything
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
         );
