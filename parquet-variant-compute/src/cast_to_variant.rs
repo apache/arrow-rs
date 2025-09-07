@@ -73,6 +73,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     List(ListArrowToVariantBuilder<'a, i32>),
     LargeList(ListArrowToVariantBuilder<'a, i64>),
     Map(MapArrowToVariantBuilder<'a>),
+    Union(UnionArrowToVariantBuilder<'a>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -99,6 +100,7 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::List(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::LargeList(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Map(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Union(b) => b.append_row(index, builder),
         }
     }
 }
@@ -455,6 +457,50 @@ impl<'a> MapArrowToVariantBuilder<'a> {
     }
 }
 
+/// Union builder for both sparse and dense union arrays
+pub(crate) struct UnionArrowToVariantBuilder<'a> {
+    union_array: &'a arrow::array::UnionArray,
+    child_builders: HashMap<i8, Box<ArrowToVariantRowBuilder<'a>>>,
+}
+
+impl<'a> UnionArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
+        let union_array = array.as_union();
+        let union_fields = union_array.union_fields();
+        
+        // Create child builders for each union field
+        let mut child_builders = HashMap::new();
+        for (type_id, _field) in union_fields.iter() {
+            let child_array = union_array.child(type_id);
+            let child_builder = make_arrow_to_variant_row_builder(
+                child_array.data_type(),
+                child_array.as_ref(),
+            )?;
+            child_builders.insert(type_id, Box::new(child_builder));
+        }
+        
+        Ok(Self {
+            union_array,
+            child_builders,
+        })
+    }
+    
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        let type_id = self.union_array.type_id(index);
+        let value_offset = self.union_array.value_offset(index);
+        
+        if let Some(child_builder) = self.child_builders.get_mut(&type_id) {
+            // Delegate to the appropriate child builder
+            child_builder.append_row(value_offset, builder)?;
+        } else {
+            // Invalid type_id - should not happen in valid union, handle gracefully
+            builder.append_null();
+        }
+        
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -503,6 +549,9 @@ fn make_arrow_to_variant_row_builder<'a>(
         
         // Map types
         DataType::Map(_, _) => Ok(ArrowToVariantRowBuilder::Map(MapArrowToVariantBuilder::new(array)?)),
+        
+        // Union types
+        DataType::Union(_, _) => Ok(ArrowToVariantRowBuilder::Union(UnionArrowToVariantBuilder::new(array)?)),
         
         // TODO: Add other types (Binary, Date, Time, Decimal, etc.)
         _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
@@ -3489,5 +3538,203 @@ mod row_builder_tests {
         assert_eq!(obj3.len(), 2);
         assert_eq!(obj3.get("key2"), Some(Variant::from(2)));
         assert_eq!(obj3.get("key3"), Some(Variant::from(3)));
+    }
+
+    #[test]
+    fn test_union_sparse_row_builder() {
+        use arrow::array::{Int32Array, Float64Array, StringArray, UnionArray};
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+        use std::sync::Arc;
+
+        // Create a sparse union array with mixed types (int, float, string)
+        let int_array = Int32Array::from(vec![Some(1), None, None, None, Some(34), None]);
+        let float_array = Float64Array::from(vec![None, Some(3.2), None, Some(32.5), None, None]);
+        let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
+        let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let union_fields = UnionFields::new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("int_field", DataType::Int32, false),
+                Field::new("float_field", DataType::Float64, false),
+                Field::new("string_field", DataType::Utf8, false),
+            ],
+        );
+
+        let children: Vec<Arc<dyn Array>> = vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(string_array),
+        ];
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            None, // Sparse union
+            children,
+        )
+        .unwrap();
+
+        // Test the row builder
+        let mut builder = make_arrow_to_variant_row_builder(
+            union_array.data_type(),
+            &union_array,
+        ).unwrap();
+
+        let mut variant_builder = VariantArrayBuilder::new(union_array.len());
+        for i in 0..union_array.len() {
+            builder.append_row(i, &mut variant_builder).unwrap();
+        }
+        let variant_array = variant_builder.build();
+
+        // Verify results
+        assert_eq!(variant_array.len(), 6);
+        
+        // Row 0: int 1
+        assert_eq!(variant_array.value(0), Variant::Int32(1));
+        
+        // Row 1: float 3.2
+        assert_eq!(variant_array.value(1), Variant::Double(3.2));
+        
+        // Row 2: string "hello"
+        assert_eq!(variant_array.value(2), Variant::from("hello"));
+        
+        // Row 3: float 32.5
+        assert_eq!(variant_array.value(3), Variant::Double(32.5));
+        
+        // Row 4: int 34
+        assert_eq!(variant_array.value(4), Variant::Int32(34));
+        
+        // Row 5: null (int array has null at this position)
+        assert!(variant_array.is_null(5));
+    }
+
+    #[test]
+    fn test_union_dense_row_builder() {
+        use arrow::array::{Int32Array, Float64Array, StringArray, UnionArray};
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+        use std::sync::Arc;
+
+        // Create a dense union array with mixed types (int, float, string)
+        let int_array = Int32Array::from(vec![Some(1), Some(34), None]);
+        let float_array = Float64Array::from(vec![3.2, 32.5]);
+        let string_array = StringArray::from(vec!["hello"]);
+        let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 0, 1, 1, 2]
+            .into_iter()
+            .collect::<ScalarBuffer<i32>>();
+
+        let union_fields = UnionFields::new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("int_field", DataType::Int32, false),
+                Field::new("float_field", DataType::Float64, false),
+                Field::new("string_field", DataType::Utf8, false),
+            ],
+        );
+
+        let children: Vec<Arc<dyn Array>> = vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(string_array),
+        ];
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            Some(offsets), // Dense union
+            children,
+        )
+        .unwrap();
+
+        // Test the row builder
+        let mut builder = make_arrow_to_variant_row_builder(
+            union_array.data_type(),
+            &union_array,
+        ).unwrap();
+
+        let mut variant_builder = VariantArrayBuilder::new(union_array.len());
+        for i in 0..union_array.len() {
+            builder.append_row(i, &mut variant_builder).unwrap();
+        }
+        let variant_array = variant_builder.build();
+
+        // Verify results
+        assert_eq!(variant_array.len(), 6);
+        
+        // Row 0: int 1 (offset 0 in int_array)
+        assert_eq!(variant_array.value(0), Variant::Int32(1));
+        
+        // Row 1: float 3.2 (offset 0 in float_array)
+        assert_eq!(variant_array.value(1), Variant::Double(3.2));
+        
+        // Row 2: string "hello" (offset 0 in string_array)
+        assert_eq!(variant_array.value(2), Variant::from("hello"));
+        
+        // Row 3: float 32.5 (offset 1 in float_array)
+        assert_eq!(variant_array.value(3), Variant::Double(32.5));
+        
+        // Row 4: int 34 (offset 1 in int_array)
+        assert_eq!(variant_array.value(4), Variant::Int32(34));
+        
+        // Row 5: null (offset 2 in int_array, which has null)
+        assert!(variant_array.is_null(5));
+    }
+
+    #[test]
+    fn test_union_sparse_type_ids_row_builder() {
+        use arrow::array::{Int32Array, StringArray, UnionArray};
+        use arrow::buffer::ScalarBuffer;
+        use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+        use std::sync::Arc;
+
+        // Create a sparse union with non-contiguous type IDs (1, 3)
+        let int_array = Int32Array::from(vec![Some(42), None]);
+        let string_array = StringArray::from(vec![None, Some("test")]);
+        let type_ids = [1, 3].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let union_fields = UnionFields::new(
+            vec![1, 3], // Non-contiguous type IDs
+            vec![
+                Field::new("int_field", DataType::Int32, false),
+                Field::new("string_field", DataType::Utf8, false),
+            ],
+        );
+
+        let children: Vec<Arc<dyn Array>> = vec![
+            Arc::new(int_array),
+            Arc::new(string_array),
+        ];
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            None, // Sparse union
+            children,
+        )
+        .unwrap();
+
+        // Test the row builder
+        let mut builder = make_arrow_to_variant_row_builder(
+            union_array.data_type(),
+            &union_array,
+        ).unwrap();
+
+        let mut variant_builder = VariantArrayBuilder::new(union_array.len());
+        for i in 0..union_array.len() {
+            builder.append_row(i, &mut variant_builder).unwrap();
+        }
+        let variant_array = variant_builder.build();
+
+        // Verify results
+        assert_eq!(variant_array.len(), 2);
+        
+        // Row 0: int 42 (type_id = 1)
+        assert_eq!(variant_array.value(0), Variant::Int32(42));
+        
+        // Row 1: string "test" (type_id = 3)
+        assert_eq!(variant_array.value(1), Variant::from("test"));
     }
 }
