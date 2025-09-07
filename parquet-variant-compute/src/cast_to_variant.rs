@@ -43,7 +43,7 @@ use arrow::temporal_conversions::{
 use arrow_schema::{ArrowError, DataType, FieldRef, TimeUnit, UnionFields};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use parquet_variant::{
-    Variant, VariantBuilder, VariantBuilderExt, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+    ObjectFieldBuilder, Variant, VariantBuilder, VariantBuilderExt, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
 
 // ============================================================================
@@ -446,7 +446,7 @@ impl<'a> MapArrowToVariantBuilder<'a> {
         // Add each key-value pair (loop does nothing for empty maps - correct!)
         for kv_index in start..end {
             let key = self.key_strings.value(kv_index);
-            let mut field_builder = object_builder.field(key);
+            let mut field_builder = ObjectFieldBuilder::new(key, &mut object_builder);
             self.values_builder.append_row(kv_index, &mut field_builder)?;
         }
         
@@ -2607,7 +2607,7 @@ mod tests {
         let variant0 = result.value(0);
         assert_eq!(variant0.as_object().unwrap().get("key1").unwrap(), Variant::from(1));
         
-        // Map 1: {} (empty, not null) - FIXED: was incorrectly null before
+        // Map 1: {} (empty, not null)
         let variant1 = result.value(1);
         let obj1 = variant1.as_object().unwrap();
         assert_eq!(obj1.len(), 0); // Empty object
@@ -3352,18 +3352,6 @@ mod row_builder_tests {
     fn test_nested_list_row_builder() {
         use arrow::array::{ListArray};
         use arrow::datatypes::Field;
-
-        // Create nested list: [[[1, 2], [3]], null]
-        let inner_data = vec![
-            Some(vec![Some(1), Some(2)]),
-            Some(vec![Some(3)]),
-        ];
-        let inner_list = ListArray::from_iter_primitive::<Int32Type, _, _>(inner_data);
-        
-        let outer_data = vec![
-            Some(vec![Some(0), Some(1)]), // References to inner list elements
-            None,
-        ];
         
         // Build the nested structure manually
         let inner_field = Arc::new(Field::new("item", DataType::Int32, true));
