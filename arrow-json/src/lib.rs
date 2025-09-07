@@ -87,7 +87,7 @@ use serde_json::{Number, Value};
 ///
 /// This enum controls which form(s) the Reader will accept and which form the
 /// Writer will produce. For example, if the RecordBatch Schema is
-/// `[("a", Int32), ("r", Struct(b Boolean, c Utf8))]`
+/// `[("a", Int32), ("r", Struct("b": Boolean, "c" Utf8))]`
 /// then a Reader with [`StructMode::ObjectOnly`] would read rows of the form
 /// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with ['StructMode::ListOnly']
 /// would read rows of the form `[1, [true, "cat"]]`. A Writer would produce
