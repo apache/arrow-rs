@@ -368,7 +368,6 @@ impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
         let list_array = array.as_list::<O>();
         let values = list_array.values();
         
-        // Create builder for the values array directly - no slicing needed
         let values_builder = make_arrow_to_variant_row_builder(
             values.data_type(),
             values.as_ref(),
@@ -387,8 +386,8 @@ impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
         }
         
         let offsets = self.list_array.offsets();
-        let start = offsets[index].as_usize();      // Direct offset - no adjustment needed
-        let end = offsets[index + 1].as_usize();    // Direct offset - no adjustment needed
+        let start = offsets[index].as_usize();
+        let end = offsets[index + 1].as_usize();
         
         let mut list_builder = builder.try_new_list()?;
         for value_index in start..end {
@@ -3139,9 +3138,7 @@ mod row_builder_tests {
 
     #[test]
     fn test_list_row_builder() {
-        use arrow::array::{ListArray, Int32Array};
-        use arrow::datatypes::{DataType, Field};
-        use std::sync::Arc;
+        use arrow::array::{ListArray};
 
         // Create a list array: [[1, 2], [3, 4, 5], null, []]
         let data = vec![
@@ -3155,9 +3152,10 @@ mod row_builder_tests {
         let mut row_builder = make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(list_array.len());
         
-        // Test each row
         for i in 0..list_array.len() {
-            row_builder.append_row(i, &mut variant_array_builder).unwrap();
+            let mut builder = variant_array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
         }
         
         let variant_array = variant_array_builder.build();
@@ -3167,14 +3165,14 @@ mod row_builder_tests {
         
         // Row 0: [1, 2]
         let row0 = variant_array.value(0);
-        let list0 = row0.get_list().unwrap();
+        let list0 = row0.as_list().unwrap();
         assert_eq!(list0.len(), 2);
         assert_eq!(list0.get(0), Some(Variant::from(1)));
         assert_eq!(list0.get(1), Some(Variant::from(2)));
         
         // Row 1: [3, 4, 5]
         let row1 = variant_array.value(1);
-        let list1 = row1.get_list().unwrap();
+        let list1 = row1.as_list().unwrap();
         assert_eq!(list1.len(), 3);
         assert_eq!(list1.get(0), Some(Variant::from(3)));
         assert_eq!(list1.get(1), Some(Variant::from(4)));
@@ -3185,15 +3183,13 @@ mod row_builder_tests {
         
         // Row 3: []
         let row3 = variant_array.value(3);
-        let list3 = row3.get_list().unwrap();
+        let list3 = row3.as_list().unwrap();
         assert_eq!(list3.len(), 0);
     }
 
     #[test]
     fn test_large_list_row_builder() {
-        use arrow::array::{LargeListArray, Int64Array};
-        use arrow::datatypes::{DataType, Field};
-        use std::sync::Arc;
+        use arrow::array::{LargeListArray};
 
         // Create a large list array: [[1, 2], null]
         let data = vec![
@@ -3205,9 +3201,10 @@ mod row_builder_tests {
         let mut row_builder = make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(list_array.len());
         
-        // Test each row
         for i in 0..list_array.len() {
-            row_builder.append_row(i, &mut variant_array_builder).unwrap();
+            let mut builder = variant_array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
         }
         
         let variant_array = variant_array_builder.build();
@@ -3217,7 +3214,7 @@ mod row_builder_tests {
         
         // Row 0: [1, 2]
         let row0 = variant_array.value(0);
-        let list0 = row0.get_list().unwrap();
+        let list0 = row0.as_list().unwrap();
         assert_eq!(list0.len(), 2);
         assert_eq!(list0.get(0), Some(Variant::from(1i64)));
         assert_eq!(list0.get(1), Some(Variant::from(2i64)));
@@ -3228,9 +3225,7 @@ mod row_builder_tests {
 
     #[test]
     fn test_sliced_list_row_builder() {
-        use arrow::array::{ListArray, Int32Array};
-        use arrow::datatypes::{DataType, Field};
-        use std::sync::Arc;
+        use arrow::array::{ListArray};
 
         // Create a list array: [[1, 2], [3, 4, 5], [6]]
         let data = vec![
@@ -3243,11 +3238,13 @@ mod row_builder_tests {
         // Slice to get just the middle element: [[3, 4, 5]]
         let sliced_array = list_array.slice(1, 1);
         
-        let mut row_builder = make_arrow_to_variant_row_builder(sliced_array.data_type(), sliced_array.as_ref()).unwrap();
+        let mut row_builder = make_arrow_to_variant_row_builder(sliced_array.data_type(), &sliced_array).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(sliced_array.len());
         
         // Test the single row
-        row_builder.append_row(0, &mut variant_array_builder).unwrap();
+        let mut builder = variant_array_builder.variant_builder();
+        row_builder.append_row(0, &mut builder).unwrap();
+        builder.finish();
         
         let variant_array = variant_array_builder.build();
         
@@ -3256,7 +3253,7 @@ mod row_builder_tests {
         
         // Row 0: [3, 4, 5]
         let row0 = variant_array.value(0);
-        let list0 = row0.get_list().unwrap();
+        let list0 = row0.as_list().unwrap();
         assert_eq!(list0.len(), 3);
         assert_eq!(list0.get(0), Some(Variant::from(3)));
         assert_eq!(list0.get(1), Some(Variant::from(4)));
@@ -3265,9 +3262,8 @@ mod row_builder_tests {
 
     #[test]
     fn test_nested_list_row_builder() {
-        use arrow::array::{ListArray, Int32Array};
-        use arrow::datatypes::{DataType, Field};
-        use std::sync::Arc;
+        use arrow::array::{ListArray};
+        use arrow::datatypes::Field;
 
         // Create nested list: [[[1, 2], [3]], null]
         let inner_data = vec![
@@ -3302,9 +3298,10 @@ mod row_builder_tests {
         let mut row_builder = make_arrow_to_variant_row_builder(outer_list.data_type(), &outer_list).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(outer_list.len());
         
-        // Test each row
         for i in 0..outer_list.len() {
-            row_builder.append_row(i, &mut variant_array_builder).unwrap();
+            let mut builder = variant_array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
         }
         
         let variant_array = variant_array_builder.build();
@@ -3314,15 +3311,17 @@ mod row_builder_tests {
         
         // Row 0: [[1, 2], [3]]
         let row0 = variant_array.value(0);
-        let outer_list0 = row0.get_list().unwrap();
+        let outer_list0 = row0.as_list().unwrap();
         assert_eq!(outer_list0.len(), 2);
         
-        let inner_list0_0 = outer_list0.get(0).unwrap().get_list().unwrap();
+        let inner_list0_0 = outer_list0.get(0).unwrap();
+        let inner_list0_0 = inner_list0_0.as_list().unwrap();
         assert_eq!(inner_list0_0.len(), 2);
         assert_eq!(inner_list0_0.get(0), Some(Variant::from(1)));
         assert_eq!(inner_list0_0.get(1), Some(Variant::from(2)));
         
-        let inner_list0_1 = outer_list0.get(1).unwrap().get_list().unwrap();
+        let inner_list0_1 = outer_list0.get(1).unwrap();
+        let inner_list0_1 = inner_list0_1.as_list().unwrap();
         assert_eq!(inner_list0_1.len(), 1);
         assert_eq!(inner_list0_1.get(0), Some(Variant::from(3)));
         
