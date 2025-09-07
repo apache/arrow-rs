@@ -70,6 +70,8 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder<'a, Int32Type>),
     RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder<'a, Int64Type>),
     Dictionary(DictionaryArrowToVariantBuilder<'a>),
+    List(ListArrowToVariantBuilder<'a, i32>),
+    LargeList(ListArrowToVariantBuilder<'a, i64>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -93,6 +95,8 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::RunEndEncodedInt32(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::RunEndEncodedInt64(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Dictionary(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::List(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::LargeList(b) => b.append_row(index, builder),
         }
     }
 }
@@ -353,6 +357,55 @@ impl<'a> DictionaryArrowToVariantBuilder<'a> {
     }
 }
 
+/// Generic list builder for List and LargeList types
+pub(crate) struct ListArrowToVariantBuilder<'a, O: OffsetSizeTrait> {
+    list_array: &'a arrow::array::GenericListArray<O>,
+    values_builder: Box<ArrowToVariantRowBuilder<'a>>,
+    first_offset: O,
+}
+
+impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
+    fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
+        let list_array = array.as_list::<O>();
+        let values = list_array.values();
+        let offsets = list_array.offsets();
+        
+        // Required for correctness when list array is sliced
+        let first_offset = *offsets.first().expect("There should be an offset");
+        let length = *offsets.last().expect("There should be an offset") - first_offset;
+        let sliced_values = values.slice(first_offset.as_usize(), length.as_usize());
+        
+        let values_builder = make_arrow_to_variant_row_builder(
+            sliced_values.data_type(),
+            sliced_values.as_ref(),
+        )?;
+        
+        Ok(Self {
+            list_array,
+            values_builder: Box::new(values_builder),
+            first_offset,
+        })
+    }
+    
+    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.list_array.is_null(index) {
+            builder.append_null();
+            return Ok(());
+        }
+        
+        let offsets = self.list_array.offsets();
+        let start = (offsets[index] - self.first_offset).as_usize();
+        let end = (offsets[index + 1] - self.first_offset).as_usize();
+        
+        let mut list_builder = builder.try_new_list()?;
+        for value_index in start..end {
+            self.values_builder.append_row(value_index, &mut list_builder)?;
+        }
+        list_builder.finish();
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -394,6 +447,10 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Dictionary(_, _) => {
             Ok(ArrowToVariantRowBuilder::Dictionary(DictionaryArrowToVariantBuilder::new(array)?))
         }
+        
+        // List types
+        DataType::List(_) => Ok(ArrowToVariantRowBuilder::List(ListArrowToVariantBuilder::new(array)?)),
+        DataType::LargeList(_) => Ok(ArrowToVariantRowBuilder::LargeList(ListArrowToVariantBuilder::new(array)?)),
         
         // TODO: Add other types (Binary, Date, Time, Decimal, etc.)
         _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
@@ -3085,5 +3142,198 @@ mod row_builder_tests {
         let third_variant = variant_array.value(2);
         assert_eq!(third_variant.get_object_field("id"), Some(Variant::from(1)));
         assert_eq!(third_variant.get_object_field("name"), Some(Variant::from("Alice")));
+    }
+
+    #[test]
+    fn test_list_row_builder() {
+        use arrow::array::{ListArray, Int32Array};
+        use arrow::datatypes::{DataType, Field};
+        use std::sync::Arc;
+
+        // Create a list array: [[1, 2], [3, 4, 5], null, []]
+        let data = vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+            None,
+            Some(vec![]),
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
+        let mut variant_array_builder = VariantArrayBuilder::new(list_array.len());
+        
+        // Test each row
+        for i in 0..list_array.len() {
+            row_builder.append_row(i, &mut variant_array_builder).unwrap();
+        }
+        
+        let variant_array = variant_array_builder.build();
+        
+        // Verify results
+        assert_eq!(variant_array.len(), 4);
+        
+        // Row 0: [1, 2]
+        let row0 = variant_array.value(0);
+        let list0 = row0.get_list().unwrap();
+        assert_eq!(list0.len(), 2);
+        assert_eq!(list0.get(0), Some(Variant::from(1)));
+        assert_eq!(list0.get(1), Some(Variant::from(2)));
+        
+        // Row 1: [3, 4, 5]
+        let row1 = variant_array.value(1);
+        let list1 = row1.get_list().unwrap();
+        assert_eq!(list1.len(), 3);
+        assert_eq!(list1.get(0), Some(Variant::from(3)));
+        assert_eq!(list1.get(1), Some(Variant::from(4)));
+        assert_eq!(list1.get(2), Some(Variant::from(5)));
+        
+        // Row 2: null
+        assert!(variant_array.is_null(2));
+        
+        // Row 3: []
+        let row3 = variant_array.value(3);
+        let list3 = row3.get_list().unwrap();
+        assert_eq!(list3.len(), 0);
+    }
+
+    #[test]
+    fn test_large_list_row_builder() {
+        use arrow::array::{LargeListArray, Int64Array};
+        use arrow::datatypes::{DataType, Field};
+        use std::sync::Arc;
+
+        // Create a large list array: [[1, 2], null]
+        let data = vec![
+            Some(vec![Some(1i64), Some(2i64)]),
+            None,
+        ];
+        let list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
+        let mut variant_array_builder = VariantArrayBuilder::new(list_array.len());
+        
+        // Test each row
+        for i in 0..list_array.len() {
+            row_builder.append_row(i, &mut variant_array_builder).unwrap();
+        }
+        
+        let variant_array = variant_array_builder.build();
+        
+        // Verify results
+        assert_eq!(variant_array.len(), 2);
+        
+        // Row 0: [1, 2]
+        let row0 = variant_array.value(0);
+        let list0 = row0.get_list().unwrap();
+        assert_eq!(list0.len(), 2);
+        assert_eq!(list0.get(0), Some(Variant::from(1i64)));
+        assert_eq!(list0.get(1), Some(Variant::from(2i64)));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+    }
+
+    #[test]
+    fn test_sliced_list_row_builder() {
+        use arrow::array::{ListArray, Int32Array};
+        use arrow::datatypes::{DataType, Field};
+        use std::sync::Arc;
+
+        // Create a list array: [[1, 2], [3, 4, 5], [6]]
+        let data = vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+            Some(vec![Some(6)]),
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        
+        // Slice to get just the middle element: [[3, 4, 5]]
+        let sliced_array = list_array.slice(1, 1);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(sliced_array.data_type(), sliced_array.as_ref()).unwrap();
+        let mut variant_array_builder = VariantArrayBuilder::new(sliced_array.len());
+        
+        // Test the single row
+        row_builder.append_row(0, &mut variant_array_builder).unwrap();
+        
+        let variant_array = variant_array_builder.build();
+        
+        // Verify result
+        assert_eq!(variant_array.len(), 1);
+        
+        // Row 0: [3, 4, 5]
+        let row0 = variant_array.value(0);
+        let list0 = row0.get_list().unwrap();
+        assert_eq!(list0.len(), 3);
+        assert_eq!(list0.get(0), Some(Variant::from(3)));
+        assert_eq!(list0.get(1), Some(Variant::from(4)));
+        assert_eq!(list0.get(2), Some(Variant::from(5)));
+    }
+
+    #[test]
+    fn test_nested_list_row_builder() {
+        use arrow::array::{ListArray, Int32Array};
+        use arrow::datatypes::{DataType, Field};
+        use std::sync::Arc;
+
+        // Create nested list: [[[1, 2], [3]], null]
+        let inner_data = vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3)]),
+        ];
+        let inner_list = ListArray::from_iter_primitive::<Int32Type, _, _>(inner_data);
+        
+        let outer_data = vec![
+            Some(vec![Some(0), Some(1)]), // References to inner list elements
+            None,
+        ];
+        
+        // Build the nested structure manually
+        let inner_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_field), true));
+        
+        let values_data = vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(3)]),
+        ];
+        let values_list = ListArray::from_iter_primitive::<Int32Type, _, _>(values_data);
+        
+        let outer_offsets = arrow::buffer::OffsetBuffer::new(vec![0i32, 2, 2].into());
+        let outer_list = ListArray::new(
+            inner_list_field,
+            outer_offsets,
+            Arc::new(values_list),
+            Some(arrow::buffer::NullBuffer::from(vec![true, false])),
+        );
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(outer_list.data_type(), &outer_list).unwrap();
+        let mut variant_array_builder = VariantArrayBuilder::new(outer_list.len());
+        
+        // Test each row
+        for i in 0..outer_list.len() {
+            row_builder.append_row(i, &mut variant_array_builder).unwrap();
+        }
+        
+        let variant_array = variant_array_builder.build();
+        
+        // Verify results
+        assert_eq!(variant_array.len(), 2);
+        
+        // Row 0: [[1, 2], [3]]
+        let row0 = variant_array.value(0);
+        let outer_list0 = row0.get_list().unwrap();
+        assert_eq!(outer_list0.len(), 2);
+        
+        let inner_list0_0 = outer_list0.get(0).unwrap().get_list().unwrap();
+        assert_eq!(inner_list0_0.len(), 2);
+        assert_eq!(inner_list0_0.get(0), Some(Variant::from(1)));
+        assert_eq!(inner_list0_0.get(1), Some(Variant::from(2)));
+        
+        let inner_list0_1 = outer_list0.get(1).unwrap().get_list().unwrap();
+        assert_eq!(inner_list0_1.len(), 1);
+        assert_eq!(inner_list0_1.get(0), Some(Variant::from(3)));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
     }
 }
