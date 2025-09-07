@@ -60,6 +60,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     PrimitiveUInt16(PrimitiveArrowToVariantBuilder<'a, UInt16Type>),
     PrimitiveUInt32(PrimitiveArrowToVariantBuilder<'a, UInt32Type>),
     PrimitiveUInt64(PrimitiveArrowToVariantBuilder<'a, UInt64Type>),
+    PrimitiveFloat16(PrimitiveArrowToVariantBuilder<'a, Float16Type>),
     PrimitiveFloat32(PrimitiveArrowToVariantBuilder<'a, Float32Type>),
     PrimitiveFloat64(PrimitiveArrowToVariantBuilder<'a, Float64Type>),
     Boolean(BooleanArrowToVariantBuilder<'a>),
@@ -87,6 +88,7 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::PrimitiveUInt16(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::PrimitiveUInt32(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::PrimitiveUInt64(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::PrimitiveFloat16(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::PrimitiveFloat32(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::PrimitiveFloat64(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Boolean(b) => b.append_row(index, builder),
@@ -516,6 +518,7 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::UInt64 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt64(PrimitiveArrowToVariantBuilder::<UInt64Type>::new(array))),
         
         // Float types
+        DataType::Float16 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat16(PrimitiveArrowToVariantBuilder::<Float16Type>::new(array))),
         DataType::Float32 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat32(PrimitiveArrowToVariantBuilder::<Float32Type>::new(array))),
         DataType::Float64 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat64(PrimitiveArrowToVariantBuilder::<Float64Type>::new(array))),
         
