@@ -8600,8 +8600,12 @@ mod tests {
 
         let new_array_result = cast(&array, &new_type.clone());
         assert!(!can_cast_types(array.data_type(), &new_type));
-        assert!(
-            matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#)
+        let Err(ArrowError::CastError(t)) = new_array_result else {
+            panic!();
+        };
+        assert_eq!(
+            t,
+            r#"Casting from Map(Field { "entries": Struct(key Utf8, value nullable Utf8) }, false) to Map(Field { "entries": Struct(key Utf8, value Utf8) }, true) not supported"#
         );
     }
 
@@ -8647,8 +8651,12 @@ mod tests {
 
         let new_array_result = cast(&array, &new_type.clone());
         assert!(!can_cast_types(array.data_type(), &new_type));
-        assert!(
-            matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Interval(DayTime), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Duration(Second), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#)
+        let Err(ArrowError::CastError(t)) = new_array_result else {
+            panic!();
+        };
+        assert_eq!(
+            t,
+            r#"Casting from Map(Field { "entries": Struct(key Utf8, value nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct(key Utf8, value Duration(Second)) }, true) not supported"#
         );
     }
 
@@ -10740,7 +10748,7 @@ mod tests {
         let to_type = DataType::Utf8;
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Struct([Field { name: "a", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) to Utf8 not supported"#,
+            r#"Cast error: Casting from Struct(a Boolean) to Utf8 not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -10751,7 +10759,7 @@ mod tests {
         let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
         let result = cast(&array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct([Field { name: "a", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) not supported"#,
+            r#"Cast error: Casting from Utf8 to Struct(a Boolean) not supported"#,
             result.unwrap_err().to_string()
         );
     }
