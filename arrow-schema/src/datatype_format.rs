@@ -12,6 +12,12 @@ impl fmt::Debug for DataType {
             }
         }
 
+        // A lot of these can still be improved a lot.
+        // _Some_ of these can be parsed with `FromStr`, but not all (YET!).
+        // The goal is that the formatting should always be
+        // * Terse and teadable
+        // * Reversible (contain all necessary information to reverse it perfectly)
+
         match &self {
             Self::Null => write!(f, "Null"),
             Self::Boolean => write!(f, "Boolean"),
