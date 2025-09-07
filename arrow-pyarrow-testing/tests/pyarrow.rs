@@ -58,9 +58,9 @@ fn test_to_pyarrow() {
 
     let res = Python::attach(|py| {
         let py_input = input.to_pyarrow(py)?;
-        let records = RecordBatch::from_pyarrow_bound(py_input.bind(py))?;
+        let records = RecordBatch::from_pyarrow_bound(&py_input)?;
         let py_records = records.to_pyarrow(py)?;
-        RecordBatch::from_pyarrow_bound(py_records.bind(py))
+        RecordBatch::from_pyarrow_bound(&py_records)
     })
     .unwrap();
 
@@ -84,9 +84,9 @@ fn test_to_pyarrow_byte_view() {
         println!("input: {input:?}");
         let res = Python::attach(|py| {
             let py_input = input.to_pyarrow(py)?;
-            let records = RecordBatch::from_pyarrow_bound(py_input.bind(py))?;
+            let records = RecordBatch::from_pyarrow_bound(&py_input)?;
             let py_records = records.to_pyarrow(py)?;
-            RecordBatch::from_pyarrow_bound(py_records.bind(py))
+            RecordBatch::from_pyarrow_bound(&py_records)
         })
         .unwrap();
 
