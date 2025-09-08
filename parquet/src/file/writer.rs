@@ -149,7 +149,6 @@ pub type OnCloseRowGroup<'a, W> = Box<
 /// - After all row groups have been written, close the file writer using `close` method.
 pub struct SerializedFileWriter<W: Write> {
     buf: TrackedWrite<W>,
-    schema: TypePtr,
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaData>,
@@ -189,7 +188,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         Self::start_file(&properties, &mut buf)?;
         Ok(Self {
             buf,
-            schema,
             descr: Arc::new(schema_descriptor),
             props: properties,
             row_groups: vec![],
@@ -357,7 +355,9 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         }
 
         encoder = encoder.with_column_indexes(column_indexes);
-        encoder = encoder.with_offset_indexes(offset_indexes);
+        if !self.props.offset_index_disabled() {
+            encoder = encoder.with_offset_indexes(offset_indexes);
+        }
         encoder.finish()
     }
 

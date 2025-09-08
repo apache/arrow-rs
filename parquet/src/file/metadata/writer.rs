@@ -20,7 +20,6 @@ use crate::file::metadata::{
     ColumnChunkMetaData, ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData,
 };
 use crate::schema::types::{SchemaDescPtr, SchemaDescriptor};
-use crate::thrift::TSerializable;
 use crate::{
     basic::ColumnOrder,
     file::metadata::{FileMetaData, ParquetMetaDataBuilder},
@@ -49,7 +48,6 @@ use crate::{
 };
 use std::io::Write;
 use std::sync::Arc;
-use thrift::protocol::TCompactOutputProtocol;
 
 /// Writes `crate::file::metadata` structures to a thrift encoded byte stream
 ///
@@ -476,13 +474,6 @@ struct MetadataObjectWriter {
 }
 
 impl MetadataObjectWriter {
-    #[inline]
-    fn write_object(object: &impl TSerializable, sink: impl Write) -> Result<()> {
-        let mut protocol = TCompactOutputProtocol::new(sink);
-        object.write_to_out_protocol(&mut protocol)?;
-        Ok(())
-    }
-
     #[inline]
     fn write_thrift_object(object: &impl WriteThrift, sink: impl Write) -> Result<()> {
         let mut protocol = ThriftCompactOutputProtocol::new(sink);

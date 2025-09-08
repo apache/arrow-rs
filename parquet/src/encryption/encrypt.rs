@@ -24,11 +24,9 @@ use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
-use crate::thrift::TSerializable;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use thrift::protocol::TCompactOutputProtocol;
 
 #[derive(Debug, Clone, PartialEq)]
 struct EncryptionKey {
@@ -366,18 +364,6 @@ impl FileEncryptor {
 }
 
 /// Write an encrypted Thrift serializable object
-pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
-    object: &T,
-    encryptor: &mut Box<dyn BlockEncryptor>,
-    sink: &mut W,
-    module_aad: &[u8],
-) -> Result<()> {
-    let encrypted_buffer = encrypt_object_to_vec(object, encryptor, module_aad)?;
-    sink.write_all(&encrypted_buffer)?;
-    Ok(())
-}
-
-/// Write an encrypted Thrift serializable object
 pub(crate) fn encrypt_thrift_object<T: WriteThrift, W: Write>(
     object: &T,
     encryptor: &mut Box<dyn BlockEncryptor>,
@@ -386,29 +372,6 @@ pub(crate) fn encrypt_thrift_object<T: WriteThrift, W: Write>(
 ) -> Result<()> {
     let encrypted_buffer = encrypt_thrift_object_to_vec(object, encryptor, module_aad)?;
     sink.write_all(&encrypted_buffer)?;
-    Ok(())
-}
-
-pub(crate) fn write_signed_plaintext_object<T: TSerializable, W: Write>(
-    object: &T,
-    encryptor: &mut Box<dyn BlockEncryptor>,
-    sink: &mut W,
-    module_aad: &[u8],
-) -> Result<()> {
-    let mut buffer: Vec<u8> = vec![];
-    {
-        let mut protocol = TCompactOutputProtocol::new(&mut buffer);
-        object.write_to_out_protocol(&mut protocol)?;
-    }
-    sink.write_all(&buffer)?;
-    buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
-
-    // Format of encrypted buffer is: [ciphertext size, nonce, ciphertext, authentication tag]
-    let nonce = &buffer[SIZE_LEN..SIZE_LEN + NONCE_LEN];
-    let tag = &buffer[buffer.len() - TAG_LEN..];
-    sink.write_all(nonce)?;
-    sink.write_all(tag)?;
-
     Ok(())
 }
 
@@ -433,21 +396,6 @@ pub(crate) fn write_signed_plaintext_thrift_object<T: WriteThrift, W: Write>(
     sink.write_all(tag)?;
 
     Ok(())
-}
-
-/// Encrypt a Thrift serializable object to a byte vector
-pub(crate) fn encrypt_object_to_vec<T: TSerializable>(
-    object: &T,
-    encryptor: &mut Box<dyn BlockEncryptor>,
-    module_aad: &[u8],
-) -> Result<Vec<u8>> {
-    let mut buffer: Vec<u8> = vec![];
-    {
-        let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut buffer);
-        object.write_to_out_protocol(&mut unencrypted_protocol)?;
-    }
-
-    encryptor.encrypt(buffer.as_ref(), module_aad)
 }
 
 /// Encrypt a Thrift serializable object to a byte vector

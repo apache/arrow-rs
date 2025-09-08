@@ -2068,7 +2068,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2280;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2616;
+        let base_expected_size = 2712;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2108,7 +2108,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2704;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3040;
+        let bigger_expected_size = 3136;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

@@ -740,7 +740,7 @@ impl ArrowColumnChunk {
 /// row_group_writer.close().unwrap();
 ///
 /// let metadata = writer.close().unwrap();
-/// assert_eq!(metadata.num_rows, 3);
+/// assert_eq!(metadata.file_metadata().num_rows(), 3);
 /// ```
 pub struct ArrowColumnWriter {
     writer: ArrowColumnWriterImpl,
@@ -3009,16 +3009,18 @@ mod tests {
         writer.write(&batch).unwrap();
         let file_metadata = writer.close().unwrap();
 
+        let schema = file_metadata.file_metadata().schema();
         // Coerced name of "item" should be "element"
-        let schema = file_metadata.file_metadata().schema_descr();
-        println!("schema {schema:?}");
-        assert_eq!(schema.column(3).name(), "element");
+        let list_field = &schema.get_fields()[0].get_fields()[0];
+        assert_eq!(list_field.get_fields()[0].name(), "element");
+
+        let map_field = &schema.get_fields()[1].get_fields()[0];
         // Coerced name of "entries" should be "key_value"
-        assert_eq!(schema.column(5).name(), "key_value");
+        assert_eq!(map_field.name(), "key_value");
         // Coerced name of "keys" should be "key"
-        assert_eq!(schema.column(6).name(), "key");
+        assert_eq!(map_field.get_fields()[0].name(), "key");
         // Coerced name of "values" should be "value"
-        assert_eq!(schema.column(7).name(), "value");
+        assert_eq!(map_field.get_fields()[1].name(), "value");
 
         // Double check schema after reading from the file
         let reader = SerializedFileReader::new(file).unwrap();
