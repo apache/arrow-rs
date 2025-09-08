@@ -199,14 +199,20 @@ impl<'a> BooleanArrowToVariantBuilder<'a> {
 }
 
 /// Generic String builder for StringArray (Utf8 and LargeUtf8)
-pub(crate) struct StringArrowToVariantBuilder<'a, O: OffsetSizeTrait> {
+pub(crate) struct StringArrowToVariantBuilder<'a, O>
+where
+    O : OffsetSizeTrait,
+{
     array: &'a arrow::array::GenericStringArray<O>,
 }
 
-impl<'a, O: OffsetSizeTrait> StringArrowToVariantBuilder<'a, O> {
+impl<'a, O> StringArrowToVariantBuilder<'a, O>
+where
+    O : OffsetSizeTrait,
+{
     fn new(array: &'a dyn Array) -> Self {
         Self {
-            array: array.as_string::<O>(),
+            array: array.as_string(),
         }
     }
     
