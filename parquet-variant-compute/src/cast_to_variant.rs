@@ -30,7 +30,7 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    i256, ArrowNativeType, ArrowPrimitiveType, ArrowTimestampType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
+    i256, ArrowNativeType, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
     Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, LargeBinaryType, RunEndIndexType, Time32MillisecondType,
     Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
@@ -38,7 +38,7 @@ use arrow::datatypes::{
     UInt64Type, UInt8Type,
 };
 use arrow::temporal_conversions::{
-    as_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
+    as_date, as_datetime, as_time, timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef, TimeUnit, UnionFields};
@@ -90,12 +90,12 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     TimestampMillisecond(TimestampArrowToVariantBuilder<'a, TimestampMillisecondType>),
     TimestampMicrosecond(TimestampArrowToVariantBuilder<'a, TimestampMicrosecondType>),
     TimestampNanosecond(TimestampArrowToVariantBuilder<'a, TimestampNanosecondType>),
-    Date32(Date32ArrowToVariantBuilder<'a>),
-    Date64(Date64ArrowToVariantBuilder<'a>),
-    Time32Second(Time32SecondArrowToVariantBuilder<'a>),
-    Time32Millisecond(Time32MillisecondArrowToVariantBuilder<'a>),
-    Time64Microsecond(Time64MicrosecondArrowToVariantBuilder<'a>),
-    Time64Nanosecond(Time64NanosecondArrowToVariantBuilder<'a>),
+    Date32(DateArrowToVariantBuilder<'a, Date32Type>),
+    Date64(DateArrowToVariantBuilder<'a, Date64Type>),
+    Time32Second(TimeArrowToVariantBuilder<'a, Time32SecondType>),
+    Time32Millisecond(TimeArrowToVariantBuilder<'a, Time32MillisecondType>),
+    Time64Microsecond(TimeArrowToVariantBuilder<'a, Time64MicrosecondType>),
+    Time64Nanosecond(TimeArrowToVariantBuilder<'a, Time64NanosecondType>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -773,15 +773,21 @@ impl<'a, T: ArrowTimestampType> TimestampArrowToVariantBuilder<'a, T> {
     }
 }
 
-/// Date32 builder for Arrow Date32 arrays
-pub(crate) struct Date32ArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Date32Array,
+/// Generic Date builder for Arrow date arrays (Date32, Date64)
+pub(crate) struct DateArrowToVariantBuilder<'a, T: ArrowTemporalType> 
+where
+    i64: From<T::Native>,
+{
+    array: &'a arrow::array::PrimitiveArray<T>,
 }
 
-impl<'a> Date32ArrowToVariantBuilder<'a> {
+impl<'a, T: ArrowTemporalType> DateArrowToVariantBuilder<'a, T> 
+where
+    i64: From<T::Native>,
+{
     fn new(array: &'a dyn Array) -> Self {
         Self {
-            array: array.as_primitive::<Date32Type>(),
+            array: array.as_primitive::<T>(),
         }
     }
     
@@ -789,39 +795,13 @@ impl<'a> Date32ArrowToVariantBuilder<'a> {
         if self.array.is_null(index) {
             builder.append_null();
         } else {
-            let date_value = self.array.value(index);
+            let date_value = i64::from(self.array.value(index));
             
-            // Use Date32Type's specific conversion method
-            let naive_date = Date32Type::to_naive_date(date_value);
-            builder.append_value(Variant::from(naive_date));
-        }
-        Ok(())
-    }
-}
-
-/// Date64 builder for Arrow Date64 arrays
-pub(crate) struct Date64ArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Date64Array,
-}
-
-impl<'a> Date64ArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_primitive::<Date64Type>(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let date_value = self.array.value(index);
-            
-            // Use Date64Type's specific conversion method
-            let Some(naive_date) = Date64Type::to_naive_date_opt(date_value) else {
+            // Use Arrow's generic date conversion function
+            let Some(naive_date) = as_date::<T>(date_value) else {
                 return Err(ArrowError::CastError(format!(
-                    "Failed to convert Arrow date value {} to chrono::NaiveDate for Date64 type",
-                    date_value
+                    "Failed to convert Arrow date value {} to chrono::NaiveDate for type {:?}",
+                    date_value, T::DATA_TYPE
                 )));
             };
             builder.append_value(Variant::from(naive_date));
@@ -830,15 +810,21 @@ impl<'a> Date64ArrowToVariantBuilder<'a> {
     }
 }
 
-/// Time32Second builder for Arrow Time32(Second) arrays
-pub(crate) struct Time32SecondArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Time32SecondArray,
+/// Generic Time builder for Arrow time arrays (Time32, Time64)
+pub(crate) struct TimeArrowToVariantBuilder<'a, T: ArrowTemporalType> 
+where
+    i64: From<T::Native>,
+{
+    array: &'a arrow::array::PrimitiveArray<T>,
 }
 
-impl<'a> Time32SecondArrowToVariantBuilder<'a> {
+impl<'a, T: ArrowTemporalType> TimeArrowToVariantBuilder<'a, T> 
+where
+    i64: From<T::Native>,
+{
     fn new(array: &'a dyn Array) -> Self {
         Self {
-            array: array.as_primitive::<Time32SecondType>(),
+            array: array.as_primitive::<T>(),
         }
     }
     
@@ -846,115 +832,13 @@ impl<'a> Time32SecondArrowToVariantBuilder<'a> {
         if self.array.is_null(index) {
             builder.append_null();
         } else {
-            let time_value = self.array.value(index);
+            let time_value = i64::from(self.array.value(index));
             
-            // Convert using NaiveTime::from_num_seconds_from_midnight_opt (nanoseconds are 0)
-            let Some(naive_time) = NaiveTime::from_num_seconds_from_midnight_opt(time_value as u32, 0u32) else {
+            // Use Arrow's generic time conversion function
+            let Some(naive_time) = as_time::<T>(time_value) else {
                 return Err(ArrowError::CastError(format!(
-                    "Failed to convert Arrow time value {} to chrono::NaiveTime for Time32(Second) type",
-                    time_value
-                )));
-            };
-            builder.append_value(Variant::from(naive_time));
-        }
-        Ok(())
-    }
-}
-
-/// Time32Millisecond builder for Arrow Time32(Millisecond) arrays
-pub(crate) struct Time32MillisecondArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Time32MillisecondArray,
-}
-
-impl<'a> Time32MillisecondArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_primitive::<Time32MillisecondType>(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let time_value = self.array.value(index);
-            
-            // Convert milliseconds to seconds and nanoseconds
-            let Some(naive_time) = NaiveTime::from_num_seconds_from_midnight_opt(
-                time_value as u32 / 1000,
-                (time_value as u32 % 1000) * 1_000_000
-            ) else {
-                return Err(ArrowError::CastError(format!(
-                    "Failed to convert Arrow time value {} to chrono::NaiveTime for Time32(Millisecond) type",
-                    time_value
-                )));
-            };
-            builder.append_value(Variant::from(naive_time));
-        }
-        Ok(())
-    }
-}
-
-/// Time64Microsecond builder for Arrow Time64(Microsecond) arrays
-pub(crate) struct Time64MicrosecondArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Time64MicrosecondArray,
-}
-
-impl<'a> Time64MicrosecondArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_primitive::<Time64MicrosecondType>(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let time_value = self.array.value(index);
-            
-            // Convert microseconds to seconds and nanoseconds
-            let Some(naive_time) = NaiveTime::from_num_seconds_from_midnight_opt(
-                (time_value / 1_000_000) as u32,
-                (time_value % 1_000_000 * 1_000) as u32
-            ) else {
-                return Err(ArrowError::CastError(format!(
-                    "Failed to convert Arrow time value {} to chrono::NaiveTime for Time64(Microsecond) type",
-                    time_value
-                )));
-            };
-            builder.append_value(Variant::from(naive_time));
-        }
-        Ok(())
-    }
-}
-
-/// Time64Nanosecond builder for Arrow Time64(Nanosecond) arrays
-pub(crate) struct Time64NanosecondArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Time64NanosecondArray,
-}
-
-impl<'a> Time64NanosecondArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_primitive::<Time64NanosecondType>(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let time_value = self.array.value(index);
-            
-            // Convert nanoseconds to seconds and nanoseconds
-            let Some(naive_time) = NaiveTime::from_num_seconds_from_midnight_opt(
-                (time_value / 1_000_000_000) as u32,
-                (time_value % 1_000_000_000) as u32
-            ) else {
-                return Err(ArrowError::CastError(format!(
-                    "Failed to convert Arrow time value {} to chrono::NaiveTime for Time64(Nanosecond) type",
-                    time_value
+                    "Failed to convert Arrow time value {} to chrono::NaiveTime for type {:?}",
+                    time_value, T::DATA_TYPE
                 )));
             };
             builder.append_value(Variant::from(naive_time));
@@ -1050,20 +934,20 @@ fn make_arrow_to_variant_row_builder<'a>(
         
         // Date types
         DataType::Date32 => Ok(ArrowToVariantRowBuilder::Date32(
-            Date32ArrowToVariantBuilder::new(array)
+            DateArrowToVariantBuilder::<Date32Type>::new(array)
         )),
         DataType::Date64 => Ok(ArrowToVariantRowBuilder::Date64(
-            Date64ArrowToVariantBuilder::new(array)
+            DateArrowToVariantBuilder::<Date64Type>::new(array)
         )),
         
         // Time types
         DataType::Time32(time_unit) => {
             match time_unit {
                 TimeUnit::Second => Ok(ArrowToVariantRowBuilder::Time32Second(
-                    Time32SecondArrowToVariantBuilder::new(array)
+                    TimeArrowToVariantBuilder::<Time32SecondType>::new(array)
                 )),
                 TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::Time32Millisecond(
-                    Time32MillisecondArrowToVariantBuilder::new(array)
+                    TimeArrowToVariantBuilder::<Time32MillisecondType>::new(array)
                 )),
                 _ => Err(ArrowError::CastError(format!("Unsupported Time32 unit: {time_unit:?}"))),
             }
@@ -1071,10 +955,10 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Time64(time_unit) => {
             match time_unit {
                 TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::Time64Microsecond(
-                    Time64MicrosecondArrowToVariantBuilder::new(array)
+                    TimeArrowToVariantBuilder::<Time64MicrosecondType>::new(array)
                 )),
                 TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::Time64Nanosecond(
-                    Time64NanosecondArrowToVariantBuilder::new(array)
+                    TimeArrowToVariantBuilder::<Time64NanosecondType>::new(array)
                 )),
                 _ => Err(ArrowError::CastError(format!("Unsupported Time64 unit: {time_unit:?}"))),
             }
