@@ -2135,7 +2135,6 @@ mod tests {
 
     #[test]
     fn default_order_is_consistent() {
-        // Ensure TryFrom delegates to from_arrow_with_options(None)
         let arrow_schema = ArrowSchema::new(vec![ArrowField::new("s", DataType::Utf8, true)]);
         let a = AvroSchema::try_from(&arrow_schema).unwrap().json_string;
         let b = AvroSchema::from_arrow_with_options(&arrow_schema, None);

@@ -182,7 +182,7 @@ impl<'a> FieldEncoder<'a> {
             },
             other => {
                 return Err(ArrowError::NotYetImplemented(format!(
-                    "Avro writer: {other:?} not yet supported".into(),
+                    "Avro writer: {other:?} not yet supported",
                 )));
             }
         };
