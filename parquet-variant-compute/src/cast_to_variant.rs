@@ -44,341 +44,36 @@ use parquet_variant::{
 };
 
 // ============================================================================
-// Macros for generating row-oriented builders
-// ============================================================================
-
-/// Base macro for generating row builders with optional state fields
-macro_rules! impl_row_builder_base {
-    ($name:ident, $array_field_type:ty, $array_init:expr, $variant_expr:expr $(, $state_field:ident: $state_type:ty)*) => {
-        pub(crate) struct $name<'a> {
-            array: &'a $array_field_type,
-            $($state_field: $state_type,)*
-        }
-        
-        impl<'a> $name<'a> {
-            fn new(array: &'a dyn Array $(, $state_field: $state_type)*) -> Self {
-                Self { 
-                    array: $array_init,
-                    $($state_field,)*
-                }
-            }
-            
-            fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-                if self.array.is_null(index) {
-                    builder.append_null();
-                } else {
-                    let variant = $variant_expr;
-                    builder.append_value(variant);
-                }
-                Ok(())
-            }
-        }
-    };
-}
-
-/// Convenience macro for generic builders (with type parameter and method)
-macro_rules! impl_generic_row_builder {
-    ($name:ident<$t:ty>, $method:ident, $cast_fn:expr, $array_type:ty $(, $state_field:ident: $state_type:ty)*) => {
-        impl_row_builder_base!(
-            $name,
-            $array_type,
-            array.$method::<$t>(),
-            $crate::type_conversion::generic_conversion_single_value!($t, $method, $cast_fn, self.array, index)
-            $(, $state_field: $state_type)*
-        );
-    };
-}
-
-/// Convenience macro for primitive builders (uses as_primitive method)
-macro_rules! impl_primitive_row_builder {
-    ($name:ident<$t:ty> $(, $state_field:ident: $state_type:ty)*) => {
-        impl_generic_row_builder!(
-            $name<$t>,
-            as_primitive,
-            |v| v,
-            arrow::array::PrimitiveArray<$t>
-            $(, $state_field: $state_type)*
-        );
-    };
-}
-
-// ============================================================================
-// Macro-generated row builders
-// ============================================================================
-
-// Primitive builders (11 variants) - stateless
-impl_primitive_row_builder!(PrimitiveInt8ArrowToVariantBuilder<Int8Type>);
-impl_primitive_row_builder!(PrimitiveInt16ArrowToVariantBuilder<Int16Type>);
-impl_primitive_row_builder!(PrimitiveInt32ArrowToVariantBuilder<Int32Type>);
-impl_primitive_row_builder!(PrimitiveInt64ArrowToVariantBuilder<Int64Type>);
-impl_primitive_row_builder!(PrimitiveUInt8ArrowToVariantBuilder<UInt8Type>);
-impl_primitive_row_builder!(PrimitiveUInt16ArrowToVariantBuilder<UInt16Type>);
-impl_primitive_row_builder!(PrimitiveUInt32ArrowToVariantBuilder<UInt32Type>);
-impl_primitive_row_builder!(PrimitiveUInt64ArrowToVariantBuilder<UInt64Type>);
-impl_primitive_row_builder!(PrimitiveFloat16ArrowToVariantBuilder<Float16Type>);
-impl_primitive_row_builder!(PrimitiveFloat32ArrowToVariantBuilder<Float32Type>);
-impl_primitive_row_builder!(PrimitiveFloat64ArrowToVariantBuilder<Float64Type>);
-
-// Generic offset builders (4 variants) - stateless
-impl_generic_row_builder!(
-    StringArrowToVariantBuilder<i32>, 
-    as_string, 
-    |v| v, 
-    arrow::array::GenericStringArray<i32>
-);
-impl_generic_row_builder!(
-    LargeStringArrowToVariantBuilder<i64>, 
-    as_string, 
-    |v| v, 
-    arrow::array::GenericStringArray<i64>
-);
-impl_generic_row_builder!(
-    BinaryArrowToVariantBuilder<i32>, 
-    as_binary, 
-    |v| v, 
-    arrow::array::GenericBinaryArray<i32>
-);
-impl_generic_row_builder!(
-    LargeBinaryArrowToVariantBuilder<i64>, 
-    as_binary, 
-    |v| v, 
-    arrow::array::GenericBinaryArray<i64>
-);
-
-// Non-generic simple builders (4 variants) - stateless
-impl_row_builder_base!(
-    BooleanArrowToVariantBuilder,
-    arrow::array::BooleanArray,
-    array.as_boolean(),
-    $crate::type_conversion::non_generic_conversion_single_value!(self.array, |v| v, index)
-);
-impl_row_builder_base!(
-    BinaryViewArrowToVariantBuilder,
-    arrow::array::BinaryViewArray,
-    array.as_byte_view(),
-    $crate::type_conversion::non_generic_conversion_single_value!(self.array, |v| v, index)
-);
-impl_row_builder_base!(
-    FixedSizeBinaryArrowToVariantBuilder,
-    arrow::array::FixedSizeBinaryArray,
-    array.as_fixed_size_binary(),
-    $crate::type_conversion::non_generic_conversion_single_value!(self.array, |v| v, index)
-);
-impl_row_builder_base!(
-    Utf8ViewArrowToVariantBuilder,
-    arrow::array::StringViewArray,
-    array.as_string_view(),
-    $crate::type_conversion::non_generic_conversion_single_value!(self.array, |v| v, index)
-);
-
-// Null builder - special case (always appends null)
-impl_row_builder_base!(
-    NullArrowToVariantBuilder,
-    (),
-    (),
-    Variant::Null
-);
-
-// Decimal builders (4 variants) - stateful with scale
-impl_row_builder_base!(
-    Decimal32ArrowToVariantBuilder,
-    arrow::array::PrimitiveArray<Decimal32Type>,
-    array.as_primitive::<Decimal32Type>(),
-    decimal_to_variant_decimal!(self.array.value(index), &self.scale, i32, VariantDecimal4),
-    scale: i8
-);
-impl_row_builder_base!(
-    Decimal64ArrowToVariantBuilder,
-    arrow::array::PrimitiveArray<Decimal64Type>,
-    array.as_primitive::<Decimal64Type>(),
-    decimal_to_variant_decimal!(self.array.value(index), &self.scale, i64, VariantDecimal8),
-    scale: i8
-);
-impl_row_builder_base!(
-    Decimal128ArrowToVariantBuilder,
-    arrow::array::PrimitiveArray<Decimal128Type>,
-    array.as_primitive::<Decimal128Type>(),
-    decimal_to_variant_decimal!(self.array.value(index), &self.scale, i128, VariantDecimal16),
-    scale: i8
-);
-impl_row_builder_base!(
-    Decimal256ArrowToVariantBuilder,
-    arrow::array::PrimitiveArray<Decimal256Type>,
-    array.as_primitive::<Decimal256Type>(),
-    {
-        let value = self.array.value(index);
-        if let Some(v) = value.to_i128() {
-            decimal_to_variant_decimal!(v, &self.scale, i128, VariantDecimal16)
-        } else {
-            Variant::Null
-        }
-    },
-    scale: i8
-);
-
-// Timestamp builders (4 variants) - stateful with timezone
-impl_row_builder_base!(
-    TimestampSecondArrowToVariantBuilder,
-    arrow::array::PrimitiveArray<TimestampSecondType>,
-    array.as_primitive::<TimestampSecondType>(),
-    {
-        let timestamp_value = self.array.value(index);
-        let Some(naive_datetime) = as_datetime::<TimestampSecondType>(timestamp_value) else {
-            return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
-        };
-        if self.has_time_zone {
-            let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
-            Variant::from(utc_dt)
-        } else {
-            Variant::from(naive_datetime)
-        }
-    },
-    has_time_zone: bool
-);
-impl_row_builder_base!(
-    TimestampMillisecondArrowToVariantBuilder,
-    arrow::array::PrimitiveArray<TimestampMillisecondType>,
-    array.as_primitive::<TimestampMillisecondType>(),
-    {
-        let timestamp_value = self.array.value(index);
-        let Some(naive_datetime) = as_datetime::<TimestampMillisecondType>(timestamp_value) else {
-            return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
-        };
-        if self.has_time_zone {
-            let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
-            Variant::from(utc_dt)
-        } else {
-            Variant::from(naive_datetime)
-        }
-    },
-    has_time_zone: bool
-);
-impl_row_builder_base!(
-    TimestampMicrosecondArrowToVariantBuilder,
-    arrow::array::PrimitiveArray<TimestampMicrosecondType>,
-    array.as_primitive::<TimestampMicrosecondType>(),
-    {
-        let timestamp_value = self.array.value(index);
-        let Some(naive_datetime) = as_datetime::<TimestampMicrosecondType>(timestamp_value) else {
-            return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
-        };
-        if self.has_time_zone {
-            let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
-            Variant::from(utc_dt)
-        } else {
-            Variant::from(naive_datetime)
-        }
-    },
-    has_time_zone: bool
-);
-impl_row_builder_base!(
-    TimestampNanosecondArrowToVariantBuilder,
-    arrow::array::PrimitiveArray<TimestampNanosecondType>,
-    array.as_primitive::<TimestampNanosecondType>(),
-    {
-        let timestamp_value = self.array.value(index);
-        let Some(naive_datetime) = as_datetime::<TimestampNanosecondType>(timestamp_value) else {
-            return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
-        };
-        if self.has_time_zone {
-            let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
-            Variant::from(utc_dt)
-        } else {
-            Variant::from(naive_datetime)
-        }
-    },
-    has_time_zone: bool
-);
-
-// Date builders (2 variants) - stateless temporal transform
-impl_generic_row_builder!(
-    Date32ArrowToVariantBuilder<Date32Type>,
-    as_primitive,
-    |value| {
-        let date_value = i64::from(value);
-        as_date::<Date32Type>(date_value).map(Variant::from).unwrap_or(Variant::Null)
-    },
-    arrow::array::PrimitiveArray<Date32Type>
-);
-impl_generic_row_builder!(
-    Date64ArrowToVariantBuilder<Date64Type>,
-    as_primitive,
-    |value| {
-        let date_value = i64::from(value);
-        as_date::<Date64Type>(date_value).map(Variant::from).unwrap_or(Variant::Null)
-    },
-    arrow::array::PrimitiveArray<Date64Type>
-);
-
-// Time builders (4 variants) - stateless temporal transform
-impl_generic_row_builder!(
-    Time32SecondArrowToVariantBuilder<Time32SecondType>,
-    as_primitive,
-    |value| {
-        let time_value = i64::from(value);
-        as_time::<Time32SecondType>(time_value).map(Variant::from).unwrap_or(Variant::Null)
-    },
-    arrow::array::PrimitiveArray<Time32SecondType>
-);
-impl_generic_row_builder!(
-    Time32MillisecondArrowToVariantBuilder<Time32MillisecondType>,
-    as_primitive,
-    |value| {
-        let time_value = i64::from(value);
-        as_time::<Time32MillisecondType>(time_value).map(Variant::from).unwrap_or(Variant::Null)
-    },
-    arrow::array::PrimitiveArray<Time32MillisecondType>
-);
-impl_generic_row_builder!(
-    Time64MicrosecondArrowToVariantBuilder<Time64MicrosecondType>,
-    as_primitive,
-    |value| {
-        let time_value = i64::from(value);
-        as_time::<Time64MicrosecondType>(time_value).map(Variant::from).unwrap_or(Variant::Null)
-    },
-    arrow::array::PrimitiveArray<Time64MicrosecondType>
-);
-impl_generic_row_builder!(
-    Time64NanosecondArrowToVariantBuilder<Time64NanosecondType>,
-    as_primitive,
-    |value| {
-        let time_value = i64::from(value);
-        as_time::<Time64NanosecondType>(time_value).map(Variant::from).unwrap_or(Variant::Null)
-    },
-    arrow::array::PrimitiveArray<Time64NanosecondType>
-);
-
-// ============================================================================
 // Row-oriented builders for efficient Arrow-to-Variant conversion
 // ============================================================================
 
 /// Row builder for converting Arrow arrays to VariantArray row by row
 pub(crate) enum ArrowToVariantRowBuilder<'a> {
-    PrimitiveInt8(PrimitiveInt8ArrowToVariantBuilder<'a>),
-    PrimitiveInt16(PrimitiveInt16ArrowToVariantBuilder<'a>),
-    PrimitiveInt32(PrimitiveInt32ArrowToVariantBuilder<'a>),
-    PrimitiveInt64(PrimitiveInt64ArrowToVariantBuilder<'a>),
-    PrimitiveUInt8(PrimitiveUInt8ArrowToVariantBuilder<'a>),
-    PrimitiveUInt16(PrimitiveUInt16ArrowToVariantBuilder<'a>),
-    PrimitiveUInt32(PrimitiveUInt32ArrowToVariantBuilder<'a>),
-    PrimitiveUInt64(PrimitiveUInt64ArrowToVariantBuilder<'a>),
-    PrimitiveFloat16(PrimitiveFloat16ArrowToVariantBuilder<'a>),
-    PrimitiveFloat32(PrimitiveFloat32ArrowToVariantBuilder<'a>),
-    PrimitiveFloat64(PrimitiveFloat64ArrowToVariantBuilder<'a>),
+    PrimitiveInt8(PrimitiveArrowToVariantBuilder<'a, Int8Type>),
+    PrimitiveInt16(PrimitiveArrowToVariantBuilder<'a, Int16Type>),
+    PrimitiveInt32(PrimitiveArrowToVariantBuilder<'a, Int32Type>),
+    PrimitiveInt64(PrimitiveArrowToVariantBuilder<'a, Int64Type>),
+    PrimitiveUInt8(PrimitiveArrowToVariantBuilder<'a, UInt8Type>),
+    PrimitiveUInt16(PrimitiveArrowToVariantBuilder<'a, UInt16Type>),
+    PrimitiveUInt32(PrimitiveArrowToVariantBuilder<'a, UInt32Type>),
+    PrimitiveUInt64(PrimitiveArrowToVariantBuilder<'a, UInt64Type>),
+    PrimitiveFloat16(PrimitiveArrowToVariantBuilder<'a, Float16Type>),
+    PrimitiveFloat32(PrimitiveArrowToVariantBuilder<'a, Float32Type>),
+    PrimitiveFloat64(PrimitiveArrowToVariantBuilder<'a, Float64Type>),
     Decimal32(Decimal32ArrowToVariantBuilder<'a>),
     Decimal64(Decimal64ArrowToVariantBuilder<'a>),
     Decimal128(Decimal128ArrowToVariantBuilder<'a>),
     Decimal256(Decimal256ArrowToVariantBuilder<'a>),
     Boolean(BooleanArrowToVariantBuilder<'a>),
-    String(StringArrowToVariantBuilder<'a>),
-    LargeString(LargeStringArrowToVariantBuilder<'a>),
-    Binary(BinaryArrowToVariantBuilder<'a>),
-    LargeBinary(LargeBinaryArrowToVariantBuilder<'a>),
+    String(StringArrowToVariantBuilder<'a, i32>),
+    LargeString(StringArrowToVariantBuilder<'a, i64>),
+    Binary(BinaryArrowToVariantBuilder<'a, i32>),
+    LargeBinary(BinaryArrowToVariantBuilder<'a, i64>),
     BinaryView(BinaryViewArrowToVariantBuilder<'a>),
     FixedSizeBinary(FixedSizeBinaryArrowToVariantBuilder<'a>),
     Utf8View(Utf8ViewArrowToVariantBuilder<'a>),
     Struct(StructArrowToVariantBuilder<'a>),
-    Null(NullArrowToVariantBuilder<'a>),
+    Null(NullArrowToVariantBuilder),
     RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder<'a, Int16Type>),
     RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder<'a, Int32Type>),
     RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder<'a, Int64Type>),
@@ -387,16 +82,16 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     LargeList(ListArrowToVariantBuilder<'a, i64>),
     Map(MapArrowToVariantBuilder<'a>),
     Union(UnionArrowToVariantBuilder<'a>),
-    TimestampSecond(TimestampSecondArrowToVariantBuilder<'a>),
-    TimestampMillisecond(TimestampMillisecondArrowToVariantBuilder<'a>),
-    TimestampMicrosecond(TimestampMicrosecondArrowToVariantBuilder<'a>),
-    TimestampNanosecond(TimestampNanosecondArrowToVariantBuilder<'a>),
-    Date32(Date32ArrowToVariantBuilder<'a>),
-    Date64(Date64ArrowToVariantBuilder<'a>),
-    Time32Second(Time32SecondArrowToVariantBuilder<'a>),
-    Time32Millisecond(Time32MillisecondArrowToVariantBuilder<'a>),
-    Time64Microsecond(Time64MicrosecondArrowToVariantBuilder<'a>),
-    Time64Nanosecond(Time64NanosecondArrowToVariantBuilder<'a>),
+    TimestampSecond(TimestampArrowToVariantBuilder<'a, TimestampSecondType>),
+    TimestampMillisecond(TimestampArrowToVariantBuilder<'a, TimestampMillisecondType>),
+    TimestampMicrosecond(TimestampArrowToVariantBuilder<'a, TimestampMicrosecondType>),
+    TimestampNanosecond(TimestampArrowToVariantBuilder<'a, TimestampNanosecondType>),
+    Date32(DateArrowToVariantBuilder<'a, Date32Type>),
+    Date64(DateArrowToVariantBuilder<'a, Date64Type>),
+    Time32Second(TimeArrowToVariantBuilder<'a, Time32SecondType>),
+    Time32Millisecond(TimeArrowToVariantBuilder<'a, Time32MillisecondType>),
+    Time64Microsecond(TimeArrowToVariantBuilder<'a, Time64MicrosecondType>),
+    Time64Nanosecond(TimeArrowToVariantBuilder<'a, Time64NanosecondType>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -1155,19 +850,19 @@ fn make_arrow_to_variant_row_builder<'a>(
 ) -> Result<ArrowToVariantRowBuilder<'a>, ArrowError> {
     match data_type {
         // All integer types
-        DataType::Int8 => Ok(ArrowToVariantRowBuilder::PrimitiveInt8(PrimitiveInt8ArrowToVariantBuilder::new(array))),
-        DataType::Int16 => Ok(ArrowToVariantRowBuilder::PrimitiveInt16(PrimitiveInt16ArrowToVariantBuilder::new(array))),
-        DataType::Int32 => Ok(ArrowToVariantRowBuilder::PrimitiveInt32(PrimitiveInt32ArrowToVariantBuilder::new(array))),
-        DataType::Int64 => Ok(ArrowToVariantRowBuilder::PrimitiveInt64(PrimitiveInt64ArrowToVariantBuilder::new(array))),
-        DataType::UInt8 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt8(PrimitiveUInt8ArrowToVariantBuilder::new(array))),
-        DataType::UInt16 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt16(PrimitiveUInt16ArrowToVariantBuilder::new(array))),
-        DataType::UInt32 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt32(PrimitiveUInt32ArrowToVariantBuilder::new(array))),
-        DataType::UInt64 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt64(PrimitiveUInt64ArrowToVariantBuilder::new(array))),
+        DataType::Int8 => Ok(ArrowToVariantRowBuilder::PrimitiveInt8(PrimitiveArrowToVariantBuilder::<Int8Type>::new(array))),
+        DataType::Int16 => Ok(ArrowToVariantRowBuilder::PrimitiveInt16(PrimitiveArrowToVariantBuilder::<Int16Type>::new(array))),
+        DataType::Int32 => Ok(ArrowToVariantRowBuilder::PrimitiveInt32(PrimitiveArrowToVariantBuilder::<Int32Type>::new(array))),
+        DataType::Int64 => Ok(ArrowToVariantRowBuilder::PrimitiveInt64(PrimitiveArrowToVariantBuilder::<Int64Type>::new(array))),
+        DataType::UInt8 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt8(PrimitiveArrowToVariantBuilder::<UInt8Type>::new(array))),
+        DataType::UInt16 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt16(PrimitiveArrowToVariantBuilder::<UInt16Type>::new(array))),
+        DataType::UInt32 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt32(PrimitiveArrowToVariantBuilder::<UInt32Type>::new(array))),
+        DataType::UInt64 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt64(PrimitiveArrowToVariantBuilder::<UInt64Type>::new(array))),
         
         // Float types
-        DataType::Float16 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat16(PrimitiveFloat16ArrowToVariantBuilder::new(array))),
-        DataType::Float32 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat32(PrimitiveFloat32ArrowToVariantBuilder::new(array))),
-        DataType::Float64 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat64(PrimitiveFloat64ArrowToVariantBuilder::new(array))),
+        DataType::Float16 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat16(PrimitiveArrowToVariantBuilder::<Float16Type>::new(array))),
+        DataType::Float32 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat32(PrimitiveArrowToVariantBuilder::<Float32Type>::new(array))),
+        DataType::Float64 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat64(PrimitiveArrowToVariantBuilder::<Float64Type>::new(array))),
         
         // Decimal types
         DataType::Decimal32(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal32(Decimal32ArrowToVariantBuilder::new(array, *scale))),
@@ -1178,17 +873,17 @@ fn make_arrow_to_variant_row_builder<'a>(
         // Special types
         DataType::Boolean => Ok(ArrowToVariantRowBuilder::Boolean(BooleanArrowToVariantBuilder::new(array))),
         DataType::Utf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
-        DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::LargeString(LargeStringArrowToVariantBuilder::new(array))),
+        DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::LargeString(StringArrowToVariantBuilder::new(array))),
         DataType::Utf8View => Ok(ArrowToVariantRowBuilder::Utf8View(Utf8ViewArrowToVariantBuilder::new(array))),
         
         // Binary types
         DataType::Binary => Ok(ArrowToVariantRowBuilder::Binary(BinaryArrowToVariantBuilder::new(array))),
-        DataType::LargeBinary => Ok(ArrowToVariantRowBuilder::LargeBinary(LargeBinaryArrowToVariantBuilder::new(array))),
+        DataType::LargeBinary => Ok(ArrowToVariantRowBuilder::LargeBinary(BinaryArrowToVariantBuilder::new(array))),
         DataType::BinaryView => Ok(ArrowToVariantRowBuilder::BinaryView(BinaryViewArrowToVariantBuilder::new(array))),
         DataType::FixedSizeBinary(_) => Ok(ArrowToVariantRowBuilder::FixedSizeBinary(FixedSizeBinaryArrowToVariantBuilder::new(array))),
         
         DataType::Struct(_) => Ok(ArrowToVariantRowBuilder::Struct(StructArrowToVariantBuilder::new(array.as_struct())?)),
-        DataType::Null => Ok(ArrowToVariantRowBuilder::Null(NullArrowToVariantBuilder::new(array))),
+        DataType::Null => Ok(ArrowToVariantRowBuilder::Null(NullArrowToVariantBuilder)),
         
         // Run-end encoded types
         DataType::RunEndEncoded(run_ends, _) => {
@@ -1219,36 +914,36 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Timestamp(time_unit, time_zone) => {
             match time_unit {
                 TimeUnit::Second => Ok(ArrowToVariantRowBuilder::TimestampSecond(
-                    TimestampSecondArrowToVariantBuilder::new(array, time_zone.is_some())
+                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
                 )),
                 TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::TimestampMillisecond(
-                    TimestampMillisecondArrowToVariantBuilder::new(array, time_zone.is_some())
+                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
                 )),
                 TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::TimestampMicrosecond(
-                    TimestampMicrosecondArrowToVariantBuilder::new(array, time_zone.is_some())
+                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
                 )),
                 TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::TimestampNanosecond(
-                    TimestampNanosecondArrowToVariantBuilder::new(array, time_zone.is_some())
+                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
                 )),
             }
         }
         
         // Date types
         DataType::Date32 => Ok(ArrowToVariantRowBuilder::Date32(
-            Date32ArrowToVariantBuilder::new(array)
+            DateArrowToVariantBuilder::<Date32Type>::new(array)
         )),
         DataType::Date64 => Ok(ArrowToVariantRowBuilder::Date64(
-            Date64ArrowToVariantBuilder::new(array)
+            DateArrowToVariantBuilder::<Date64Type>::new(array)
         )),
         
         // Time types
         DataType::Time32(time_unit) => {
             match time_unit {
                 TimeUnit::Second => Ok(ArrowToVariantRowBuilder::Time32Second(
-                    Time32SecondArrowToVariantBuilder::new(array)
+                    TimeArrowToVariantBuilder::<Time32SecondType>::new(array)
                 )),
                 TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::Time32Millisecond(
-                    Time32MillisecondArrowToVariantBuilder::new(array)
+                    TimeArrowToVariantBuilder::<Time32MillisecondType>::new(array)
                 )),
                 _ => Err(ArrowError::CastError(format!("Unsupported Time32 unit: {time_unit:?}"))),
             }
@@ -1256,10 +951,10 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Time64(time_unit) => {
             match time_unit {
                 TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::Time64Microsecond(
-                    Time64MicrosecondArrowToVariantBuilder::new(array)
+                    TimeArrowToVariantBuilder::<Time64MicrosecondType>::new(array)
                 )),
                 TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::Time64Nanosecond(
-                    Time64NanosecondArrowToVariantBuilder::new(array)
+                    TimeArrowToVariantBuilder::<Time64NanosecondType>::new(array)
                 )),
                 _ => Err(ArrowError::CastError(format!("Unsupported Time64 unit: {time_unit:?}"))),
             }
