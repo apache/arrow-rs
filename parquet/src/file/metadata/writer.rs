@@ -317,7 +317,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// 4. Length of encoded `FileMetaData` (4 bytes, little endian)
 /// 5. Parquet Magic Bytes (4 bytes)
 ///
-/// [`FileMetaData`]: crate::format::FileMetaData
+/// [`FileMetaData`]: https://github.com/apache/parquet-format/tree/master?tab=readme-ov-file#metadata
 /// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
@@ -543,7 +543,7 @@ impl MetadataObjectWriter {
 
     /// Write [`FileMetaData`] in Thrift format, possibly encrypting it if required
     ///
-    /// [`FileMetaData`]: crate::format::FileMetaData
+    /// [`FileMetaData`]: https://github.com/apache/parquet-format/tree/master?tab=readme-ov-file#metadata
     fn write_file_metadata(&self, file_metadata: &FileMeta, mut sink: impl Write) -> Result<()> {
         match self.file_encryptor.as_ref() {
             Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {

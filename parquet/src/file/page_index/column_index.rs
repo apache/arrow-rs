@@ -17,7 +17,7 @@
 
 //! [`ColumnIndexMetaData`] structures holding decoded [`ColumnIndex`] information
 //!
-//! [`ColumnIndex`]: crate::format::ColumnIndex
+//! [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 //!
 
 use crate::{

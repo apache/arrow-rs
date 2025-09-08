@@ -17,9 +17,7 @@
 
 //! Parquet metadata API
 //!
-//! Most users should use these structures to interact with Parquet metadata.
-//! The [crate::format] module contains lower level structures generated from the
-//! Parquet thrift definition.
+//! Users should use these structures to interact with Parquet metadata.
 //!
 //! * [`ParquetMetaData`]: Top level metadata container, read from the Parquet
 //!   file footer.
@@ -67,7 +65,6 @@
 //!    with a more idiomatic API. Note that, confusingly, some but not all
 //!    of these structures have the same name as the [`format`] structures.
 //!
-//! [`format`]: crate::format
 //! [`file::metadata`]: crate::file::metadata
 //! [parquet.thrift]:  https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 //!
@@ -148,7 +145,7 @@ pub(crate) use writer::ThriftMetadataWriter;
 /// column in the third row group of the parquet file.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`ColumnIndex`]: crate::format::ColumnIndex
+/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
 
 /// [`OffsetIndexMetaData`] for each data page of each row group of each column
@@ -161,7 +158,7 @@ pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
 /// `column_number`of row group `row_group_number`.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`OffsetIndex`]: crate::format::OffsetIndex
+/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 
 /// Parsed metadata for a single Parquet file
@@ -1274,7 +1271,7 @@ impl ColumnChunkMetaDataBuilder {
 /// Builder for Parquet [`ColumnIndex`], part of the Parquet [PageIndex]
 ///
 /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`ColumnIndex`]: crate::format::ColumnIndex
+/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct ColumnIndexBuilder {
     column_type: Type,
     null_pages: Vec<bool>,
@@ -1329,7 +1326,7 @@ impl ColumnIndexBuilder {
     /// Append the given page-level histograms to the [`ColumnIndex`] histograms.
     /// Does nothing if the `ColumnIndexBuilder` is not in the `valid` state.
     ///
-    /// [`ColumnIndex`]: crate::format::ColumnIndex
+    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn append_histograms(
         &mut self,
         repetition_level_histogram: &Option<LevelHistogram>,
