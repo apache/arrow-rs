@@ -1412,4 +1412,130 @@ mod tests {
         let got = encode_all(&arr, &FieldPlan::Scalar, None);
         assert_bytes_eq(&got, &expected);
     }
+
+    #[test]
+    fn list_encoder_int32() {
+        // Build ListArray [[1,2], [], [3]]
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let offsets = vec![0, 2, 2, 3];
+        let list = ListArray::new(
+            Field::new("item", DataType::Int32, true).into(),
+            arrow_buffer::OffsetBuffer::new(offsets.into()),
+            Arc::new(values) as ArrayRef,
+            None,
+        );
+        // Avro array encoding per row
+        let mut expected = Vec::new();
+        // row 0: block len 2, items 1,2 then 0
+        expected.extend(avro_long_bytes(2));
+        expected.extend(avro_long_bytes(1));
+        expected.extend(avro_long_bytes(2));
+        expected.extend(avro_long_bytes(0));
+        // row 1: empty
+        expected.extend(avro_long_bytes(0));
+        // row 2: one item 3
+        expected.extend(avro_long_bytes(1));
+        expected.extend(avro_long_bytes(3));
+        expected.extend(avro_long_bytes(0));
+
+        let plan = FieldPlan::List { items_nullability: None, item_plan: Box::new(FieldPlan::Scalar) };
+        let got = encode_all(&list, &plan, None);
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn struct_encoder_two_fields() {
+        // Struct { a: Int32, b: Utf8 }
+        let a = Int32Array::from(vec![1, 2]);
+        let b = StringArray::from(vec!["x", "y"]);
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let struct_arr = StructArray::new(fields.clone(), vec![Arc::new(a) as ArrayRef, Arc::new(b) as ArrayRef], None);
+        let plan = FieldPlan::Struct { encoders: vec![
+            FieldBinding { arrow_index: 0, nullability: None, plan: FieldPlan::Scalar },
+            FieldBinding { arrow_index: 1, nullability: None, plan: FieldPlan::Scalar },
+        ]};
+        let got = encode_all(&struct_arr, &plan, None);
+        // Expected: rows concatenated: a then b
+        let mut expected = Vec::new();
+        expected.extend(avro_long_bytes(1)); // a=1
+        expected.extend(avro_len_prefixed_bytes(b"x")); // b="x"
+        expected.extend(avro_long_bytes(2)); // a=2
+        expected.extend(avro_len_prefixed_bytes(b"y")); // b="y"
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn enum_encoder_dictionary() {
+        // symbols: ["A","B","C"], keys [2,0,1]
+        let dict_values = StringArray::from(vec!["A","B","C"]);
+        let keys = Int32Array::from(vec![2,0,1]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(dict_values) as ArrayRef).unwrap();
+        let symbols = Arc::<[String]>::from(vec!["A".to_string(),"B".to_string(),"C".to_string()].into_boxed_slice());
+        let plan = FieldPlan::Enum { symbols };
+        let got = encode_all(&dict, &plan, None);
+        let mut expected = Vec::new();
+        expected.extend(avro_long_bytes(2));
+        expected.extend(avro_long_bytes(0));
+        expected.extend(avro_long_bytes(1));
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn decimal_bytes_and_fixed() {
+        // Decimal64 with small positives and negatives
+        let dec = Decimal64Array::from(vec![1i64, -1i64, 0i64])
+            .with_precision_and_scale(10, 0)
+            .unwrap();
+        // bytes(decimal): minimal two's complement length-prefixed
+        let plan_bytes = FieldPlan::Decimal { size: None };
+        let got_bytes = encode_all(&dec, &plan_bytes, None);
+        // 1 -> 0x01; -1 -> 0xFF; 0 -> 0x00
+        let mut expected_bytes = Vec::new();
+        expected_bytes.extend(avro_len_prefixed_bytes(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01][7..])); // 0x01
+        expected_bytes.extend(avro_len_prefixed_bytes(&[0xFF]));
+        expected_bytes.extend(avro_len_prefixed_bytes(&[0x00]));
+        assert_bytes_eq(&got_bytes, &expected_bytes);
+
+        // fixed(8): sign-extend to 8 bytes as-is
+        let plan_fixed = FieldPlan::Decimal { size: Some(8) };
+        let got_fixed = encode_all(&dec, &plan_fixed, None);
+        let mut expected_fixed = Vec::new();
+        expected_fixed.extend_from_slice(&1i64.to_be_bytes());
+        expected_fixed.extend_from_slice(&(-1i64).to_be_bytes());
+        expected_fixed.extend_from_slice(&0i64.to_be_bytes());
+        assert_bytes_eq(&got_fixed, &expected_fixed);
+    }
+
+    #[test]
+    fn map_encoder_string_keys_int_values() {
+        // Build MapArray with two rows
+        // Row0: {"k1":1, "k2":2}
+        // Row1: {}
+        let keys = StringArray::from(vec!["k1","k2"]);
+        let values = Int32Array::from(vec![1,2]);
+        let entries_fields = Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+        ]);
+        let entries = StructArray::new(entries_fields, vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef], None);
+        let offsets = arrow_buffer::OffsetBuffer::new(vec![0i32, 2, 2].into());
+        let map = MapArray::new(Field::new("entries", entries.data_type().clone(), false).into(), offsets, entries, None, false);
+        let plan = FieldPlan::Map { values_nullability: None, value_plan: Box::new(FieldPlan::Scalar) };
+        let got = encode_all(&map, &plan, None);
+        // Expected Avro per row: arrays of key,value
+        let mut expected = Vec::new();
+        // Row0: block 2 then pairs
+        expected.extend(avro_long_bytes(2));
+        expected.extend(avro_len_prefixed_bytes(b"k1"));
+        expected.extend(avro_long_bytes(1));
+        expected.extend(avro_len_prefixed_bytes(b"k2"));
+        expected.extend(avro_long_bytes(2));
+        expected.extend(avro_long_bytes(0));
+        // Row1: empty
+        expected.extend(avro_long_bytes(0));
+        assert_bytes_eq(&got, &expected);
+    }
 }
