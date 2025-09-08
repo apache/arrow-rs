@@ -154,7 +154,8 @@ macro_rules! define_row_builder {
     (
         struct $name:ident<$lifetime:lifetime, $generic:ident: $($bound:path)+>
         $(where $where_path:path: $where_bound:path)?,
-        |$array_param:ident| -> $array_type:ty { $init_expr:expr }
+        |$array_param:ident| -> $array_type:ty { $init_expr:expr },
+        |$value:ident| $value_transform:expr
     ) => {
         pub(crate) struct $name<$lifetime, $generic: $($bound)+> 
         $(where $where_path: $where_bound)?
@@ -175,8 +176,8 @@ macro_rules! define_row_builder {
                 if self.array.is_null(index) {
                     builder.append_null();
                 } else {
-                    let value = self.array.value(index);
-                    builder.append_value(value);
+                    let $value = self.array.value(index);
+                    builder.append_value($value_transform);
                 }
                 Ok(())
             }
@@ -192,7 +193,8 @@ macro_rules! define_row_builder {
 define_row_builder!(
     struct PrimitiveArrowToVariantBuilder<'a, T: ArrowPrimitiveType>
     where T::Native: Into<Variant<'a, 'a>>,
-    |array| -> PrimitiveArray<T> { array.as_primitive() }
+    |array| -> PrimitiveArray<T> { array.as_primitive() },
+    |value| value
 );
 
 /// Boolean builder for BooleanArray
@@ -221,7 +223,8 @@ impl<'a> BooleanArrowToVariantBuilder<'a> {
 // Generic String builder for StringArray (Utf8 and LargeUtf8)
 define_row_builder!(
     struct StringArrowToVariantBuilder<'a, O: OffsetSizeTrait>,
-    |array| -> GenericStringArray<O> { array.as_string() }
+    |array| -> GenericStringArray<O> { array.as_string() },
+    |value| value
 );
 
 
@@ -646,7 +649,8 @@ impl<'a> Decimal256ArrowToVariantBuilder<'a> {
 // Generic Binary builder for Arrow BinaryArray and LargeBinaryArray
 define_row_builder!(
     struct BinaryArrowToVariantBuilder<'a, O: OffsetSizeTrait>,
-    |array| -> GenericBinaryArray<O> { array.as_binary() }
+    |array| -> GenericBinaryArray<O> { array.as_binary() },
+    |value| value
 );
 
 /// BinaryView builder for Arrow BinaryViewArray
