@@ -284,7 +284,7 @@ impl AvroDataType {
                 Value::Bool(b) => AvroLiteral::Boolean(*b),
                 _ => {
                     return Err(ArrowError::SchemaError(
-                        "Boolean default must be a JSON boolean".into(),
+                        "Boolean default must be a JSON boolean".to_string(),
                     ))
                 }
             },
@@ -341,7 +341,7 @@ impl AvroDataType {
                 ),
                 _ => {
                     return Err(ArrowError::SchemaError(
-                        "Default value must be a JSON array for Avro array type".into(),
+                        "Default value must be a JSON array for Avro array type".to_string(),
                     ))
                 }
             },
@@ -355,7 +355,7 @@ impl AvroDataType {
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
-                        "Default value must be a JSON object for Avro map type".into(),
+                        "Default value must be a JSON object for Avro map type".to_string(),
                     ))
                 }
             },
@@ -381,7 +381,7 @@ impl AvroDataType {
                             })?;
                             let lit = f.data_type().parse_default_literal(&v)?;
                             out.insert(name, lit);
-                        } else if f.data_type().nullability() == Some(Nullability::NullFirst) {
+                        } else if f.data_type().nullability() == Some(Nullability::default()) {
                             // Only a NullFirst union may implicitly supply null for the missing subfield
                             out.insert(name, AvroLiteral::Null);
                         } else {
@@ -396,7 +396,7 @@ impl AvroDataType {
                 }
                 _ => {
                     return Err(ArrowError::SchemaError(
-                        "Default value for record/struct must be a JSON object".into(),
+                        "Default value for record/struct must be a JSON object".to_string(),
                     ))
                 }
             },
@@ -413,10 +413,7 @@ impl AvroDataType {
         Ok(())
     }
 
-    fn validate_and_store_default(
-        &mut self,
-        default_json: &Value,
-    ) -> Result<AvroLiteral, ArrowError> {
+    fn parse_and_store_default(&mut self, default_json: &Value) -> Result<AvroLiteral, ArrowError> {
         let lit = self.parse_default_literal(default_json)?;
         self.store_default(default_json)?;
         Ok(lit)
@@ -1451,13 +1448,13 @@ impl<'a> Maker<'a> {
                     match r_field.default.as_ref() {
                         Some(default_json) => {
                             dt.resolution = Some(ResolutionInfo::DefaultValue(
-                                dt.validate_and_store_default(default_json)?,
+                                dt.parse_and_store_default(default_json)?,
                             ));
                         }
                         None => {
                             if dt.nullability() == Some(Nullability::NullFirst) {
                                 dt.resolution = Some(ResolutionInfo::DefaultValue(
-                                    dt.validate_and_store_default(&Value::Null)?,
+                                    dt.parse_and_store_default(&Value::Null)?,
                                 ));
                             } else {
                                 return Err(ArrowError::SchemaError(format!(
@@ -2053,11 +2050,11 @@ mod tests {
     #[test]
     fn test_validate_and_store_default_null_and_nullability_rules() {
         let mut dt_null = AvroDataType::new(Codec::Null, HashMap::new(), None);
-        let lit = dt_null.validate_and_store_default(&Value::Null).unwrap();
+        let lit = dt_null.parse_and_store_default(&Value::Null).unwrap();
         assert_eq!(lit, AvroLiteral::Null);
         assert_default_stored(&dt_null, &Value::Null);
         let mut dt_int = AvroDataType::new(Codec::Int32, HashMap::new(), None);
-        let err = dt_int.validate_and_store_default(&Value::Null).unwrap_err();
+        let err = dt_int.parse_and_store_default(&Value::Null).unwrap_err();
         assert!(
             err.to_string()
                 .contains("JSON null default is only valid for `null` type"),
@@ -2065,14 +2062,12 @@ mod tests {
         );
         let mut dt_int_nf =
             AvroDataType::new(Codec::Int32, HashMap::new(), Some(Nullability::NullFirst));
-        let lit2 = dt_int_nf.validate_and_store_default(&Value::Null).unwrap();
+        let lit2 = dt_int_nf.parse_and_store_default(&Value::Null).unwrap();
         assert_eq!(lit2, AvroLiteral::Null);
         assert_default_stored(&dt_int_nf, &Value::Null);
         let mut dt_int_ns =
             AvroDataType::new(Codec::Int32, HashMap::new(), Some(Nullability::NullSecond));
-        let err2 = dt_int_ns
-            .validate_and_store_default(&Value::Null)
-            .unwrap_err();
+        let err2 = dt_int_ns.parse_and_store_default(&Value::Null).unwrap_err();
         assert!(
             err2.to_string()
                 .contains("JSON null default is only valid for `null` type"),
@@ -2083,96 +2078,92 @@ mod tests {
     #[test]
     fn test_validate_and_store_default_primitives_and_temporal() {
         let mut dt_bool = AvroDataType::new(Codec::Boolean, HashMap::new(), None);
-        let lit = dt_bool
-            .validate_and_store_default(&Value::Bool(true))
-            .unwrap();
+        let lit = dt_bool.parse_and_store_default(&Value::Bool(true)).unwrap();
         assert_eq!(lit, AvroLiteral::Boolean(true));
         assert_default_stored(&dt_bool, &Value::Bool(true));
         let mut dt_i32 = AvroDataType::new(Codec::Int32, HashMap::new(), None);
         let lit = dt_i32
-            .validate_and_store_default(&serde_json::json!(123))
+            .parse_and_store_default(&serde_json::json!(123))
             .unwrap();
         assert_eq!(lit, AvroLiteral::Int(123));
         assert_default_stored(&dt_i32, &serde_json::json!(123));
         let err = dt_i32
-            .validate_and_store_default(&serde_json::json!(i64::from(i32::MAX) + 1))
+            .parse_and_store_default(&serde_json::json!(i64::from(i32::MAX) + 1))
             .unwrap_err();
         assert!(format!("{err}").contains("out of i32 range"));
         let mut dt_i64 = AvroDataType::new(Codec::Int64, HashMap::new(), None);
         let lit = dt_i64
-            .validate_and_store_default(&serde_json::json!(1234567890))
+            .parse_and_store_default(&serde_json::json!(1234567890))
             .unwrap();
         assert_eq!(lit, AvroLiteral::Long(1234567890));
         assert_default_stored(&dt_i64, &serde_json::json!(1234567890));
         let mut dt_f32 = AvroDataType::new(Codec::Float32, HashMap::new(), None);
         let lit = dt_f32
-            .validate_and_store_default(&serde_json::json!(1.25))
+            .parse_and_store_default(&serde_json::json!(1.25))
             .unwrap();
         assert_eq!(lit, AvroLiteral::Float(1.25));
         assert_default_stored(&dt_f32, &serde_json::json!(1.25));
         let err = dt_f32
-            .validate_and_store_default(&serde_json::json!(1e39))
+            .parse_and_store_default(&serde_json::json!(1e39))
             .unwrap_err();
         assert!(format!("{err}").contains("out of f32 range"));
         let mut dt_f64 = AvroDataType::new(Codec::Float64, HashMap::new(), None);
         let lit = dt_f64
-            .validate_and_store_default(&serde_json::json!(std::f64::consts::PI))
+            .parse_and_store_default(&serde_json::json!(std::f64::consts::PI))
             .unwrap();
         assert_eq!(lit, AvroLiteral::Double(std::f64::consts::PI));
         assert_default_stored(&dt_f64, &serde_json::json!(std::f64::consts::PI));
         let mut dt_str = AvroDataType::new(Codec::Utf8, HashMap::new(), None);
         let l = dt_str
-            .validate_and_store_default(&json_string("hello"))
+            .parse_and_store_default(&json_string("hello"))
             .unwrap();
         assert_eq!(l, AvroLiteral::String("hello".into()));
         assert_default_stored(&dt_str, &json_string("hello"));
         let mut dt_strv = AvroDataType::new(Codec::Utf8View, HashMap::new(), None);
         let l = dt_strv
-            .validate_and_store_default(&json_string("view"))
+            .parse_and_store_default(&json_string("view"))
             .unwrap();
         assert_eq!(l, AvroLiteral::String("view".into()));
         assert_default_stored(&dt_strv, &json_string("view"));
         let mut dt_uuid = AvroDataType::new(Codec::Uuid, HashMap::new(), None);
         let l = dt_uuid
-            .validate_and_store_default(&json_string("00000000-0000-0000-0000-000000000000"))
+            .parse_and_store_default(&json_string("00000000-0000-0000-0000-000000000000"))
             .unwrap();
         assert_eq!(
             l,
             AvroLiteral::String("00000000-0000-0000-0000-000000000000".into())
         );
         let mut dt_bin = AvroDataType::new(Codec::Binary, HashMap::new(), None);
-        let l = dt_bin
-            .validate_and_store_default(&json_string("ABC"))
-            .unwrap();
+        let l = dt_bin.parse_and_store_default(&json_string("ABC")).unwrap();
         assert_eq!(l, AvroLiteral::Bytes(vec![65, 66, 67]));
         let err = dt_bin
-            .validate_and_store_default(&json_string("€")) // U+20AC
+            .parse_and_store_default(&json_string("€")) // U+20AC
             .unwrap_err();
         assert!(format!("{err}").contains("Invalid codepoint"));
         let mut dt_date = AvroDataType::new(Codec::Date32, HashMap::new(), None);
         let ld = dt_date
-            .validate_and_store_default(&serde_json::json!(1))
+            .parse_and_store_default(&serde_json::json!(1))
             .unwrap();
         assert_eq!(ld, AvroLiteral::Int(1));
         let mut dt_tmill = AvroDataType::new(Codec::TimeMillis, HashMap::new(), None);
         let lt = dt_tmill
-            .validate_and_store_default(&serde_json::json!(86_400_000))
+            .parse_and_store_default(&serde_json::json!(86_400_000))
             .unwrap();
         assert_eq!(lt, AvroLiteral::Int(86_400_000));
         let mut dt_tmicros = AvroDataType::new(Codec::TimeMicros, HashMap::new(), None);
         let ltm = dt_tmicros
-            .validate_and_store_default(&serde_json::json!(1_000_000))
+            .parse_and_store_default(&serde_json::json!(1_000_000))
             .unwrap();
         assert_eq!(ltm, AvroLiteral::Long(1_000_000));
         let mut dt_ts_milli = AvroDataType::new(Codec::TimestampMillis(true), HashMap::new(), None);
         let l1 = dt_ts_milli
-            .validate_and_store_default(&serde_json::json!(123))
+            .parse_and_store_default(&serde_json::json!(123))
             .unwrap();
         assert_eq!(l1, AvroLiteral::Long(123));
         let mut dt_ts_micro =
             AvroDataType::new(Codec::TimestampMicros(false), HashMap::new(), None);
         let l2 = dt_ts_micro
-            .validate_and_store_default(&serde_json::json!(456))
+            .parse_and_store_default(&serde_json::json!(456))
             .unwrap();
         assert_eq!(l2, AvroLiteral::Long(456));
     }
@@ -2181,27 +2172,27 @@ mod tests {
     fn test_validate_and_store_default_fixed_decimal_interval() {
         let mut dt_fixed = AvroDataType::new(Codec::Fixed(4), HashMap::new(), None);
         let l = dt_fixed
-            .validate_and_store_default(&json_string("WXYZ"))
+            .parse_and_store_default(&json_string("WXYZ"))
             .unwrap();
         assert_eq!(l, AvroLiteral::Bytes(vec![87, 88, 89, 90]));
         let err = dt_fixed
-            .validate_and_store_default(&json_string("TOO LONG"))
+            .parse_and_store_default(&json_string("TOO LONG"))
             .unwrap_err();
         assert!(format!("{err}").contains("Default length"));
         let mut dt_dec_fixed =
             AvroDataType::new(Codec::Decimal(10, Some(2), Some(3)), HashMap::new(), None);
         let l = dt_dec_fixed
-            .validate_and_store_default(&json_string("abc"))
+            .parse_and_store_default(&json_string("abc"))
             .unwrap();
         assert_eq!(l, AvroLiteral::Bytes(vec![97, 98, 99]));
         let err = dt_dec_fixed
-            .validate_and_store_default(&json_string("toolong"))
+            .parse_and_store_default(&json_string("toolong"))
             .unwrap_err();
         assert!(format!("{err}").contains("Default length"));
         let mut dt_dec_bytes =
             AvroDataType::new(Codec::Decimal(10, Some(2), None), HashMap::new(), None);
         let l = dt_dec_bytes
-            .validate_and_store_default(&json_string("freeform"))
+            .parse_and_store_default(&json_string("freeform"))
             .unwrap();
         assert_eq!(
             l,
@@ -2209,14 +2200,14 @@ mod tests {
         );
         let mut dt_interval = AvroDataType::new(Codec::Interval, HashMap::new(), None);
         let l = dt_interval
-            .validate_and_store_default(&json_string("ABCDEFGHIJKL"))
+            .parse_and_store_default(&json_string("ABCDEFGHIJKL"))
             .unwrap();
         assert_eq!(
             l,
             AvroLiteral::Bytes("ABCDEFGHIJKL".bytes().collect::<Vec<_>>())
         );
         let err = dt_interval
-            .validate_and_store_default(&json_string("short"))
+            .parse_and_store_default(&json_string("short"))
             .unwrap_err();
         assert!(format!("{err}").contains("Default length"));
     }
@@ -2228,17 +2219,17 @@ mod tests {
             .collect();
         let mut dt_enum = AvroDataType::new(Codec::Enum(symbols), HashMap::new(), None);
         let l = dt_enum
-            .validate_and_store_default(&json_string("GREEN"))
+            .parse_and_store_default(&json_string("GREEN"))
             .unwrap();
         assert_eq!(l, AvroLiteral::Enum("GREEN".into()));
         let err = dt_enum
-            .validate_and_store_default(&json_string("YELLOW"))
+            .parse_and_store_default(&json_string("YELLOW"))
             .unwrap_err();
         assert!(format!("{err}").contains("Default enum symbol"));
         let item = AvroDataType::new(Codec::Int64, HashMap::new(), None);
         let mut dt_list = AvroDataType::new(Codec::List(Arc::new(item)), HashMap::new(), None);
         let val = serde_json::json!([1, 2, 3]);
-        let l = dt_list.validate_and_store_default(&val).unwrap();
+        let l = dt_list.parse_and_store_default(&val).unwrap();
         assert_eq!(
             l,
             AvroLiteral::Array(vec![
@@ -2248,20 +2239,20 @@ mod tests {
             ])
         );
         let err = dt_list
-            .validate_and_store_default(&serde_json::json!({"not":"array"}))
+            .parse_and_store_default(&serde_json::json!({"not":"array"}))
             .unwrap_err();
         assert!(format!("{err}").contains("JSON array"));
         let val_dt = AvroDataType::new(Codec::Float64, HashMap::new(), None);
         let mut dt_map = AvroDataType::new(Codec::Map(Arc::new(val_dt)), HashMap::new(), None);
         let mv = serde_json::json!({"x": 1.5, "y": 2.5});
-        let l = dt_map.validate_and_store_default(&mv).unwrap();
+        let l = dt_map.parse_and_store_default(&mv).unwrap();
         let mut expected = IndexMap::new();
         expected.insert("x".into(), AvroLiteral::Double(1.5));
         expected.insert("y".into(), AvroLiteral::Double(2.5));
         assert_eq!(l, AvroLiteral::Map(expected));
         // Not object -> error
         let err = dt_map
-            .validate_and_store_default(&serde_json::json!(123))
+            .parse_and_store_default(&serde_json::json!(123))
             .unwrap_err();
         assert!(format!("{err}").contains("JSON object"));
         let mut field_a = AvroField {
@@ -2286,7 +2277,7 @@ mod tests {
         let struct_fields: Arc<[AvroField]> = Arc::from(vec![field_a, field_b, field_c]);
         let mut dt_struct = AvroDataType::new(Codec::Struct(struct_fields), HashMap::new(), None);
         let default_obj = serde_json::json!({"a": 7});
-        let l = dt_struct.validate_and_store_default(&default_obj).unwrap();
+        let l = dt_struct.parse_and_store_default(&default_obj).unwrap();
         let mut expected = IndexMap::new();
         expected.insert("a".into(), AvroLiteral::Int(7));
         expected.insert("b".into(), AvroLiteral::Null);
@@ -2303,14 +2294,14 @@ mod tests {
             None,
         );
         let err = dt_bad
-            .validate_and_store_default(&serde_json::json!({}))
+            .parse_and_store_default(&serde_json::json!({}))
             .unwrap_err();
         assert!(
             format!("{err}").contains("missing required subfield 'req'"),
             "unexpected error: {err}"
         );
         let err = dt_struct
-            .validate_and_store_default(&serde_json::json!(10))
+            .parse_and_store_default(&serde_json::json!(10))
             .unwrap_err();
         assert!(format!("{err}").contains("must be a JSON object"));
     }
