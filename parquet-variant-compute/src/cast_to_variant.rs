@@ -4134,16 +4134,18 @@ mod row_builder_tests {
         assert_eq!(variant_array.len(), 4);
         
         // Row 0: "hello" bytes
-        assert_eq!(variant_array.value(0), Variant::from(b"hello".to_vec()));
+        assert_eq!(variant_array.value(0), Variant::from(b"hello".as_slice()));
         
         // Row 1: null
         assert!(variant_array.is_null(1));
         
         // Row 2: binary with special bytes
-        assert_eq!(variant_array.value(2), Variant::from(vec![0x00, 0x01, 0x02, 0xFF]));
+        let bytes = [0x00, 0x01, 0x02, 0xFF];
+        assert_eq!(variant_array.value(2), Variant::from(bytes.as_slice()));
         
         // Row 3: empty binary
-        assert_eq!(variant_array.value(3), Variant::from(Vec::<u8>::new()));
+        let bytes = [];
+        assert_eq!(variant_array.value(3), Variant::from(bytes.as_slice()));
     }
 
     #[test]
@@ -4175,13 +4177,13 @@ mod row_builder_tests {
         assert_eq!(variant_array.len(), 3);
         
         // Row 0: large binary data
-        assert_eq!(variant_array.value(0), Variant::from(b"large binary data".to_vec()));
+        assert_eq!(variant_array.value(0), Variant::from(b"large binary data".as_slice()));
         
         // Row 1: null
         assert!(variant_array.is_null(1));
         
         // Row 2: another large chunk
-        assert_eq!(variant_array.value(2), Variant::from(b"another large chunk".to_vec()));
+        assert_eq!(variant_array.value(2), Variant::from(b"another large chunk".as_slice()));
     }
 
     #[test]
@@ -4213,13 +4215,13 @@ mod row_builder_tests {
         assert_eq!(variant_array.len(), 3);
         
         // Row 0: short binary
-        assert_eq!(variant_array.value(0), Variant::from(b"short".to_vec()));
+        assert_eq!(variant_array.value(0), Variant::from(b"short".as_slice()));
         
         // Row 1: null
         assert!(variant_array.is_null(1));
         
         // Row 2: long binary view
-        assert_eq!(variant_array.value(2), Variant::from(b"this is a longer binary view that exceeds inline storage".to_vec()));
+        assert_eq!(variant_array.value(2), Variant::from(b"this is a longer binary view that exceeds inline storage".as_slice()));
     }
 
     #[test]
@@ -4233,7 +4235,7 @@ mod row_builder_tests {
             Some([0xFF, 0xFE, 0xFD, 0xFC]),
         ];
         let fixed_binary_array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            binary_data.into_iter().map(|x| x.map(|v| v.as_slice())),
+            binary_data.into_iter(),
             4,
         ).unwrap();
         
@@ -4254,13 +4256,15 @@ mod row_builder_tests {
         assert_eq!(variant_array.len(), 3);
         
         // Row 0: fixed size binary
-        assert_eq!(variant_array.value(0), Variant::from(vec![0x01, 0x02, 0x03, 0x04]));
+        let bytes = [0x01, 0x02, 0x03, 0x04];
+        assert_eq!(variant_array.value(0), Variant::from(bytes.as_slice()));
         
         // Row 1: null
         assert!(variant_array.is_null(1));
         
         // Row 2: another fixed size binary
-        assert_eq!(variant_array.value(2), Variant::from(vec![0xFF, 0xFE, 0xFD, 0xFC]));
+        let bytes = [0xFF, 0xFE, 0xFD, 0xFC];
+        assert_eq!(variant_array.value(2), Variant::from(bytes.as_slice()));
     }
 
     #[test]
