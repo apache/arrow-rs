@@ -1278,7 +1278,7 @@ impl<'a> WriteThrift for FileMeta<'a> {
         // field 2 is schema. do depth-first traversal of tree, converting to SchemaElement and
         // writing along the way.
         let root = self.file_metadata.schema_descr().root_schema_ptr();
-        let schema_len = num_nodes(&root);
+        let schema_len = num_nodes(&root)?;
         writer.write_field_begin(FieldType::List, 2, 1)?;
         writer.write_list_begin(ElementType::Struct, schema_len)?;
         // recursively write Type nodes as SchemaElements
@@ -1313,6 +1313,16 @@ impl<'a> WriteThrift for FileMeta<'a> {
 }
 
 fn write_schema<W: Write>(
+    schema: &TypePtr,
+    writer: &mut ThriftCompactOutputProtocol<W>,
+) -> Result<()> {
+    if !schema.is_group() {
+        return Err(general_err!("Root schema must be Group type"));
+    }
+    write_schema_helper(schema, writer)
+}
+
+fn write_schema_helper<W: Write>(
     node: &TypePtr,
     writer: &mut ThriftCompactOutputProtocol<W>,
 ) -> Result<()> {
@@ -1384,7 +1394,7 @@ fn write_schema<W: Write>(
 
             // Add child elements for a group
             for field in fields {
-                write_schema(field, writer)?;
+                write_schema_helper(field, writer)?;
             }
             Ok(())
         }
@@ -1520,12 +1530,18 @@ impl WriteThrift for ColumnChunkMetaData {
 pub(crate) mod tests {
     use crate::errors::Result;
     use crate::file::metadata::thrift_gen::{
-        convert_column, convert_row_group, BoundingBox, ColumnChunk, RowGroup,
+        convert_column, convert_row_group, write_schema, BoundingBox, ColumnChunk, RowGroup,
+        SchemaElement,
     };
     use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
-    use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
-    use crate::schema::types::{ColumnDescriptor, SchemaDescriptor};
+    use crate::parquet_thrift::{
+        read_thrift_vec, ElementType, ReadThrift, ThriftCompactOutputProtocol,
+        ThriftSliceInputProtocol,
+    };
+    use crate::schema::types::{
+        num_nodes, parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor, TypePtr,
+    };
     use std::sync::Arc;
 
     // for testing. decode thrift encoded RowGroup
@@ -1545,6 +1561,40 @@ pub(crate) mod tests {
         let mut reader = ThriftSliceInputProtocol::new(buf);
         let cc = ColumnChunk::read_thrift(&mut reader)?;
         convert_column(cc, column_descr)
+    }
+
+    pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {
+        let num_nodes = num_nodes(&schema)?;
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+
+        // kick off writing list
+        writer.write_list_begin(ElementType::Struct, num_nodes)?;
+
+        // write SchemaElements
+        write_schema(&schema, &mut writer)?;
+
+        let mut prot = ThriftSliceInputProtocol::new(&mut buf);
+        let se: Vec<SchemaElement> = read_thrift_vec(&mut prot)?;
+        parquet_schema_from_array(se)
+    }
+
+    pub(crate) fn schema_to_buf(schema: &TypePtr) -> Result<Vec<u8>> {
+        let num_nodes = num_nodes(&schema)?;
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+
+        // kick off writing list
+        writer.write_list_begin(ElementType::Struct, num_nodes)?;
+
+        // write SchemaElements
+        write_schema(schema, &mut writer)?;
+        Ok(buf)
+    }
+
+    pub(crate) fn buf_to_schema_list<'a>(buf: &'a mut Vec<u8>) -> Result<Vec<SchemaElement<'a>>> {
+        let mut prot = ThriftSliceInputProtocol::new(buf.as_mut_slice());
+        read_thrift_vec(&mut prot)
     }
 
     #[test]
