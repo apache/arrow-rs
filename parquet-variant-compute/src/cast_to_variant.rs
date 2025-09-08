@@ -760,79 +760,28 @@ impl<'a, T: ArrowTimestampType> TimestampArrowToVariantBuilder<'a, T> {
     }
 }
 
-/// Generic Date builder for Arrow date arrays (Date32, Date64)
-pub(crate) struct DateArrowToVariantBuilder<'a, T: ArrowTemporalType> 
-where
-    i64: From<T::Native>,
-{
-    array: &'a arrow::array::PrimitiveArray<T>,
-}
+// Generic Date builder for Arrow date arrays (Date32, Date64)
+define_row_builder!(
+    struct DateArrowToVariantBuilder<'a, T: ArrowTemporalType>
+    where i64: From<T::Native>,
+    |array| -> PrimitiveArray<T> { array.as_primitive() },
+    |value| {
+        let date_value = i64::from(value);
+        as_date::<T>(date_value).map(Variant::from).unwrap_or(Variant::Null)
+    }
+);
 
-impl<'a, T: ArrowTemporalType> DateArrowToVariantBuilder<'a, T> 
-where
-    i64: From<T::Native>,
-{
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_primitive::<T>(),
-        }
+// Generic Time builder for Arrow time arrays (Time32, Time64)
+define_row_builder!(
+    struct TimeArrowToVariantBuilder<'a, T: ArrowTemporalType>
+    where i64: From<T::Native>,
+    |array| -> PrimitiveArray<T> { array.as_primitive() },
+    |value| {
+        let time_value = i64::from(value);
+        as_time::<T>(time_value).map(Variant::from).unwrap_or(Variant::Null)
     }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let date_value = i64::from(self.array.value(index));
-            
-            // Use Arrow's generic date conversion function
-            let Some(naive_date) = as_date::<T>(date_value) else {
-                return Err(ArrowError::CastError(format!(
-                    "Failed to convert Arrow date value {} to chrono::NaiveDate for type {:?}",
-                    date_value, T::DATA_TYPE
-                )));
-            };
-            builder.append_value(Variant::from(naive_date));
-        }
-        Ok(())
-    }
-}
+);
 
-/// Generic Time builder for Arrow time arrays (Time32, Time64)
-pub(crate) struct TimeArrowToVariantBuilder<'a, T: ArrowTemporalType> 
-where
-    i64: From<T::Native>,
-{
-    array: &'a arrow::array::PrimitiveArray<T>,
-}
-
-impl<'a, T: ArrowTemporalType> TimeArrowToVariantBuilder<'a, T> 
-where
-    i64: From<T::Native>,
-{
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_primitive::<T>(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let time_value = i64::from(self.array.value(index));
-            
-            // Use Arrow's generic time conversion function
-            let Some(naive_time) = as_time::<T>(time_value) else {
-                return Err(ArrowError::CastError(format!(
-                    "Failed to convert Arrow time value {} to chrono::NaiveTime for type {:?}",
-                    time_value, T::DATA_TYPE
-                )));
-            };
-            builder.append_value(Variant::from(naive_time));
-        }
-        Ok(())
-    }
-}
 
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
