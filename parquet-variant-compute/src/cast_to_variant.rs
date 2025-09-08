@@ -63,6 +63,10 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     PrimitiveFloat16(PrimitiveArrowToVariantBuilder<'a, Float16Type>),
     PrimitiveFloat32(PrimitiveArrowToVariantBuilder<'a, Float32Type>),
     PrimitiveFloat64(PrimitiveArrowToVariantBuilder<'a, Float64Type>),
+    Decimal32(Decimal32ArrowToVariantBuilder<'a>),
+    Decimal64(Decimal64ArrowToVariantBuilder<'a>),
+    Decimal128(Decimal128ArrowToVariantBuilder<'a>),
+    Decimal256(Decimal256ArrowToVariantBuilder<'a>),
     Boolean(BooleanArrowToVariantBuilder<'a>),
     String(StringArrowToVariantBuilder<'a>),
     Struct(StructArrowToVariantBuilder<'a>),
@@ -91,6 +95,10 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::PrimitiveFloat16(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::PrimitiveFloat32(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::PrimitiveFloat64(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Decimal32(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Decimal64(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Decimal128(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Decimal256(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Boolean(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::String(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Struct(b) => b.append_row(index, builder),
@@ -501,6 +509,115 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
     }
 }
 
+/// Decimal32 builder for Arrow Decimal32Array
+pub(crate) struct Decimal32ArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Decimal32Array,
+    scale: i8,
+}
+
+impl<'a> Decimal32ArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array, scale: i8) -> Self {
+        Self {
+            array: array.as_primitive::<Decimal32Type>(),
+            scale,
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let value = self.array.value(index);
+            let variant = decimal_to_variant_decimal!(value, &self.scale, i32, VariantDecimal4);
+            builder.append_value(variant);
+        }
+        Ok(())
+    }
+}
+
+/// Decimal64 builder for Arrow Decimal64Array
+pub(crate) struct Decimal64ArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Decimal64Array,
+    scale: i8,
+}
+
+impl<'a> Decimal64ArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array, scale: i8) -> Self {
+        Self {
+            array: array.as_primitive::<Decimal64Type>(),
+            scale,
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let value = self.array.value(index);
+            let variant = decimal_to_variant_decimal!(value, &self.scale, i64, VariantDecimal8);
+            builder.append_value(variant);
+        }
+        Ok(())
+    }
+}
+
+/// Decimal128 builder for Arrow Decimal128Array
+pub(crate) struct Decimal128ArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Decimal128Array,
+    scale: i8,
+}
+
+impl<'a> Decimal128ArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array, scale: i8) -> Self {
+        Self {
+            array: array.as_primitive::<Decimal128Type>(),
+            scale,
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let value = self.array.value(index);
+            let variant = decimal_to_variant_decimal!(value, &self.scale, i128, VariantDecimal16);
+            builder.append_value(variant);
+        }
+        Ok(())
+    }
+}
+
+/// Decimal256 builder for Arrow Decimal256Array
+pub(crate) struct Decimal256ArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Decimal256Array,
+    scale: i8,
+}
+
+impl<'a> Decimal256ArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array, scale: i8) -> Self {
+        Self {
+            array: array.as_primitive::<Decimal256Type>(),
+            scale,
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let value = self.array.value(index);
+            // Special handling for Decimal256 like in original cast_to_variant
+            let variant = if let Some(v) = value.to_i128() {
+                decimal_to_variant_decimal!(v, &self.scale, i128, VariantDecimal16)
+            } else {
+                Variant::Null
+            };
+            builder.append_value(variant);
+        }
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -521,6 +638,12 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Float16 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat16(PrimitiveArrowToVariantBuilder::<Float16Type>::new(array))),
         DataType::Float32 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat32(PrimitiveArrowToVariantBuilder::<Float32Type>::new(array))),
         DataType::Float64 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat64(PrimitiveArrowToVariantBuilder::<Float64Type>::new(array))),
+        
+        // Decimal types
+        DataType::Decimal32(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal32(Decimal32ArrowToVariantBuilder::new(array, *scale))),
+        DataType::Decimal64(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal64(Decimal64ArrowToVariantBuilder::new(array, *scale))),
+        DataType::Decimal128(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal128(Decimal128ArrowToVariantBuilder::new(array, *scale))),
+        DataType::Decimal256(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal256(Decimal256ArrowToVariantBuilder::new(array, *scale))),
         
         // Special types
         DataType::Boolean => Ok(ArrowToVariantRowBuilder::Boolean(BooleanArrowToVariantBuilder::new(array))),
@@ -3743,5 +3866,108 @@ mod row_builder_tests {
         
         // Row 1: string "test" (type_id = 3)
         assert_eq!(variant_array.value(1), Variant::from("test"));
+    }
+
+    #[test]
+    fn test_decimal32_row_builder() {
+        use arrow::array::Decimal32Array;
+        use parquet_variant::{VariantDecimal4};
+
+        // Test Decimal32Array with scale 2 (e.g., for currency: 12.34)
+        let decimal_array = Decimal32Array::from(vec![Some(1234), None, Some(-5678)])
+            .with_precision_and_scale(10, 2).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            decimal_array.data_type(),
+            &decimal_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..decimal_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: 12.34 (1234 with scale 2)
+        assert_eq!(variant_array.value(0), Variant::from(VariantDecimal4::try_new(1234, 2).unwrap()));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: -56.78 (-5678 with scale 2)
+        assert_eq!(variant_array.value(2), Variant::from(VariantDecimal4::try_new(-5678, 2).unwrap()));
+    }
+
+    #[test]
+    fn test_decimal128_row_builder() {
+        use arrow::array::Decimal128Array;
+        use parquet_variant::{VariantDecimal16};
+
+        // Test Decimal128Array with negative scale (multiply by 10^|scale|)
+        let decimal_array = Decimal128Array::from(vec![Some(123), None, Some(456)])
+            .with_precision_and_scale(10, -2).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            decimal_array.data_type(),
+            &decimal_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..decimal_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: 123 * 10^2 = 12300 with scale 0 (negative scale handling)
+        assert_eq!(variant_array.value(0), Variant::from(VariantDecimal16::try_new(12300, 0).unwrap()));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 456 * 10^2 = 45600 with scale 0
+        assert_eq!(variant_array.value(2), Variant::from(VariantDecimal16::try_new(45600, 0).unwrap()));
+    }
+
+    #[test]
+    fn test_decimal256_overflow_row_builder() {
+        use arrow::array::Decimal256Array;
+        use arrow::datatypes::i256;
+
+        // Test Decimal256Array with a value that overflows i128
+        let large_value = i256::from_i128(i128::MAX) + i256::from(1); // Overflows i128
+        let decimal_array = Decimal256Array::from(vec![Some(large_value), Some(i256::from(123))])
+            .with_precision_and_scale(76, 3).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            decimal_array.data_type(),
+            &decimal_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(2);
+        
+        for i in 0..decimal_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 2);
+        
+        // Row 0: overflow value becomes Variant::Null
+        assert_eq!(variant_array.value(0), Variant::Null);
+        
+        // Row 1: normal value converts successfully
+        assert_eq!(variant_array.value(1), Variant::from(VariantDecimal16::try_new(123, 3).unwrap()));
     }
 }
