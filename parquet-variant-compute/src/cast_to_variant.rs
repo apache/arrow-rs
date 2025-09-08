@@ -90,6 +90,12 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     TimestampMillisecond(TimestampArrowToVariantBuilder<'a, TimestampMillisecondType>),
     TimestampMicrosecond(TimestampArrowToVariantBuilder<'a, TimestampMicrosecondType>),
     TimestampNanosecond(TimestampArrowToVariantBuilder<'a, TimestampNanosecondType>),
+    Date32(Date32ArrowToVariantBuilder<'a>),
+    Date64(Date64ArrowToVariantBuilder<'a>),
+    Time32Second(Time32SecondArrowToVariantBuilder<'a>),
+    Time32Millisecond(Time32MillisecondArrowToVariantBuilder<'a>),
+    Time64Microsecond(Time64MicrosecondArrowToVariantBuilder<'a>),
+    Time64Nanosecond(Time64NanosecondArrowToVariantBuilder<'a>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -132,6 +138,12 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::TimestampMillisecond(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::TimestampMicrosecond(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::TimestampNanosecond(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Date32(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Date64(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Time32Second(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Time32Millisecond(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Time64Microsecond(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Time64Nanosecond(b) => b.append_row(index, builder),
         }
     }
 }
@@ -761,6 +773,196 @@ impl<'a, T: ArrowTimestampType> TimestampArrowToVariantBuilder<'a, T> {
     }
 }
 
+/// Date32 builder for Arrow Date32 arrays
+pub(crate) struct Date32ArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Date32Array,
+}
+
+impl<'a> Date32ArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_primitive::<Date32Type>(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let date_value = self.array.value(index);
+            
+            // Use Date32Type's specific conversion method
+            let naive_date = Date32Type::to_naive_date(date_value);
+            builder.append_value(Variant::from(naive_date));
+        }
+        Ok(())
+    }
+}
+
+/// Date64 builder for Arrow Date64 arrays
+pub(crate) struct Date64ArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Date64Array,
+}
+
+impl<'a> Date64ArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_primitive::<Date64Type>(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let date_value = self.array.value(index);
+            
+            // Use Date64Type's specific conversion method
+            let Some(naive_date) = Date64Type::to_naive_date_opt(date_value) else {
+                return Err(ArrowError::CastError(format!(
+                    "Failed to convert Arrow date value {} to chrono::NaiveDate for Date64 type",
+                    date_value
+                )));
+            };
+            builder.append_value(Variant::from(naive_date));
+        }
+        Ok(())
+    }
+}
+
+/// Time32Second builder for Arrow Time32(Second) arrays
+pub(crate) struct Time32SecondArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Time32SecondArray,
+}
+
+impl<'a> Time32SecondArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_primitive::<Time32SecondType>(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let time_value = self.array.value(index);
+            
+            // Convert using NaiveTime::from_num_seconds_from_midnight_opt (nanoseconds are 0)
+            let Some(naive_time) = NaiveTime::from_num_seconds_from_midnight_opt(time_value as u32, 0u32) else {
+                return Err(ArrowError::CastError(format!(
+                    "Failed to convert Arrow time value {} to chrono::NaiveTime for Time32(Second) type",
+                    time_value
+                )));
+            };
+            builder.append_value(Variant::from(naive_time));
+        }
+        Ok(())
+    }
+}
+
+/// Time32Millisecond builder for Arrow Time32(Millisecond) arrays
+pub(crate) struct Time32MillisecondArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Time32MillisecondArray,
+}
+
+impl<'a> Time32MillisecondArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_primitive::<Time32MillisecondType>(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let time_value = self.array.value(index);
+            
+            // Convert milliseconds to seconds and nanoseconds
+            let Some(naive_time) = NaiveTime::from_num_seconds_from_midnight_opt(
+                time_value as u32 / 1000,
+                (time_value as u32 % 1000) * 1_000_000
+            ) else {
+                return Err(ArrowError::CastError(format!(
+                    "Failed to convert Arrow time value {} to chrono::NaiveTime for Time32(Millisecond) type",
+                    time_value
+                )));
+            };
+            builder.append_value(Variant::from(naive_time));
+        }
+        Ok(())
+    }
+}
+
+/// Time64Microsecond builder for Arrow Time64(Microsecond) arrays
+pub(crate) struct Time64MicrosecondArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Time64MicrosecondArray,
+}
+
+impl<'a> Time64MicrosecondArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_primitive::<Time64MicrosecondType>(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let time_value = self.array.value(index);
+            
+            // Convert microseconds to seconds and nanoseconds
+            let Some(naive_time) = NaiveTime::from_num_seconds_from_midnight_opt(
+                (time_value / 1_000_000) as u32,
+                (time_value % 1_000_000 * 1_000) as u32
+            ) else {
+                return Err(ArrowError::CastError(format!(
+                    "Failed to convert Arrow time value {} to chrono::NaiveTime for Time64(Microsecond) type",
+                    time_value
+                )));
+            };
+            builder.append_value(Variant::from(naive_time));
+        }
+        Ok(())
+    }
+}
+
+/// Time64Nanosecond builder for Arrow Time64(Nanosecond) arrays
+pub(crate) struct Time64NanosecondArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::Time64NanosecondArray,
+}
+
+impl<'a> Time64NanosecondArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_primitive::<Time64NanosecondType>(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let time_value = self.array.value(index);
+            
+            // Convert nanoseconds to seconds and nanoseconds
+            let Some(naive_time) = NaiveTime::from_num_seconds_from_midnight_opt(
+                (time_value / 1_000_000_000) as u32,
+                (time_value % 1_000_000_000) as u32
+            ) else {
+                return Err(ArrowError::CastError(format!(
+                    "Failed to convert Arrow time value {} to chrono::NaiveTime for Time64(Nanosecond) type",
+                    time_value
+                )));
+            };
+            builder.append_value(Variant::from(naive_time));
+        }
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -846,7 +1048,38 @@ fn make_arrow_to_variant_row_builder<'a>(
             }
         }
         
-        // TODO: Add other types (Date, Time, etc.)
+        // Date types
+        DataType::Date32 => Ok(ArrowToVariantRowBuilder::Date32(
+            Date32ArrowToVariantBuilder::new(array)
+        )),
+        DataType::Date64 => Ok(ArrowToVariantRowBuilder::Date64(
+            Date64ArrowToVariantBuilder::new(array)
+        )),
+        
+        // Time types
+        DataType::Time32(time_unit) => {
+            match time_unit {
+                TimeUnit::Second => Ok(ArrowToVariantRowBuilder::Time32Second(
+                    Time32SecondArrowToVariantBuilder::new(array)
+                )),
+                TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::Time32Millisecond(
+                    Time32MillisecondArrowToVariantBuilder::new(array)
+                )),
+                _ => Err(ArrowError::CastError(format!("Unsupported Time32 unit: {time_unit:?}"))),
+            }
+        }
+        DataType::Time64(time_unit) => {
+            match time_unit {
+                TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::Time64Microsecond(
+                    Time64MicrosecondArrowToVariantBuilder::new(array)
+                )),
+                TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::Time64Nanosecond(
+                    Time64NanosecondArrowToVariantBuilder::new(array)
+                )),
+                _ => Err(ArrowError::CastError(format!("Unsupported Time64 unit: {time_unit:?}"))),
+            }
+        }
+        
         _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
     }
 }
@@ -1301,7 +1534,7 @@ fn convert_map(
                     builder.append_null();
                     continue;
                 }
-                
+
                 let start = offsets[i].as_usize();
                 let end = offsets[i + 1].as_usize();
 
@@ -4502,5 +4735,281 @@ mod row_builder_tests {
         // Row 2: no fractional seconds -> TimestampNtzMicros
         let expected_no_millis = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(2), Variant::from(expected_no_millis));
+    }
+
+    #[test]
+    fn test_date32_row_builder() {
+        use arrow::array::Date32Array;
+        use chrono::NaiveDate;
+
+        // Test Date32Array with various dates
+        let date_data = vec![
+            Some(0),        // 1970-01-01
+            None,
+            Some(19723),    // 2024-01-01 (days since epoch)
+            Some(-719162),  // 0001-01-01 (near minimum)
+        ];
+        let date_array = Date32Array::from(date_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            date_array.data_type(),
+            &date_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(4);
+        
+        for i in 0..date_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 4);
+        
+        // Row 0: 1970-01-01 (epoch)
+        let expected_epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_epoch));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 2024-01-01
+        let expected_2024 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_2024));
+        
+        // Row 3: 0001-01-01 (near minimum date)
+        let expected_min = NaiveDate::from_ymd_opt(1, 1, 1).unwrap();
+        assert_eq!(variant_array.value(3), Variant::from(expected_min));
+    }
+
+    #[test]
+    fn test_date64_row_builder() {
+        use arrow::array::Date64Array;
+        use chrono::NaiveDate;
+
+        // Test Date64Array with various dates (milliseconds since epoch)
+        let date_data = vec![
+            Some(0),            // 1970-01-01
+            None,
+            Some(1704067200000), // 2024-01-01 (milliseconds since epoch)
+            Some(86400000),      // 1970-01-02
+        ];
+        let date_array = Date64Array::from(date_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            date_array.data_type(),
+            &date_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(4);
+        
+        for i in 0..date_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 4);
+        
+        // Row 0: 1970-01-01 (epoch)
+        let expected_epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_epoch));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 2024-01-01
+        let expected_2024 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_2024));
+        
+        // Row 3: 1970-01-02
+        let expected_next_day = NaiveDate::from_ymd_opt(1970, 1, 2).unwrap();
+        assert_eq!(variant_array.value(3), Variant::from(expected_next_day));
+    }
+
+    #[test]
+    fn test_time32_second_row_builder() {
+        use arrow::array::Time32SecondArray;
+        use chrono::NaiveTime;
+
+        // Test Time32SecondArray with various times (seconds since midnight)
+        let time_data = vec![
+            Some(0),        // 00:00:00
+            None,
+            Some(3661),     // 01:01:01
+            Some(86399),    // 23:59:59
+        ];
+        let time_array = Time32SecondArray::from(time_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            time_array.data_type(),
+            &time_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(4);
+        
+        for i in 0..time_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 4);
+        
+        // Row 0: 00:00:00 (midnight)
+        let expected_midnight = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 01:01:01
+        let expected_time = NaiveTime::from_hms_opt(1, 1, 1).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_time));
+        
+        // Row 3: 23:59:59 (last second of day)
+        let expected_last = NaiveTime::from_hms_opt(23, 59, 59).unwrap();
+        assert_eq!(variant_array.value(3), Variant::from(expected_last));
+    }
+
+    #[test]
+    fn test_time32_millisecond_row_builder() {
+        use arrow::array::Time32MillisecondArray;
+        use chrono::NaiveTime;
+
+        // Test Time32MillisecondArray with various times (milliseconds since midnight)
+        let time_data = vec![
+            Some(0),         // 00:00:00.000
+            None,
+            Some(3661123),   // 01:01:01.123
+            Some(86399999),  // 23:59:59.999
+        ];
+        let time_array = Time32MillisecondArray::from(time_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            time_array.data_type(),
+            &time_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(4);
+        
+        for i in 0..time_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 4);
+        
+        // Row 0: 00:00:00.000 (midnight)
+        let expected_midnight = NaiveTime::from_hms_milli_opt(0, 0, 0, 0).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 01:01:01.123
+        let expected_time = NaiveTime::from_hms_milli_opt(1, 1, 1, 123).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_time));
+        
+        // Row 3: 23:59:59.999 (last millisecond of day)
+        let expected_last = NaiveTime::from_hms_milli_opt(23, 59, 59, 999).unwrap();
+        assert_eq!(variant_array.value(3), Variant::from(expected_last));
+    }
+
+    #[test]
+    fn test_time64_microsecond_row_builder() {
+        use arrow::array::Time64MicrosecondArray;
+        use chrono::NaiveTime;
+
+        // Test Time64MicrosecondArray with various times (microseconds since midnight)
+        let time_data = vec![
+            Some(0),              // 00:00:00.000000
+            None,
+            Some(3661123456),     // 01:01:01.123456
+            Some(86399999999),    // 23:59:59.999999
+        ];
+        let time_array = Time64MicrosecondArray::from(time_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            time_array.data_type(),
+            &time_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(4);
+        
+        for i in 0..time_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 4);
+        
+        // Row 0: 00:00:00.000000 (midnight)
+        let expected_midnight = NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 01:01:01.123456
+        let expected_time = NaiveTime::from_hms_micro_opt(1, 1, 1, 123456).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_time));
+        
+        // Row 3: 23:59:59.999999 (last microsecond of day)
+        let expected_last = NaiveTime::from_hms_micro_opt(23, 59, 59, 999999).unwrap();
+        assert_eq!(variant_array.value(3), Variant::from(expected_last));
+    }
+
+    #[test]
+    fn test_time64_nanosecond_row_builder() {
+        use arrow::array::Time64NanosecondArray;
+        use chrono::NaiveTime;
+
+        // Test Time64NanosecondArray with various times (nanoseconds since midnight)
+        let time_data = vec![
+            Some(0),                   // 00:00:00.000000000
+            None,
+            Some(3661123456789),       // 01:01:01.123456789
+            Some(86399999999999),      // 23:59:59.999999999
+        ];
+        let time_array = Time64NanosecondArray::from(time_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            time_array.data_type(),
+            &time_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(4);
+        
+        for i in 0..time_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 4);
+        
+        // Row 0: 00:00:00.000000000 (midnight)
+        let expected_midnight = NaiveTime::from_hms_nano_opt(0, 0, 0, 0).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 01:01:01.123456789 -> truncated to 01:01:01.123456000 (microsecond precision)
+        let expected_time = NaiveTime::from_hms_micro_opt(1, 1, 1, 123456).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_time));
+        
+        // Row 3: 23:59:59.999999999 -> truncated to 23:59:59.999999000 (microsecond precision)
+        let expected_last = NaiveTime::from_hms_micro_opt(23, 59, 59, 999999).unwrap();
+        assert_eq!(variant_array.value(3), Variant::from(expected_last));
     }
 }
