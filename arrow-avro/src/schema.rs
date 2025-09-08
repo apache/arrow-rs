@@ -467,7 +467,7 @@ impl AvroSchema {
         record.insert("fields".into(), Value::Array(fields_json));
         extend_with_passthrough_metadata(&mut record, &schema.metadata);
         let json_string = serde_json::to_string(&Value::Object(record))
-            .map_err(|e| ArrowError::SchemaError(format!("Serialising Avro JSON failed: {e}")))?;
+            .map_err(|e| ArrowError::SchemaError(format!("Serializing Avro JSON failed: {e}")))?;
         Ok(AvroSchema::new(json_string))
     }
 }
