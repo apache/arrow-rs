@@ -4346,7 +4346,7 @@ mod row_builder_tests {
     #[test]
     fn test_timestamp_second_row_builder() {
         use arrow::array::TimestampSecondArray;
-        use chrono::{DateTime, NaiveDateTime, Utc};
+        use chrono::{NaiveDateTime};
 
         // Test TimestampSecondArray without timezone
         let timestamp_data = vec![
@@ -4387,8 +4387,7 @@ mod row_builder_tests {
     #[test]
     fn test_timestamp_with_timezone_row_builder() {
         use arrow::array::TimestampMicrosecondArray;
-        use arrow_schema::DataType;
-        use chrono::{DateTime, Utc};
+        use chrono::{DateTime};
 
         // Test TimestampMicrosecondArray with timezone
         let timestamp_data = vec![
@@ -4396,7 +4395,7 @@ mod row_builder_tests {
             None,
             Some(1640995200000000), // 2022-01-01 00:00:00 UTC (in microseconds)
         ];
-        let timezone = Some("UTC".into());
+        let timezone = "UTC".to_string();
         let timestamp_array = TimestampMicrosecondArray::from(timestamp_data)
             .with_timezone(timezone.clone());
         
