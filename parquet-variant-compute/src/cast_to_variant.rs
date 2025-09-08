@@ -3875,7 +3875,7 @@ mod row_builder_tests {
 
         // Test Decimal32Array with scale 2 (e.g., for currency: 12.34)
         let decimal_array = Decimal32Array::from(vec![Some(1234), None, Some(-5678)])
-            .with_precision_and_scale(10, 2).unwrap();
+            .with_precision_and_scale(9, 2).unwrap();
         
         let mut row_builder = make_arrow_to_variant_row_builder(
             decimal_array.data_type(),
