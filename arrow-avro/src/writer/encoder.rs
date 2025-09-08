@@ -181,9 +181,9 @@ impl<'a> FieldEncoder<'a> {
                 }
             },
             other => {
-                return Err(ArrowError::NotYetImplemented(
+                return Err(ArrowError::NotYetImplemented(format!(
                     "Avro writer: {other:?} not yet supported".into(),
-                ));
+                )));
             }
         };
         // Compute the effective null state from writer-declared nullability and data nulls.
