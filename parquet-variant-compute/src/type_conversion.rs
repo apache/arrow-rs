@@ -20,6 +20,7 @@
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// not requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
+#[allow(unused)]
 macro_rules! non_generic_conversion_array {
     ($array:expr, $cast_fn:expr, $builder:expr) => {{
         let array = $array;
@@ -33,6 +34,7 @@ macro_rules! non_generic_conversion_array {
         }
     }};
 }
+#[allow(unused)]
 pub(crate) use non_generic_conversion_array;
 
 /// Convert the value at a specific index in the given array into a `Variant`.
@@ -52,6 +54,7 @@ pub(crate) use non_generic_conversion_single_value;
 /// Convert the input array to a `VariantArray` row by row, using `method`
 /// requiring a generic type to downcast the generic array to a specific
 /// array type and `cast_fn` to transform each element to a type compatible with Variant
+#[allow(unused)]
 macro_rules! generic_conversion_array {
     ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
         $crate::type_conversion::non_generic_conversion_array!(
@@ -61,6 +64,7 @@ macro_rules! generic_conversion_array {
         )
     }};
 }
+#[allow(unused)]
 pub(crate) use generic_conversion_array;
 
 /// Convert the value at a specific index in the given array into a `Variant`,
@@ -79,6 +83,7 @@ pub(crate) use generic_conversion_single_value;
 
 /// Convert the input array of a specific primitive type to a `VariantArray`
 /// row by row
+#[allow(unused)]
 macro_rules! primitive_conversion_array {
     ($t:ty, $input:expr, $builder:expr) => {{
         $crate::type_conversion::generic_conversion_array!(
@@ -90,6 +95,7 @@ macro_rules! primitive_conversion_array {
         )
     }};
 }
+#[allow(unused)]
 pub(crate) use primitive_conversion_array;
 
 /// Convert the value at a specific index in the given array into a `Variant`.
