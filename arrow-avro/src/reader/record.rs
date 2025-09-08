@@ -22,9 +22,10 @@ use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::schema::Nullability;
 use arrow_array::builder::{
-    Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
-    IntervalMonthDayNanoBuilder, StringViewBuilder,
+    Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder, StringViewBuilder,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_array::builder::{Decimal32Builder, Decimal64Builder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
@@ -1295,6 +1296,8 @@ impl Projector {
 /// Lightweight skipper for non‑projected writer fields
 /// (fields present in the writer schema but omitted by the reader/projection);
 /// per Avro 1.11.1 schema resolution these fields are ignored.
+///
+/// <https://avro.apache.org/docs/1.11.1/specification/#schema-resolution>
 #[derive(Debug)]
 enum Skipper {
     Null,
@@ -1445,11 +1448,7 @@ mod tests {
     use super::*;
     use crate::codec::AvroField;
     use crate::schema::{PrimitiveType, Schema, TypeName};
-    use arrow_array::{
-        cast::AsArray, Array, Decimal128Array, Decimal256Array, Decimal32Array, DictionaryArray,
-        FixedSizeBinaryArray, IntervalMonthDayNanoArray, ListArray, MapArray, StringArray,
-        StructArray,
-    };
+    use arrow_array::cast::AsArray;
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
         let mut buf = Vec::new();
