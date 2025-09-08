@@ -22,8 +22,10 @@ use crate::schema::{
 };
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use indexmap::IndexMap;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -614,7 +616,7 @@ pub enum Codec {
     /// Represents Avro fixed type, maps to Arrow's FixedSizeBinary data type
     /// The i32 parameter indicates the fixed binary size
     Fixed(i32),
-    /// Represents Avro decimal type, maps to Arrow's Decimal128 or Decimal256 data types
+    /// Represents Avro decimal type, maps to Arrow's Decimal32, Decimal64, Decimal128, or Decimal256 data types
     ///
     /// The fields are `(precision, scale, fixed_size)`.
     /// - `precision` (`usize`): Total number of digits.
@@ -660,20 +662,28 @@ impl Codec {
             }
             Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => DataType::FixedSizeBinary(*size),
-            Self::Decimal(precision, scale, size) => {
+            Self::Decimal(precision, scale, _size) => {
                 let p = *precision as u8;
                 let s = scale.unwrap_or(0) as i8;
-                let too_large_for_128 = match *size {
-                    Some(sz) => sz > 16,
-                    None => {
-                        (p as usize) > DECIMAL128_MAX_PRECISION as usize
-                            || (s as usize) > DECIMAL128_MAX_SCALE as usize
+                #[cfg(feature = "small_decimals")]
+                {
+                    if *precision <= DECIMAL32_MAX_PRECISION as usize {
+                        DataType::Decimal32(p, s)
+                    } else if *precision <= DECIMAL64_MAX_PRECISION as usize {
+                        DataType::Decimal64(p, s)
+                    } else if *precision <= DECIMAL128_MAX_PRECISION as usize {
+                        DataType::Decimal128(p, s)
+                    } else {
+                        DataType::Decimal256(p, s)
                     }
-                };
-                if too_large_for_128 {
-                    DataType::Decimal256(p, s)
-                } else {
-                    DataType::Decimal128(p, s)
+                }
+                #[cfg(not(feature = "small_decimals"))]
+                {
+                    if *precision <= DECIMAL128_MAX_PRECISION as usize {
+                        DataType::Decimal128(p, s)
+                    } else {
+                        DataType::Decimal256(p, s)
+                    }
                 }
             }
             Self::Uuid => DataType::FixedSizeBinary(16),
@@ -719,6 +729,29 @@ impl From<PrimitiveType> for Codec {
     }
 }
 
+/// Compute the exact maximum base‑10 precision that fits in `n` bytes for Avro
+/// `fixed` decimals stored as two's‑complement unscaled integers (big‑endian).
+///
+/// Per Avro spec (Decimal logical type), for a fixed length `n`:
+/// max precision = ⌊log₁₀(2^(8n − 1) − 1)⌋.
+///
+/// This function returns `None` if `n` is 0 or greater than 32 (Arrow supports
+/// Decimal256, which is 32 bytes and has max precision 76).
+const fn max_precision_for_fixed_bytes(n: usize) -> Option<usize> {
+    // Precomputed exact table for n = 1..=32
+    // 1:2, 2:4, 3:6, 4:9, 5:11, 6:14, 7:16, 8:18, 9:21, 10:23, 11:26, 12:28,
+    // 13:31, 14:33, 15:35, 16:38, 17:40, 18:43, 19:45, 20:47, 21:50, 22:52,
+    // 23:55, 24:57, 25:59, 26:62, 27:64, 28:67, 29:69, 30:71, 31:74, 32:76
+    const MAX_P: [usize; 32] = [
+        2, 4, 6, 9, 11, 14, 16, 18, 21, 23, 26, 28, 31, 33, 35, 38, 40, 43, 45, 47, 50, 52, 55, 57,
+        59, 62, 64, 67, 69, 71, 74, 76,
+    ];
+    match n {
+        1..=32 => Some(MAX_P[n - 1]),
+        _ => None,
+    }
+}
+
 fn parse_decimal_attributes(
     attributes: &Attributes,
     fallback_size: Option<usize>,
@@ -742,6 +775,34 @@ fn parse_decimal_attributes(
         .and_then(|v| v.as_u64())
         .map(|s| s as usize)
         .or(fallback_size);
+    if precision == 0 {
+        return Err(ArrowError::ParseError(
+            "Decimal requires precision > 0".to_string(),
+        ));
+    }
+    if scale > precision {
+        return Err(ArrowError::ParseError(format!(
+            "Decimal has invalid scale > precision: scale={scale}, precision={precision}"
+        )));
+    }
+    if precision > DECIMAL256_MAX_PRECISION as usize {
+        return Err(ArrowError::ParseError(format!(
+            "Decimal precision {precision} exceeds maximum supported by Arrow ({})",
+            DECIMAL256_MAX_PRECISION
+        )));
+    }
+    if let Some(sz) = size {
+        let max_p = max_precision_for_fixed_bytes(sz).ok_or_else(|| {
+            ArrowError::ParseError(format!(
+                "Invalid fixed size for decimal: {sz}, must be between 1 and 32 bytes"
+            ))
+        })?;
+        if precision > max_p {
+            return Err(ArrowError::ParseError(format!(
+                "Decimal precision {precision} exceeds capacity of fixed size {sz} bytes (max {max_p})"
+            )));
+        }
+    }
     Ok((precision, scale, size))
 }
 
@@ -959,7 +1020,7 @@ impl<'a> Maker<'a> {
                     Ok(field)
                 }
                 ComplexType::Array(a) => {
-                    let mut field = self.parse_type(a.items.as_ref(), namespace)?;
+                    let field = self.parse_type(a.items.as_ref(), namespace)?;
                     Ok(AvroDataType {
                         nullability: None,
                         metadata: a.attributes.field_metadata(),
