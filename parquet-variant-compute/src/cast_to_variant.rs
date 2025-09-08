@@ -30,14 +30,15 @@ use arrow::array::{
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    i256, ArrowNativeType, ArrowPrimitiveType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
+    i256, ArrowNativeType, ArrowPrimitiveType, ArrowTimestampType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
     Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, LargeBinaryType, RunEndIndexType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
 use arrow::temporal_conversions::{
-    timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
+    as_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
     timestamp_us_to_datetime,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef, TimeUnit, UnionFields};
@@ -85,6 +86,10 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     LargeList(ListArrowToVariantBuilder<'a, i64>),
     Map(MapArrowToVariantBuilder<'a>),
     Union(UnionArrowToVariantBuilder<'a>),
+    TimestampSecond(TimestampArrowToVariantBuilder<'a, TimestampSecondType>),
+    TimestampMillisecond(TimestampArrowToVariantBuilder<'a, TimestampMillisecondType>),
+    TimestampMicrosecond(TimestampArrowToVariantBuilder<'a, TimestampMicrosecondType>),
+    TimestampNanosecond(TimestampArrowToVariantBuilder<'a, TimestampNanosecondType>),
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
@@ -123,6 +128,10 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::LargeList(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Map(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Union(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::TimestampSecond(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::TimestampMillisecond(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::TimestampMicrosecond(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::TimestampNanosecond(b) => b.append_row(index, builder),
         }
     }
 }
@@ -714,6 +723,46 @@ impl<'a> Utf8ViewArrowToVariantBuilder<'a> {
     }
 }
 
+/// Generic Timestamp builder for Arrow timestamp arrays
+pub(crate) struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType> {
+    array: &'a arrow::array::PrimitiveArray<T>,
+    time_zone: Option<Arc<str>>,
+}
+
+impl<'a, T: ArrowTimestampType> TimestampArrowToVariantBuilder<'a, T> {
+    fn new(array: &'a dyn Array, time_zone: Option<Arc<str>>) -> Self {
+        Self {
+            array: array.as_primitive::<T>(),
+            time_zone,
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let timestamp_value = self.array.value(index);
+            
+            // Convert using Arrow's temporal conversion functions
+            if let Some(naive_datetime) = as_datetime::<T>(timestamp_value) {
+                let variant = if self.time_zone.is_none() {
+                    // No timezone -> NaiveDateTime -> TimestampNtzMicros/TimestampNtzNanos
+                    Variant::from(naive_datetime) // Uses From<NaiveDateTime> for Variant
+                } else {
+                    // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos  
+                    let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
+                    Variant::from(utc_dt) // Uses From<DateTime<Utc>> for Variant
+                };
+                builder.append_value(variant);
+            } else {
+                // Conversion failed -> append null
+                builder.append_null();
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -781,7 +830,25 @@ fn make_arrow_to_variant_row_builder<'a>(
         // Union types
         DataType::Union(_, _) => Ok(ArrowToVariantRowBuilder::Union(UnionArrowToVariantBuilder::new(array)?)),
         
-        // TODO: Add other types (Binary, Date, Time, Decimal, etc.)
+        // Timestamp types
+        DataType::Timestamp(time_unit, time_zone) => {
+            match time_unit {
+                TimeUnit::Second => Ok(ArrowToVariantRowBuilder::TimestampSecond(
+                    TimestampArrowToVariantBuilder::new(array, time_zone.clone())
+                )),
+                TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::TimestampMillisecond(
+                    TimestampArrowToVariantBuilder::new(array, time_zone.clone())
+                )),
+                TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::TimestampMicrosecond(
+                    TimestampArrowToVariantBuilder::new(array, time_zone.clone())
+                )),
+                TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::TimestampNanosecond(
+                    TimestampArrowToVariantBuilder::new(array, time_zone.clone())
+                )),
+            }
+        }
+        
+        // TODO: Add other types (Date, Time, etc.)
         _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
     }
 }
@@ -4274,5 +4341,172 @@ mod row_builder_tests {
         
         // Row 2: long string view
         assert_eq!(variant_array.value(2), Variant::from("this is a much longer string that will be stored out-of-line in the buffer"));
+    }
+
+    #[test]
+    fn test_timestamp_second_row_builder() {
+        use arrow::array::TimestampSecondArray;
+        use chrono::{DateTime, NaiveDateTime, Utc};
+
+        // Test TimestampSecondArray without timezone
+        let timestamp_data = vec![
+            Some(1609459200), // 2021-01-01 00:00:00 UTC
+            None,
+            Some(1640995200), // 2022-01-01 00:00:00 UTC
+        ];
+        let timestamp_array = TimestampSecondArray::from(timestamp_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            timestamp_array.data_type(),
+            &timestamp_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..timestamp_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: 2021-01-01 00:00:00 (no timezone -> NaiveDateTime -> TimestampNtzMicros)
+        let expected_naive = NaiveDateTime::from_timestamp_opt(1609459200, 0).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_naive));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 2022-01-01 00:00:00
+        let expected_naive2 = NaiveDateTime::from_timestamp_opt(1640995200, 0).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_naive2));
+    }
+
+    #[test]
+    fn test_timestamp_with_timezone_row_builder() {
+        use arrow::array::TimestampMicrosecondArray;
+        use arrow_schema::DataType;
+        use chrono::{DateTime, Utc};
+
+        // Test TimestampMicrosecondArray with timezone
+        let timestamp_data = vec![
+            Some(1609459200000000), // 2021-01-01 00:00:00 UTC (in microseconds)
+            None,
+            Some(1640995200000000), // 2022-01-01 00:00:00 UTC (in microseconds)
+        ];
+        let timezone = Some("UTC".into());
+        let timestamp_array = TimestampMicrosecondArray::from(timestamp_data)
+            .with_timezone(timezone.clone());
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            timestamp_array.data_type(),
+            &timestamp_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..timestamp_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: 2021-01-01 00:00:00 UTC (with timezone -> DateTime<Utc> -> TimestampMicros)
+        let expected_utc = DateTime::from_timestamp(1609459200, 0).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_utc));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: 2022-01-01 00:00:00 UTC
+        let expected_utc2 = DateTime::from_timestamp(1640995200, 0).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_utc2));
+    }
+
+    #[test]
+    fn test_timestamp_nanosecond_precision_row_builder() {
+        use arrow::array::TimestampNanosecondArray;
+        use chrono::NaiveDateTime;
+
+        // Test TimestampNanosecondArray with nanosecond precision
+        let timestamp_data = vec![
+            Some(1609459200123456789), // 2021-01-01 00:00:00.123456789 UTC
+            None,
+            Some(1609459200000000000), // 2021-01-01 00:00:00.000000000 UTC (no fractional seconds)
+        ];
+        let timestamp_array = TimestampNanosecondArray::from(timestamp_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            timestamp_array.data_type(),
+            &timestamp_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..timestamp_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: with nanoseconds -> should use TimestampNtzNanos
+        let expected_with_nanos = NaiveDateTime::from_timestamp_opt(1609459200, 123456789).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_with_nanos));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: no fractional seconds -> should use TimestampNtzMicros  
+        let expected_no_nanos = NaiveDateTime::from_timestamp_opt(1609459200, 0).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_no_nanos));
+    }
+
+    #[test]
+    fn test_timestamp_millisecond_row_builder() {
+        use arrow::array::TimestampMillisecondArray;
+        use chrono::NaiveDateTime;
+
+        // Test TimestampMillisecondArray
+        let timestamp_data = vec![
+            Some(1609459200123), // 2021-01-01 00:00:00.123 UTC
+            None,
+            Some(1609459200000), // 2021-01-01 00:00:00.000 UTC
+        ];
+        let timestamp_array = TimestampMillisecondArray::from(timestamp_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            timestamp_array.data_type(),
+            &timestamp_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..timestamp_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: with milliseconds -> TimestampNtzMicros (123ms = 123000000ns)
+        let expected_with_millis = NaiveDateTime::from_timestamp_opt(1609459200, 123000000).unwrap();
+        assert_eq!(variant_array.value(0), Variant::from(expected_with_millis));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: no fractional seconds -> TimestampNtzMicros
+        let expected_no_millis = NaiveDateTime::from_timestamp_opt(1609459200, 0).unwrap();
+        assert_eq!(variant_array.value(2), Variant::from(expected_no_millis));
     }
 }
