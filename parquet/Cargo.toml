@@ -112,7 +112,7 @@ json = ["serde_json", "base64"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
-experimental = []
+experimental = ["variant_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
