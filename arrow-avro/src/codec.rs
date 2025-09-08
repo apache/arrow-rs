@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::schema::{
-    Attributes, AvroSchema, ComplexType, Enum, PrimitiveType, Record, Schema, Type, TypeName,
-    AVRO_ENUM_SYMBOLS_METADATA_KEY,
+    Attributes, AvroSchema, ComplexType, Enum, Nullability, PrimitiveType, Record, Schema, Type,
+    TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
 };
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
@@ -27,19 +27,6 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-/// Avro types are not nullable, with nullability instead encoded as a union
-/// where one of the variants is the null type.
-///
-/// To accommodate this we special case two-variant unions where one of the
-/// variants is the null type, and use this to derive arrow's notion of nullability
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Nullability {
-    /// The nulls are encoded as the first union variant
-    NullFirst,
-    /// The nulls are encoded as the second union variant
-    NullSecond,
-}
 
 /// Contains information about how to resolve differences between a writer's and a reader's schema.
 #[derive(Debug, Clone, PartialEq)]
