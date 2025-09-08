@@ -19,7 +19,7 @@ use crate::file::metadata::thrift_gen::{EncryptionAlgorithm, FileMeta};
 use crate::file::metadata::{
     ColumnChunkMetaData, ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData,
 };
-use crate::schema::types::{SchemaDescPtr, SchemaDescriptor, TypePtr};
+use crate::schema::types::{SchemaDescPtr, SchemaDescriptor};
 use crate::thrift::TSerializable;
 use crate::{
     basic::ColumnOrder,
@@ -56,11 +56,10 @@ use thrift::protocol::TCompactOutputProtocol;
 /// See [`ParquetMetaDataWriter`] for background and example.
 pub(crate) struct ThriftMetadataWriter<'a, W: Write> {
     buf: &'a mut TrackedWrite<W>,
-    schema: &'a TypePtr,
     schema_descr: &'a SchemaDescPtr,
     row_groups: Vec<RowGroupMetaData>,
-    column_indexes: Option<&'a [Vec<Option<ColumnIndexMetaData>>]>,
-    offset_indexes: Option<&'a [Vec<Option<OffsetIndexMetaData>>]>,
+    column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
+    offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
     key_value_metadata: Option<Vec<KeyValue>>,
     created_by: Option<String>,
     object_writer: MetadataObjectWriter,
@@ -138,11 +137,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     pub fn finish(mut self) -> Result<ParquetMetaData> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
 
+        let column_indexes = std::mem::take(&mut self.column_indexes);
+        let offset_indexes = std::mem::take(&mut self.offset_indexes);
+
         // Write column indexes and offset indexes
-        if let Some(column_indexes) = self.column_indexes {
+        if let Some(column_indexes) = column_indexes.as_ref() {
             self.write_column_indexes(column_indexes)?;
         }
-        if let Some(offset_indexes) = self.offset_indexes {
+        if let Some(offset_indexes) = offset_indexes.as_ref() {
             self.write_offset_indexes(offset_indexes)?;
         }
 
@@ -216,28 +218,20 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             None => builder.set_row_groups(row_groups),
         };
 
-        let column_indexes: Option<ParquetColumnIndex> = self.column_indexes.map(|ovvi| {
-            ovvi.iter()
+        let column_indexes: Option<ParquetColumnIndex> = column_indexes.map(|ovvi| {
+            ovvi.into_iter()
                 .map(|vi| {
-                    vi.iter()
-                        .map(|oi| {
-                            oi.as_ref()
-                                .map(|i| i.clone())
-                                .unwrap_or(ColumnIndexMetaData::NONE)
-                        })
+                    vi.into_iter()
+                        .map(|oi| oi.unwrap_or(ColumnIndexMetaData::NONE))
                         .collect()
                 })
                 .collect()
         });
 
         // FIXME(ets): this will panic if there's a missing index.
-        let offset_indexes: Option<ParquetOffsetIndex> = self.offset_indexes.map(|ovvi| {
-            ovvi.iter()
-                .map(|vi| {
-                    vi.iter()
-                        .map(|oi| oi.as_ref().map(|i| i.clone()).unwrap())
-                        .collect()
-                })
+        let offset_indexes: Option<ParquetOffsetIndex> = offset_indexes.map(|ovvi| {
+            ovvi.into_iter()
+                .map(|vi| vi.into_iter().map(|oi| oi.unwrap()).collect())
                 .collect()
         });
 
@@ -249,7 +243,6 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
     pub fn new(
         buf: &'a mut TrackedWrite<W>,
-        schema: &'a TypePtr,
         schema_descr: &'a SchemaDescPtr,
         row_groups: Vec<RowGroupMetaData>,
         created_by: Option<String>,
@@ -257,7 +250,6 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     ) -> Self {
         Self {
             buf,
-            schema,
             schema_descr,
             row_groups,
             column_indexes: None,
@@ -271,7 +263,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
     pub fn with_column_indexes(
         mut self,
-        column_indexes: &'a [Vec<Option<ColumnIndexMetaData>>],
+        column_indexes: Vec<Vec<Option<ColumnIndexMetaData>>>,
     ) -> Self {
         self.column_indexes = Some(column_indexes);
         self
@@ -279,7 +271,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
     pub fn with_offset_indexes(
         mut self,
-        offset_indexes: &'a [Vec<Option<OffsetIndexMetaData>>],
+        offset_indexes: Vec<Vec<Option<OffsetIndexMetaData>>>,
     ) -> Self {
         self.offset_indexes = Some(offset_indexes);
         self
@@ -418,14 +410,20 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
-            &schema,
             &schema_descr,
             row_groups,
             created_by,
             file_metadata.version(),
         );
-        encoder = encoder.with_column_indexes(&column_indexes);
-        encoder = encoder.with_offset_indexes(&offset_indexes);
+
+        if let Some(column_indexes) = column_indexes {
+            encoder = encoder.with_column_indexes(column_indexes);
+        }
+
+        if let Some(offset_indexes) = offset_indexes {
+            encoder = encoder.with_offset_indexes(offset_indexes);
+        }
+
         if let Some(key_value_metadata) = key_value_metadata {
             encoder = encoder.with_key_value_metadata(key_value_metadata);
         }
@@ -434,32 +432,29 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         Ok(())
     }
 
-    fn convert_column_indexes(&self) -> Vec<Vec<Option<ColumnIndexMetaData>>> {
+    fn convert_column_indexes(&self) -> Option<Vec<Vec<Option<ColumnIndexMetaData>>>> {
         // FIXME(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
         // but then converting back to ParquetColumnIndex in the end. need to unify this.
         if let Some(row_group_column_indexes) = self.metadata.column_index() {
-            (0..self.metadata.row_groups().len())
-                .map(|rg_idx| {
-                    let column_indexes = &row_group_column_indexes[rg_idx];
-                    column_indexes
-                        .iter()
-                        .map(|column_index| Some(column_index.clone()))
-                        .collect()
-                })
-                .collect()
+            Some(
+                (0..self.metadata.row_groups().len())
+                    .map(|rg_idx| {
+                        let column_indexes = &row_group_column_indexes[rg_idx];
+                        column_indexes
+                            .iter()
+                            .map(|column_index| Some(column_index.clone()))
+                            .collect()
+                    })
+                    .collect(),
+            )
         } else {
-            // make a None for each row group, for each column
-            self.metadata
-                .row_groups()
-                .iter()
-                .map(|rg| std::iter::repeat_n(None, rg.columns().len()).collect())
-                .collect()
+            None
         }
     }
 
-    fn convert_offset_index(&self) -> Vec<Vec<Option<OffsetIndexMetaData>>> {
+    fn convert_offset_index(&self) -> Option<Vec<Vec<Option<OffsetIndexMetaData>>>> {
         if let Some(row_group_offset_indexes) = self.metadata.offset_index() {
-            (0..self.metadata.row_groups().len())
+            Some((0..self.metadata.row_groups().len())
                 .map(|rg_idx| {
                     let offset_indexes = &row_group_offset_indexes[rg_idx];
                     offset_indexes
@@ -467,14 +462,9 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                         .map(|offset_index| Some(offset_index.clone()))
                         .collect()
                 })
-                .collect()
+                .collect())
         } else {
-            // make a None for each row group, for each column
-            self.metadata
-                .row_groups()
-                .iter()
-                .map(|rg| std::iter::repeat_n(None, rg.columns().len()).collect())
-                .collect()
+            None
         }
     }
 }

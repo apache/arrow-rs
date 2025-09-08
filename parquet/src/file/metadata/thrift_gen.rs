@@ -1220,11 +1220,32 @@ pub(crate) fn serialize_column_meta_data<W: Write>(
     if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
         last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
     }
-    if let Some(index_page_offset) = column_chunk.index_page_offset {
-        // uncomment when we add geo spatial
-        //last_field_id = index_page_offset.write_thrift_field(w, 16, last_field_id)?;
-        index_page_offset.write_thrift_field(w, 16, last_field_id)?;
+
+    // SizeStatistics
+    let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
+            || column_chunk.repetition_level_histogram.is_some()
+            || column_chunk.definition_level_histogram.is_some()
+    {
+        let repetition_level_histogram = column_chunk
+            .repetition_level_histogram()
+            .map(|hist| hist.clone().into_inner());
+
+        let definition_level_histogram = column_chunk
+            .definition_level_histogram()
+            .map(|hist| hist.clone().into_inner());
+
+        Some(SizeStatistics {
+            unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
+            repetition_level_histogram,
+            definition_level_histogram,
+        })
+    } else {
+        None
+    };
+    if let Some(size_stats) = size_stats {
+        size_stats.write_thrift_field(w, 16, last_field_id)?;
     }
+
     // TODO: field 17 geo spatial stats here
     w.write_struct_end()
 }
@@ -1305,7 +1326,10 @@ fn write_schema<W: Write>(
                 repetition_type: Some(basic_info.repetition()),
                 name: basic_info.name(),
                 num_children: None,
-                converted_type: basic_info.converted_type().into(),
+                converted_type: match basic_info.converted_type() {
+                    ConvertedType::NONE => None,
+                    other => Some(other),
+                },
                 scale: if *scale >= 0 { Some(*scale) } else { None },
                 precision: if *precision >= 0 {
                     Some(*precision)
@@ -1334,7 +1358,10 @@ fn write_schema<W: Write>(
                 repetition_type: repetition,
                 name: basic_info.name(),
                 num_children: Some(fields.len() as i32),
-                converted_type: basic_info.converted_type().into(),
+                converted_type: match basic_info.converted_type() {
+                    ConvertedType::NONE => None,
+                    other => Some(other),
+                },
                 scale: None,
                 precision: None,
                 field_id: if basic_info.has_id() {

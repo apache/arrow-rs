@@ -3011,6 +3011,7 @@ mod tests {
 
         // Coerced name of "item" should be "element"
         let schema = file_metadata.file_metadata().schema_descr();
+        println!("schema {schema:?}");
         assert_eq!(schema.column(3).name(), "element");
         // Coerced name of "entries" should be "key_value"
         assert_eq!(schema.column(5).name(), "key_value");

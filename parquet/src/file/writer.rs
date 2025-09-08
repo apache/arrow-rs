@@ -318,7 +318,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         Ok(())
     }
 
-    /// Assembles and writes metadata at the end of the file.
+    /// Assembles and writes metadata at the end of the file. This will take ownership
+    /// of `row_groups` and the page index structures.
     fn write_metadata(&mut self) -> Result<ParquetMetaData> {
         self.finished = true;
 
@@ -333,11 +334,15 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             None => Some(self.kv_metadatas.clone()),
         };
 
+        // take ownership of metadata
+        let row_groups = std::mem::take(&mut self.row_groups);
+        let column_indexes = std::mem::take(&mut self.column_indexes);
+        let offset_indexes = std::mem::take(&mut self.offset_indexes);
+
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
-            &self.schema,
             &self.descr,
-            self.row_groups.clone(), // FIXME(ets): I really want the writer to take ownership of everything
+            row_groups,
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
         );
@@ -351,8 +356,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
 
-        encoder = encoder.with_column_indexes(&self.column_indexes);
-        encoder = encoder.with_offset_indexes(&self.offset_indexes);
+        encoder = encoder.with_column_indexes(column_indexes);
+        encoder = encoder.with_offset_indexes(offset_indexes);
         encoder.finish()
     }
 
