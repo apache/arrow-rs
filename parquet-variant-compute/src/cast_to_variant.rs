@@ -68,9 +68,10 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     Decimal128(Decimal128ArrowToVariantBuilder<'a>),
     Decimal256(Decimal256ArrowToVariantBuilder<'a>),
     Boolean(BooleanArrowToVariantBuilder<'a>),
-    String(StringArrowToVariantBuilder<'a>),
-    Binary(BinaryArrowToVariantBuilder<'a>),
-    LargeBinary(LargeBinaryArrowToVariantBuilder<'a>),
+    String(StringArrowToVariantBuilder<'a, i32>),
+    LargeString(StringArrowToVariantBuilder<'a, i64>),
+    Binary(BinaryArrowToVariantBuilder<'a, i32>),
+    LargeBinary(BinaryArrowToVariantBuilder<'a, i64>),
     BinaryView(BinaryViewArrowToVariantBuilder<'a>),
     FixedSizeBinary(FixedSizeBinaryArrowToVariantBuilder<'a>),
     Utf8View(Utf8ViewArrowToVariantBuilder<'a>),
@@ -106,6 +107,7 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::Decimal256(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Boolean(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::String(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::LargeString(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Binary(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::LargeBinary(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::BinaryView(b) => b.append_row(index, builder),
@@ -179,31 +181,23 @@ impl<'a> BooleanArrowToVariantBuilder<'a> {
     }
 }
 
-/// String builder for StringArray (both Utf8 and LargeUtf8)
-pub(crate) struct StringArrowToVariantBuilder<'a> {
-    array: &'a dyn Array,
+/// Generic String builder for StringArray (Utf8 and LargeUtf8)
+pub(crate) struct StringArrowToVariantBuilder<'a, O: OffsetSizeTrait> {
+    array: &'a arrow::array::GenericStringArray<O>,
 }
 
-impl<'a> StringArrowToVariantBuilder<'a> {
+impl<'a, O: OffsetSizeTrait> StringArrowToVariantBuilder<'a, O> {
     fn new(array: &'a dyn Array) -> Self {
-        Self { array }
+        Self {
+            array: array.as_string::<O>(),
+        }
     }
     
-    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
         if self.array.is_null(index) {
             builder.append_null();
         } else {
-            let value = match self.array.data_type() {
-                DataType::Utf8 => {
-                    let string_array = self.array.as_string::<i32>();
-                    string_array.value(index)
-                }
-                DataType::LargeUtf8 => {
-                    let string_array = self.array.as_string::<i64>();
-                    string_array.value(index)
-                }
-                _ => return Err(ArrowError::CastError("Expected string array".to_string())),
-            };
+            let value = self.array.value(index);
             builder.append_value(value);
         }
         Ok(())
@@ -628,38 +622,15 @@ impl<'a> Decimal256ArrowToVariantBuilder<'a> {
     }
 }
 
-/// Binary builder for Arrow BinaryArray
-pub(crate) struct BinaryArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::BinaryArray,
+/// Generic Binary builder for Arrow BinaryArray and LargeBinaryArray
+pub(crate) struct BinaryArrowToVariantBuilder<'a, O: OffsetSizeTrait> {
+    array: &'a arrow::array::GenericBinaryArray<O>,
 }
 
-impl<'a> BinaryArrowToVariantBuilder<'a> {
+impl<'a, O: OffsetSizeTrait> BinaryArrowToVariantBuilder<'a, O> {
     fn new(array: &'a dyn Array) -> Self {
         Self {
-            array: array.as_binary::<i32>(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let bytes = self.array.value(index);
-            builder.append_value(Variant::from(bytes));
-        }
-        Ok(())
-    }
-}
-
-/// LargeBinary builder for Arrow LargeBinaryArray
-pub(crate) struct LargeBinaryArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::LargeBinaryArray,
-}
-
-impl<'a> LargeBinaryArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_binary::<i64>(),
+            array: array.as_binary::<O>(),
         }
     }
     
@@ -773,12 +744,12 @@ fn make_arrow_to_variant_row_builder<'a>(
         // Special types
         DataType::Boolean => Ok(ArrowToVariantRowBuilder::Boolean(BooleanArrowToVariantBuilder::new(array))),
         DataType::Utf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
-        DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
+        DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::LargeString(StringArrowToVariantBuilder::new(array))),
         DataType::Utf8View => Ok(ArrowToVariantRowBuilder::Utf8View(Utf8ViewArrowToVariantBuilder::new(array))),
         
         // Binary types
         DataType::Binary => Ok(ArrowToVariantRowBuilder::Binary(BinaryArrowToVariantBuilder::new(array))),
-        DataType::LargeBinary => Ok(ArrowToVariantRowBuilder::LargeBinary(LargeBinaryArrowToVariantBuilder::new(array))),
+        DataType::LargeBinary => Ok(ArrowToVariantRowBuilder::LargeBinary(BinaryArrowToVariantBuilder::new(array))),
         DataType::BinaryView => Ok(ArrowToVariantRowBuilder::BinaryView(BinaryViewArrowToVariantBuilder::new(array))),
         DataType::FixedSizeBinary(_) => Ok(ArrowToVariantRowBuilder::FixedSizeBinary(FixedSizeBinaryArrowToVariantBuilder::new(array))),
         
