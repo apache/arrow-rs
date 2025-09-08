@@ -51,6 +51,7 @@
 //!
 //! // TODO support writing VariantArray directly
 //! // at the moment it panics when trying to downcast to a struct array
+//! // https://github.com/apache/arrow-rs/issues/8296
 //! //  let array: ArrayRef = Arc::new(array);
 //! let array: ArrayRef = Arc::new(array.into_inner());
 //!
@@ -91,6 +92,7 @@
 //!
 //! // TODO support writing VariantArray directly
 //! // at the moment it panics when trying to downcast to a struct array
+//! // https://github.com/apache/arrow-rs/issues/8296
 //! //  let array: ArrayRef = Arc::new(array);
 //! let array: ArrayRef = Arc::new(array.into_inner());
 //!
