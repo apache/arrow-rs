@@ -27,8 +27,7 @@ use arrow::array::{
 };
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType, Date32Type, Date64Type, Decimal128Type,
-    Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
+    ArrowNativeType, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType, Date32Type, Date64Type, Float16Type, Float32Type, Float64Type, Int16Type,
     Int32Type, Int64Type, Int8Type, RunEndIndexType, Time32MillisecondType,
     Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
@@ -397,7 +396,7 @@ pub(crate) struct ListArrowToVariantBuilder<'a, O: OffsetSizeTrait> {
 
 impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
-        let list_array = array.as_list::<O>();
+        let list_array = array.as_list();
         let values = list_array.values();
         
         let values_builder = make_arrow_to_variant_row_builder(
@@ -532,7 +531,7 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
 define_row_builder!(
     struct Decimal32ArrowToVariantBuilder<'a>
     { scale: i8 },
-    |array| -> arrow::array::Decimal32Array { array.as_primitive::<Decimal32Type>() },
+    |array| -> arrow::array::Decimal32Array { array.as_primitive() },
     |value| decimal_to_variant_decimal!(value, scale, i32, VariantDecimal4)
 );
 
@@ -540,7 +539,7 @@ define_row_builder!(
 define_row_builder!(
     struct Decimal64ArrowToVariantBuilder<'a>
     { scale: i8 },
-    |array| -> arrow::array::Decimal64Array { array.as_primitive::<Decimal64Type>() },
+    |array| -> arrow::array::Decimal64Array { array.as_primitive() },
     |value| decimal_to_variant_decimal!(value, scale, i64, VariantDecimal8)
 );
 
@@ -548,7 +547,7 @@ define_row_builder!(
 define_row_builder!(
     struct Decimal128ArrowToVariantBuilder<'a>
     { scale: i8 },
-    |array| -> arrow::array::Decimal128Array { array.as_primitive::<Decimal128Type>() },
+    |array| -> arrow::array::Decimal128Array { array.as_primitive() },
     |value| decimal_to_variant_decimal!(value, scale, i128, VariantDecimal16)
 );
 
@@ -556,7 +555,7 @@ define_row_builder!(
 define_row_builder!(
     struct Decimal256ArrowToVariantBuilder<'a>
     { scale: i8 },
-    |array| -> arrow::array::Decimal256Array { array.as_primitive::<Decimal256Type>() },
+    |array| -> arrow::array::Decimal256Array { array.as_primitive() },
     |value| {
         // Decimal256 needs special handling - convert to i128 if possible
         match value.to_i128() {
@@ -644,19 +643,19 @@ fn make_arrow_to_variant_row_builder<'a>(
 ) -> Result<ArrowToVariantRowBuilder<'a>, ArrowError> {
     match data_type {
         // All integer types
-        DataType::Int8 => Ok(ArrowToVariantRowBuilder::PrimitiveInt8(PrimitiveArrowToVariantBuilder::<Int8Type>::new(array))),
-        DataType::Int16 => Ok(ArrowToVariantRowBuilder::PrimitiveInt16(PrimitiveArrowToVariantBuilder::<Int16Type>::new(array))),
-        DataType::Int32 => Ok(ArrowToVariantRowBuilder::PrimitiveInt32(PrimitiveArrowToVariantBuilder::<Int32Type>::new(array))),
-        DataType::Int64 => Ok(ArrowToVariantRowBuilder::PrimitiveInt64(PrimitiveArrowToVariantBuilder::<Int64Type>::new(array))),
-        DataType::UInt8 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt8(PrimitiveArrowToVariantBuilder::<UInt8Type>::new(array))),
-        DataType::UInt16 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt16(PrimitiveArrowToVariantBuilder::<UInt16Type>::new(array))),
-        DataType::UInt32 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt32(PrimitiveArrowToVariantBuilder::<UInt32Type>::new(array))),
-        DataType::UInt64 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt64(PrimitiveArrowToVariantBuilder::<UInt64Type>::new(array))),
+        DataType::Int8 => Ok(ArrowToVariantRowBuilder::PrimitiveInt8(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::Int16 => Ok(ArrowToVariantRowBuilder::PrimitiveInt16(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::Int32 => Ok(ArrowToVariantRowBuilder::PrimitiveInt32(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::Int64 => Ok(ArrowToVariantRowBuilder::PrimitiveInt64(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::UInt8 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt8(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::UInt16 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt16(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::UInt32 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt32(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::UInt64 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt64(PrimitiveArrowToVariantBuilder::new(array))),
         
         // Float types
-        DataType::Float16 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat16(PrimitiveArrowToVariantBuilder::<Float16Type>::new(array))),
-        DataType::Float32 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat32(PrimitiveArrowToVariantBuilder::<Float32Type>::new(array))),
-        DataType::Float64 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat64(PrimitiveArrowToVariantBuilder::<Float64Type>::new(array))),
+        DataType::Float16 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat16(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::Float32 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat32(PrimitiveArrowToVariantBuilder::new(array))),
+        DataType::Float64 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat64(PrimitiveArrowToVariantBuilder::new(array))),
         
         // Decimal types
         DataType::Decimal32(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal32(Decimal32ArrowToVariantBuilder::new(array, *scale))),
@@ -724,20 +723,20 @@ fn make_arrow_to_variant_row_builder<'a>(
         
         // Date types
         DataType::Date32 => Ok(ArrowToVariantRowBuilder::Date32(
-            DateArrowToVariantBuilder::<Date32Type>::new(array)
+            DateArrowToVariantBuilder::new(array)
         )),
         DataType::Date64 => Ok(ArrowToVariantRowBuilder::Date64(
-            DateArrowToVariantBuilder::<Date64Type>::new(array)
+            DateArrowToVariantBuilder::new(array)
         )),
         
         // Time types
         DataType::Time32(time_unit) => {
             match time_unit {
                 TimeUnit::Second => Ok(ArrowToVariantRowBuilder::Time32Second(
-                    TimeArrowToVariantBuilder::<Time32SecondType>::new(array)
+                    TimeArrowToVariantBuilder::new(array)
                 )),
                 TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::Time32Millisecond(
-                    TimeArrowToVariantBuilder::<Time32MillisecondType>::new(array)
+                    TimeArrowToVariantBuilder::new(array)
                 )),
                 _ => Err(ArrowError::CastError(format!("Unsupported Time32 unit: {time_unit:?}"))),
             }
@@ -745,10 +744,10 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Time64(time_unit) => {
             match time_unit {
                 TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::Time64Microsecond(
-                    TimeArrowToVariantBuilder::<Time64MicrosecondType>::new(array)
+                    TimeArrowToVariantBuilder::new(array)
                 )),
                 TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::Time64Nanosecond(
-                    TimeArrowToVariantBuilder::<Time64NanosecondType>::new(array)
+                    TimeArrowToVariantBuilder::new(array)
                 )),
                 _ => Err(ArrowError::CastError(format!("Unsupported Time64 unit: {time_unit:?}"))),
             }
