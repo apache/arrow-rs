@@ -1438,7 +1438,10 @@ mod tests {
         expected.extend(avro_long_bytes(3));
         expected.extend(avro_long_bytes(0));
 
-        let plan = FieldPlan::List { items_nullability: None, item_plan: Box::new(FieldPlan::Scalar) };
+        let plan = FieldPlan::List {
+            items_nullability: None,
+            item_plan: Box::new(FieldPlan::Scalar),
+        };
         let got = encode_all(&list, &plan, None);
         assert_bytes_eq(&got, &expected);
     }
@@ -1452,11 +1455,25 @@ mod tests {
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Utf8, true),
         ]);
-        let struct_arr = StructArray::new(fields.clone(), vec![Arc::new(a) as ArrayRef, Arc::new(b) as ArrayRef], None);
-        let plan = FieldPlan::Struct { encoders: vec![
-            FieldBinding { arrow_index: 0, nullability: None, plan: FieldPlan::Scalar },
-            FieldBinding { arrow_index: 1, nullability: None, plan: FieldPlan::Scalar },
-        ]};
+        let struct_arr = StructArray::new(
+            fields.clone(),
+            vec![Arc::new(a) as ArrayRef, Arc::new(b) as ArrayRef],
+            None,
+        );
+        let plan = FieldPlan::Struct {
+            encoders: vec![
+                FieldBinding {
+                    arrow_index: 0,
+                    nullability: None,
+                    plan: FieldPlan::Scalar,
+                },
+                FieldBinding {
+                    arrow_index: 1,
+                    nullability: None,
+                    plan: FieldPlan::Scalar,
+                },
+            ],
+        };
         let got = encode_all(&struct_arr, &plan, None);
         // Expected: rows concatenated: a then b
         let mut expected = Vec::new();
@@ -1470,10 +1487,13 @@ mod tests {
     #[test]
     fn enum_encoder_dictionary() {
         // symbols: ["A","B","C"], keys [2,0,1]
-        let dict_values = StringArray::from(vec!["A","B","C"]);
-        let keys = Int32Array::from(vec![2,0,1]);
-        let dict = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(dict_values) as ArrayRef).unwrap();
-        let symbols = Arc::<[String]>::from(vec!["A".to_string(),"B".to_string(),"C".to_string()].into_boxed_slice());
+        let dict_values = StringArray::from(vec!["A", "B", "C"]);
+        let keys = Int32Array::from(vec![2, 0, 1]);
+        let dict =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(dict_values) as ArrayRef).unwrap();
+        let symbols = Arc::<[String]>::from(
+            vec!["A".to_string(), "B".to_string(), "C".to_string()].into_boxed_slice(),
+        );
         let plan = FieldPlan::Enum { symbols };
         let got = encode_all(&dict, &plan, None);
         let mut expected = Vec::new();
@@ -1494,7 +1514,9 @@ mod tests {
         let got_bytes = encode_all(&dec, &plan_bytes, None);
         // 1 -> 0x01; -1 -> 0xFF; 0 -> 0x00
         let mut expected_bytes = Vec::new();
-        expected_bytes.extend(avro_len_prefixed_bytes(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01][7..])); // 0x01
+        expected_bytes.extend(avro_len_prefixed_bytes(
+            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01][7..],
+        )); // 0x01
         expected_bytes.extend(avro_len_prefixed_bytes(&[0xFF]));
         expected_bytes.extend(avro_len_prefixed_bytes(&[0x00]));
         assert_bytes_eq(&got_bytes, &expected_bytes);
@@ -1514,16 +1536,29 @@ mod tests {
         // Build MapArray with two rows
         // Row0: {"k1":1, "k2":2}
         // Row1: {}
-        let keys = StringArray::from(vec!["k1","k2"]);
-        let values = Int32Array::from(vec![1,2]);
+        let keys = StringArray::from(vec!["k1", "k2"]);
+        let values = Int32Array::from(vec![1, 2]);
         let entries_fields = Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", DataType::Int32, true),
         ]);
-        let entries = StructArray::new(entries_fields, vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef], None);
+        let entries = StructArray::new(
+            entries_fields,
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+            None,
+        );
         let offsets = arrow_buffer::OffsetBuffer::new(vec![0i32, 2, 2].into());
-        let map = MapArray::new(Field::new("entries", entries.data_type().clone(), false).into(), offsets, entries, None, false);
-        let plan = FieldPlan::Map { values_nullability: None, value_plan: Box::new(FieldPlan::Scalar) };
+        let map = MapArray::new(
+            Field::new("entries", entries.data_type().clone(), false).into(),
+            offsets,
+            entries,
+            None,
+            false,
+        );
+        let plan = FieldPlan::Map {
+            values_nullability: None,
+            value_plan: Box::new(FieldPlan::Scalar),
+        };
         let got = encode_all(&map, &plan, None);
         // Expected Avro per row: arrays of key,value
         let mut expected = Vec::new();
