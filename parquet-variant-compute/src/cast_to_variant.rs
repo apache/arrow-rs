@@ -150,10 +150,12 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
 // ============================================================================
 
 /// Macro to define (possibly generic) row builders with consistent structure and behavior
+/// Supports optional extra fields that are passed to the constructor
 macro_rules! define_row_builder {
     (
         struct $name:ident<$lifetime:lifetime $(, $generic:ident: $($bound:path)+)?>
-        $(where $where_path:path: $where_bound:path)?,
+        $(where $where_path:path: $where_bound:path)?
+        $({ $($field:ident: $field_type:ty),* $(,)? })?,
         |$array_param:ident| -> $array_type:ty { $init_expr:expr },
         |$value:ident| $value_transform:expr
     ) => {
@@ -161,14 +163,16 @@ macro_rules! define_row_builder {
         $(where $where_path: $where_bound)?
         {
             array: &$lifetime $array_type,
+            $($($field: $field_type,)*)?
         }
         
         impl<$lifetime $(, $generic: $($bound)+)?> $name<$lifetime $(, $generic)?>
         $(where $where_path: $where_bound)?
         {
-            fn new($array_param: &$lifetime dyn Array) -> Self {
+            fn new($array_param: &$lifetime dyn Array $(, $($field: $field_type),*)?) -> Self {
                 Self {
                     array: $init_expr,
+                    $($($field,)*)?
                 }
             }
             
@@ -521,114 +525,44 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
     }
 }
 
-/// Decimal32 builder for Arrow Decimal32Array
-pub(crate) struct Decimal32ArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Decimal32Array,
-    scale: i8,
-}
 
-impl<'a> Decimal32ArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array, scale: i8) -> Self {
-        Self {
-            array: array.as_primitive::<Decimal32Type>(),
-            scale,
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let value = self.array.value(index);
-            let variant = decimal_to_variant_decimal!(value, &self.scale, i32, VariantDecimal4);
-            builder.append_value(variant);
-        }
-        Ok(())
-    }
-}
+// Decimal32 builder for Arrow Decimal32Array
+define_row_builder!(
+    struct Decimal32ArrowToVariantBuilder<'a>
+    { scale: i8 },
+    |array| -> arrow::array::Decimal32Array { array.as_primitive::<Decimal32Type>() },
+    |value| decimal_to_variant_decimal!(value, &self.scale, i32, VariantDecimal4)
+);
 
-/// Decimal64 builder for Arrow Decimal64Array
-pub(crate) struct Decimal64ArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Decimal64Array,
-    scale: i8,
-}
+// Decimal64 builder for Arrow Decimal64Array
+define_row_builder!(
+    struct Decimal64ArrowToVariantBuilder<'a>
+    { scale: i8 },
+    |array| -> arrow::array::Decimal64Array { array.as_primitive::<Decimal64Type>() },
+    |value| decimal_to_variant_decimal!(value, &self.scale, i64, VariantDecimal8)
+);
 
-impl<'a> Decimal64ArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array, scale: i8) -> Self {
-        Self {
-            array: array.as_primitive::<Decimal64Type>(),
-            scale,
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let value = self.array.value(index);
-            let variant = decimal_to_variant_decimal!(value, &self.scale, i64, VariantDecimal8);
-            builder.append_value(variant);
-        }
-        Ok(())
-    }
-}
+// Decimal128 builder for Arrow Decimal128Array
+define_row_builder!(
+    struct Decimal128ArrowToVariantBuilder<'a>
+    { scale: i8 },
+    |array| -> arrow::array::Decimal128Array { array.as_primitive::<Decimal128Type>() },
+    |value| decimal_to_variant_decimal!(value, &self.scale, i128, VariantDecimal16)
+);
 
-/// Decimal128 builder for Arrow Decimal128Array
-pub(crate) struct Decimal128ArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Decimal128Array,
-    scale: i8,
-}
-
-impl<'a> Decimal128ArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array, scale: i8) -> Self {
-        Self {
-            array: array.as_primitive::<Decimal128Type>(),
-            scale,
+// Decimal256 builder for Arrow Decimal256Array
+define_row_builder!(
+    struct Decimal256ArrowToVariantBuilder<'a>
+    { scale: i8 },
+    |array| -> arrow::array::Decimal256Array { array.as_primitive::<Decimal256Type>() },
+    |value| {
+        // Decimal256 needs special handling - convert to i128 if possible
+        match value.to_i128() {
+            Some(i128_val) => decimal_to_variant_decimal!(i128_val, &self.scale, i128, VariantDecimal16),
+            None => Variant::Null, // Value too large for i128
         }
     }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let value = self.array.value(index);
-            let variant = decimal_to_variant_decimal!(value, &self.scale, i128, VariantDecimal16);
-            builder.append_value(variant);
-        }
-        Ok(())
-    }
-}
-
-/// Decimal256 builder for Arrow Decimal256Array
-pub(crate) struct Decimal256ArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::Decimal256Array,
-    scale: i8,
-}
-
-impl<'a> Decimal256ArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array, scale: i8) -> Self {
-        Self {
-            array: array.as_primitive::<Decimal256Type>(),
-            scale,
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let value = self.array.value(index);
-            // Special handling for Decimal256 like in original cast_to_variant
-            let variant = if let Some(v) = value.to_i128() {
-                decimal_to_variant_decimal!(v, &self.scale, i128, VariantDecimal16)
-            } else {
-                Variant::Null
-            };
-            builder.append_value(variant);
-        }
-        Ok(())
-    }
-}
+);
 
 // Generic Binary builder for Arrow BinaryArray and LargeBinaryArray
 define_row_builder!(
@@ -658,43 +592,26 @@ define_row_builder!(
     |value| value
 );
 
-/// Generic Timestamp builder for Arrow timestamp arrays
-pub(crate) struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType> {
-    array: &'a arrow::array::PrimitiveArray<T>,
-    has_time_zone: bool,
-}
-
-impl<'a, T: ArrowTimestampType> TimestampArrowToVariantBuilder<'a, T> {
-    fn new(array: &'a dyn Array, has_time_zone: bool) -> Self {
-        Self {
-            array: array.as_primitive::<T>(),
-            has_time_zone,
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
+// Generic Timestamp builder for Arrow timestamp arrays
+define_row_builder!(
+    struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType>
+    { has_time_zone: bool },
+    |array| -> arrow::array::PrimitiveArray<T> { array.as_primitive() },
+    |value| {
+        // Convert using Arrow's temporal conversion functions
+        let Some(naive_datetime) = as_datetime::<T>(value) else {
+            return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
+        };
+        if self.has_time_zone {
+            // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos  
+            let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
+            Variant::from(utc_dt) // Uses From<DateTime<Utc>> for Variant
         } else {
-            let timestamp_value = self.array.value(index);
-            
-            // Convert using Arrow's temporal conversion functions
-            let Some(naive_datetime) = as_datetime::<T>(timestamp_value) else {
-                return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
-            };
-            let variant = if self.has_time_zone {
-                // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos  
-                let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
-                Variant::from(utc_dt) // Uses From<DateTime<Utc>> for Variant
-            } else {
-                // No timezone -> NaiveDateTime -> TimestampNtzMicros/TimestampNtzNanos
-                Variant::from(naive_datetime) // Uses From<NaiveDateTime> for Variant
-            };
-            builder.append_value(variant);
+            // No timezone -> NaiveDateTime -> TimestampNtzMicros/TimestampNtzNanos
+            Variant::from(naive_datetime) // Uses From<NaiveDateTime> for Variant
         }
-        Ok(())
     }
-}
+);
 
 // Generic Date builder for Arrow date arrays (Date32, Date64)
 define_row_builder!(
