@@ -149,21 +149,21 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
 // Macro for generating generic row builders
 // ============================================================================
 
-/// Macro to define generic row builders with consistent structure and behavior
+/// Macro to define (possibly generic) row builders with consistent structure and behavior
 macro_rules! define_row_builder {
     (
-        struct $name:ident<$lifetime:lifetime, $generic:ident: $($bound:path)+>
+        struct $name:ident<$lifetime:lifetime $(, $generic:ident: $($bound:path)+)?>
         $(where $where_path:path: $where_bound:path)?,
         |$array_param:ident| -> $array_type:ty { $init_expr:expr },
         |$value:ident| $value_transform:expr
     ) => {
-        pub(crate) struct $name<$lifetime, $generic: $($bound)+> 
+        pub(crate) struct $name<$lifetime $(, $generic: $($bound)+)?> 
         $(where $where_path: $where_bound)?
         {
             array: &$lifetime $array_type,
         }
         
-        impl<$lifetime, $generic: $($bound)+> $name<$lifetime, $generic>
+        impl<$lifetime $(, $generic: $($bound)+)?> $name<$lifetime $(, $generic)?>
         $(where $where_path: $where_bound)?
         {
             fn new($array_param: &$lifetime dyn Array) -> Self {
@@ -197,28 +197,12 @@ define_row_builder!(
     |value| value
 );
 
-/// Boolean builder for BooleanArray
-pub(crate) struct BooleanArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::BooleanArray,
-}
-
-impl<'a> BooleanArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_boolean(),
-        }
-    }
-    
-    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let value = self.array.value(index);
-            builder.append_value(value);
-        }
-        Ok(())
-    }
-}
+// Boolean builder - handles BooleanArray
+define_row_builder!(
+    struct BooleanArrowToVariantBuilder<'a>,
+    |array| -> arrow::array::BooleanArray { array.as_boolean() },
+    |value| value
+);
 
 // Generic String builder for StringArray (Utf8 and LargeUtf8)
 define_row_builder!(
@@ -653,74 +637,26 @@ define_row_builder!(
     |value| value
 );
 
-/// BinaryView builder for Arrow BinaryViewArray
-pub(crate) struct BinaryViewArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::BinaryViewArray,
-}
+// BinaryView builder - handles BinaryViewArray
+define_row_builder!(
+    struct BinaryViewArrowToVariantBuilder<'a>,
+    |array| -> arrow::array::BinaryViewArray { array.as_byte_view() },
+    |value| value
+);
 
-impl<'a> BinaryViewArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_byte_view(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let bytes = self.array.value(index);
-            builder.append_value(Variant::from(bytes));
-        }
-        Ok(())
-    }
-}
+// FixedSizeBinary builder - handles FixedSizeBinaryArray
+define_row_builder!(
+    struct FixedSizeBinaryArrowToVariantBuilder<'a>,
+    |array| -> arrow::array::FixedSizeBinaryArray { array.as_fixed_size_binary() },
+    |value| value
+);
 
-/// FixedSizeBinary builder for Arrow FixedSizeBinaryArray
-pub(crate) struct FixedSizeBinaryArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::FixedSizeBinaryArray,
-}
-
-impl<'a> FixedSizeBinaryArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_fixed_size_binary(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let bytes = self.array.value(index);
-            builder.append_value(Variant::from(bytes));
-        }
-        Ok(())
-    }
-}
-
-/// Utf8View builder for Arrow StringViewArray
-pub(crate) struct Utf8ViewArrowToVariantBuilder<'a> {
-    array: &'a arrow::array::StringViewArray,
-}
-
-impl<'a> Utf8ViewArrowToVariantBuilder<'a> {
-    fn new(array: &'a dyn Array) -> Self {
-        Self {
-            array: array.as_string_view(),
-        }
-    }
-    
-    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
-        if self.array.is_null(index) {
-            builder.append_null();
-        } else {
-            let string = self.array.value(index);
-            builder.append_value(Variant::from(string));
-        }
-        Ok(())
-    }
-}
+// Utf8View builder - handles StringViewArray
+define_row_builder!(
+    struct Utf8ViewArrowToVariantBuilder<'a>,
+    |array| -> arrow::array::StringViewArray { array.as_string_view() },
+    |value| value
+);
 
 /// Generic Timestamp builder for Arrow timestamp arrays
 pub(crate) struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType> {
@@ -781,7 +717,6 @@ define_row_builder!(
         as_time::<T>(time_value).map(Variant::from).unwrap_or(Variant::Null)
     }
 );
-
 
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
