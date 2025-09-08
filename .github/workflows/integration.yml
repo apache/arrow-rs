@@ -63,6 +63,7 @@ jobs:
       ARROW_INTEGRATION_CPP: ON
       ARROW_INTEGRATION_CSHARP: ON
       ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
+      ARCHERY_INTEGRATION_WITH_DOTNET: "1"
       ARCHERY_INTEGRATION_WITH_GO: "1"
       ARCHERY_INTEGRATION_WITH_JAVA: "1"
       ARCHERY_INTEGRATION_WITH_JS: "1"
@@ -98,6 +99,11 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
+      - name: Checkout Arrow .NET
+        uses: actions/checkout@v5
+        with:
+          repository: apache/arrow-dotnet
+          path: dotnet
       - name: Checkout Arrow Go
         uses: actions/checkout@v5
         with:
@@ -152,7 +158,7 @@ jobs:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.
           key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.8'
       - name: Upgrade pip and setuptools

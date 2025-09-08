@@ -91,8 +91,8 @@
 //!
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
-    compare_schemas, generate_fingerprint, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema,
-    SchemaStore, SINGLE_OBJECT_MAGIC,
+    compare_schemas, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore,
+    CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
 };
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
@@ -185,7 +185,7 @@ impl Decoder {
                 };
             }
             match self.handle_prefix(&data[total_consumed..])? {
-                Some(0) => break, // insufficient bytes
+                Some(0) => break, // Insufficient bytes
                 Some(n) => {
                     total_consumed += n;
                     self.apply_pending_schema_if_batch_empty();
@@ -201,31 +201,60 @@ impl Decoder {
         Ok(total_consumed)
     }
 
-    // Attempt to handle a single‑object‑encoding prefix at the current position.
-    //
+    // Attempt to handle a prefix at the current position.
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
     fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
-        // Need at least the magic bytes to decide (2 bytes).
-        let Some(magic_bytes) = buf.get(..SINGLE_OBJECT_MAGIC.len()) else {
-            return Ok(Some(0)); // Get more bytes
-        };
+        match self.fingerprint_algorithm {
+            FingerprintAlgorithm::Rabin => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::Rabin(u64::from_le_bytes(bytes))
+                })
+            }
+            FingerprintAlgorithm::None => {
+                self.handle_prefix_common(buf, &CONFLUENT_MAGIC, |bytes| {
+                    Fingerprint::Id(u32::from_be_bytes(bytes))
+                })
+            }
+            #[cfg(feature = "md5")]
+            FingerprintAlgorithm::MD5 => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::MD5(bytes)
+                })
+            }
+            #[cfg(feature = "sha256")]
+            FingerprintAlgorithm::SHA256 => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::SHA256(bytes)
+                })
+            }
+        }
+    }
+
+    /// This method checks for the provided `magic` bytes at the start of `buf` and, if present,
+    /// attempts to read the following fingerprint of `N` bytes, converting it to a
+    /// [`Fingerprint`] using `fingerprint_from`.
+    fn handle_prefix_common<const MAGIC_LEN: usize, const N: usize>(
+        &mut self,
+        buf: &[u8],
+        magic: &[u8; MAGIC_LEN],
+        fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
+    ) -> Result<Option<usize>, ArrowError> {
+        // Need at least the magic bytes to decide
+        // 2 bytes for Avro Spec and 1 byte for Confluent Wire Protocol.
+        if buf.len() < MAGIC_LEN {
+            return Ok(Some(0));
+        }
         // Bail out early if the magic does not match.
-        if magic_bytes != SINGLE_OBJECT_MAGIC {
-            return Ok(None); // Continue to decode the next record
+        if &buf[..MAGIC_LEN] != magic {
+            return Ok(None);
         }
         // Try to parse the fingerprint that follows the magic.
-        let fingerprint_size = match self.fingerprint_algorithm {
-            FingerprintAlgorithm::Rabin => self
-                .handle_fingerprint(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
-                    Fingerprint::Rabin(u64::from_le_bytes(bytes))
-                })?,
-        };
+        let consumed_fp = self.handle_fingerprint(&buf[MAGIC_LEN..], fingerprint_from)?;
         // Convert the inner result into a “bytes consumed” count.
         // NOTE: Incomplete fingerprint consumes no bytes.
-        let consumed = fingerprint_size.map_or(0, |n| n + SINGLE_OBJECT_MAGIC.len());
-        Ok(Some(consumed))
+        Ok(Some(consumed_fp.map_or(0, |n| n + MAGIC_LEN)))
     }
 
     // Attempts to read and install a new fingerprint of `N` bytes.
@@ -239,7 +268,7 @@ impl Decoder {
     ) -> Result<Option<usize>, ArrowError> {
         // Need enough bytes to get fingerprint (next N bytes)
         let Some(fingerprint_bytes) = buf.get(..N) else {
-            return Ok(None); // Insufficient bytes
+            return Ok(None); // insufficient bytes
         };
         // SAFETY: length checked above.
         let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
@@ -658,7 +687,7 @@ mod test {
     use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
     use crate::schema::{
         AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, Schema as AvroRaw,
-        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, SINGLE_OBJECT_MAGIC,
+        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
     };
     use crate::test_util::arrow_test_data;
     use arrow::array::ArrayDataBuilder;
@@ -668,7 +697,7 @@ mod test {
     };
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
-    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow_buffer::{i256, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow_schema::{ArrowError, DataType, Field, Fields, IntervalUnit, Schema};
     use bytes::{Buf, BufMut, Bytes};
     use futures::executor::block_on;
@@ -760,6 +789,17 @@ mod test {
                 out.extend_from_slice(&v.to_le_bytes());
                 out
             }
+            Fingerprint::Id(v) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({v})");
+            }
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(v) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({v:?})");
+            }
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(id) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({id:?})");
+            }
         }
     }
 
@@ -771,6 +811,21 @@ mod test {
             .with_active_fingerprint(fp)
             .build_decoder()
             .expect("decoder")
+    }
+
+    fn make_id_prefix(id: u32, additional: usize) -> Vec<u8> {
+        let capacity = CONFLUENT_MAGIC.len() + size_of::<u32>() + additional;
+        let mut out = Vec::with_capacity(capacity);
+        out.extend_from_slice(&CONFLUENT_MAGIC);
+        out.extend_from_slice(&id.to_be_bytes());
+        out
+    }
+
+    fn make_message_id(id: u32, value: i64) -> Vec<u8> {
+        let encoded_value = encode_zigzag(value);
+        let mut msg = make_id_prefix(id, encoded_value.len());
+        msg.extend_from_slice(&encoded_value);
+        msg
     }
 
     fn make_value_schema(pt: PrimitiveType) -> AvroSchema {
@@ -855,6 +910,53 @@ mod test {
         AvroSchema::new(root.to_string())
     }
 
+    fn make_reader_schema_with_enum_remap(
+        path: &str,
+        remap: &HashMap<&str, Vec<&str>>,
+    ) -> AvroSchema {
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        let fields = root
+            .get_mut("fields")
+            .and_then(|f| f.as_array_mut())
+            .expect("record has fields");
+
+        fn to_symbols_array(symbols: &[&str]) -> Value {
+            Value::Array(symbols.iter().map(|s| Value::String((*s).into())).collect())
+        }
+
+        fn update_enum_symbols(ty: &mut Value, symbols: &Value) {
+            match ty {
+                Value::Object(map) => {
+                    if matches!(map.get("type"), Some(Value::String(t)) if t == "enum") {
+                        map.insert("symbols".to_string(), symbols.clone());
+                    }
+                }
+                Value::Array(arr) => {
+                    for b in arr.iter_mut() {
+                        if let Value::Object(map) = b {
+                            if matches!(map.get("type"), Some(Value::String(t)) if t == "enum") {
+                                map.insert("symbols".to_string(), symbols.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for f in fields.iter_mut() {
+            let Some(name) = f.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            if let Some(new_symbols) = remap.get(name) {
+                let symbols_val = to_symbols_array(new_symbols);
+                let ty = f.get_mut("type").expect("field has a type");
+                update_enum_symbols(ty, &symbols_val);
+            }
+        }
+        AvroSchema::new(root.to_string())
+    }
+
     fn read_alltypes_with_reader_schema(path: &str, reader_schema: AvroSchema) -> RecordBatch {
         let file = File::open(path).unwrap();
         let reader = ReaderBuilder::new()
@@ -863,10 +965,37 @@ mod test {
             .with_reader_schema(reader_schema)
             .build(BufReader::new(file))
             .unwrap();
-
         let schema = reader.schema();
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         arrow::compute::concat_batches(&schema, &batches).unwrap()
+    }
+
+    fn make_reader_schema_with_selected_fields_in_order(
+        path: &str,
+        selected: &[&str],
+    ) -> AvroSchema {
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        let writer_fields = root
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record has fields");
+        let mut field_map: HashMap<String, Value> = HashMap::with_capacity(writer_fields.len());
+        for f in writer_fields {
+            if let Some(name) = f.get("name").and_then(|n| n.as_str()) {
+                field_map.insert(name.to_string(), f.clone());
+            }
+        }
+        let mut new_fields = Vec::with_capacity(selected.len());
+        for name in selected {
+            let f = field_map
+                .get(*name)
+                .unwrap_or_else(|| panic!("field '{name}' not found in writer schema"))
+                .clone();
+            new_fields.push(f);
+        }
+        root["fields"] = Value::Array(new_fields);
+        AvroSchema::new(root.to_string())
     }
 
     #[test]
@@ -1208,6 +1337,52 @@ mod test {
     }
 
     #[test]
+    fn test_simple_enum_with_reader_schema_mapping() {
+        let file = arrow_test_data("avro/simple_enum.avro");
+        let mut remap: HashMap<&str, Vec<&str>> = HashMap::new();
+        remap.insert("f1", vec!["d", "c", "b", "a"]);
+        remap.insert("f2", vec!["h", "g", "f", "e"]);
+        remap.insert("f3", vec!["k", "i", "j"]);
+        let reader_schema = make_reader_schema_with_enum_remap(&file, &remap);
+        let actual = read_alltypes_with_reader_schema(&file, reader_schema);
+        let dict_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let f1_keys = Int32Array::from(vec![3, 2, 1, 0]);
+        let f1_vals = StringArray::from(vec!["d", "c", "b", "a"]);
+        let f1 = DictionaryArray::<Int32Type>::try_new(f1_keys, Arc::new(f1_vals)).unwrap();
+        let mut md_f1 = HashMap::new();
+        md_f1.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["d","c","b","a"]"#.to_string(),
+        );
+        let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
+        let f2_keys = Int32Array::from(vec![1, 0, 3, 2]);
+        let f2_vals = StringArray::from(vec!["h", "g", "f", "e"]);
+        let f2 = DictionaryArray::<Int32Type>::try_new(f2_keys, Arc::new(f2_vals)).unwrap();
+        let mut md_f2 = HashMap::new();
+        md_f2.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["h","g","f","e"]"#.to_string(),
+        );
+        let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
+        let f3_keys = Int32Array::from(vec![Some(2), Some(0), None, Some(1)]);
+        let f3_vals = StringArray::from(vec!["k", "i", "j"]);
+        let f3 = DictionaryArray::<Int32Type>::try_new(f3_keys, Arc::new(f3_vals)).unwrap();
+        let mut md_f3 = HashMap::new();
+        md_f3.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["k","i","j"]"#.to_string(),
+        );
+        let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
+        let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
+        let expected = RecordBatch::try_new(
+            expected_schema,
+            vec![Arc::new(f1) as ArrayRef, Arc::new(f2), Arc::new(f3)],
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_schema_store_register_lookup() {
         let schema_int = make_record_schema(PrimitiveType::Int);
         let schema_long = make_record_schema(PrimitiveType::Long);
@@ -1258,6 +1433,11 @@ mod test {
         let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
+            Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
         };
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         buf.extend_from_slice(&long_bytes[..4]);
@@ -1276,8 +1456,14 @@ mod test {
             RecordDecoder::try_new_with_options(root_long.data_type(), decoder.utf8_view).unwrap();
         let _ = decoder.cache.insert(fp_long, long_decoder);
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
-        let Fingerprint::Rabin(v) = fp_long;
-        buf.extend_from_slice(&v.to_le_bytes());
+        match fp_long {
+            Fingerprint::Rabin(v) => buf.extend_from_slice(&v.to_le_bytes()),
+            Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+        }
         let consumed = decoder.handle_prefix(&buf).unwrap().unwrap();
         assert_eq!(consumed, buf.len());
         assert!(decoder.pending_schema.is_some());
@@ -1355,6 +1541,83 @@ mod test {
     }
 
     #[test]
+    fn test_two_messages_same_schema_id() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let id = 100u32;
+        // Set up store with None fingerprint algorithm and register schema by id
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id), writer_schema.clone())
+            .expect("set id schema");
+        let msg1 = make_message_id(id, 21);
+        let msg2 = make_message_id(id, 22);
+        let input = [msg1.clone(), msg2.clone()].concat();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(reader_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id))
+            .build_decoder()
+            .unwrap();
+        let _ = decoder.decode(&input).unwrap();
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 2);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.value(0), 21);
+        assert_eq!(col.value(1), 22);
+    }
+
+    #[test]
+    fn test_unknown_id_fingerprint_is_error() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let id_known = 7u32;
+        let id_unknown = 9u32;
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id_known), writer_schema.clone())
+            .expect("set id schema");
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(writer_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id_known))
+            .build_decoder()
+            .unwrap();
+        let prefix = make_id_prefix(id_unknown, 0);
+        let err = decoder.decode(&prefix).expect_err("decode should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unknown fingerprint"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_handle_prefix_id_incomplete_magic() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let id = 5u32;
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id), writer_schema.clone())
+            .expect("set id schema");
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(writer_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id))
+            .build_decoder()
+            .unwrap();
+        let buf = &crate::schema::CONFLUENT_MAGIC[..0]; // empty incomplete magic
+        let res = decoder.handle_prefix(buf).unwrap();
+        assert_eq!(res, Some(0));
+        assert!(decoder.pending_schema.is_none());
+    }
+
     fn test_split_message_across_chunks() {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let reader_schema = writer_schema.clone();
@@ -1535,6 +1798,107 @@ mod test {
             RecordBatch::try_from_iter(vec![("str_field", Arc::new(array) as ArrayRef)]).unwrap();
 
         assert!(batch.column(0).as_any().is::<StringViewArray>());
+    }
+
+    #[test]
+    fn test_alltypes_skip_writer_fields_keep_double_only() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&file, &["double_col"]);
+        let batch = read_alltypes_with_reader_schema(&file, reader_schema);
+        let expected = RecordBatch::try_from_iter_with_nullable([(
+            "double_col",
+            Arc::new(Float64Array::from_iter_values(
+                (0..8).map(|x| (x % 2) as f64 * 10.1),
+            )) as _,
+            true,
+        )])
+        .unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn test_alltypes_skip_writer_fields_reorder_and_skip_many() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&file, &["timestamp_col", "id"]);
+        let batch = read_alltypes_with_reader_schema(&file, reader_schema);
+        let expected = RecordBatch::try_from_iter_with_nullable([
+            (
+                "timestamp_col",
+                Arc::new(
+                    TimestampMicrosecondArray::from_iter_values([
+                        1235865600000000, // 2009-03-01T00:00:00.000
+                        1235865660000000, // 2009-03-01T00:01:00.000
+                        1238544000000000, // 2009-04-01T00:00:00.000
+                        1238544060000000, // 2009-04-01T00:01:00.000
+                        1233446400000000, // 2009-02-01T00:00:00.000
+                        1233446460000000, // 2009-02-01T00:01:00.000
+                        1230768000000000, // 2009-01-01T00:00:00.000
+                        1230768060000000, // 2009-01-01T00:01:00.000
+                    ])
+                    .with_timezone("+00:00"),
+                ) as _,
+                true,
+            ),
+            (
+                "id",
+                Arc::new(Int32Array::from(vec![4, 5, 6, 7, 2, 3, 0, 1])) as _,
+                true,
+            ),
+        ])
+        .unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn test_skippable_types_project_each_field_individually() {
+        let path = "test/data/skippable_types.avro";
+        let full = read_file(path, 1024, false);
+        let schema_full = full.schema();
+        let num_rows = full.num_rows();
+        let writer_json = load_writer_schema_json(path);
+        assert_eq!(
+            writer_json["type"], "record",
+            "writer schema must be a record"
+        );
+        let fields_json = writer_json
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record has fields");
+        assert_eq!(
+            schema_full.fields().len(),
+            fields_json.len(),
+            "full read column count vs writer fields"
+        );
+        for (idx, f) in fields_json.iter().enumerate() {
+            let name = f
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or_else(|| panic!("field at index {idx} has no name"));
+            let reader_schema = make_reader_schema_with_selected_fields_in_order(path, &[name]);
+            let projected = read_alltypes_with_reader_schema(path, reader_schema);
+            assert_eq!(
+                projected.num_columns(),
+                1,
+                "projected batch should contain exactly the selected column '{name}'"
+            );
+            assert_eq!(
+                projected.num_rows(),
+                num_rows,
+                "row count mismatch for projected column '{name}'"
+            );
+            let field = schema_full.field(idx).clone();
+            let col = full.column(idx).clone();
+            let expected =
+                RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![col]).unwrap();
+            // Equality means: (1) read the right column values; and (2) all other
+            // writer fields were skipped correctly for this projection (no misalignment).
+            assert_eq!(
+                projected, expected,
+                "projected column '{name}' mismatch vs full read column"
+            );
+        }
     }
 
     #[test]
@@ -1791,18 +2155,18 @@ mod test {
         let expected = RecordBatch::try_from_iter_with_nullable([(
             "foo",
             Arc::new(BinaryArray::from_iter_values(vec![
-                b"\x00".as_ref(),
-                b"\x01".as_ref(),
-                b"\x02".as_ref(),
-                b"\x03".as_ref(),
-                b"\x04".as_ref(),
-                b"\x05".as_ref(),
-                b"\x06".as_ref(),
-                b"\x07".as_ref(),
-                b"\x08".as_ref(),
-                b"\t".as_ref(),
-                b"\n".as_ref(),
-                b"\x0b".as_ref(),
+                b"\x00" as &[u8],
+                b"\x01" as &[u8],
+                b"\x02" as &[u8],
+                b"\x03" as &[u8],
+                b"\x04" as &[u8],
+                b"\x05" as &[u8],
+                b"\x06" as &[u8],
+                b"\x07" as &[u8],
+                b"\x08" as &[u8],
+                b"\t" as &[u8],
+                b"\n" as &[u8],
+                b"\x0b" as &[u8],
             ])) as Arc<dyn Array>,
             true,
         )])
@@ -1812,37 +2176,137 @@ mod test {
 
     #[test]
     fn test_decimal() {
-        let files = [
-            ("avro/fixed_length_decimal.avro", 25, 2),
-            ("avro/fixed_length_decimal_legacy.avro", 13, 2),
-            ("avro/int32_decimal.avro", 4, 2),
-            ("avro/int64_decimal.avro", 10, 2),
+        // Choose expected Arrow types depending on the `small_decimals` feature flag.
+        // With `small_decimals` enabled, Decimal32/Decimal64 are used where their
+        // precision allows; otherwise, those cases resolve to Decimal128.
+        #[cfg(feature = "small_decimals")]
+        let files: [(&str, DataType); 8] = [
+            (
+                "avro/fixed_length_decimal.avro",
+                DataType::Decimal128(25, 2),
+            ),
+            (
+                "avro/fixed_length_decimal_legacy.avro",
+                DataType::Decimal64(13, 2),
+            ),
+            ("avro/int32_decimal.avro", DataType::Decimal32(4, 2)),
+            ("avro/int64_decimal.avro", DataType::Decimal64(10, 2)),
+            (
+                "test/data/int256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed_length_decimal_legacy_32.avro",
+                DataType::Decimal32(9, 2),
+            ),
+            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
         ];
-        let decimal_values: Vec<i128> = (1..=24).map(|n| n as i128 * 100).collect();
-        for (file, precision, scale) in files {
-            let file_path = arrow_test_data(file);
+        #[cfg(not(feature = "small_decimals"))]
+        let files: [(&str, DataType); 8] = [
+            (
+                "avro/fixed_length_decimal.avro",
+                DataType::Decimal128(25, 2),
+            ),
+            (
+                "avro/fixed_length_decimal_legacy.avro",
+                DataType::Decimal128(13, 2),
+            ),
+            ("avro/int32_decimal.avro", DataType::Decimal128(4, 2)),
+            ("avro/int64_decimal.avro", DataType::Decimal128(10, 2)),
+            (
+                "test/data/int256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed_length_decimal_legacy_32.avro",
+                DataType::Decimal128(9, 2),
+            ),
+            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
+        ];
+        for (file, expected_dt) in files {
+            let (precision, scale) = match expected_dt {
+                DataType::Decimal32(p, s)
+                | DataType::Decimal64(p, s)
+                | DataType::Decimal128(p, s)
+                | DataType::Decimal256(p, s) => (p, s),
+                _ => unreachable!("Unexpected decimal type in test inputs"),
+            };
+            assert!(scale >= 0, "test data uses non-negative scales only");
+            let scale_u32 = scale as u32;
+            let file_path: String = if file.starts_with("avro/") {
+                arrow_test_data(file)
+            } else {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(file)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let pow10: i128 = 10i128.pow(scale_u32);
+            let values_i128: Vec<i128> = (1..=24).map(|n| (n as i128) * pow10).collect();
+            let build_expected = |dt: &DataType, values: &[i128]| -> ArrayRef {
+                match *dt {
+                    DataType::Decimal32(p, s) => {
+                        let it = values.iter().map(|&v| v as i32);
+                        Arc::new(
+                            Decimal32Array::from_iter_values(it)
+                                .with_precision_and_scale(p, s)
+                                .unwrap(),
+                        )
+                    }
+                    DataType::Decimal64(p, s) => {
+                        let it = values.iter().map(|&v| v as i64);
+                        Arc::new(
+                            Decimal64Array::from_iter_values(it)
+                                .with_precision_and_scale(p, s)
+                                .unwrap(),
+                        )
+                    }
+                    DataType::Decimal128(p, s) => {
+                        let it = values.iter().copied();
+                        Arc::new(
+                            Decimal128Array::from_iter_values(it)
+                                .with_precision_and_scale(p, s)
+                                .unwrap(),
+                        )
+                    }
+                    DataType::Decimal256(p, s) => {
+                        let it = values.iter().map(|&v| i256::from_i128(v));
+                        Arc::new(
+                            Decimal256Array::from_iter_values(it)
+                                .with_precision_and_scale(p, s)
+                                .unwrap(),
+                        )
+                    }
+                    _ => unreachable!("Unexpected decimal type in test"),
+                }
+            };
             let actual_batch = read_file(&file_path, 8, false);
-            let expected_array = Decimal128Array::from_iter_values(decimal_values.clone())
-                .with_precision_and_scale(precision, scale)
-                .unwrap();
+            let actual_nullable = actual_batch.schema().field(0).is_nullable();
+            let expected_array = build_expected(&expected_dt, &values_i128);
             let mut meta = HashMap::new();
             meta.insert("precision".to_string(), precision.to_string());
             meta.insert("scale".to_string(), scale.to_string());
-            let field_with_meta = Field::new("value", DataType::Decimal128(precision, scale), true)
-                .with_metadata(meta);
-            let expected_schema = Arc::new(Schema::new(vec![field_with_meta]));
+            let field =
+                Field::new("value", expected_dt.clone(), actual_nullable).with_metadata(meta);
+            let expected_schema = Arc::new(Schema::new(vec![field]));
             let expected_batch =
-                RecordBatch::try_new(expected_schema.clone(), vec![Arc::new(expected_array)])
-                    .expect("Failed to build expected RecordBatch");
+                RecordBatch::try_new(expected_schema.clone(), vec![expected_array]).unwrap();
             assert_eq!(
                 actual_batch, expected_batch,
-                "Decoded RecordBatch does not match the expected Decimal128 data for file {file}"
+                "Decoded RecordBatch does not match for {file}"
             );
             let actual_batch_small = read_file(&file_path, 3, false);
             assert_eq!(
-                actual_batch_small,
-                expected_batch,
-                "Decoded RecordBatch does not match the expected Decimal128 data for file {file} with batch size 3"
+                actual_batch_small, expected_batch,
+                "Decoded RecordBatch does not match for {file} with batch size 3"
             );
         }
     }

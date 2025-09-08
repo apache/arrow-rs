@@ -20,6 +20,8 @@ use arrow_schema::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value};
+#[cfg(feature = "sha256")]
+use sha2::{Digest, Sha256};
 use std::cmp::PartialEq;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -30,6 +32,9 @@ pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
 
 /// The Avro single‑object encoding “magic” bytes (`0xC3 0x01`)
 pub const SINGLE_OBJECT_MAGIC: [u8; 2] = [0xC3, 0x01];
+
+/// The Confluent "magic" byte (`0x00`)
+pub const CONFLUENT_MAGIC: [u8; 1] = [0x00];
 
 /// Metadata key used to represent Avro enum symbols in an Arrow schema.
 pub const AVRO_ENUM_SYMBOLS_METADATA_KEY: &str = "avro.enum.symbols";
@@ -49,9 +54,23 @@ pub const AVRO_DOC_METADATA_KEY: &str = "avro.doc";
 /// Compare two Avro schemas for equality (identical schemas).
 /// Returns true if the schemas have the same parsing canonical form (i.e., logically identical).
 pub fn compare_schemas(writer: &Schema, reader: &Schema) -> Result<bool, ArrowError> {
-    let canon_writer = generate_canonical_form(writer)?;
-    let canon_reader = generate_canonical_form(reader)?;
+    let canon_writer = AvroSchema::generate_canonical_form(writer)?;
+    let canon_reader = AvroSchema::generate_canonical_form(reader)?;
     Ok(canon_writer == canon_reader)
+}
+
+/// Avro types are not nullable, with nullability instead encoded as a union
+/// where one of the variants is the null type.
+///
+/// To accommodate this, we specially case two-variant unions where one of the
+/// variants is the null type, and use this to derive arrow's notion of nullability
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
+pub enum Nullability {
+    /// The nulls are encoded as the first union variant
+    #[default]
+    NullFirst,
+    /// The nulls are encoded as the second union variant
+    NullSecond,
 }
 
 /// Either a [`PrimitiveType`] or a reference to a previously defined named type
@@ -108,7 +127,7 @@ pub struct Attributes<'a> {
 
     /// Additional JSON attributes
     #[serde(flatten)]
-    pub additional: HashMap<&'a str, serde_json::Value>,
+    pub additional: HashMap<&'a str, Value>,
 }
 
 impl Attributes<'_> {
@@ -215,8 +234,8 @@ pub struct Field<'a> {
     #[serde(borrow)]
     pub r#type: Schema<'a>,
     /// Optional default value for this field
-    #[serde(borrow, default)]
-    pub default: Option<&'a str>,
+    #[serde(default)]
+    pub default: Option<Value>,
 }
 
 /// An enumeration
@@ -304,51 +323,11 @@ pub struct AvroSchema {
 impl TryFrom<&ArrowSchema> for AvroSchema {
     type Error = ArrowError;
 
+    /// Converts an `ArrowSchema` to `AvroSchema`, delegating to
+    /// `AvroSchema::from_arrow_with_options` with `None` so that the
+    /// union null ordering is decided by `Nullability::default()`.
     fn try_from(schema: &ArrowSchema) -> Result<Self, Self::Error> {
-        // Fast‑path: schema already contains Avro JSON
-        if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
-            return Ok(AvroSchema::new(json.clone()));
-        }
-        let mut name_gen = NameGenerator::default();
-        let fields_json = schema
-            .fields()
-            .iter()
-            .map(|f| arrow_field_to_avro(f, &mut name_gen))
-            .collect::<Result<Vec<_>, _>>()?;
-        // Assemble top‑level record
-        let record_name = schema
-            .metadata
-            .get(AVRO_NAME_METADATA_KEY)
-            .map_or("topLevelRecord", |s| s.as_str());
-        let mut record = JsonMap::with_capacity(schema.metadata.len() + 4);
-        record.insert("type".into(), Value::String("record".into()));
-        record.insert(
-            "name".into(),
-            Value::String(sanitise_avro_name(record_name)),
-        );
-        if let Some(ns) = schema.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
-            record.insert("namespace".into(), Value::String(ns.clone()));
-        }
-        if let Some(doc) = schema.metadata.get(AVRO_DOC_METADATA_KEY) {
-            record.insert("doc".into(), Value::String(doc.clone()));
-        }
-        record.insert("fields".into(), Value::Array(fields_json));
-        let schema_prefix = format!("{SCHEMA_METADATA_KEY}.");
-        for (meta_key, meta_val) in &schema.metadata {
-            // Skip keys already handled or internal
-            if meta_key.starts_with("avro.")
-                || meta_key.starts_with(schema_prefix.as_str())
-                || is_internal_arrow_key(meta_key)
-            {
-                continue;
-            }
-            let json_val =
-                serde_json::from_str(meta_val).unwrap_or_else(|_| Value::String(meta_val.clone()));
-            record.insert(meta_key.clone(), json_val);
-        }
-        let json_string = serde_json::to_string(&Value::Object(record))
-            .map_err(|e| ArrowError::SchemaError(format!("Serialising Avro JSON failed: {e}")))?;
-        Ok(AvroSchema::new(json_string))
+        AvroSchema::from_arrow_with_options(schema, None)
     }
 }
 
@@ -368,31 +347,146 @@ impl AvroSchema {
 
     /// Returns the Rabin fingerprint of the schema.
     pub fn fingerprint(&self) -> Result<Fingerprint, ArrowError> {
-        generate_fingerprint_rabin(&self.schema()?)
+        Self::generate_fingerprint_rabin(&self.schema()?)
+    }
+
+    /// Generates a fingerprint for the given `Schema` using the specified [`FingerprintAlgorithm`].
+    ///
+    /// The fingerprint is computed over the schema's Parsed Canonical Form
+    /// as defined by the Avro specification. Depending on `hash_type`, this
+    /// will return one of the supported [`Fingerprint`] variants:
+    /// - [`Fingerprint::Rabin`] for [`FingerprintAlgorithm::Rabin`]
+    /// - [`Fingerprint::MD5`] for [`FingerprintAlgorithm::MD5`]
+    /// - [`Fingerprint::SHA256`] for [`FingerprintAlgorithm::SHA256`]
+    ///
+    /// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
+    /// and will result in an error. If you intend to use a Schema Registry ID-based
+    /// wire format, load or set the [`Fingerprint::Id`] directly via [`Fingerprint::load_fingerprint_id`]
+    /// or [`SchemaStore::set`].
+    ///
+    /// See also: <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
+    ///
+    /// # Errors
+    /// Returns an error if generating the canonical form of the schema fails,
+    /// or if `hash_type` is [`FingerprintAlgorithm::None`].
+    ///
+    /// # Examples
+    /// ```no_run
+    /// use arrow_avro::schema::{AvroSchema, FingerprintAlgorithm};
+    ///
+    /// let avro = AvroSchema::new("\"string\"".to_string());
+    /// let schema = avro.schema().unwrap();
+    /// let fp = AvroSchema::generate_fingerprint(&schema, FingerprintAlgorithm::Rabin).unwrap();
+    /// ```
+    pub fn generate_fingerprint(
+        schema: &Schema,
+        hash_type: FingerprintAlgorithm,
+    ) -> Result<Fingerprint, ArrowError> {
+        let canonical = Self::generate_canonical_form(schema).map_err(|e| {
+            ArrowError::ComputeError(format!("Failed to generate canonical form for schema: {e}"))
+        })?;
+        match hash_type {
+            FingerprintAlgorithm::Rabin => {
+                Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
+            }
+            FingerprintAlgorithm::None => Err(ArrowError::SchemaError(
+                "FingerprintAlgorithm of None cannot be used to generate a fingerprint; \
+                if using Fingerprint::Id, pass the registry ID in instead using the set method."
+                    .to_string(),
+            )),
+            #[cfg(feature = "md5")]
+            FingerprintAlgorithm::MD5 => Ok(Fingerprint::MD5(compute_fingerprint_md5(&canonical))),
+            #[cfg(feature = "sha256")]
+            FingerprintAlgorithm::SHA256 => {
+                Ok(Fingerprint::SHA256(compute_fingerprint_sha256(&canonical)))
+            }
+        }
+    }
+
+    /// Generates the 64-bit Rabin fingerprint for the given `Schema`.
+    ///
+    /// The fingerprint is computed from the canonical form of the schema.
+    /// This is also known as `CRC-64-AVRO`.
+    ///
+    /// # Returns
+    /// A `Fingerprint::Rabin` variant containing the 64-bit fingerprint.
+    pub fn generate_fingerprint_rabin(schema: &Schema) -> Result<Fingerprint, ArrowError> {
+        Self::generate_fingerprint(schema, FingerprintAlgorithm::Rabin)
+    }
+
+    /// Generates the Parsed Canonical Form for the given [`Schema`].
+    ///
+    /// The canonical form is a standardized JSON representation of the schema,
+    /// primarily used for generating a schema fingerprint for equality checking.
+    ///
+    /// This form strips attributes that do not affect the schema's identity,
+    /// such as `doc` fields, `aliases`, and any properties not defined in the
+    /// Avro specification.
+    ///
+    /// <https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas>
+    pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
+        build_canonical(schema, None)
+    }
+
+    /// Build Avro JSON from an Arrow [`ArrowSchema`], applying the given null‑union order.
+    ///
+    /// If the input Arrow schema already contains Avro JSON in
+    /// [`SCHEMA_METADATA_KEY`], that JSON is returned verbatim to preserve
+    /// the exact header encoding alignment; otherwise, a new JSON is generated
+    /// honoring `null_union_order` at **all nullable sites**.
+    pub fn from_arrow_with_options(
+        schema: &ArrowSchema,
+        null_order: Option<Nullability>,
+    ) -> Result<AvroSchema, ArrowError> {
+        if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
+            return Ok(AvroSchema::new(json.clone()));
+        }
+        let order = null_order.unwrap_or_default();
+        let mut name_gen = NameGenerator::default();
+        let fields_json = schema
+            .fields()
+            .iter()
+            .map(|f| arrow_field_to_avro(f, &mut name_gen, order))
+            .collect::<Result<Vec<_>, _>>()?;
+        let record_name = schema
+            .metadata
+            .get(AVRO_NAME_METADATA_KEY)
+            .map_or("topLevelRecord", |s| s.as_str());
+        let mut record = JsonMap::with_capacity(schema.metadata.len() + 4);
+        record.insert("type".into(), Value::String("record".into()));
+        record.insert(
+            "name".into(),
+            Value::String(sanitise_avro_name(record_name)),
+        );
+        if let Some(ns) = schema.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+            record.insert("namespace".into(), Value::String(ns.clone()));
+        }
+        if let Some(doc) = schema.metadata.get(AVRO_DOC_METADATA_KEY) {
+            record.insert("doc".into(), Value::String(doc.clone()));
+        }
+        record.insert("fields".into(), Value::Array(fields_json));
+        extend_with_passthrough_metadata(&mut record, &schema.metadata);
+        let json_string = serde_json::to_string(&Value::Object(record))
+            .map_err(|e| ArrowError::SchemaError(format!("Serializing Avro JSON failed: {e}")))?;
+        Ok(AvroSchema::new(json_string))
     }
 }
 
 /// Supported fingerprint algorithms for Avro schema identification.
-/// Currently only `Rabin` is supported, `SHA256` and `MD5` support will come in a future update
+/// For use with Confluent Schema Registry IDs, set to None.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum FingerprintAlgorithm {
     /// 64‑bit CRC‑64‑AVRO Rabin fingerprint.
     #[default]
     Rabin,
-}
-
-/// A schema fingerprint in one of the supported formats.
-///
-/// This is used as the key inside `SchemaStore` `HashMap`. Each `SchemaStore`
-/// instance always stores only one variant, matching its configured
-/// `FingerprintAlgorithm`, but the enum makes the API uniform.
-/// Currently only `Rabin` is supported
-///
-/// <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Fingerprint {
-    /// A 64-bit Rabin fingerprint.
-    Rabin(u64),
+    /// Represents a fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
+    None,
+    #[cfg(feature = "md5")]
+    /// 128-bit MD5 message digest.
+    MD5,
+    #[cfg(feature = "sha256")]
+    /// 256-bit SHA-256 digest.
+    SHA256,
 }
 
 /// Allow easy extraction of the algorithm used to create a fingerprint.
@@ -400,48 +494,48 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
     fn from(fp: &Fingerprint) -> Self {
         match fp {
             Fingerprint::Rabin(_) => FingerprintAlgorithm::Rabin,
+            Fingerprint::Id(_) => FingerprintAlgorithm::None,
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(_) => FingerprintAlgorithm::MD5,
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(_) => FingerprintAlgorithm::SHA256,
         }
     }
 }
 
-/// Generates a fingerprint for the given `Schema` using the specified `FingerprintAlgorithm`.
-pub(crate) fn generate_fingerprint(
-    schema: &Schema,
-    hash_type: FingerprintAlgorithm,
-) -> Result<Fingerprint, ArrowError> {
-    let canonical = generate_canonical_form(schema).map_err(|e| {
-        ArrowError::ComputeError(format!("Failed to generate canonical form for schema: {e}"))
-    })?;
-    match hash_type {
-        FingerprintAlgorithm::Rabin => {
-            Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
-        }
+/// A schema fingerprint in one of the supported formats.
+///
+/// This is used as the key inside `SchemaStore` `HashMap`. Each `SchemaStore`
+/// instance always stores only one variant, matching its configured
+/// `FingerprintAlgorithm`, but the enum makes the API uniform.
+///
+/// <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
+/// <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Fingerprint {
+    /// A 64-bit Rabin fingerprint.
+    Rabin(u64),
+    /// A 32-bit Schema Registry ID.
+    Id(u32),
+    #[cfg(feature = "md5")]
+    /// A 128-bit MD5 fingerprint.
+    MD5([u8; 16]),
+    #[cfg(feature = "sha256")]
+    /// A 256-bit SHA-256 fingerprint.
+    SHA256([u8; 32]),
+}
+
+impl Fingerprint {
+    /// Loads the 32-bit Schema Registry fingerprint (Confluent Schema Registry ID).
+    ///
+    /// The provided `id` is in big-endian wire order; this converts it to host order
+    /// and returns `Fingerprint::Id`.
+    ///
+    /// # Returns
+    /// A `Fingerprint::Id` variant containing the 32-bit fingerprint.
+    pub fn load_fingerprint_id(id: u32) -> Self {
+        Fingerprint::Id(u32::from_be(id))
     }
-}
-
-/// Generates the 64-bit Rabin fingerprint for the given `Schema`.
-///
-/// The fingerprint is computed from the canonical form of the schema.
-/// This is also known as `CRC-64-AVRO`.
-///
-/// # Returns
-/// A `Fingerprint::Rabin` variant containing the 64-bit fingerprint.
-pub fn generate_fingerprint_rabin(schema: &Schema) -> Result<Fingerprint, ArrowError> {
-    generate_fingerprint(schema, FingerprintAlgorithm::Rabin)
-}
-
-/// Generates the Parsed Canonical Form for the given [`Schema`].
-///
-/// The canonical form is a standardized JSON representation of the schema,
-/// primarily used for generating a schema fingerprint for equality checking.
-///
-/// This form strips attributes that do not affect the schema's identity,
-/// such as `doc` fields, `aliases`, and any properties not defined in the
-/// Avro specification.
-///
-/// <https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas>
-pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
-    build_canonical(schema, None)
 }
 
 /// An in-memory cache of Avro schemas, indexed by their fingerprint.
@@ -478,17 +572,16 @@ pub struct SchemaStore {
     schemas: HashMap<Fingerprint, AvroSchema>,
 }
 
-impl TryFrom<&[AvroSchema]> for SchemaStore {
+impl TryFrom<HashMap<Fingerprint, AvroSchema>> for SchemaStore {
     type Error = ArrowError;
 
-    /// Creates a `SchemaStore` from a slice of schemas.
-    /// Each schema in the slice is registered with the new store.
-    fn try_from(schemas: &[AvroSchema]) -> Result<Self, Self::Error> {
-        let mut store = SchemaStore::new();
-        for schema in schemas {
-            store.register(schema.clone())?;
-        }
-        Ok(store)
+    /// Creates a `SchemaStore` from a HashMap of schemas.
+    /// Each schema in the HashMap is registered with the new store.
+    fn try_from(schemas: HashMap<Fingerprint, AvroSchema>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            schemas,
+            ..Self::default()
+        })
     }
 }
 
@@ -498,23 +591,35 @@ impl SchemaStore {
         Self::default()
     }
 
-    /// Registers a schema with the store and returns its fingerprint.
+    /// Creates an empty `SchemaStore` using the default fingerprinting algorithm (64-bit Rabin).
+    pub fn new_with_type(fingerprint_algorithm: FingerprintAlgorithm) -> Self {
+        Self {
+            fingerprint_algorithm,
+            ..Self::default()
+        }
+    }
+
+    /// Registers a schema with the store and the provided fingerprint.
+    /// Note: Confluent wire format implementations should leverage this method.
     ///
-    /// A fingerprint is calculated for the given schema using the store's configured
-    /// hash type. If a schema with the same fingerprint does not already exist in the
-    /// store, the new schema is inserted. If the fingerprint already exists, the
-    /// existing schema is not overwritten.
+    /// A schema is set in the store, using the provided fingerprint. If a schema
+    /// with the same fingerprint does not already exist in the store, the new schema
+    /// is inserted. If the fingerprint already exists, the existing schema is not overwritten.
     ///
     /// # Arguments
     ///
+    /// * `fingerprint` - A reference to the `Fingerprint` of the schema to register.
     /// * `schema` - The `AvroSchema` to register.
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `Fingerprint` of the schema if successful,
+    /// A `Result` returning the provided `Fingerprint` of the schema if successful,
     /// or an `ArrowError` on failure.
-    pub fn register(&mut self, schema: AvroSchema) -> Result<Fingerprint, ArrowError> {
-        let fingerprint = generate_fingerprint(&schema.schema()?, self.fingerprint_algorithm)?;
+    pub fn set(
+        &mut self,
+        fingerprint: Fingerprint,
+        schema: AvroSchema,
+    ) -> Result<Fingerprint, ArrowError> {
         match self.schemas.entry(fingerprint) {
             Entry::Occupied(entry) => {
                 if entry.get() != &schema {
@@ -527,6 +632,37 @@ impl SchemaStore {
                 entry.insert(schema);
             }
         }
+        Ok(fingerprint)
+    }
+
+    /// Registers a schema with the store and returns its fingerprint.
+    ///
+    /// A fingerprint is calculated for the given schema using the store's configured
+    /// hash type. If a schema with the same fingerprint does not already exist in the
+    /// store, the new schema is inserted. If the fingerprint already exists, the
+    /// existing schema is not overwritten. If FingerprintAlgorithm is set to None, this
+    /// method will return an error. Confluent wire format implementations should leverage the
+    /// set method instead.
+    ///
+    /// # Arguments
+    ///
+    /// * `schema` - The `AvroSchema` to register.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `Fingerprint` of the schema if successful,
+    /// or an `ArrowError` on failure.
+    pub fn register(&mut self, schema: AvroSchema) -> Result<Fingerprint, ArrowError> {
+        if self.fingerprint_algorithm == FingerprintAlgorithm::None {
+            return Err(ArrowError::SchemaError(
+                "Invalid FingerprintAlgorithm; unable to generate fingerprint. \
+            Use the set method directly instead, providing a valid fingerprint"
+                    .to_string(),
+            ));
+        }
+        let fingerprint =
+            AvroSchema::generate_fingerprint(&schema.schema()?, self.fingerprint_algorithm)?;
+        self.set(fingerprint, schema)?;
         Ok(fingerprint)
     }
 
@@ -715,9 +851,50 @@ pub(crate) fn compute_fingerprint_rabin(canonical_form: &str) -> u64 {
     fp
 }
 
+#[cfg(feature = "md5")]
+/// Compute the **128‑bit MD5** fingerprint of the canonical form.
+///
+/// Returns a 16‑byte array (`[u8; 16]`) containing the full MD5 digest,
+/// exactly as required by the Avro specification.
+#[inline]
+pub(crate) fn compute_fingerprint_md5(canonical_form: &str) -> [u8; 16] {
+    let digest = md5::compute(canonical_form.as_bytes());
+    digest.0
+}
+
+#[cfg(feature = "sha256")]
+/// Compute the **256‑bit SHA‑256** fingerprint of the canonical form.
+///
+/// Returns a 32‑byte array (`[u8; 32]`) containing the full SHA‑256 digest.
+#[inline]
+pub(crate) fn compute_fingerprint_sha256(canonical_form: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(canonical_form.as_bytes());
+    let digest = hasher.finalize();
+    digest.into()
+}
+
 #[inline]
 fn is_internal_arrow_key(key: &str) -> bool {
     key.starts_with("ARROW:") || key == SCHEMA_METADATA_KEY
+}
+
+/// Copies Arrow schema metadata entries to the provided JSON map,
+/// skipping keys that are Avro-reserved, internal Arrow keys, or
+/// nested under the `avro.schema.` namespace. Values that parse as
+/// JSON are inserted as JSON; otherwise the raw string is preserved.
+fn extend_with_passthrough_metadata(
+    target: &mut JsonMap<String, Value>,
+    metadata: &HashMap<String, String>,
+) {
+    for (meta_key, meta_val) in metadata {
+        if meta_key.starts_with("avro.") || is_internal_arrow_key(meta_key) {
+            continue;
+        }
+        let json_val =
+            serde_json::from_str(meta_val).unwrap_or_else(|_| Value::String(meta_val.clone()));
+        target.insert(meta_key.clone(), json_val);
+    }
 }
 
 // Sanitize an arbitrary string so it is a valid Avro field or type name
@@ -790,12 +967,21 @@ fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
     }
 }
 
-// Convert an Arrow `DataType` into an Avro schema `Value`.
+fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
+    let null = Value::String("null".into());
+    let elements = match null_order {
+        Nullability::NullFirst => vec![null, inner],
+        Nullability::NullSecond => vec![inner, null],
+    };
+    Value::Array(elements)
+}
+
 fn datatype_to_avro(
     dt: &DataType,
     field_name: &str,
     metadata: &HashMap<String, String>,
     name_gen: &mut NameGenerator,
+    null_order: Nullability,
 ) -> Result<(Value, JsonMap<String, Value>), ArrowError> {
     let mut extras = JsonMap::new();
     let val = match dt {
@@ -909,20 +1095,32 @@ fn datatype_to_avro(
             if matches!(dt, DataType::LargeList(_)) {
                 extras.insert("arrowLargeList".into(), Value::Bool(true));
             }
-            let (items, ie) =
-                datatype_to_avro(child.data_type(), child.name(), child.metadata(), name_gen)?;
+            let items_schema = process_datatype(
+                child.data_type(),
+                child.name(),
+                child.metadata(),
+                name_gen,
+                null_order,
+                child.is_nullable(),
+            )?;
             json!({
                 "type": "array",
-                "items": merge_extras(items, ie)
+                "items": items_schema
             })
         }
         DataType::FixedSizeList(child, len) => {
             extras.insert("arrowFixedSize".into(), json!(len));
-            let (items, ie) =
-                datatype_to_avro(child.data_type(), child.name(), child.metadata(), name_gen)?;
+            let items_schema = process_datatype(
+                child.data_type(),
+                child.name(),
+                child.metadata(),
+                name_gen,
+                null_order,
+                child.is_nullable(),
+            )?;
             json!({
                 "type": "array",
-                "items": merge_extras(items, ie)
+                "items": items_schema
             })
         }
         DataType::Map(entries, _) => {
@@ -934,21 +1132,23 @@ fn datatype_to_avro(
                     ))
                 }
             };
-            let (val_schema, value_entry) = datatype_to_avro(
+            let values_schema = process_datatype(
                 value_field.data_type(),
                 value_field.name(),
                 value_field.metadata(),
                 name_gen,
+                null_order,
+                value_field.is_nullable(),
             )?;
             json!({
                 "type": "map",
-                "values": merge_extras(val_schema, value_entry)
+                "values": values_schema
             })
         }
         DataType::Struct(fields) => {
             let avro_fields = fields
                 .iter()
-                .map(|field| arrow_field_to_avro(field, name_gen))
+                .map(|field| arrow_field_to_avro(field, name_gen, null_order))
                 .collect::<Result<Vec<_>, _>>()?;
             json!({
                 "type": "record",
@@ -966,19 +1166,24 @@ fn datatype_to_avro(
                     "symbols": symbols
                 })
             } else {
-                let (inner, ie) = datatype_to_avro(value.as_ref(), field_name, metadata, name_gen)?;
-                merge_extras(inner, ie)
+                process_datatype(
+                    value.as_ref(),
+                    field_name,
+                    metadata,
+                    name_gen,
+                    null_order,
+                    false,
+                )?
             }
         }
-        DataType::RunEndEncoded(_, values) => {
-            let (inner, ie) = datatype_to_avro(
-                values.data_type(),
-                values.name(),
-                values.metadata(),
-                name_gen,
-            )?;
-            merge_extras(inner, ie)
-        }
+        DataType::RunEndEncoded(_, values) => process_datatype(
+            values.data_type(),
+            values.name(),
+            values.metadata(),
+            name_gen,
+            null_order,
+            false,
+        )?,
         DataType::Union(_, _) => {
             return Err(ArrowError::NotYetImplemented(
                 "Arrow Union to Avro Union not yet supported".into(),
@@ -993,27 +1198,40 @@ fn datatype_to_avro(
     Ok((val, extras))
 }
 
+fn process_datatype(
+    dt: &DataType,
+    field_name: &str,
+    metadata: &HashMap<String, String>,
+    name_gen: &mut NameGenerator,
+    null_order: Nullability,
+    is_nullable: bool,
+) -> Result<Value, ArrowError> {
+    let (schema, extras) = datatype_to_avro(dt, field_name, metadata, name_gen, null_order)?;
+    let mut merged = merge_extras(schema, extras);
+    if is_nullable {
+        merged = wrap_nullable(merged, null_order)
+    }
+    Ok(merged)
+}
+
 fn arrow_field_to_avro(
     field: &ArrowField,
     name_gen: &mut NameGenerator,
+    null_order: Nullability,
 ) -> Result<Value, ArrowError> {
-    // Sanitize field name to ensure Avro validity but store the original in metadata
     let avro_name = sanitise_avro_name(field.name());
-    let (schema, extras) =
-        datatype_to_avro(field.data_type(), &avro_name, field.metadata(), name_gen)?;
-    // If nullable, wrap `[ "null", <type> ]`, NOTE: second order nullability to be added in a follow-up
-    let mut schema = if field.is_nullable() {
-        Value::Array(vec![
-            Value::String("null".into()),
-            merge_extras(schema, extras),
-        ])
-    } else {
-        merge_extras(schema, extras)
-    };
+    let schema_value = process_datatype(
+        field.data_type(),
+        &avro_name,
+        field.metadata(),
+        name_gen,
+        null_order,
+        field.is_nullable(),
+    )?;
     // Build the field map
     let mut map = JsonMap::with_capacity(field.metadata().len() + 3);
     map.insert("name".into(), Value::String(avro_name));
-    map.insert("type".into(), schema);
+    map.insert("type".into(), schema_value);
     // Transfer selected metadata
     for (meta_key, meta_val) in field.metadata() {
         if is_internal_arrow_key(meta_key) {
@@ -1393,8 +1611,16 @@ mod tests {
     fn test_try_from_schemas_rabin() {
         let int_avro_schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
         let record_avro_schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
-        let schemas = vec![int_avro_schema.clone(), record_avro_schema.clone()];
-        let store = SchemaStore::try_from(schemas.as_slice()).unwrap();
+        let mut schemas: HashMap<Fingerprint, AvroSchema> = HashMap::new();
+        schemas.insert(
+            int_avro_schema.fingerprint().unwrap(),
+            int_avro_schema.clone(),
+        );
+        schemas.insert(
+            record_avro_schema.fingerprint().unwrap(),
+            record_avro_schema.clone(),
+        );
+        let store = SchemaStore::try_from(schemas).unwrap();
         let int_fp = int_avro_schema.fingerprint().unwrap();
         assert_eq!(store.lookup(&int_fp).cloned(), Some(int_avro_schema));
         let rec_fp = record_avro_schema.fingerprint().unwrap();
@@ -1405,12 +1631,21 @@ mod tests {
     fn test_try_from_with_duplicates() {
         let int_avro_schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
         let record_avro_schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
-        let schemas = vec![
+        let mut schemas: HashMap<Fingerprint, AvroSchema> = HashMap::new();
+        schemas.insert(
+            int_avro_schema.fingerprint().unwrap(),
             int_avro_schema.clone(),
-            record_avro_schema,
+        );
+        schemas.insert(
+            record_avro_schema.fingerprint().unwrap(),
+            record_avro_schema.clone(),
+        );
+        // Insert duplicate of int schema
+        schemas.insert(
+            int_avro_schema.fingerprint().unwrap(),
             int_avro_schema.clone(),
-        ];
-        let store = SchemaStore::try_from(schemas.as_slice()).unwrap();
+        );
+        let store = SchemaStore::try_from(schemas).unwrap();
         assert_eq!(store.schemas.len(), 2);
         let int_fp = int_avro_schema.fingerprint().unwrap();
         assert_eq!(store.lookup(&int_fp).cloned(), Some(int_avro_schema));
@@ -1421,14 +1656,40 @@ mod tests {
         let mut store = SchemaStore::new();
         let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
         let fp_enum = store.register(schema.clone()).unwrap();
-        let Fingerprint::Rabin(fp_val) = fp_enum;
-        assert_eq!(
-            store.lookup(&Fingerprint::Rabin(fp_val)).cloned(),
-            Some(schema.clone())
-        );
-        assert!(store
-            .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
-            .is_none());
+        match fp_enum {
+            Fingerprint::Rabin(fp_val) => {
+                assert_eq!(
+                    store.lookup(&Fingerprint::Rabin(fp_val)).cloned(),
+                    Some(schema.clone())
+                );
+                assert!(store
+                    .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
+                    .is_none());
+            }
+            Fingerprint::Id(id) => {
+                unreachable!("This test should only generate Rabin fingerprints")
+            }
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(id) => {
+                unreachable!("This test should only generate Rabin fingerprints")
+            }
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(id) => {
+                unreachable!("This test should only generate Rabin fingerprints")
+            }
+        }
+    }
+
+    #[test]
+    fn test_set_and_lookup_id() {
+        let mut store = SchemaStore::new();
+        let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let id = 42u32;
+        let fp = Fingerprint::Id(id);
+        let out_fp = store.set(fp, schema.clone()).unwrap();
+        assert_eq!(out_fp, fp);
+        assert_eq!(store.lookup(&fp).cloned(), Some(schema.clone()));
+        assert!(store.lookup(&Fingerprint::Id(id.wrapping_add(1))).is_none());
     }
 
     #[test]
@@ -1443,9 +1704,42 @@ mod tests {
     }
 
     #[test]
+    fn test_set_and_lookup_with_provided_fingerprint() {
+        let mut store = SchemaStore::new();
+        let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let fp = schema.fingerprint().unwrap();
+        let out_fp = store.set(fp, schema.clone()).unwrap();
+        assert_eq!(out_fp, fp);
+        assert_eq!(store.lookup(&fp).cloned(), Some(schema));
+    }
+
+    #[test]
+    fn test_set_duplicate_same_schema_ok() {
+        let mut store = SchemaStore::new();
+        let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let fp = schema.fingerprint().unwrap();
+        let _ = store.set(fp, schema.clone()).unwrap();
+        let _ = store.set(fp, schema.clone()).unwrap();
+        assert_eq!(store.schemas.len(), 1);
+    }
+
+    #[test]
+    fn test_set_duplicate_different_schema_collision_error() {
+        let mut store = SchemaStore::new();
+        let schema1 = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let schema2 = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
+        // Use the same Fingerprint::Id to simulate a collision across different schemas
+        let fp = Fingerprint::Id(123);
+        let _ = store.set(fp, schema1).unwrap();
+        let err = store.set(fp, schema2).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("Schema fingerprint collision"));
+    }
+
+    #[test]
     fn test_canonical_form_generation_primitive() {
         let schema = int_schema();
-        let canonical_form = generate_canonical_form(&schema).unwrap();
+        let canonical_form = AvroSchema::generate_canonical_form(&schema).unwrap();
         assert_eq!(canonical_form, r#""int""#);
     }
 
@@ -1453,7 +1747,7 @@ mod tests {
     fn test_canonical_form_generation_record() {
         let schema = record_schema();
         let expected_canonical_form = r#"{"name":"test.namespace.record1","type":"record","fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}]}"#;
-        let canonical_form = generate_canonical_form(&schema).unwrap();
+        let canonical_form = AvroSchema::generate_canonical_form(&schema).unwrap();
         assert_eq!(canonical_form, expected_canonical_form);
     }
 
@@ -1510,7 +1804,7 @@ mod tests {
                 r#type: Schema::Type(Type {
                     r#type: TypeName::Primitive(PrimitiveType::Bytes),
                     attributes: Attributes {
-                        logical_type: Some("decimal"),
+                        logical_type: None,
                         additional: HashMap::from([("precision", json!(4))]),
                     },
                 }),
@@ -1522,7 +1816,7 @@ mod tests {
             },
         }));
         let expected_canonical_form = r#"{"name":"record_with_attrs","type":"record","fields":[{"name":"f1","type":"bytes"}]}"#;
-        let canonical_form = generate_canonical_form(&schema_with_attrs).unwrap();
+        let canonical_form = AvroSchema::generate_canonical_form(&schema_with_attrs).unwrap();
         assert_eq!(canonical_form, expected_canonical_form);
     }
 
@@ -1766,5 +2060,84 @@ mod tests {
         let schema = single_field_schema(ArrowField::new("metrics", map_dt, false));
         let avro = AvroSchema::try_from(&schema).unwrap();
         assert_json_contains(&avro.json_string, "\"arrowDurationUnit\":\"second\"");
+    }
+
+    #[test]
+    fn test_schema_with_non_string_defaults_decodes_successfully() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "R",
+            "fields": [
+                {"name": "a", "type": "int", "default": 0},
+                {"name": "b", "type": {"type": "array", "items": "long"}, "default": [1, 2, 3]},
+                {"name": "c", "type": {"type": "map", "values": "double"}, "default": {"x": 1.5, "y": 2.5}},
+                {"name": "inner", "type": {"type": "record", "name": "Inner", "fields": [
+                    {"name": "flag", "type": "boolean", "default": true},
+                    {"name": "name", "type": "string", "default": "hi"}
+                ]}, "default": {"flag": false, "name": "d"}},
+                {"name": "u", "type": ["int", "null"], "default": 42}
+            ]
+        }"#;
+
+        let schema: Schema = serde_json::from_str(schema_json).expect("schema should parse");
+        match &schema {
+            Schema::Complex(ComplexType::Record(_)) => {}
+            other => panic!("expected record schema, got: {:?}", other),
+        }
+        // Avro to Arrow conversion
+        let field = crate::codec::AvroField::try_from(&schema)
+            .expect("Avro->Arrow conversion should succeed");
+        let arrow_field = field.field();
+
+        // Build expected Arrow field
+        let expected_list_item = ArrowField::new(
+            arrow_schema::Field::LIST_FIELD_DEFAULT_NAME,
+            DataType::Int64,
+            false,
+        );
+        let expected_b = ArrowField::new("b", DataType::List(Arc::new(expected_list_item)), false);
+
+        let expected_map_value = ArrowField::new("value", DataType::Float64, false);
+        let expected_entries = ArrowField::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                ArrowField::new("key", DataType::Utf8, false),
+                expected_map_value,
+            ])),
+            false,
+        );
+        let expected_c =
+            ArrowField::new("c", DataType::Map(Arc::new(expected_entries), false), false);
+
+        let expected_inner = ArrowField::new(
+            "inner",
+            DataType::Struct(Fields::from(vec![
+                ArrowField::new("flag", DataType::Boolean, false),
+                ArrowField::new("name", DataType::Utf8, false),
+            ])),
+            false,
+        );
+
+        let expected = ArrowField::new(
+            "R",
+            DataType::Struct(Fields::from(vec![
+                ArrowField::new("a", DataType::Int32, false),
+                expected_b,
+                expected_c,
+                expected_inner,
+                ArrowField::new("u", DataType::Int32, true),
+            ])),
+            false,
+        );
+
+        assert_eq!(arrow_field, expected);
+    }
+
+    #[test]
+    fn default_order_is_consistent() {
+        let arrow_schema = ArrowSchema::new(vec![ArrowField::new("s", DataType::Utf8, true)]);
+        let a = AvroSchema::try_from(&arrow_schema).unwrap().json_string;
+        let b = AvroSchema::from_arrow_with_options(&arrow_schema, None);
+        assert_eq!(a, b.unwrap().json_string);
     }
 }
