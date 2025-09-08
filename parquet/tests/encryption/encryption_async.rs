@@ -578,8 +578,8 @@ async fn test_multi_threaded_encrypted_writing() {
 
     // Close the file writer which writes the footer
     let metadata = writer.finish().unwrap();
-    assert_eq!(metadata.num_rows, 100);
-    assert_eq!(metadata.schema, metadata.schema);
+    assert_eq!(metadata.file_metadata().num_rows(), 100);
+    // TODO(ets): wut? assert_eq!(metadata.schema, metadata.schema);
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =

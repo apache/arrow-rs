@@ -452,15 +452,17 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
     fn convert_offset_index(&self) -> Option<Vec<Vec<Option<OffsetIndexMetaData>>>> {
         if let Some(row_group_offset_indexes) = self.metadata.offset_index() {
-            Some((0..self.metadata.row_groups().len())
-                .map(|rg_idx| {
-                    let offset_indexes = &row_group_offset_indexes[rg_idx];
-                    offset_indexes
-                        .iter()
-                        .map(|offset_index| Some(offset_index.clone()))
-                        .collect()
-                })
-                .collect())
+            Some(
+                (0..self.metadata.row_groups().len())
+                    .map(|rg_idx| {
+                        let offset_indexes = &row_group_offset_indexes[rg_idx];
+                        offset_indexes
+                            .iter()
+                            .map(|offset_index| Some(offset_index.clone()))
+                            .collect()
+                    })
+                    .collect(),
+            )
         } else {
             None
         }

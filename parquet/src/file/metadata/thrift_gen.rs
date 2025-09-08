@@ -1223,8 +1223,8 @@ pub(crate) fn serialize_column_meta_data<W: Write>(
 
     // SizeStatistics
     let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
-            || column_chunk.repetition_level_histogram.is_some()
-            || column_chunk.definition_level_histogram.is_some()
+        || column_chunk.repetition_level_histogram.is_some()
+        || column_chunk.definition_level_histogram.is_some()
     {
         let repetition_level_histogram = column_chunk
             .repetition_level_histogram()
