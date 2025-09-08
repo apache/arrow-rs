@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "arrow")]
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::metadata::ParquetMetaDataReader;
 use rand::Rng;
 use thrift::protocol::TCompactOutputProtocol;
@@ -164,7 +166,7 @@ fn get_footer_bytes(data: Bytes) -> Bytes {
 }
 
 #[cfg(feature = "arrow")]
-fn rewrite_file(bytes: Bytes) -> (Bytes, FileMetaData) {
+fn rewrite_file(bytes: Bytes) -> (Bytes, ParquetMetaData) {
     use arrow::array::RecordBatchReader;
     use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -242,40 +244,36 @@ fn criterion_benchmark(c: &mut Criterion) {
     #[cfg(feature = "arrow")]
     c.bench_function("page headers", |b| {
         b.iter(|| {
-            metadata.row_groups.iter().for_each(|rg| {
-                rg.columns.iter().for_each(|col| {
-                    if let Some(col_meta) = &col.meta_data {
-                        if let Some(dict_offset) = col_meta.dictionary_page_offset {
-                            parquet::thrift::bench_page_header(
-                                &file_bytes.slice(dict_offset as usize..),
-                            );
-                        }
+            for rg in metadata.row_groups() {
+                for col in rg.columns() {
+                    if let Some(dict_offset) = col.dictionary_page_offset() {
                         parquet::thrift::bench_page_header(
-                            &file_bytes.slice(col_meta.data_page_offset as usize..),
+                            &file_bytes.slice(dict_offset as usize..),
                         );
                     }
-                });
-            });
+                    parquet::thrift::bench_page_header(
+                        &file_bytes.slice(col.data_page_offset() as usize..),
+                    );
+                }
+            }
         })
     });
 
     #[cfg(feature = "arrow")]
     c.bench_function("page headers (no stats)", |b| {
         b.iter(|| {
-            metadata.row_groups.iter().for_each(|rg| {
-                rg.columns.iter().for_each(|col| {
-                    if let Some(col_meta) = &col.meta_data {
-                        if let Some(dict_offset) = col_meta.dictionary_page_offset {
-                            parquet::thrift::bench_page_header_no_stats(
-                                &file_bytes.slice(dict_offset as usize..),
-                            );
-                        }
+            for rg in metadata.row_groups() {
+                for col in rg.columns() {
+                    if let Some(dict_offset) = col.dictionary_page_offset() {
                         parquet::thrift::bench_page_header_no_stats(
-                            &file_bytes.slice(col_meta.data_page_offset as usize..),
+                            &file_bytes.slice(dict_offset as usize..),
                         );
                     }
-                });
-            });
+                    parquet::thrift::bench_page_header_no_stats(
+                        &file_bytes.slice(col.data_page_offset() as usize..),
+                    );
+                }
+            }
         })
     });
 }

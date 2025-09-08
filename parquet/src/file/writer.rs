@@ -2098,7 +2098,7 @@ mod tests {
             unenc_size,
             meta_data.unencoded_byte_array_data_bytes().unwrap()
         );
-        check_def_hist(&meta_data.definition_level_histogram().unwrap().values());
+        check_def_hist(meta_data.definition_level_histogram().unwrap().values());
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();

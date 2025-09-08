@@ -433,8 +433,9 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     fn convert_column_indexes(&self) -> Option<Vec<Vec<Option<ColumnIndexMetaData>>>> {
         // FIXME(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
         // but then converting back to ParquetColumnIndex in the end. need to unify this.
-        if let Some(row_group_column_indexes) = self.metadata.column_index() {
-            Some(
+        self.metadata
+            .column_index()
+            .map(|row_group_column_indexes| {
                 (0..self.metadata.row_groups().len())
                     .map(|rg_idx| {
                         let column_indexes = &row_group_column_indexes[rg_idx];
@@ -443,16 +444,14 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                             .map(|column_index| Some(column_index.clone()))
                             .collect()
                     })
-                    .collect(),
-            )
-        } else {
-            None
-        }
+                    .collect()
+            })
     }
 
     fn convert_offset_index(&self) -> Option<Vec<Vec<Option<OffsetIndexMetaData>>>> {
-        if let Some(row_group_offset_indexes) = self.metadata.offset_index() {
-            Some(
+        self.metadata
+            .offset_index()
+            .map(|row_group_offset_indexes| {
                 (0..self.metadata.row_groups().len())
                     .map(|rg_idx| {
                         let offset_indexes = &row_group_offset_indexes[rg_idx];
@@ -461,11 +460,8 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                             .map(|offset_index| Some(offset_index.clone()))
                             .collect()
                     })
-                    .collect(),
-            )
-        } else {
-            None
-        }
+                    .collect()
+            })
     }
 }
 

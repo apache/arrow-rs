@@ -1125,13 +1125,10 @@ pub(crate) fn num_nodes(tp: &TypePtr) -> usize {
 
 pub(crate) fn count_nodes(tp: &TypePtr, n_nodes: &mut usize) {
     *n_nodes += 1;
-    match tp.as_ref() {
-        Type::GroupType { ref fields, .. } => {
-            for f in fields {
-                count_nodes(f, n_nodes);
-            }
+    if let Type::GroupType { ref fields, .. } = tp.as_ref() {
+        for f in fields {
+            count_nodes(f, n_nodes);
         }
-        _ => (),
     }
 }
 

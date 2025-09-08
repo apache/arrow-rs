@@ -1444,7 +1444,7 @@ impl WriteThrift for ColumnChunkMetaData {
         // only write the ColumnMetaData if we haven't already encrypted it
         if self.encrypted_column_metadata.is_none() {
             writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
-            serialize_column_meta_data(&self, writer)?;
+            serialize_column_meta_data(self, writer)?;
             last_field_id = 3;
         }
 
@@ -1488,7 +1488,7 @@ impl WriteThrift for ColumnChunkMetaData {
 
         // always write the ColumnMetaData
         writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
-        serialize_column_meta_data(&self, writer)?;
+        serialize_column_meta_data(self, writer)?;
         last_field_id = 3;
 
         if let Some(offset_idx_off) = self.offset_index_offset() {
