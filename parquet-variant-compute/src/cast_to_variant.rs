@@ -69,6 +69,11 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     Decimal256(Decimal256ArrowToVariantBuilder<'a>),
     Boolean(BooleanArrowToVariantBuilder<'a>),
     String(StringArrowToVariantBuilder<'a>),
+    Binary(BinaryArrowToVariantBuilder<'a>),
+    LargeBinary(LargeBinaryArrowToVariantBuilder<'a>),
+    BinaryView(BinaryViewArrowToVariantBuilder<'a>),
+    FixedSizeBinary(FixedSizeBinaryArrowToVariantBuilder<'a>),
+    Utf8View(Utf8ViewArrowToVariantBuilder<'a>),
     Struct(StructArrowToVariantBuilder<'a>),
     Null(NullArrowToVariantBuilder),
     RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder<'a, Int16Type>),
@@ -101,6 +106,11 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             ArrowToVariantRowBuilder::Decimal256(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Boolean(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::String(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Binary(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::LargeBinary(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::BinaryView(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::FixedSizeBinary(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Utf8View(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Struct(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::Null(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::RunEndEncodedInt16(b) => b.append_row(index, builder),
@@ -618,6 +628,121 @@ impl<'a> Decimal256ArrowToVariantBuilder<'a> {
     }
 }
 
+/// Binary builder for Arrow BinaryArray
+pub(crate) struct BinaryArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::BinaryArray,
+}
+
+impl<'a> BinaryArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_binary::<i32>(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let bytes = self.array.value(index);
+            builder.append_value(Variant::from(bytes));
+        }
+        Ok(())
+    }
+}
+
+/// LargeBinary builder for Arrow LargeBinaryArray
+pub(crate) struct LargeBinaryArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::LargeBinaryArray,
+}
+
+impl<'a> LargeBinaryArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_binary::<i64>(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let bytes = self.array.value(index);
+            builder.append_value(Variant::from(bytes));
+        }
+        Ok(())
+    }
+}
+
+/// BinaryView builder for Arrow BinaryViewArray
+pub(crate) struct BinaryViewArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::BinaryViewArray,
+}
+
+impl<'a> BinaryViewArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_byte_view(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let bytes = self.array.value(index);
+            builder.append_value(Variant::from(bytes));
+        }
+        Ok(())
+    }
+}
+
+/// FixedSizeBinary builder for Arrow FixedSizeBinaryArray
+pub(crate) struct FixedSizeBinaryArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::FixedSizeBinaryArray,
+}
+
+impl<'a> FixedSizeBinaryArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_fixed_size_binary(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let bytes = self.array.value(index);
+            builder.append_value(Variant::from(bytes));
+        }
+        Ok(())
+    }
+}
+
+/// Utf8View builder for Arrow StringViewArray
+pub(crate) struct Utf8ViewArrowToVariantBuilder<'a> {
+    array: &'a arrow::array::StringViewArray,
+}
+
+impl<'a> Utf8ViewArrowToVariantBuilder<'a> {
+    fn new(array: &'a dyn Array) -> Self {
+        Self {
+            array: array.as_string_view(),
+        }
+    }
+    
+    fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+        if self.array.is_null(index) {
+            builder.append_null();
+        } else {
+            let string = self.array.value(index);
+            builder.append_value(Variant::from(string));
+        }
+        Ok(())
+    }
+}
+
 /// Factory function to create the appropriate row builder for a given DataType
 fn make_arrow_to_variant_row_builder<'a>(
     data_type: &'a DataType,
@@ -649,6 +774,14 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Boolean => Ok(ArrowToVariantRowBuilder::Boolean(BooleanArrowToVariantBuilder::new(array))),
         DataType::Utf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
         DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
+        DataType::Utf8View => Ok(ArrowToVariantRowBuilder::Utf8View(Utf8ViewArrowToVariantBuilder::new(array))),
+        
+        // Binary types
+        DataType::Binary => Ok(ArrowToVariantRowBuilder::Binary(BinaryArrowToVariantBuilder::new(array))),
+        DataType::LargeBinary => Ok(ArrowToVariantRowBuilder::LargeBinary(LargeBinaryArrowToVariantBuilder::new(array))),
+        DataType::BinaryView => Ok(ArrowToVariantRowBuilder::BinaryView(BinaryViewArrowToVariantBuilder::new(array))),
+        DataType::FixedSizeBinary(_) => Ok(ArrowToVariantRowBuilder::FixedSizeBinary(FixedSizeBinaryArrowToVariantBuilder::new(array))),
+        
         DataType::Struct(_) => Ok(ArrowToVariantRowBuilder::Struct(StructArrowToVariantBuilder::new(array.as_struct())?)),
         DataType::Null => Ok(ArrowToVariantRowBuilder::Null(NullArrowToVariantBuilder)),
         
@@ -3969,5 +4102,202 @@ mod row_builder_tests {
         
         // Row 1: normal value converts successfully
         assert_eq!(variant_array.value(1), Variant::from(VariantDecimal16::try_new(123, 3).unwrap()));
+    }
+
+    #[test]
+    fn test_binary_row_builder() {
+        use arrow::array::BinaryArray;
+
+        // Test BinaryArray with various binary data
+        let binary_data = vec![
+            Some(b"hello".as_slice()),
+            None,
+            Some(b"\x00\x01\x02\xFF".as_slice()),
+            Some(b"".as_slice()), // Empty binary
+        ];
+        let binary_array = BinaryArray::from(binary_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            binary_array.data_type(),
+            &binary_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(4);
+        
+        for i in 0..binary_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 4);
+        
+        // Row 0: "hello" bytes
+        assert_eq!(variant_array.value(0), Variant::from(b"hello".to_vec()));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: binary with special bytes
+        assert_eq!(variant_array.value(2), Variant::from(vec![0x00, 0x01, 0x02, 0xFF]));
+        
+        // Row 3: empty binary
+        assert_eq!(variant_array.value(3), Variant::from(Vec::<u8>::new()));
+    }
+
+    #[test]
+    fn test_large_binary_row_builder() {
+        use arrow::array::LargeBinaryArray;
+
+        // Test LargeBinaryArray
+        let binary_data = vec![
+            Some(b"large binary data".as_slice()),
+            None,
+            Some(b"another large chunk".as_slice()),
+        ];
+        let large_binary_array = LargeBinaryArray::from(binary_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            large_binary_array.data_type(),
+            &large_binary_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..large_binary_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: large binary data
+        assert_eq!(variant_array.value(0), Variant::from(b"large binary data".to_vec()));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: another large chunk
+        assert_eq!(variant_array.value(2), Variant::from(b"another large chunk".to_vec()));
+    }
+
+    #[test]
+    fn test_binary_view_row_builder() {
+        use arrow::array::BinaryViewArray;
+
+        // Test BinaryViewArray
+        let binary_data = vec![
+            Some(b"short".as_slice()),
+            None,
+            Some(b"this is a longer binary view that exceeds inline storage".as_slice()),
+        ];
+        let binary_view_array = BinaryViewArray::from(binary_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            binary_view_array.data_type(),
+            &binary_view_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..binary_view_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: short binary
+        assert_eq!(variant_array.value(0), Variant::from(b"short".to_vec()));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: long binary view
+        assert_eq!(variant_array.value(2), Variant::from(b"this is a longer binary view that exceeds inline storage".to_vec()));
+    }
+
+    #[test]
+    fn test_fixed_size_binary_row_builder() {
+        use arrow::array::FixedSizeBinaryArray;
+
+        // Test FixedSizeBinaryArray with 4-byte values
+        let binary_data = vec![
+            Some([0x01, 0x02, 0x03, 0x04]),
+            None,
+            Some([0xFF, 0xFE, 0xFD, 0xFC]),
+        ];
+        let fixed_binary_array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            binary_data.into_iter().map(|x| x.map(|v| v.as_slice())),
+            4,
+        ).unwrap();
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            fixed_binary_array.data_type(),
+            &fixed_binary_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..fixed_binary_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: fixed size binary
+        assert_eq!(variant_array.value(0), Variant::from(vec![0x01, 0x02, 0x03, 0x04]));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: another fixed size binary
+        assert_eq!(variant_array.value(2), Variant::from(vec![0xFF, 0xFE, 0xFD, 0xFC]));
+    }
+
+    #[test]
+    fn test_utf8_view_row_builder() {
+        use arrow::array::StringViewArray;
+
+        // Test StringViewArray (Utf8View)
+        let string_data = vec![
+            Some("short"),
+            None,
+            Some("this is a much longer string that will be stored out-of-line in the buffer"),
+        ];
+        let string_view_array = StringViewArray::from(string_data);
+        
+        let mut row_builder = make_arrow_to_variant_row_builder(
+            string_view_array.data_type(),
+            &string_view_array,
+        ).unwrap();
+
+        let mut array_builder = VariantArrayBuilder::new(3);
+        
+        for i in 0..string_view_array.len() {
+            let mut builder = array_builder.variant_builder();
+            row_builder.append_row(i, &mut builder).unwrap();
+            builder.finish();
+        }
+        
+        let variant_array = array_builder.build();
+        assert_eq!(variant_array.len(), 3);
+        
+        // Row 0: short string
+        assert_eq!(variant_array.value(0), Variant::from("short"));
+        
+        // Row 1: null
+        assert!(variant_array.is_null(1));
+        
+        // Row 2: long string view
+        assert_eq!(variant_array.value(2), Variant::from("this is a much longer string that will be stored out-of-line in the buffer"));
     }
 }
