@@ -133,7 +133,6 @@ impl VariantArray {
         })
     }
 
-    #[allow(unused)]
     pub(crate) fn from_parts(
         metadata: BinaryViewArray,
         value: Option<BinaryViewArray>,
