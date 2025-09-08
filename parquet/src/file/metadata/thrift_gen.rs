@@ -267,6 +267,14 @@ fn convert_row_group(
     row_group: RowGroup,
     schema_descr: Arc<SchemaDescriptor>,
 ) -> Result<RowGroupMetaData> {
+    if schema_descr.num_columns() != row_group.columns.len() {
+        return Err(general_err!(
+            "Column count mismatch. Schema has {} columns while Row Group has {}",
+            schema_descr.num_columns(),
+            row_group.columns.len()
+        ));
+    }
+
     let num_rows = row_group.num_rows;
     let sorting_columns = row_group.sorting_columns;
     let total_byte_size = row_group.total_byte_size;
@@ -1509,9 +1517,35 @@ impl WriteThrift for ColumnChunkMetaData {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::file::metadata::thrift_gen::BoundingBox;
+pub(crate) mod tests {
+    use crate::errors::Result;
+    use crate::file::metadata::thrift_gen::{
+        convert_column, convert_row_group, BoundingBox, ColumnChunk, RowGroup,
+    };
+    use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
+    use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
+    use crate::schema::types::{ColumnDescriptor, SchemaDescriptor};
+    use std::sync::Arc;
+
+    // for testing. decode thrift encoded RowGroup
+    pub(crate) fn read_row_group(
+        buf: &mut [u8],
+        schema_descr: Arc<SchemaDescriptor>,
+    ) -> Result<RowGroupMetaData> {
+        let mut reader = ThriftSliceInputProtocol::new(buf);
+        let rg = RowGroup::read_thrift(&mut reader)?;
+        convert_row_group(rg, schema_descr)
+    }
+
+    pub(crate) fn read_column_chunk(
+        buf: &mut [u8],
+        column_descr: Arc<ColumnDescriptor>,
+    ) -> Result<ColumnChunkMetaData> {
+        let mut reader = ThriftSliceInputProtocol::new(buf);
+        let cc = ColumnChunk::read_thrift(&mut reader)?;
+        convert_column(cc, column_descr)
+    }
 
     #[test]
     fn test_bounding_box_roundtrip() {

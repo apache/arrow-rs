@@ -1027,6 +1027,7 @@ mod tests {
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
+    use crate::file::statistics::page_stats_to_thrift;
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
@@ -1870,29 +1871,22 @@ mod tests {
         let metadata = row_group_writer.close().unwrap();
         writer.close().unwrap();
 
-        let thrift = metadata.to_thrift();
-        let encoded_stats: Vec<_> = thrift
-            .columns
-            .into_iter()
-            .map(|x| x.meta_data.unwrap().statistics.unwrap())
-            .collect();
-
         // decimal
-        let s = &encoded_stats[0];
+        let s = page_stats_to_thrift(metadata.column(0).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
 
         // i32
-        let s = &encoded_stats[1];
+        let s = page_stats_to_thrift(metadata.column(1).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
 
         // u32
-        let s = &encoded_stats[2];
+        let s = page_stats_to_thrift(metadata.column(2).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), None);
         assert_eq!(s.max.as_deref(), None);
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
