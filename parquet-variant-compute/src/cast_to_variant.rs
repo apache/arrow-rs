@@ -4346,7 +4346,6 @@ mod row_builder_tests {
     #[test]
     fn test_timestamp_second_row_builder() {
         use arrow::array::TimestampSecondArray;
-        use chrono::{NaiveDateTime};
 
         // Test TimestampSecondArray without timezone
         let timestamp_data = vec![
@@ -4373,14 +4372,14 @@ mod row_builder_tests {
         assert_eq!(variant_array.len(), 3);
         
         // Row 0: 2021-01-01 00:00:00 (no timezone -> NaiveDateTime -> TimestampNtzMicros)
-        let expected_naive = NaiveDateTime::from_timestamp_opt(1609459200, 0).unwrap();
+        let expected_naive = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(0), Variant::from(expected_naive));
         
         // Row 1: null
         assert!(variant_array.is_null(1));
         
         // Row 2: 2022-01-01 00:00:00
-        let expected_naive2 = NaiveDateTime::from_timestamp_opt(1640995200, 0).unwrap();
+        let expected_naive2 = DateTime::from_timestamp(1640995200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(2), Variant::from(expected_naive2));
     }
 
@@ -4430,7 +4429,6 @@ mod row_builder_tests {
     #[test]
     fn test_timestamp_nanosecond_precision_row_builder() {
         use arrow::array::TimestampNanosecondArray;
-        use chrono::NaiveDateTime;
 
         // Test TimestampNanosecondArray with nanosecond precision
         let timestamp_data = vec![
@@ -4457,21 +4455,20 @@ mod row_builder_tests {
         assert_eq!(variant_array.len(), 3);
         
         // Row 0: with nanoseconds -> should use TimestampNtzNanos
-        let expected_with_nanos = NaiveDateTime::from_timestamp_opt(1609459200, 123456789).unwrap();
+        let expected_with_nanos = DateTime::from_timestamp(1609459200, 123456789).unwrap().naive_utc();
         assert_eq!(variant_array.value(0), Variant::from(expected_with_nanos));
         
         // Row 1: null
         assert!(variant_array.is_null(1));
         
         // Row 2: no fractional seconds -> should use TimestampNtzMicros  
-        let expected_no_nanos = NaiveDateTime::from_timestamp_opt(1609459200, 0).unwrap();
+        let expected_no_nanos = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(2), Variant::from(expected_no_nanos));
     }
 
     #[test]
     fn test_timestamp_millisecond_row_builder() {
         use arrow::array::TimestampMillisecondArray;
-        use chrono::NaiveDateTime;
 
         // Test TimestampMillisecondArray
         let timestamp_data = vec![
@@ -4498,14 +4495,14 @@ mod row_builder_tests {
         assert_eq!(variant_array.len(), 3);
         
         // Row 0: with milliseconds -> TimestampNtzMicros (123ms = 123000000ns)
-        let expected_with_millis = NaiveDateTime::from_timestamp_opt(1609459200, 123000000).unwrap();
+        let expected_with_millis = DateTime::from_timestamp(1609459200, 123000000).unwrap().naive_utc();
         assert_eq!(variant_array.value(0), Variant::from(expected_with_millis));
         
         // Row 1: null
         assert!(variant_array.is_null(1));
         
         // Row 2: no fractional seconds -> TimestampNtzMicros
-        let expected_no_millis = NaiveDateTime::from_timestamp_opt(1609459200, 0).unwrap();
+        let expected_no_millis = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(2), Variant::from(expected_no_millis));
     }
 }
