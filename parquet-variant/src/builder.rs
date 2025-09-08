@@ -1785,7 +1785,7 @@ impl<'o, 'v, 's> ObjectFieldBuilder<'o, 'v, 's> {
 
 impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
     /// A NULL object field is interpreted as missing, so nothing gets inserted at all.
-    fn append_null(&mut self) { }
+    fn append_null(&mut self) {}
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.builder.insert(self.key, value);
     }

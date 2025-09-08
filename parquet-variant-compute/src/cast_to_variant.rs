@@ -17,29 +17,25 @@
 
 use std::collections::HashMap;
 
-use crate::type_conversion::{
-    decimal_to_variant_decimal,
-};
+use crate::type_conversion::decimal_to_variant_decimal;
 use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::{
-    Array, AsArray, OffsetSizeTrait,
-    PrimitiveArray, GenericStringArray, GenericBinaryArray,
+    Array, AsArray, GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType, Date32Type, Date64Type, Float16Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, RunEndIndexType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType, Date32Type,
+    Date64Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    RunEndIndexType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow::temporal_conversions::{
-    as_date, as_datetime, as_time, 
-};
+use arrow::temporal_conversions::{as_date, as_datetime, as_time};
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, TimeZone, Utc};
 use parquet_variant::{
-    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal16, VariantDecimal4,
+    VariantDecimal8,
 };
 
 // ============================================================================
@@ -94,7 +90,11 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
-    pub fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+    pub fn append_row(
+        &mut self,
+        index: usize,
+        builder: &mut impl VariantBuilderExt,
+    ) -> Result<(), ArrowError> {
         match self {
             ArrowToVariantRowBuilder::PrimitiveInt8(b) => b.append_row(index, builder),
             ArrowToVariantRowBuilder::PrimitiveInt16(b) => b.append_row(index, builder),
@@ -143,13 +143,8 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
     }
 }
 
-
-// ============================================================================
-// Macro for generating generic row builders
-// ============================================================================
-
-/// Macro to define (possibly generic) row builders with consistent structure and behavior
-/// Supports optional extra fields that are passed to the constructor
+/// Macro to define (possibly generic) row builders with consistent structure and behavior.
+/// Supports optional extra fields that are passed to the constructor.
 macro_rules! define_row_builder {
     (
         struct $name:ident<$lifetime:lifetime $(, $generic:ident: $($bound:path)+)?>
@@ -158,13 +153,13 @@ macro_rules! define_row_builder {
         |$array_param:ident| -> $array_type:ty { $init_expr:expr },
         |$value:ident| $value_transform:expr
     ) => {
-        pub(crate) struct $name<$lifetime $(, $generic: $($bound)+)?> 
+        pub(crate) struct $name<$lifetime $(, $generic: $($bound)+)?>
         $(where $where_path: $where_bound)?
         {
             array: &$lifetime $array_type,
             $($($field: $field_type,)*)?
         }
-        
+
         impl<$lifetime $(, $generic: $($bound)+)?> $name<$lifetime $(, $generic)?>
         $(where $where_path: $where_bound)?
         {
@@ -174,7 +169,7 @@ macro_rules! define_row_builder {
                     $($($field,)*)?
                 }
             }
-            
+
             fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
                 if self.array.is_null(index) {
                     builder.append_null();
@@ -216,7 +211,6 @@ define_row_builder!(
     |value| value
 );
 
-
 /// Struct builder for StructArray
 pub(crate) struct StructArrowToVariantBuilder<'a> {
     struct_array: &'a arrow::array::StructArray,
@@ -226,37 +220,42 @@ pub(crate) struct StructArrowToVariantBuilder<'a> {
 impl<'a> StructArrowToVariantBuilder<'a> {
     fn new(struct_array: &'a arrow::array::StructArray) -> Result<Self, ArrowError> {
         let mut field_builders = Vec::new();
-        
+
         // Create a row builder for each field
-        for (field_name, field_array) in struct_array.column_names().iter()
-            .zip(struct_array.columns().iter()) 
+        for (field_name, field_array) in struct_array
+            .column_names()
+            .iter()
+            .zip(struct_array.columns().iter())
         {
-            let field_builder = make_arrow_to_variant_row_builder(
-                field_array.data_type(),
-                field_array.as_ref(),
-            )?;
+            let field_builder =
+                make_arrow_to_variant_row_builder(field_array.data_type(), field_array.as_ref())?;
             field_builders.push((*field_name, field_builder));
         }
-        
+
         Ok(Self {
             struct_array,
             field_builders,
         })
     }
-    
-    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+
+    fn append_row(
+        &mut self,
+        index: usize,
+        builder: &mut impl VariantBuilderExt,
+    ) -> Result<(), ArrowError> {
         if self.struct_array.is_null(index) {
             builder.append_null();
         } else {
             // Create object builder for this struct row
             let mut obj_builder = builder.try_new_object()?;
-            
+
             // Process each field
             for (field_name, row_builder) in &mut self.field_builders {
-                let mut field_builder = parquet_variant::ObjectFieldBuilder::new(field_name, &mut obj_builder);
+                let mut field_builder =
+                    parquet_variant::ObjectFieldBuilder::new(field_name, &mut obj_builder);
                 row_builder.append_row(index, &mut field_builder)?;
             }
-            
+
             obj_builder.finish();
         }
         Ok(())
@@ -267,7 +266,11 @@ impl<'a> StructArrowToVariantBuilder<'a> {
 pub(crate) struct NullArrowToVariantBuilder;
 
 impl NullArrowToVariantBuilder {
-    fn append_row(&mut self, _index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+    fn append_row(
+        &mut self,
+        _index: usize,
+        builder: &mut impl VariantBuilderExt,
+    ) -> Result<(), ArrowError> {
         builder.append_null();
         Ok(())
     }
@@ -277,10 +280,10 @@ impl NullArrowToVariantBuilder {
 pub(crate) struct RunEndEncodedArrowToVariantBuilder<'a, R: RunEndIndexType> {
     run_array: &'a arrow::array::RunArray<R>,
     values_builder: Box<ArrowToVariantRowBuilder<'a>>,
-    
+
     run_ends: &'a [R::Native],
-    run_number: usize,     // Physical index into run_ends and values
-    run_start: usize,      // Logical start index of current run
+    run_number: usize, // Physical index into run_ends and values
+    run_start: usize,  // Logical start index of current run
 }
 
 impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
@@ -288,13 +291,11 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
         let Some(run_array) = array.as_run_opt() else {
             return Err(ArrowError::CastError("Expected RunArray".to_string()));
         };
-        
-        let values_array = run_array.values();
-        let values_builder = make_arrow_to_variant_row_builder(
-            values_array.data_type(),
-            values_array.as_ref(),
-        )?;
-        
+
+        let values = run_array.values();
+        let values_builder =
+            make_arrow_to_variant_row_builder(values.data_type(), values.as_ref())?;
+
         Ok(Self {
             run_array,
             values_builder: Box::new(values_builder),
@@ -303,26 +304,32 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
             run_start: 0,
         })
     }
-    
-    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+
+    fn append_row(
+        &mut self,
+        index: usize,
+        builder: &mut impl VariantBuilderExt,
+    ) -> Result<(), ArrowError> {
         self.set_run_for_index(index)?;
-        
+
         // Handle null values
         if self.run_array.values().is_null(self.run_number) {
             builder.append_null();
             return Ok(());
         }
-        
+
         // Re-encode the value
         self.values_builder.append_row(self.run_number, builder)?;
-        
+
         Ok(())
     }
-    
+
     fn set_run_for_index(&mut self, index: usize) -> Result<(), ArrowError> {
         if index >= self.run_start {
             let Some(run_end) = self.run_ends.get(self.run_number) else {
-                return Err(ArrowError::CastError(format!("Index {} beyond run array", index)));
+                return Err(ArrowError::CastError(format!(
+                    "Index {index} beyond run array"
+                )));
             };
             if index < run_end.as_usize() {
                 return Ok(());
@@ -335,9 +342,13 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
         }
 
         // Use partition_point for all non-sequential cases
-        let run_number = self.run_ends.partition_point(|&run_end| run_end.as_usize() <= index);
+        let run_number = self
+            .run_ends
+            .partition_point(|&run_end| run_end.as_usize() <= index);
         if run_number >= self.run_ends.len() {
-            return Err(ArrowError::CastError(format!("Index {} beyond run array", index)));
+            return Err(ArrowError::CastError(format!(
+                "Index {index} beyond run array"
+            )));
         }
         self.run_number = run_number;
         self.run_start = match run_number {
@@ -359,25 +370,27 @@ impl<'a> DictionaryArrowToVariantBuilder<'a> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
         let dict_array = array.as_any_dictionary();
         let values = dict_array.values();
-        let values_builder = make_arrow_to_variant_row_builder(
-            values.data_type(),
-            values.as_ref(),
-        )?;
-        
+        let values_builder =
+            make_arrow_to_variant_row_builder(values.data_type(), values.as_ref())?;
+
         // WARNING: normalized_keys panics if values is empty
         let normalized_keys = match values.len() {
             0 => Vec::new(),
             _ => dict_array.normalized_keys(),
         };
-        
+
         Ok(Self {
             keys: dict_array.keys(),
             normalized_keys,
             values_builder: Box::new(values_builder),
         })
     }
-    
-    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+
+    fn append_row(
+        &mut self,
+        index: usize,
+        builder: &mut impl VariantBuilderExt,
+    ) -> Result<(), ArrowError> {
         if self.keys.is_null(index) {
             builder.append_null();
         } else {
@@ -398,31 +411,33 @@ impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
         let list_array = array.as_list();
         let values = list_array.values();
-        
-        let values_builder = make_arrow_to_variant_row_builder(
-            values.data_type(),
-            values.as_ref(),
-        )?;
-        
+        let values_builder =
+            make_arrow_to_variant_row_builder(values.data_type(), values.as_ref())?;
+
         Ok(Self {
             list_array,
             values_builder: Box::new(values_builder),
         })
     }
-    
-    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+
+    fn append_row(
+        &mut self,
+        index: usize,
+        builder: &mut impl VariantBuilderExt,
+    ) -> Result<(), ArrowError> {
         if self.list_array.is_null(index) {
             builder.append_null();
             return Ok(());
         }
-        
+
         let offsets = self.list_array.offsets();
         let start = offsets[index].as_usize();
         let end = offsets[index + 1].as_usize();
-        
+
         let mut list_builder = builder.try_new_list()?;
         for value_index in start..end {
-            self.values_builder.append_row(value_index, &mut list_builder)?;
+            self.values_builder
+                .append_row(value_index, &mut list_builder)?;
         }
         list_builder.finish();
         Ok(())
@@ -439,46 +454,49 @@ pub(crate) struct MapArrowToVariantBuilder<'a> {
 impl<'a> MapArrowToVariantBuilder<'a> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
         let map_array = array.as_map();
-        
+
         // Pre-cast keys to strings once (like existing convert_map code)
         let keys = cast(map_array.keys(), &DataType::Utf8)?;
         let key_strings = keys.as_string::<i32>().clone();
-        
+
         // Create recursive builder for values
         let values = map_array.values();
-        let values_builder = make_arrow_to_variant_row_builder(
-            values.data_type(),
-            values.as_ref(),
-        )?;
-        
+        let values_builder =
+            make_arrow_to_variant_row_builder(values.data_type(), values.as_ref())?;
+
         Ok(Self {
             map_array,
             key_strings,
             values_builder: Box::new(values_builder),
         })
     }
-    
-    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+
+    fn append_row(
+        &mut self,
+        index: usize,
+        builder: &mut impl VariantBuilderExt,
+    ) -> Result<(), ArrowError> {
         // Check for NULL map first (via null bitmap)
         if self.map_array.is_null(index) {
             builder.append_null();
             return Ok(());
         }
-        
+
         let offsets = self.map_array.offsets();
         let start = offsets[index].as_usize();
         let end = offsets[index + 1].as_usize();
-        
+
         // Create object builder for this map (even if empty)
         let mut object_builder = builder.try_new_object()?;
-        
+
         // Add each key-value pair (loop does nothing for empty maps - correct!)
         for kv_index in start..end {
             let key = self.key_strings.value(kv_index);
             let mut field_builder = ObjectFieldBuilder::new(key, &mut object_builder);
-            self.values_builder.append_row(kv_index, &mut field_builder)?;
+            self.values_builder
+                .append_row(kv_index, &mut field_builder)?;
         }
-        
+
         object_builder.finish(); // Empty map becomes empty object {}
         Ok(())
     }
@@ -494,67 +512,72 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
     fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
         let union_array = array.as_union();
         let type_ids = union_array.type_ids();
-        
+
         // Create child builders for each union field
         let mut child_builders = HashMap::new();
         for &type_id in type_ids {
             let child_array = union_array.child(type_id);
-            let child_builder = make_arrow_to_variant_row_builder(
-                child_array.data_type(),
-                child_array.as_ref(),
-            )?;
+            let child_builder =
+                make_arrow_to_variant_row_builder(child_array.data_type(), child_array.as_ref())?;
             child_builders.insert(type_id, Box::new(child_builder));
         }
-        
+
         Ok(Self {
             union_array,
             child_builders,
         })
     }
-    
-    fn append_row(&mut self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+
+    fn append_row(
+        &mut self,
+        index: usize,
+        builder: &mut impl VariantBuilderExt,
+    ) -> Result<(), ArrowError> {
         let type_id = self.union_array.type_id(index);
         let value_offset = self.union_array.value_offset(index);
-        
+
         // Delegate to the appropriate child builder, or append null to handle an invalid type_id
         match self.child_builders.get_mut(&type_id) {
             Some(child_builder) => child_builder.append_row(value_offset, builder)?,
             None => builder.append_null(),
         }
-        
+
         Ok(())
     }
 }
 
-
 // Decimal32 builder for Arrow Decimal32Array
 define_row_builder!(
-    struct Decimal32ArrowToVariantBuilder<'a>
-    { scale: i8 },
+    struct Decimal32ArrowToVariantBuilder<'a> {
+        scale: i8,
+    },
     |array| -> arrow::array::Decimal32Array { array.as_primitive() },
     |value| decimal_to_variant_decimal!(value, scale, i32, VariantDecimal4)
 );
 
 // Decimal64 builder for Arrow Decimal64Array
 define_row_builder!(
-    struct Decimal64ArrowToVariantBuilder<'a>
-    { scale: i8 },
+    struct Decimal64ArrowToVariantBuilder<'a> {
+        scale: i8,
+    },
     |array| -> arrow::array::Decimal64Array { array.as_primitive() },
     |value| decimal_to_variant_decimal!(value, scale, i64, VariantDecimal8)
 );
 
 // Decimal128 builder for Arrow Decimal128Array
 define_row_builder!(
-    struct Decimal128ArrowToVariantBuilder<'a>
-    { scale: i8 },
+    struct Decimal128ArrowToVariantBuilder<'a> {
+        scale: i8,
+    },
     |array| -> arrow::array::Decimal128Array { array.as_primitive() },
     |value| decimal_to_variant_decimal!(value, scale, i128, VariantDecimal16)
 );
 
 // Decimal256 builder for Arrow Decimal256Array
 define_row_builder!(
-    struct Decimal256ArrowToVariantBuilder<'a>
-    { scale: i8 },
+    struct Decimal256ArrowToVariantBuilder<'a> {
+        scale: i8,
+    },
     |array| -> arrow::array::Decimal256Array { array.as_primitive() },
     |value| {
         // Decimal256 needs special handling - convert to i128 if possible
@@ -595,16 +618,19 @@ define_row_builder!(
 
 // Generic Timestamp builder for Arrow timestamp arrays
 define_row_builder!(
-    struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType>
-    { has_time_zone: bool },
+    struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType> {
+        has_time_zone: bool,
+    },
     |array| -> arrow::array::PrimitiveArray<T> { array.as_primitive() },
     |value| {
         // Convert using Arrow's temporal conversion functions
         let Some(naive_datetime) = as_datetime::<T>(value) else {
-            return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
+            return Err(ArrowError::CastError(
+                "Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string(),
+            ));
         };
         if *has_time_zone {
-            // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos  
+            // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos
             let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
             Variant::from(utc_dt) // Uses From<DateTime<Utc>> for Variant
         } else {
@@ -643,124 +669,184 @@ fn make_arrow_to_variant_row_builder<'a>(
 ) -> Result<ArrowToVariantRowBuilder<'a>, ArrowError> {
     match data_type {
         // All integer types
-        DataType::Int8 => Ok(ArrowToVariantRowBuilder::PrimitiveInt8(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::Int16 => Ok(ArrowToVariantRowBuilder::PrimitiveInt16(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::Int32 => Ok(ArrowToVariantRowBuilder::PrimitiveInt32(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::Int64 => Ok(ArrowToVariantRowBuilder::PrimitiveInt64(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::UInt8 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt8(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::UInt16 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt16(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::UInt32 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt32(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::UInt64 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt64(PrimitiveArrowToVariantBuilder::new(array))),
-        
+        DataType::Int8 => Ok(ArrowToVariantRowBuilder::PrimitiveInt8(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::Int16 => Ok(ArrowToVariantRowBuilder::PrimitiveInt16(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::Int32 => Ok(ArrowToVariantRowBuilder::PrimitiveInt32(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::Int64 => Ok(ArrowToVariantRowBuilder::PrimitiveInt64(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::UInt8 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt8(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::UInt16 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt16(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::UInt32 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt32(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::UInt64 => Ok(ArrowToVariantRowBuilder::PrimitiveUInt64(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+
         // Float types
-        DataType::Float16 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat16(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::Float32 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat32(PrimitiveArrowToVariantBuilder::new(array))),
-        DataType::Float64 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat64(PrimitiveArrowToVariantBuilder::new(array))),
-        
+        DataType::Float16 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat16(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::Float32 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat32(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+        DataType::Float64 => Ok(ArrowToVariantRowBuilder::PrimitiveFloat64(
+            PrimitiveArrowToVariantBuilder::new(array),
+        )),
+
         // Decimal types
-        DataType::Decimal32(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal32(Decimal32ArrowToVariantBuilder::new(array, *scale))),
-        DataType::Decimal64(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal64(Decimal64ArrowToVariantBuilder::new(array, *scale))),
-        DataType::Decimal128(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal128(Decimal128ArrowToVariantBuilder::new(array, *scale))),
-        DataType::Decimal256(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal256(Decimal256ArrowToVariantBuilder::new(array, *scale))),
-        
+        DataType::Decimal32(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal32(
+            Decimal32ArrowToVariantBuilder::new(array, *scale),
+        )),
+        DataType::Decimal64(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal64(
+            Decimal64ArrowToVariantBuilder::new(array, *scale),
+        )),
+        DataType::Decimal128(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal128(
+            Decimal128ArrowToVariantBuilder::new(array, *scale),
+        )),
+        DataType::Decimal256(_, scale) => Ok(ArrowToVariantRowBuilder::Decimal256(
+            Decimal256ArrowToVariantBuilder::new(array, *scale),
+        )),
+
         // Special types
-        DataType::Boolean => Ok(ArrowToVariantRowBuilder::Boolean(BooleanArrowToVariantBuilder::new(array))),
-        DataType::Utf8 => Ok(ArrowToVariantRowBuilder::String(StringArrowToVariantBuilder::new(array))),
-        DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::LargeString(StringArrowToVariantBuilder::new(array))),
-        DataType::Utf8View => Ok(ArrowToVariantRowBuilder::Utf8View(Utf8ViewArrowToVariantBuilder::new(array))),
-        
+        DataType::Boolean => Ok(ArrowToVariantRowBuilder::Boolean(
+            BooleanArrowToVariantBuilder::new(array),
+        )),
+        DataType::Utf8 => Ok(ArrowToVariantRowBuilder::String(
+            StringArrowToVariantBuilder::new(array),
+        )),
+        DataType::LargeUtf8 => Ok(ArrowToVariantRowBuilder::LargeString(
+            StringArrowToVariantBuilder::new(array),
+        )),
+        DataType::Utf8View => Ok(ArrowToVariantRowBuilder::Utf8View(
+            Utf8ViewArrowToVariantBuilder::new(array),
+        )),
+
         // Binary types
-        DataType::Binary => Ok(ArrowToVariantRowBuilder::Binary(BinaryArrowToVariantBuilder::new(array))),
-        DataType::LargeBinary => Ok(ArrowToVariantRowBuilder::LargeBinary(BinaryArrowToVariantBuilder::new(array))),
-        DataType::BinaryView => Ok(ArrowToVariantRowBuilder::BinaryView(BinaryViewArrowToVariantBuilder::new(array))),
-        DataType::FixedSizeBinary(_) => Ok(ArrowToVariantRowBuilder::FixedSizeBinary(FixedSizeBinaryArrowToVariantBuilder::new(array))),
-        
-        DataType::Struct(_) => Ok(ArrowToVariantRowBuilder::Struct(StructArrowToVariantBuilder::new(array.as_struct())?)),
+        DataType::Binary => Ok(ArrowToVariantRowBuilder::Binary(
+            BinaryArrowToVariantBuilder::new(array),
+        )),
+        DataType::LargeBinary => Ok(ArrowToVariantRowBuilder::LargeBinary(
+            BinaryArrowToVariantBuilder::new(array),
+        )),
+        DataType::BinaryView => Ok(ArrowToVariantRowBuilder::BinaryView(
+            BinaryViewArrowToVariantBuilder::new(array),
+        )),
+        DataType::FixedSizeBinary(_) => Ok(ArrowToVariantRowBuilder::FixedSizeBinary(
+            FixedSizeBinaryArrowToVariantBuilder::new(array),
+        )),
+
+        DataType::Struct(_) => Ok(ArrowToVariantRowBuilder::Struct(
+            StructArrowToVariantBuilder::new(array.as_struct())?,
+        )),
         DataType::Null => Ok(ArrowToVariantRowBuilder::Null(NullArrowToVariantBuilder)),
-        
+
         // Run-end encoded types
-        DataType::RunEndEncoded(run_ends, _) => {
-            match run_ends.data_type() {
-                DataType::Int16 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder::new(array)?)),
-                DataType::Int32 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder::new(array)?)),
-                DataType::Int64 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder::new(array)?)),
-                _ => Err(ArrowError::CastError(format!("Unsupported run-end type: {run_ends:?}"))),
-            }
-        }
-        
+        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+            DataType::Int16 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt16(
+                RunEndEncodedArrowToVariantBuilder::new(array)?,
+            )),
+            DataType::Int32 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt32(
+                RunEndEncodedArrowToVariantBuilder::new(array)?,
+            )),
+            DataType::Int64 => Ok(ArrowToVariantRowBuilder::RunEndEncodedInt64(
+                RunEndEncodedArrowToVariantBuilder::new(array)?,
+            )),
+            _ => Err(ArrowError::CastError(format!(
+                "Unsupported run-end type: {run_ends:?}"
+            ))),
+        },
+
         // Dictionary types
-        DataType::Dictionary(_, _) => {
-            Ok(ArrowToVariantRowBuilder::Dictionary(DictionaryArrowToVariantBuilder::new(array)?))
-        }
-        
+        DataType::Dictionary(_, _) => Ok(ArrowToVariantRowBuilder::Dictionary(
+            DictionaryArrowToVariantBuilder::new(array)?,
+        )),
+
         // List types
-        DataType::List(_) => Ok(ArrowToVariantRowBuilder::List(ListArrowToVariantBuilder::new(array)?)),
-        DataType::LargeList(_) => Ok(ArrowToVariantRowBuilder::LargeList(ListArrowToVariantBuilder::new(array)?)),
-        
+        DataType::List(_) => Ok(ArrowToVariantRowBuilder::List(
+            ListArrowToVariantBuilder::new(array)?,
+        )),
+        DataType::LargeList(_) => Ok(ArrowToVariantRowBuilder::LargeList(
+            ListArrowToVariantBuilder::new(array)?,
+        )),
+
         // Map types
-        DataType::Map(_, _) => Ok(ArrowToVariantRowBuilder::Map(MapArrowToVariantBuilder::new(array)?)),
-        
+        DataType::Map(_, _) => Ok(ArrowToVariantRowBuilder::Map(
+            MapArrowToVariantBuilder::new(array)?,
+        )),
+
         // Union types
-        DataType::Union(_, _) => Ok(ArrowToVariantRowBuilder::Union(UnionArrowToVariantBuilder::new(array)?)),
-        
+        DataType::Union(_, _) => Ok(ArrowToVariantRowBuilder::Union(
+            UnionArrowToVariantBuilder::new(array)?,
+        )),
+
         // Timestamp types
-        DataType::Timestamp(time_unit, time_zone) => {
-            match time_unit {
-                TimeUnit::Second => Ok(ArrowToVariantRowBuilder::TimestampSecond(
-                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
-                )),
-                TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::TimestampMillisecond(
-                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
-                )),
-                TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::TimestampMicrosecond(
-                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
-                )),
-                TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::TimestampNanosecond(
-                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
-                )),
-            }
-        }
-        
+        DataType::Timestamp(time_unit, time_zone) => match time_unit {
+            TimeUnit::Second => Ok(ArrowToVariantRowBuilder::TimestampSecond(
+                TimestampArrowToVariantBuilder::new(array, time_zone.is_some()),
+            )),
+            TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::TimestampMillisecond(
+                TimestampArrowToVariantBuilder::new(array, time_zone.is_some()),
+            )),
+            TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::TimestampMicrosecond(
+                TimestampArrowToVariantBuilder::new(array, time_zone.is_some()),
+            )),
+            TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::TimestampNanosecond(
+                TimestampArrowToVariantBuilder::new(array, time_zone.is_some()),
+            )),
+        },
+
         // Date types
         DataType::Date32 => Ok(ArrowToVariantRowBuilder::Date32(
-            DateArrowToVariantBuilder::new(array)
+            DateArrowToVariantBuilder::new(array),
         )),
         DataType::Date64 => Ok(ArrowToVariantRowBuilder::Date64(
-            DateArrowToVariantBuilder::new(array)
+            DateArrowToVariantBuilder::new(array),
         )),
-        
+
         // Time types
-        DataType::Time32(time_unit) => {
-            match time_unit {
-                TimeUnit::Second => Ok(ArrowToVariantRowBuilder::Time32Second(
-                    TimeArrowToVariantBuilder::new(array)
-                )),
-                TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::Time32Millisecond(
-                    TimeArrowToVariantBuilder::new(array)
-                )),
-                _ => Err(ArrowError::CastError(format!("Unsupported Time32 unit: {time_unit:?}"))),
-            }
-        }
-        DataType::Time64(time_unit) => {
-            match time_unit {
-                TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::Time64Microsecond(
-                    TimeArrowToVariantBuilder::new(array)
-                )),
-                TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::Time64Nanosecond(
-                    TimeArrowToVariantBuilder::new(array)
-                )),
-                _ => Err(ArrowError::CastError(format!("Unsupported Time64 unit: {time_unit:?}"))),
-            }
-        }
-        
-        DataType::Duration(_) | DataType::Interval(_) => {
-            Err(ArrowError::InvalidArgumentError(
-                "Casting duration/interval types to Variant is not supported. \
+        DataType::Time32(time_unit) => match time_unit {
+            TimeUnit::Second => Ok(ArrowToVariantRowBuilder::Time32Second(
+                TimeArrowToVariantBuilder::new(array),
+            )),
+            TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::Time32Millisecond(
+                TimeArrowToVariantBuilder::new(array),
+            )),
+            _ => Err(ArrowError::CastError(format!(
+                "Unsupported Time32 unit: {time_unit:?}"
+            ))),
+        },
+        DataType::Time64(time_unit) => match time_unit {
+            TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::Time64Microsecond(
+                TimeArrowToVariantBuilder::new(array),
+            )),
+            TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::Time64Nanosecond(
+                TimeArrowToVariantBuilder::new(array),
+            )),
+            _ => Err(ArrowError::CastError(format!(
+                "Unsupported Time64 unit: {time_unit:?}"
+            ))),
+        },
+
+        DataType::Duration(_) | DataType::Interval(_) => Err(ArrowError::InvalidArgumentError(
+            "Casting duration/interval types to Variant is not supported. \
                  The Variant format does not define duration/interval types."
-                    .to_string(),
-            ))
-        }
-        _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
+                .to_string(),
+        )),
+        _ => Err(ArrowError::CastError(format!(
+            "Unsupported type for row builder: {data_type:?}"
+        ))),
     }
 }
 
@@ -796,17 +882,17 @@ fn make_arrow_to_variant_row_builder<'a>(
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // Create row builder for the input array type
     let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input)?;
-    
+
     // Create output array builder
     let mut array_builder = VariantArrayBuilder::new(input.len());
-    
+
     // Process each row using the row builder
     for i in 0..input.len() {
         let mut builder = array_builder.variant_builder();
         row_builder.append_row(i, &mut builder)?;
         builder.finish();
     }
-    
+
     Ok(array_builder.build())
 }
 
@@ -826,11 +912,14 @@ mod tests {
         IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray,
         LargeStringArray, ListArray, MapArray, NullArray, StringArray, StringRunBuilder,
         StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-        UInt8Array, UnionArray, TimestampSecondArray, TimestampMillisecondArray, TimestampNanosecondArray, TimestampMicrosecondArray,
+        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::{i256, BinaryType, LargeBinaryType, BinaryViewType, IntervalDayTime, IntervalMonthDayNano};
+    use arrow::datatypes::{
+        i256, BinaryType, BinaryViewType, IntervalDayTime, IntervalMonthDayNano, LargeBinaryType,
+    };
     use arrow_schema::{DataType, Field, Fields, UnionFields};
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
@@ -2293,8 +2382,8 @@ mod tests {
 
     #[test]
     fn test_cast_to_variant_map_with_nulls_and_empty() {
-        use arrow::array::{MapArray, Int32Array, StringArray, StructArray};
-        use arrow::buffer::{OffsetBuffer, NullBuffer};
+        use arrow::array::{Int32Array, MapArray, StringArray, StructArray};
+        use arrow::buffer::{NullBuffer, OffsetBuffer};
         use arrow::datatypes::{DataType, Field, Fields};
         use std::sync::Arc;
 
@@ -2313,42 +2402,45 @@ mod tests {
 
         // Create offsets for 4 maps: [0..1], [1..1], [1..1], [1..3]
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 1, 3].into());
-        
+
         // Create null buffer - map at index 2 is NULL
         let null_buffer = Some(NullBuffer::from(vec![true, true, false, true]));
-        
+
         let map_field = Arc::new(Field::new(
             "entries",
             DataType::Struct(entries_fields),
             false,
         ));
-        
-        let map_array = MapArray::try_new(
-            map_field,
-            offsets,
-            entries,
-            null_buffer,
-            false,
-        ).unwrap();
+
+        let map_array = MapArray::try_new(map_field, offsets, entries, null_buffer, false).unwrap();
 
         let result = cast_to_variant(&map_array).unwrap();
-        
+
         // Map 0: {"key1": 1}
         let variant0 = result.value(0);
-        assert_eq!(variant0.as_object().unwrap().get("key1").unwrap(), Variant::from(1));
-        
+        assert_eq!(
+            variant0.as_object().unwrap().get("key1").unwrap(),
+            Variant::from(1)
+        );
+
         // Map 1: {} (empty, not null)
         let variant1 = result.value(1);
         let obj1 = variant1.as_object().unwrap();
         assert_eq!(obj1.len(), 0); // Empty object
-        
+
         // Map 2: null (actual NULL)
         assert!(result.is_null(2));
-        
+
         // Map 3: {"key2": 2, "key3": 3}
         let variant3 = result.value(3);
-        assert_eq!(variant3.as_object().unwrap().get("key2").unwrap(), Variant::from(2));
-        assert_eq!(variant3.as_object().unwrap().get("key3").unwrap(), Variant::from(3));
+        assert_eq!(
+            variant3.as_object().unwrap().get("key2").unwrap(),
+            Variant::from(2)
+        );
+        assert_eq!(
+            variant3.as_object().unwrap().get("key3").unwrap(),
+            Variant::from(3)
+        );
     }
 
     #[test]
@@ -2591,32 +2683,33 @@ mod tests {
 #[cfg(test)]
 mod row_builder_tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, StringArray, BooleanArray};
+    use arrow::array::{ArrayRef, BooleanArray, Int32Array, StringArray};
     use std::sync::Arc;
 
     #[test]
     fn test_primitive_row_builder() {
         // Test Int32Array
         let int_array = Int32Array::from(vec![Some(42), None, Some(100)]);
-        let mut row_builder = make_arrow_to_variant_row_builder(int_array.data_type(), &int_array).unwrap();
-        
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(int_array.data_type(), &int_array).unwrap();
+
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         // Test first value
         let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(0, &mut variant_builder).unwrap();
         variant_builder.finish();
-        
+
         // Test null value
         let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(1, &mut variant_builder).unwrap();
         variant_builder.finish();
-        
+
         // Test second value
         let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(2, &mut variant_builder).unwrap();
         variant_builder.finish();
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
         assert_eq!(variant_array.value(0), Variant::Int32(42));
@@ -2627,10 +2720,11 @@ mod row_builder_tests {
     #[test]
     fn test_string_row_builder() {
         let string_array = StringArray::from(vec![Some("hello"), None, Some("world")]);
-        let mut row_builder = make_arrow_to_variant_row_builder(string_array.data_type(), &string_array).unwrap();
-        
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(string_array.data_type(), &string_array).unwrap();
+
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(0, &mut variant_builder).unwrap();
         variant_builder.finish();
@@ -2651,10 +2745,11 @@ mod row_builder_tests {
     #[test]
     fn test_boolean_row_builder() {
         let bool_array = BooleanArray::from(vec![Some(true), None, Some(false)]);
-        let mut row_builder = make_arrow_to_variant_row_builder(bool_array.data_type(), &bool_array).unwrap();
-        
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(bool_array.data_type(), &bool_array).unwrap();
+
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(0, &mut variant_builder).unwrap();
         variant_builder.finish();
@@ -2674,38 +2769,42 @@ mod row_builder_tests {
 
     #[test]
     fn test_struct_row_builder() {
-        use arrow::array::{StructArray, Int32Array, StringArray, ArrayRef};
+        use arrow::array::{ArrayRef, Int32Array, StringArray, StructArray};
         use arrow_schema::{DataType, Field};
         use std::sync::Arc;
-        
+
         // Create a struct array with int and string fields
         let int_field = Field::new("id", DataType::Int32, true);
         let string_field = Field::new("name", DataType::Utf8, true);
-        
+
         let int_array = Int32Array::from(vec![Some(1), None, Some(3)]);
         let string_array = StringArray::from(vec![Some("Alice"), Some("Bob"), None]);
-        
+
         let struct_array = StructArray::try_new(
             vec![int_field, string_field].into(),
-            vec![Arc::new(int_array) as ArrayRef, Arc::new(string_array) as ArrayRef],
+            vec![
+                Arc::new(int_array) as ArrayRef,
+                Arc::new(string_array) as ArrayRef,
+            ],
             None,
         )
         .unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(struct_array.data_type(), &struct_array).unwrap();
-        
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(struct_array.data_type(), &struct_array).unwrap();
+
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         // Test first row
         let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(0, &mut variant_builder).unwrap();
         variant_builder.finish();
-        
+
         // Test second row (with null int field)
         let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(1, &mut variant_builder).unwrap();
         variant_builder.finish();
-        
+
         // Test third row (with null string field)
         let mut variant_builder = array_builder.variant_builder();
         row_builder.append_row(2, &mut variant_builder).unwrap();
@@ -2713,17 +2812,23 @@ mod row_builder_tests {
 
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Check first row - should have both fields
         let first_variant = variant_array.value(0);
         assert_eq!(first_variant.get_object_field("id"), Some(Variant::from(1)));
-        assert_eq!(first_variant.get_object_field("name"), Some(Variant::from("Alice")));
-        
+        assert_eq!(
+            first_variant.get_object_field("name"),
+            Some(Variant::from("Alice"))
+        );
+
         // Check second row - should have name field but not id (null field omitted)
         let second_variant = variant_array.value(1);
         assert_eq!(second_variant.get_object_field("id"), None); // null field omitted
-        assert_eq!(second_variant.get_object_field("name"), Some(Variant::from("Bob")));
-        
+        assert_eq!(
+            second_variant.get_object_field("name"),
+            Some(Variant::from("Bob"))
+        );
+
         // Check third row - should have id field but not name (null field omitted)
         let third_variant = variant_array.value(2);
         assert_eq!(third_variant.get_object_field("id"), Some(Variant::from(3)));
@@ -2732,29 +2837,30 @@ mod row_builder_tests {
 
     #[test]
     fn test_run_end_encoded_row_builder() {
-        use arrow::array::{RunArray, Int32Array};
+        use arrow::array::{Int32Array, RunArray};
         use arrow::datatypes::Int32Type;
-        
+
         // Create a run-end encoded array: [A, A, B, B, B, C]
         // run_ends: [2, 5, 6]
         // values: ["A", "B", "C"]
         let values = StringArray::from(vec!["A", "B", "C"]);
         let run_ends = Int32Array::from(vec![2, 5, 6]);
         let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
         let mut array_builder = VariantArrayBuilder::new(6);
-        
+
         // Test sequential access (most common case)
         for i in 0..6 {
             let mut variant_builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut variant_builder).unwrap();
             variant_builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 6);
-        
+
         // Verify the values
         assert_eq!(variant_array.value(0), Variant::from("A")); // Run 0
         assert_eq!(variant_array.value(1), Variant::from("A")); // Run 0
@@ -2766,26 +2872,27 @@ mod row_builder_tests {
 
     #[test]
     fn test_run_end_encoded_random_access() {
-        use arrow::array::{RunArray, Int32Array};
+        use arrow::array::{Int32Array, RunArray};
         use arrow::datatypes::Int32Type;
-        
+
         // Create a run-end encoded array: [A, A, B, B, B, C]
         let values = StringArray::from(vec!["A", "B", "C"]);
         let run_ends = Int32Array::from(vec![2, 5, 6]);
         let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
-        
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
+
         // Test random access pattern (backward jumps, forward jumps)
         let access_pattern = [0, 5, 2, 4, 1, 3]; // Mix of all cases
         let expected_values = ["A", "C", "B", "B", "A", "B"];
-        
+
         for (i, &index) in access_pattern.iter().enumerate() {
             let mut array_builder = VariantArrayBuilder::new(1);
             let mut variant_builder = array_builder.variant_builder();
             row_builder.append_row(index, &mut variant_builder).unwrap();
             variant_builder.finish();
-            
+
             let variant_array = array_builder.build();
             assert_eq!(variant_array.value(0), Variant::from(expected_values[i]));
         }
@@ -2793,27 +2900,28 @@ mod row_builder_tests {
 
     #[test]
     fn test_run_end_encoded_with_nulls() {
-        use arrow::array::{RunArray, Int32Array};
+        use arrow::array::{Int32Array, RunArray};
         use arrow::datatypes::Int32Type;
-        
+
         // Create a run-end encoded array with null values: [A, A, null, null, B]
         let values = StringArray::from(vec![Some("A"), None, Some("B")]);
         let run_ends = Int32Array::from(vec![2, 4, 5]);
         let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(run_array.data_type(), &run_array).unwrap();
         let mut array_builder = VariantArrayBuilder::new(5);
-        
+
         // Test sequential access
         for i in 0..5 {
             let mut variant_builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut variant_builder).unwrap();
             variant_builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 5);
-        
+
         // Verify the values
         assert_eq!(variant_array.value(0), Variant::from("A")); // Run 0
         assert_eq!(variant_array.value(1), Variant::from("A")); // Run 0
@@ -2826,86 +2934,89 @@ mod row_builder_tests {
     fn test_dictionary_row_builder() {
         use arrow::array::{DictionaryArray, Int32Array};
         use arrow::datatypes::Int32Type;
-        
+
         // Create a dictionary array: keys=[0, 1, 0, 2, 1], values=["apple", "banana", "cherry"]
         let values = StringArray::from(vec!["apple", "banana", "cherry"]);
         let keys = Int32Array::from(vec![0, 1, 0, 2, 1]);
         let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
         let mut array_builder = VariantArrayBuilder::new(5);
-        
+
         // Test sequential access
         for i in 0..5 {
             let mut variant_builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut variant_builder).unwrap();
             variant_builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 5);
-        
+
         // Verify the values match the dictionary lookup
-        assert_eq!(variant_array.value(0), Variant::from("apple"));   // keys[0] = 0 -> values[0] = "apple"
-        assert_eq!(variant_array.value(1), Variant::from("banana"));  // keys[1] = 1 -> values[1] = "banana"
-        assert_eq!(variant_array.value(2), Variant::from("apple"));   // keys[2] = 0 -> values[0] = "apple"
-        assert_eq!(variant_array.value(3), Variant::from("cherry"));  // keys[3] = 2 -> values[2] = "cherry"
-        assert_eq!(variant_array.value(4), Variant::from("banana"));  // keys[4] = 1 -> values[1] = "banana"
+        assert_eq!(variant_array.value(0), Variant::from("apple")); // keys[0] = 0 -> values[0] = "apple"
+        assert_eq!(variant_array.value(1), Variant::from("banana")); // keys[1] = 1 -> values[1] = "banana"
+        assert_eq!(variant_array.value(2), Variant::from("apple")); // keys[2] = 0 -> values[0] = "apple"
+        assert_eq!(variant_array.value(3), Variant::from("cherry")); // keys[3] = 2 -> values[2] = "cherry"
+        assert_eq!(variant_array.value(4), Variant::from("banana")); // keys[4] = 1 -> values[1] = "banana"
     }
 
     #[test]
     fn test_dictionary_with_nulls() {
         use arrow::array::{DictionaryArray, Int32Array};
         use arrow::datatypes::Int32Type;
-        
+
         // Create a dictionary array with null keys: keys=[0, null, 1, null, 2], values=["x", "y", "z"]
         let values = StringArray::from(vec!["x", "y", "z"]);
         let keys = Int32Array::from(vec![Some(0), None, Some(1), None, Some(2)]);
         let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
         let mut array_builder = VariantArrayBuilder::new(5);
-        
+
         // Test sequential access
         for i in 0..5 {
             let mut variant_builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut variant_builder).unwrap();
             variant_builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 5);
-        
+
         // Verify the values and nulls
-        assert_eq!(variant_array.value(0), Variant::from("x"));  // keys[0] = 0 -> values[0] = "x"
-        assert!(variant_array.is_null(1));                      // keys[1] = null
-        assert_eq!(variant_array.value(2), Variant::from("y"));  // keys[2] = 1 -> values[1] = "y"
-        assert!(variant_array.is_null(3));                      // keys[3] = null
-        assert_eq!(variant_array.value(4), Variant::from("z"));  // keys[4] = 2 -> values[2] = "z"
+        assert_eq!(variant_array.value(0), Variant::from("x")); // keys[0] = 0 -> values[0] = "x"
+        assert!(variant_array.is_null(1)); // keys[1] = null
+        assert_eq!(variant_array.value(2), Variant::from("y")); // keys[2] = 1 -> values[1] = "y"
+        assert!(variant_array.is_null(3)); // keys[3] = null
+        assert_eq!(variant_array.value(4), Variant::from("z")); // keys[4] = 2 -> values[2] = "z"
     }
 
     #[test]
     fn test_dictionary_random_access() {
         use arrow::array::{DictionaryArray, Int32Array};
         use arrow::datatypes::Int32Type;
-        
+
         // Create a dictionary array: keys=[0, 1, 2, 0, 1, 2], values=["red", "green", "blue"]
         let values = StringArray::from(vec!["red", "green", "blue"]);
         let keys = Int32Array::from(vec![0, 1, 2, 0, 1, 2]);
         let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
-        
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
+
         // Test random access pattern
         let access_pattern = [5, 0, 3, 1, 4, 2]; // Random order
         let expected_values = ["blue", "red", "red", "green", "green", "blue"];
-        
+
         for (i, &index) in access_pattern.iter().enumerate() {
             let mut array_builder = VariantArrayBuilder::new(1);
             let mut variant_builder = array_builder.variant_builder();
             row_builder.append_row(index, &mut variant_builder).unwrap();
             variant_builder.finish();
-            
+
             let variant_array = array_builder.build();
             assert_eq!(variant_array.value(0), Variant::from(expected_values[i]));
         }
@@ -2914,50 +3025,70 @@ mod row_builder_tests {
     #[test]
     fn test_nested_dictionary() {
         use arrow::array::{DictionaryArray, Int32Array, StructArray};
-        use arrow::datatypes::{Int32Type, Field};
-        
+        use arrow::datatypes::{Field, Int32Type};
+
         // Create a dictionary with struct values
         let id_array = Int32Array::from(vec![1, 2, 3]);
         let name_array = StringArray::from(vec!["Alice", "Bob", "Charlie"]);
         let struct_array = StructArray::from(vec![
-            (Arc::new(Field::new("id", DataType::Int32, false)), Arc::new(id_array) as ArrayRef),
-            (Arc::new(Field::new("name", DataType::Utf8, false)), Arc::new(name_array) as ArrayRef),
+            (
+                Arc::new(Field::new("id", DataType::Int32, false)),
+                Arc::new(id_array) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("name", DataType::Utf8, false)),
+                Arc::new(name_array) as ArrayRef,
+            ),
         ]);
-        
+
         let keys = Int32Array::from(vec![0, 1, 0, 2, 1]);
-        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(struct_array)).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
+        let dict_array =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(struct_array)).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array).unwrap();
         let mut array_builder = VariantArrayBuilder::new(5);
-        
+
         // Test sequential access
         for i in 0..5 {
             let mut variant_builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut variant_builder).unwrap();
             variant_builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 5);
-        
+
         // Verify the nested struct values
         let first_variant = variant_array.value(0);
         assert_eq!(first_variant.get_object_field("id"), Some(Variant::from(1)));
-        assert_eq!(first_variant.get_object_field("name"), Some(Variant::from("Alice")));
-        
+        assert_eq!(
+            first_variant.get_object_field("name"),
+            Some(Variant::from("Alice"))
+        );
+
         let second_variant = variant_array.value(1);
-        assert_eq!(second_variant.get_object_field("id"), Some(Variant::from(2)));
-        assert_eq!(second_variant.get_object_field("name"), Some(Variant::from("Bob")));
-        
+        assert_eq!(
+            second_variant.get_object_field("id"),
+            Some(Variant::from(2))
+        );
+        assert_eq!(
+            second_variant.get_object_field("name"),
+            Some(Variant::from("Bob"))
+        );
+
         // Test that repeated keys give same values
         let third_variant = variant_array.value(2);
         assert_eq!(third_variant.get_object_field("id"), Some(Variant::from(1)));
-        assert_eq!(third_variant.get_object_field("name"), Some(Variant::from("Alice")));
+        assert_eq!(
+            third_variant.get_object_field("name"),
+            Some(Variant::from("Alice"))
+        );
     }
 
     #[test]
     fn test_list_row_builder() {
-        use arrow::array::{ListArray};
+        use arrow::array::ListArray;
 
         // Create a list array: [[1, 2], [3, 4, 5], null, []]
         let data = vec![
@@ -2967,28 +3098,29 @@ mod row_builder_tests {
             Some(vec![]),
         ];
         let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(list_array.len());
-        
+
         for i in 0..list_array.len() {
             let mut builder = variant_array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = variant_array_builder.build();
-        
+
         // Verify results
         assert_eq!(variant_array.len(), 4);
-        
+
         // Row 0: [1, 2]
         let row0 = variant_array.value(0);
         let list0 = row0.as_list().unwrap();
         assert_eq!(list0.len(), 2);
         assert_eq!(list0.get(0), Some(Variant::from(1)));
         assert_eq!(list0.get(1), Some(Variant::from(2)));
-        
+
         // Row 1: [3, 4, 5]
         let row1 = variant_array.value(1);
         let list1 = row1.as_list().unwrap();
@@ -2996,10 +3128,10 @@ mod row_builder_tests {
         assert_eq!(list1.get(0), Some(Variant::from(3)));
         assert_eq!(list1.get(1), Some(Variant::from(4)));
         assert_eq!(list1.get(2), Some(Variant::from(5)));
-        
+
         // Row 2: null
         assert!(variant_array.is_null(2));
-        
+
         // Row 3: []
         let row3 = variant_array.value(3);
         let list3 = row3.as_list().unwrap();
@@ -3008,43 +3140,41 @@ mod row_builder_tests {
 
     #[test]
     fn test_large_list_row_builder() {
-        use arrow::array::{LargeListArray};
+        use arrow::array::LargeListArray;
 
         // Create a large list array: [[1, 2], null]
-        let data = vec![
-            Some(vec![Some(1i64), Some(2i64)]),
-            None,
-        ];
+        let data = vec![Some(vec![Some(1i64), Some(2i64)]), None];
         let list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(list_array.len());
-        
+
         for i in 0..list_array.len() {
             let mut builder = variant_array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = variant_array_builder.build();
-        
+
         // Verify results
         assert_eq!(variant_array.len(), 2);
-        
+
         // Row 0: [1, 2]
         let row0 = variant_array.value(0);
         let list0 = row0.as_list().unwrap();
         assert_eq!(list0.len(), 2);
         assert_eq!(list0.get(0), Some(Variant::from(1i64)));
         assert_eq!(list0.get(1), Some(Variant::from(2i64)));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
     }
 
     #[test]
     fn test_sliced_list_row_builder() {
-        use arrow::array::{ListArray};
+        use arrow::array::ListArray;
 
         // Create a list array: [[1, 2], [3, 4, 5], [6]]
         let data = vec![
@@ -3053,23 +3183,24 @@ mod row_builder_tests {
             Some(vec![Some(6)]),
         ];
         let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        
+
         // Slice to get just the middle element: [[3, 4, 5]]
         let sliced_array = list_array.slice(1, 1);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(sliced_array.data_type(), &sliced_array).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(sliced_array.data_type(), &sliced_array).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(sliced_array.len());
-        
+
         // Test the single row
         let mut builder = variant_array_builder.variant_builder();
         row_builder.append_row(0, &mut builder).unwrap();
         builder.finish();
-        
+
         let variant_array = variant_array_builder.build();
-        
+
         // Verify result
         assert_eq!(variant_array.len(), 1);
-        
+
         // Row 0: [3, 4, 5]
         let row0 = variant_array.value(0);
         let list0 = row0.as_list().unwrap();
@@ -3081,19 +3212,16 @@ mod row_builder_tests {
 
     #[test]
     fn test_nested_list_row_builder() {
-        use arrow::array::{ListArray};
+        use arrow::array::ListArray;
         use arrow::datatypes::Field;
-        
+
         // Build the nested structure manually
         let inner_field = Arc::new(Field::new("item", DataType::Int32, true));
         let inner_list_field = Arc::new(Field::new("item", DataType::List(inner_field), true));
-        
-        let values_data = vec![
-            Some(vec![Some(1), Some(2)]),
-            Some(vec![Some(3)]),
-        ];
+
+        let values_data = vec![Some(vec![Some(1), Some(2)]), Some(vec![Some(3)])];
         let values_list = ListArray::from_iter_primitive::<Int32Type, _, _>(values_data);
-        
+
         let outer_offsets = arrow::buffer::OffsetBuffer::new(vec![0i32, 2, 2].into());
         let outer_list = ListArray::new(
             inner_list_field,
@@ -3101,45 +3229,46 @@ mod row_builder_tests {
             Arc::new(values_list),
             Some(arrow::buffer::NullBuffer::from(vec![true, false])),
         );
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(outer_list.data_type(), &outer_list).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(outer_list.data_type(), &outer_list).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(outer_list.len());
-        
+
         for i in 0..outer_list.len() {
             let mut builder = variant_array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = variant_array_builder.build();
-        
+
         // Verify results
         assert_eq!(variant_array.len(), 2);
-        
+
         // Row 0: [[1, 2], [3]]
         let row0 = variant_array.value(0);
         let outer_list0 = row0.as_list().unwrap();
         assert_eq!(outer_list0.len(), 2);
-        
+
         let inner_list0_0 = outer_list0.get(0).unwrap();
         let inner_list0_0 = inner_list0_0.as_list().unwrap();
         assert_eq!(inner_list0_0.len(), 2);
         assert_eq!(inner_list0_0.get(0), Some(Variant::from(1)));
         assert_eq!(inner_list0_0.get(1), Some(Variant::from(2)));
-        
+
         let inner_list0_1 = outer_list0.get(1).unwrap();
         let inner_list0_1 = inner_list0_1.as_list().unwrap();
         assert_eq!(inner_list0_1.len(), 1);
         assert_eq!(inner_list0_1.get(0), Some(Variant::from(3)));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
     }
 
     #[test]
     fn test_map_row_builder() {
-        use arrow::array::{MapArray, Int32Array, StringArray, StructArray};
-        use arrow::buffer::{OffsetBuffer, NullBuffer};
+        use arrow::array::{Int32Array, MapArray, StringArray, StructArray};
+        use arrow::buffer::{NullBuffer, OffsetBuffer};
         use arrow::datatypes::{DataType, Field, Fields};
         use std::sync::Arc;
 
@@ -3158,21 +3287,21 @@ mod row_builder_tests {
 
         // Create offsets for 4 maps: [0..1], [1..1], [1..1], [1..3]
         // Map 0: {"key1": 1}    (1 entry)
-        // Map 1: {}             (0 entries - empty)  
+        // Map 1: {}             (0 entries - empty)
         // Map 2: null           (0 entries but NULL via null buffer)
         // Map 3: {"key2": 2, "key3": 3}  (2 entries)
         let offsets = OffsetBuffer::new(vec![0, 1, 1, 1, 3].into());
-        
+
         // Create null buffer - map at index 2 is NULL
         let null_buffer = Some(NullBuffer::from(vec![true, true, false, true]));
-        
+
         // Create the map field
         let map_field = Arc::new(Field::new(
             "entries",
             DataType::Struct(entries_fields),
             false, // Keys are non-nullable
         ));
-        
+
         // Create MapArray using try_new
         let map_array = MapArray::try_new(
             map_field,
@@ -3180,40 +3309,39 @@ mod row_builder_tests {
             entries,
             null_buffer,
             false, // not ordered
-        ).unwrap();
+        )
+        .unwrap();
 
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            map_array.data_type(), 
-            &map_array
-        ).unwrap();
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(map_array.data_type(), &map_array).unwrap();
         let mut variant_array_builder = VariantArrayBuilder::new(4);
-        
+
         // Test each row
         for i in 0..4 {
             let mut builder = variant_array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = variant_array_builder.build();
-        
+
         // Verify results
         assert_eq!(variant_array.len(), 4);
-        
+
         // Map 0: {"key1": 1}
         let map0 = variant_array.value(0);
         let obj0 = map0.as_object().unwrap();
         assert_eq!(obj0.len(), 1);
         assert_eq!(obj0.get("key1"), Some(Variant::from(1)));
-        
+
         // Map 1: {} (empty object, not null)
         let map1 = variant_array.value(1);
         let obj1 = map1.as_object().unwrap();
         assert_eq!(obj1.len(), 0); // Empty object
-        
+
         // Map 2: null (actual NULL)
         assert!(variant_array.is_null(2));
-        
+
         // Map 3: {"key2": 2, "key3": 3}
         let map3 = variant_array.value(3);
         let obj3 = map3.as_object().unwrap();
@@ -3224,7 +3352,7 @@ mod row_builder_tests {
 
     #[test]
     fn test_union_sparse_row_builder() {
-        use arrow::array::{Int32Array, Float64Array, StringArray, UnionArray};
+        use arrow::array::{Float64Array, Int32Array, StringArray, UnionArray};
         use arrow::buffer::ScalarBuffer;
         use arrow::datatypes::{DataType, Field, UnionFields};
         use std::sync::Arc;
@@ -3259,10 +3387,8 @@ mod row_builder_tests {
         .unwrap();
 
         // Test the row builder
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            union_array.data_type(),
-            &union_array,
-        ).unwrap();
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(union_array.data_type(), &union_array).unwrap();
 
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
@@ -3274,29 +3400,29 @@ mod row_builder_tests {
 
         // Verify results
         assert_eq!(variant_array.len(), 6);
-        
+
         // Row 0: int 1
         assert_eq!(variant_array.value(0), Variant::Int32(1));
-        
+
         // Row 1: float 3.2
         assert_eq!(variant_array.value(1), Variant::Double(3.2));
-        
+
         // Row 2: string "hello"
         assert_eq!(variant_array.value(2), Variant::from("hello"));
-        
+
         // Row 3: float 32.5
         assert_eq!(variant_array.value(3), Variant::Double(32.5));
-        
+
         // Row 4: int 34
         assert_eq!(variant_array.value(4), Variant::Int32(34));
-        
+
         // Row 5: null (int array has null at this position)
         assert!(variant_array.is_null(5));
     }
 
     #[test]
     fn test_union_dense_row_builder() {
-        use arrow::array::{Int32Array, Float64Array, StringArray, UnionArray};
+        use arrow::array::{Float64Array, Int32Array, StringArray, UnionArray};
         use arrow::buffer::ScalarBuffer;
         use arrow::datatypes::{DataType, Field, UnionFields};
         use std::sync::Arc;
@@ -3334,10 +3460,8 @@ mod row_builder_tests {
         .unwrap();
 
         // Test the row builder
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            union_array.data_type(),
-            &union_array,
-        ).unwrap();
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(union_array.data_type(), &union_array).unwrap();
 
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
@@ -3349,22 +3473,22 @@ mod row_builder_tests {
 
         // Verify results
         assert_eq!(variant_array.len(), 6);
-        
+
         // Row 0: int 1 (offset 0 in int_array)
         assert_eq!(variant_array.value(0), Variant::Int32(1));
-        
+
         // Row 1: float 3.2 (offset 0 in float_array)
         assert_eq!(variant_array.value(1), Variant::Double(3.2));
-        
+
         // Row 2: string "hello" (offset 0 in string_array)
         assert_eq!(variant_array.value(2), Variant::from("hello"));
-        
+
         // Row 3: float 32.5 (offset 1 in float_array)
         assert_eq!(variant_array.value(3), Variant::Double(32.5));
-        
+
         // Row 4: int 34 (offset 1 in int_array)
         assert_eq!(variant_array.value(4), Variant::Int32(34));
-        
+
         // Row 5: null (offset 2 in int_array, which has null)
         assert!(variant_array.is_null(5));
     }
@@ -3389,10 +3513,7 @@ mod row_builder_tests {
             ],
         );
 
-        let children: Vec<Arc<dyn Array>> = vec![
-            Arc::new(int_array),
-            Arc::new(string_array),
-        ];
+        let children: Vec<Arc<dyn Array>> = vec![Arc::new(int_array), Arc::new(string_array)];
 
         let union_array = UnionArray::try_new(
             union_fields,
@@ -3403,10 +3524,8 @@ mod row_builder_tests {
         .unwrap();
 
         // Test the row builder
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            union_array.data_type(),
-            &union_array,
-        ).unwrap();
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(union_array.data_type(), &union_array).unwrap();
 
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
@@ -3418,10 +3537,10 @@ mod row_builder_tests {
 
         // Verify results
         assert_eq!(variant_array.len(), 2);
-        
+
         // Row 0: int 42 (type_id = 1)
         assert_eq!(variant_array.value(0), Variant::Int32(42));
-        
+
         // Row 1: string "test" (type_id = 3)
         assert_eq!(variant_array.value(1), Variant::from("test"));
     }
@@ -3429,71 +3548,81 @@ mod row_builder_tests {
     #[test]
     fn test_decimal32_row_builder() {
         use arrow::array::Decimal32Array;
-        use parquet_variant::{VariantDecimal4};
+        use parquet_variant::VariantDecimal4;
 
         // Test Decimal32Array with scale 2 (e.g., for currency: 12.34)
         let decimal_array = Decimal32Array::from(vec![Some(1234), None, Some(-5678)])
-            .with_precision_and_scale(9, 2).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            decimal_array.data_type(),
-            &decimal_array,
-        ).unwrap();
+            .with_precision_and_scale(9, 2)
+            .unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(decimal_array.data_type(), &decimal_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..decimal_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: 12.34 (1234 with scale 2)
-        assert_eq!(variant_array.value(0), Variant::from(VariantDecimal4::try_new(1234, 2).unwrap()));
-        
+        assert_eq!(
+            variant_array.value(0),
+            Variant::from(VariantDecimal4::try_new(1234, 2).unwrap())
+        );
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: -56.78 (-5678 with scale 2)
-        assert_eq!(variant_array.value(2), Variant::from(VariantDecimal4::try_new(-5678, 2).unwrap()));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::from(VariantDecimal4::try_new(-5678, 2).unwrap())
+        );
     }
 
     #[test]
     fn test_decimal128_row_builder() {
         use arrow::array::Decimal128Array;
-        use parquet_variant::{VariantDecimal16};
+        use parquet_variant::VariantDecimal16;
 
         // Test Decimal128Array with negative scale (multiply by 10^|scale|)
         let decimal_array = Decimal128Array::from(vec![Some(123), None, Some(456)])
-            .with_precision_and_scale(10, -2).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            decimal_array.data_type(),
-            &decimal_array,
-        ).unwrap();
+            .with_precision_and_scale(10, -2)
+            .unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(decimal_array.data_type(), &decimal_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..decimal_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: 123 * 10^2 = 12300 with scale 0 (negative scale handling)
-        assert_eq!(variant_array.value(0), Variant::from(VariantDecimal16::try_new(12300, 0).unwrap()));
-        
+        assert_eq!(
+            variant_array.value(0),
+            Variant::from(VariantDecimal16::try_new(12300, 0).unwrap())
+        );
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 456 * 10^2 = 45600 with scale 0
-        assert_eq!(variant_array.value(2), Variant::from(VariantDecimal16::try_new(45600, 0).unwrap()));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::from(VariantDecimal16::try_new(45600, 0).unwrap())
+        );
     }
 
     #[test]
@@ -3504,29 +3633,31 @@ mod row_builder_tests {
         // Test Decimal256Array with a value that overflows i128
         let large_value = i256::from_i128(i128::MAX) + i256::from(1); // Overflows i128
         let decimal_array = Decimal256Array::from(vec![Some(large_value), Some(i256::from(123))])
-            .with_precision_and_scale(76, 3).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            decimal_array.data_type(),
-            &decimal_array,
-        ).unwrap();
+            .with_precision_and_scale(76, 3)
+            .unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(decimal_array.data_type(), &decimal_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(2);
-        
+
         for i in 0..decimal_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 2);
-        
+
         // Row 0: overflow value becomes Variant::Null
         assert_eq!(variant_array.value(0), Variant::Null);
-        
+
         // Row 1: normal value converts successfully
-        assert_eq!(variant_array.value(1), Variant::from(VariantDecimal16::try_new(123, 3).unwrap()));
+        assert_eq!(
+            variant_array.value(1),
+            Variant::from(VariantDecimal16::try_new(123, 3).unwrap())
+        );
     }
 
     #[test]
@@ -3541,33 +3672,31 @@ mod row_builder_tests {
             Some(b"".as_slice()), // Empty binary
         ];
         let binary_array = BinaryArray::from(binary_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            binary_array.data_type(),
-            &binary_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(binary_array.data_type(), &binary_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(4);
-        
+
         for i in 0..binary_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 4);
-        
+
         // Row 0: "hello" bytes
         assert_eq!(variant_array.value(0), Variant::from(b"hello".as_slice()));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: binary with special bytes
         let bytes = [0x00, 0x01, 0x02, 0xFF];
         assert_eq!(variant_array.value(2), Variant::from(bytes.as_slice()));
-        
+
         // Row 3: empty binary
         let bytes = [];
         assert_eq!(variant_array.value(3), Variant::from(bytes.as_slice()));
@@ -3584,31 +3713,36 @@ mod row_builder_tests {
             Some(b"another large chunk".as_slice()),
         ];
         let large_binary_array = LargeBinaryArray::from(binary_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            large_binary_array.data_type(),
-            &large_binary_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(large_binary_array.data_type(), &large_binary_array)
+                .unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..large_binary_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: large binary data
-        assert_eq!(variant_array.value(0), Variant::from(b"large binary data".as_slice()));
-        
+        assert_eq!(
+            variant_array.value(0),
+            Variant::from(b"large binary data".as_slice())
+        );
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: another large chunk
-        assert_eq!(variant_array.value(2), Variant::from(b"another large chunk".as_slice()));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::from(b"another large chunk".as_slice())
+        );
     }
 
     #[test]
@@ -3622,31 +3756,33 @@ mod row_builder_tests {
             Some(b"this is a longer binary view that exceeds inline storage".as_slice()),
         ];
         let binary_view_array = BinaryViewArray::from(binary_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            binary_view_array.data_type(),
-            &binary_view_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(binary_view_array.data_type(), &binary_view_array)
+                .unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..binary_view_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: short binary
         assert_eq!(variant_array.value(0), Variant::from(b"short".as_slice()));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: long binary view
-        assert_eq!(variant_array.value(2), Variant::from(b"this is a longer binary view that exceeds inline storage".as_slice()));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::from(b"this is a longer binary view that exceeds inline storage".as_slice())
+        );
     }
 
     #[test]
@@ -3659,34 +3795,32 @@ mod row_builder_tests {
             None,
             Some([0xFF, 0xFE, 0xFD, 0xFC]),
         ];
-        let fixed_binary_array = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            binary_data.into_iter(),
-            4,
-        ).unwrap();
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            fixed_binary_array.data_type(),
-            &fixed_binary_array,
-        ).unwrap();
+        let fixed_binary_array =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(binary_data.into_iter(), 4)
+                .unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(fixed_binary_array.data_type(), &fixed_binary_array)
+                .unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..fixed_binary_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: fixed size binary
         let bytes = [0x01, 0x02, 0x03, 0x04];
         assert_eq!(variant_array.value(0), Variant::from(bytes.as_slice()));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: another fixed size binary
         let bytes = [0xFF, 0xFE, 0xFD, 0xFC];
         assert_eq!(variant_array.value(2), Variant::from(bytes.as_slice()));
@@ -3703,31 +3837,35 @@ mod row_builder_tests {
             Some("this is a much longer string that will be stored out-of-line in the buffer"),
         ];
         let string_view_array = StringViewArray::from(string_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            string_view_array.data_type(),
-            &string_view_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(string_view_array.data_type(), &string_view_array)
+                .unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..string_view_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: short string
         assert_eq!(variant_array.value(0), Variant::from("short"));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: long string view
-        assert_eq!(variant_array.value(2), Variant::from("this is a much longer string that will be stored out-of-line in the buffer"));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::from(
+                "this is a much longer string that will be stored out-of-line in the buffer"
+            )
+        );
     }
 
     #[test]
@@ -3741,30 +3879,29 @@ mod row_builder_tests {
             Some(1640995200), // 2022-01-01 00:00:00 UTC
         ];
         let timestamp_array = TimestampSecondArray::from(timestamp_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            timestamp_array.data_type(),
-            &timestamp_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(timestamp_array.data_type(), &timestamp_array)
+                .unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..timestamp_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: 2021-01-01 00:00:00 (no timezone -> NaiveDateTime -> TimestampNtzMicros)
         let expected_naive = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(0), Variant::from(expected_naive));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 2022-01-01 00:00:00
         let expected_naive2 = DateTime::from_timestamp(1640995200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(2), Variant::from(expected_naive2));
@@ -3773,7 +3910,7 @@ mod row_builder_tests {
     #[test]
     fn test_timestamp_with_timezone_row_builder() {
         use arrow::array::TimestampMicrosecondArray;
-        use chrono::{DateTime};
+        use chrono::DateTime;
 
         // Test TimestampMicrosecondArray with timezone
         let timestamp_data = vec![
@@ -3782,32 +3919,31 @@ mod row_builder_tests {
             Some(1640995200000000), // 2022-01-01 00:00:00 UTC (in microseconds)
         ];
         let timezone = "UTC".to_string();
-        let timestamp_array = TimestampMicrosecondArray::from(timestamp_data)
-            .with_timezone(timezone.clone());
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            timestamp_array.data_type(),
-            &timestamp_array,
-        ).unwrap();
+        let timestamp_array =
+            TimestampMicrosecondArray::from(timestamp_data).with_timezone(timezone.clone());
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(timestamp_array.data_type(), &timestamp_array)
+                .unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..timestamp_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: 2021-01-01 00:00:00 UTC (with timezone -> DateTime<Utc> -> TimestampMicros)
         let expected_utc = DateTime::from_timestamp(1609459200, 0).unwrap();
         assert_eq!(variant_array.value(0), Variant::from(expected_utc));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 2022-01-01 00:00:00 UTC
         let expected_utc2 = DateTime::from_timestamp(1640995200, 0).unwrap();
         assert_eq!(variant_array.value(2), Variant::from(expected_utc2));
@@ -3824,31 +3960,32 @@ mod row_builder_tests {
             Some(1609459200000000000), // 2021-01-01 00:00:00.000000000 UTC (no fractional seconds)
         ];
         let timestamp_array = TimestampNanosecondArray::from(timestamp_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            timestamp_array.data_type(),
-            &timestamp_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(timestamp_array.data_type(), &timestamp_array)
+                .unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..timestamp_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: with nanoseconds -> should use TimestampNtzNanos
-        let expected_with_nanos = DateTime::from_timestamp(1609459200, 123456789).unwrap().naive_utc();
+        let expected_with_nanos = DateTime::from_timestamp(1609459200, 123456789)
+            .unwrap()
+            .naive_utc();
         assert_eq!(variant_array.value(0), Variant::from(expected_with_nanos));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
-        // Row 2: no fractional seconds -> should use TimestampNtzMicros  
+
+        // Row 2: no fractional seconds -> should use TimestampNtzMicros
         let expected_no_nanos = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(2), Variant::from(expected_no_nanos));
     }
@@ -3864,30 +4001,31 @@ mod row_builder_tests {
             Some(1609459200000), // 2021-01-01 00:00:00.000 UTC
         ];
         let timestamp_array = TimestampMillisecondArray::from(timestamp_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            timestamp_array.data_type(),
-            &timestamp_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(timestamp_array.data_type(), &timestamp_array)
+                .unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(3);
-        
+
         for i in 0..timestamp_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 3);
-        
+
         // Row 0: with milliseconds -> TimestampNtzMicros (123ms = 123000000ns)
-        let expected_with_millis = DateTime::from_timestamp(1609459200, 123000000).unwrap().naive_utc();
+        let expected_with_millis = DateTime::from_timestamp(1609459200, 123000000)
+            .unwrap()
+            .naive_utc();
         assert_eq!(variant_array.value(0), Variant::from(expected_with_millis));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: no fractional seconds -> TimestampNtzMicros
         let expected_no_millis = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
         assert_eq!(variant_array.value(2), Variant::from(expected_no_millis));
@@ -3900,40 +4038,38 @@ mod row_builder_tests {
 
         // Test Date32Array with various dates
         let date_data = vec![
-            Some(0),        // 1970-01-01
+            Some(0), // 1970-01-01
             None,
-            Some(19723),    // 2024-01-01 (days since epoch)
-            Some(-719162),  // 0001-01-01 (near minimum)
+            Some(19723),   // 2024-01-01 (days since epoch)
+            Some(-719162), // 0001-01-01 (near minimum)
         ];
         let date_array = Date32Array::from(date_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            date_array.data_type(),
-            &date_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(date_array.data_type(), &date_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(4);
-        
+
         for i in 0..date_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 4);
-        
+
         // Row 0: 1970-01-01 (epoch)
         let expected_epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         assert_eq!(variant_array.value(0), Variant::from(expected_epoch));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 2024-01-01
         let expected_2024 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         assert_eq!(variant_array.value(2), Variant::from(expected_2024));
-        
+
         // Row 3: 0001-01-01 (near minimum date)
         let expected_min = NaiveDate::from_ymd_opt(1, 1, 1).unwrap();
         assert_eq!(variant_array.value(3), Variant::from(expected_min));
@@ -3946,40 +4082,38 @@ mod row_builder_tests {
 
         // Test Date64Array with various dates (milliseconds since epoch)
         let date_data = vec![
-            Some(0),            // 1970-01-01
+            Some(0), // 1970-01-01
             None,
             Some(1704067200000), // 2024-01-01 (milliseconds since epoch)
             Some(86400000),      // 1970-01-02
         ];
         let date_array = Date64Array::from(date_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            date_array.data_type(),
-            &date_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(date_array.data_type(), &date_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(4);
-        
+
         for i in 0..date_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 4);
-        
+
         // Row 0: 1970-01-01 (epoch)
         let expected_epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         assert_eq!(variant_array.value(0), Variant::from(expected_epoch));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 2024-01-01
         let expected_2024 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         assert_eq!(variant_array.value(2), Variant::from(expected_2024));
-        
+
         // Row 3: 1970-01-02
         let expected_next_day = NaiveDate::from_ymd_opt(1970, 1, 2).unwrap();
         assert_eq!(variant_array.value(3), Variant::from(expected_next_day));
@@ -3992,40 +4126,38 @@ mod row_builder_tests {
 
         // Test Time32SecondArray with various times (seconds since midnight)
         let time_data = vec![
-            Some(0),        // 00:00:00
+            Some(0), // 00:00:00
             None,
-            Some(3661),     // 01:01:01
-            Some(86399),    // 23:59:59
+            Some(3661),  // 01:01:01
+            Some(86399), // 23:59:59
         ];
         let time_array = Time32SecondArray::from(time_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            time_array.data_type(),
-            &time_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(time_array.data_type(), &time_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(4);
-        
+
         for i in 0..time_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 4);
-        
+
         // Row 0: 00:00:00 (midnight)
         let expected_midnight = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
         assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 01:01:01
         let expected_time = NaiveTime::from_hms_opt(1, 1, 1).unwrap();
         assert_eq!(variant_array.value(2), Variant::from(expected_time));
-        
+
         // Row 3: 23:59:59 (last second of day)
         let expected_last = NaiveTime::from_hms_opt(23, 59, 59).unwrap();
         assert_eq!(variant_array.value(3), Variant::from(expected_last));
@@ -4038,40 +4170,38 @@ mod row_builder_tests {
 
         // Test Time32MillisecondArray with various times (milliseconds since midnight)
         let time_data = vec![
-            Some(0),         // 00:00:00.000
+            Some(0), // 00:00:00.000
             None,
-            Some(3661123),   // 01:01:01.123
-            Some(86399999),  // 23:59:59.999
+            Some(3661123),  // 01:01:01.123
+            Some(86399999), // 23:59:59.999
         ];
         let time_array = Time32MillisecondArray::from(time_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            time_array.data_type(),
-            &time_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(time_array.data_type(), &time_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(4);
-        
+
         for i in 0..time_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 4);
-        
+
         // Row 0: 00:00:00.000 (midnight)
         let expected_midnight = NaiveTime::from_hms_milli_opt(0, 0, 0, 0).unwrap();
         assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 01:01:01.123
         let expected_time = NaiveTime::from_hms_milli_opt(1, 1, 1, 123).unwrap();
         assert_eq!(variant_array.value(2), Variant::from(expected_time));
-        
+
         // Row 3: 23:59:59.999 (last millisecond of day)
         let expected_last = NaiveTime::from_hms_milli_opt(23, 59, 59, 999).unwrap();
         assert_eq!(variant_array.value(3), Variant::from(expected_last));
@@ -4084,40 +4214,38 @@ mod row_builder_tests {
 
         // Test Time64MicrosecondArray with various times (microseconds since midnight)
         let time_data = vec![
-            Some(0),              // 00:00:00.000000
+            Some(0), // 00:00:00.000000
             None,
-            Some(3661123456),     // 01:01:01.123456
-            Some(86399999999),    // 23:59:59.999999
+            Some(3661123456),  // 01:01:01.123456
+            Some(86399999999), // 23:59:59.999999
         ];
         let time_array = Time64MicrosecondArray::from(time_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            time_array.data_type(),
-            &time_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(time_array.data_type(), &time_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(4);
-        
+
         for i in 0..time_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 4);
-        
+
         // Row 0: 00:00:00.000000 (midnight)
         let expected_midnight = NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap();
         assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 01:01:01.123456
         let expected_time = NaiveTime::from_hms_micro_opt(1, 1, 1, 123456).unwrap();
         assert_eq!(variant_array.value(2), Variant::from(expected_time));
-        
+
         // Row 3: 23:59:59.999999 (last microsecond of day)
         let expected_last = NaiveTime::from_hms_micro_opt(23, 59, 59, 999999).unwrap();
         assert_eq!(variant_array.value(3), Variant::from(expected_last));
@@ -4130,40 +4258,38 @@ mod row_builder_tests {
 
         // Test Time64NanosecondArray with various times (nanoseconds since midnight)
         let time_data = vec![
-            Some(0),                   // 00:00:00.000000000
+            Some(0), // 00:00:00.000000000
             None,
-            Some(3661123456789),       // 01:01:01.123456789
-            Some(86399999999999),      // 23:59:59.999999999
+            Some(3661123456789),  // 01:01:01.123456789
+            Some(86399999999999), // 23:59:59.999999999
         ];
         let time_array = Time64NanosecondArray::from(time_data);
-        
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            time_array.data_type(),
-            &time_array,
-        ).unwrap();
+
+        let mut row_builder =
+            make_arrow_to_variant_row_builder(time_array.data_type(), &time_array).unwrap();
 
         let mut array_builder = VariantArrayBuilder::new(4);
-        
+
         for i in 0..time_array.len() {
             let mut builder = array_builder.variant_builder();
             row_builder.append_row(i, &mut builder).unwrap();
             builder.finish();
         }
-        
+
         let variant_array = array_builder.build();
         assert_eq!(variant_array.len(), 4);
-        
+
         // Row 0: 00:00:00.000000000 (midnight)
         let expected_midnight = NaiveTime::from_hms_nano_opt(0, 0, 0, 0).unwrap();
         assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
-        
+
         // Row 1: null
         assert!(variant_array.is_null(1));
-        
+
         // Row 2: 01:01:01.123456789 -> truncated to 01:01:01.123456000 (microsecond precision)
         let expected_time = NaiveTime::from_hms_micro_opt(1, 1, 1, 123456).unwrap();
         assert_eq!(variant_array.value(2), Variant::from(expected_time));
-        
+
         // Row 3: 23:59:59.999999999 -> truncated to 23:59:59.999999000 (microsecond precision)
         let expected_last = NaiveTime::from_hms_micro_opt(23, 59, 59, 999999).unwrap();
         assert_eq!(variant_array.value(3), Variant::from(expected_last));
