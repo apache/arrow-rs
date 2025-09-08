@@ -2176,36 +2176,59 @@ mod test {
 
     #[test]
     fn test_decimal() {
+        // Choose expected Arrow types depending on the `small_decimals` feature flag.
+        // With `small_decimals` enabled, Decimal32/Decimal64 are used where their
+        // precision allows; otherwise, those cases resolve to Decimal128.
+        #[cfg(feature = "small_decimals")]
         let files: [(&str, DataType); 8] = [
             (
                 "avro/fixed_length_decimal.avro",
                 DataType::Decimal128(25, 2),
             ),
-            // Legacy fixed[8] decimal should map to Decimal64
             (
                 "avro/fixed_length_decimal_legacy.avro",
                 DataType::Decimal64(13, 2),
             ),
-            // Bytes-backed with precision 4, scale 2 should use Decimal32
             ("avro/int32_decimal.avro", DataType::Decimal32(4, 2)),
-            // Bytes-backed with precision 10, scale 2 should use Decimal64
             ("avro/int64_decimal.avro", DataType::Decimal64(10, 2)),
-            // Bytes-backed Decimal256 (precision 76, scale 10)
             (
                 "test/data/int256_decimal.avro",
                 DataType::Decimal256(76, 10),
             ),
-            // Fixed[32]-backed Decimal256 (precision 76, scale 10)
             (
                 "test/data/fixed256_decimal.avro",
                 DataType::Decimal256(76, 10),
             ),
-            // Fixed[4]-backed legacy Decimal32 (precision 9, scale 2)
             (
                 "test/data/fixed_length_decimal_legacy_32.avro",
                 DataType::Decimal32(9, 2),
             ),
-            // Bytes-backed Decimal128 (precision 38, scale 2)
+            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
+        ];
+        #[cfg(not(feature = "small_decimals"))]
+        let files: [(&str, DataType); 8] = [
+            (
+                "avro/fixed_length_decimal.avro",
+                DataType::Decimal128(25, 2),
+            ),
+            (
+                "avro/fixed_length_decimal_legacy.avro",
+                DataType::Decimal128(13, 2),
+            ),
+            ("avro/int32_decimal.avro", DataType::Decimal128(4, 2)),
+            ("avro/int64_decimal.avro", DataType::Decimal128(10, 2)),
+            (
+                "test/data/int256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed_length_decimal_legacy_32.avro",
+                DataType::Decimal128(9, 2),
+            ),
             ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
         ];
         for (file, expected_dt) in files {

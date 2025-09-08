@@ -21,8 +21,10 @@ use crate::schema::{
 };
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL256_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL256_MAX_PRECISION,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -448,14 +450,25 @@ impl Codec {
             Self::Decimal(precision, scale, _size) => {
                 let p = *precision as u8;
                 let s = scale.unwrap_or(0) as i8;
-                if *precision <= DECIMAL32_MAX_PRECISION as usize {
-                    DataType::Decimal32(p, s)
-                } else if *precision <= DECIMAL64_MAX_PRECISION as usize {
-                    DataType::Decimal64(p, s)
-                } else if *precision <= DECIMAL128_MAX_PRECISION as usize {
-                    DataType::Decimal128(p, s)
-                } else {
-                    DataType::Decimal256(p, s)
+                #[cfg(feature = "small_decimals")]
+                {
+                    if *precision <= DECIMAL32_MAX_PRECISION as usize {
+                        DataType::Decimal32(p, s)
+                    } else if *precision <= DECIMAL64_MAX_PRECISION as usize {
+                        DataType::Decimal64(p, s)
+                    } else if *precision <= DECIMAL128_MAX_PRECISION as usize {
+                        DataType::Decimal128(p, s)
+                    } else {
+                        DataType::Decimal256(p, s)
+                    }
+                }
+                #[cfg(not(feature = "small_decimals"))]
+                {
+                    if *precision <= DECIMAL128_MAX_PRECISION as usize {
+                        DataType::Decimal128(p, s)
+                    } else {
+                        DataType::Decimal256(p, s)
+                    }
                 }
             }
             Self::Uuid => DataType::FixedSizeBinary(16),

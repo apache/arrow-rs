@@ -30,8 +30,9 @@ use arrow_buffer::*;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
     Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
-    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
@@ -351,26 +352,45 @@ impl Decoder {
                 let s = *scale;
                 let prec = p as u8;
                 let scl = s.unwrap_or(0) as i8;
-                if p <= DECIMAL32_MAX_PRECISION as usize {
-                    let builder = Decimal32Builder::with_capacity(DEFAULT_CAPACITY)
-                        .with_precision_and_scale(prec, scl)?;
-                    Self::Decimal32(p, s, *size, builder)
-                } else if p <= DECIMAL64_MAX_PRECISION as usize {
-                    let builder = Decimal64Builder::with_capacity(DEFAULT_CAPACITY)
-                        .with_precision_and_scale(prec, scl)?;
-                    Self::Decimal64(p, s, *size, builder)
-                } else if p <= DECIMAL128_MAX_PRECISION as usize {
-                    let builder = Decimal128Builder::with_capacity(DEFAULT_CAPACITY)
-                        .with_precision_and_scale(prec, scl)?;
-                    Self::Decimal128(p, s, *size, builder)
-                } else if p <= DECIMAL256_MAX_PRECISION as usize {
-                    let builder = Decimal256Builder::with_capacity(DEFAULT_CAPACITY)
-                        .with_precision_and_scale(prec, scl)?;
-                    Self::Decimal256(p, s, *size, builder)
-                } else {
-                    return Err(ArrowError::ParseError(format!(
-                        "Decimal precision {p} exceeds maximum supported"
-                    )));
+                #[cfg(feature = "small_decimals")]
+                {
+                    if p <= DECIMAL32_MAX_PRECISION as usize {
+                        let builder = Decimal32Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal32(p, s, *size, builder)
+                    } else if p <= DECIMAL64_MAX_PRECISION as usize {
+                        let builder = Decimal64Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal64(p, s, *size, builder)
+                    } else if p <= DECIMAL128_MAX_PRECISION as usize {
+                        let builder = Decimal128Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal128(p, s, *size, builder)
+                    } else if p <= DECIMAL256_MAX_PRECISION as usize {
+                        let builder = Decimal256Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal256(p, s, *size, builder)
+                    } else {
+                        return Err(ArrowError::ParseError(format!(
+                            "Decimal precision {p} exceeds maximum supported"
+                        )));
+                    }
+                }
+                #[cfg(not(feature = "small_decimals"))]
+                {
+                    if p <= DECIMAL128_MAX_PRECISION as usize {
+                        let builder = Decimal128Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal128(p, s, *size, builder)
+                    } else if p <= DECIMAL256_MAX_PRECISION as usize {
+                        let builder = Decimal256Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal256(p, s, *size, builder)
+                    } else {
+                        return Err(ArrowError::ParseError(format!(
+                            "Decimal precision {p} exceeds maximum supported"
+                        )));
+                    }
                 }
             }
             (Codec::Interval, _) => Self::Duration(IntervalMonthDayNanoBuilder::new()),
@@ -1641,10 +1661,20 @@ mod tests {
         decoder.decode(&mut cursor).unwrap();
         decoder.decode(&mut cursor).unwrap();
         let arr = decoder.flush(None).unwrap();
-        let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
-        assert_eq!(dec.len(), 2);
-        assert_eq!(dec.value_as_string(0), "123.45");
-        assert_eq!(dec.value_as_string(1), "-1.23");
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
     }
 
     #[test]
@@ -1665,11 +1695,22 @@ mod tests {
         let mut cursor = AvroCursor::new(&data);
         decoder.decode(&mut cursor).unwrap();
         decoder.decode(&mut cursor).unwrap();
+
         let arr = decoder.flush(None).unwrap();
-        let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
-        assert_eq!(dec.len(), 2);
-        assert_eq!(dec.value_as_string(0), "123.45");
-        assert_eq!(dec.value_as_string(1), "-1.23");
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
     }
 
     #[test]
@@ -1692,13 +1733,26 @@ mod tests {
         decoder.decode(&mut cursor).unwrap();
         decoder.decode(&mut cursor).unwrap();
         let arr = decoder.flush(None).unwrap();
-        let dec_arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
-        assert_eq!(dec_arr.len(), 3);
-        assert!(dec_arr.is_valid(0));
-        assert!(!dec_arr.is_valid(1));
-        assert!(dec_arr.is_valid(2));
-        assert_eq!(dec_arr.value_as_string(0), "123.4");
-        assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "123.4");
+            assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "123.4");
+            assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        }
     }
 
     #[test]
@@ -1729,13 +1783,26 @@ mod tests {
         decoder.decode(&mut cursor).unwrap();
         decoder.decode(&mut cursor).unwrap();
         let arr = decoder.flush(None).unwrap();
-        let dec_arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
-        assert_eq!(dec_arr.len(), 3);
-        assert!(dec_arr.is_valid(0));
-        assert!(!dec_arr.is_valid(1));
-        assert!(dec_arr.is_valid(2));
-        assert_eq!(dec_arr.value_as_string(0), "1234.56");
-        assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "1234.56");
+            assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "1234.56");
+            assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        }
     }
 
     #[test]
