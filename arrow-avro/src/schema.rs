@@ -59,6 +59,20 @@ pub fn compare_schemas(writer: &Schema, reader: &Schema) -> Result<bool, ArrowEr
     Ok(canon_writer == canon_reader)
 }
 
+/// Avro types are not nullable, with nullability instead encoded as a union
+/// where one of the variants is the null type.
+///
+/// To accommodate this, we specially case two-variant unions where one of the
+/// variants is the null type, and use this to derive arrow's notion of nullability
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
+pub enum Nullability {
+    /// The nulls are encoded as the first union variant
+    #[default]
+    NullFirst,
+    /// The nulls are encoded as the second union variant
+    NullSecond,
+}
+
 /// Either a [`PrimitiveType`] or a reference to a previously defined named type
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#names>
@@ -113,7 +127,7 @@ pub struct Attributes<'a> {
 
     /// Additional JSON attributes
     #[serde(flatten)]
-    pub additional: HashMap<&'a str, serde_json::Value>,
+    pub additional: HashMap<&'a str, Value>,
 }
 
 impl Attributes<'_> {
@@ -309,51 +323,11 @@ pub struct AvroSchema {
 impl TryFrom<&ArrowSchema> for AvroSchema {
     type Error = ArrowError;
 
+    /// Converts an `ArrowSchema` to `AvroSchema`, delegating to
+    /// `AvroSchema::from_arrow_with_options` with `None` so that the
+    /// union null ordering is decided by `Nullability::default()`.
     fn try_from(schema: &ArrowSchema) -> Result<Self, Self::Error> {
-        // Fast‑path: schema already contains Avro JSON
-        if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
-            return Ok(AvroSchema::new(json.clone()));
-        }
-        let mut name_gen = NameGenerator::default();
-        let fields_json = schema
-            .fields()
-            .iter()
-            .map(|f| arrow_field_to_avro(f, &mut name_gen))
-            .collect::<Result<Vec<_>, _>>()?;
-        // Assemble top‑level record
-        let record_name = schema
-            .metadata
-            .get(AVRO_NAME_METADATA_KEY)
-            .map_or("topLevelRecord", |s| s.as_str());
-        let mut record = JsonMap::with_capacity(schema.metadata.len() + 4);
-        record.insert("type".into(), Value::String("record".into()));
-        record.insert(
-            "name".into(),
-            Value::String(sanitise_avro_name(record_name)),
-        );
-        if let Some(ns) = schema.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
-            record.insert("namespace".into(), Value::String(ns.clone()));
-        }
-        if let Some(doc) = schema.metadata.get(AVRO_DOC_METADATA_KEY) {
-            record.insert("doc".into(), Value::String(doc.clone()));
-        }
-        record.insert("fields".into(), Value::Array(fields_json));
-        let schema_prefix = format!("{SCHEMA_METADATA_KEY}.");
-        for (meta_key, meta_val) in &schema.metadata {
-            // Skip keys already handled or internal
-            if meta_key.starts_with("avro.")
-                || meta_key.starts_with(schema_prefix.as_str())
-                || is_internal_arrow_key(meta_key)
-            {
-                continue;
-            }
-            let json_val =
-                serde_json::from_str(meta_val).unwrap_or_else(|_| Value::String(meta_val.clone()));
-            record.insert(meta_key.clone(), json_val);
-        }
-        let json_string = serde_json::to_string(&Value::Object(record))
-            .map_err(|e| ArrowError::SchemaError(format!("Serialising Avro JSON failed: {e}")))?;
-        Ok(AvroSchema::new(json_string))
+        AvroSchema::from_arrow_with_options(schema, None)
     }
 }
 
@@ -452,6 +426,49 @@ impl AvroSchema {
     /// <https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas>
     pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
         build_canonical(schema, None)
+    }
+
+    /// Build Avro JSON from an Arrow [`ArrowSchema`], applying the given null‑union order.
+    ///
+    /// If the input Arrow schema already contains Avro JSON in
+    /// [`SCHEMA_METADATA_KEY`], that JSON is returned verbatim to preserve
+    /// the exact header encoding alignment; otherwise, a new JSON is generated
+    /// honoring `null_union_order` at **all nullable sites**.
+    pub fn from_arrow_with_options(
+        schema: &ArrowSchema,
+        null_order: Option<Nullability>,
+    ) -> Result<AvroSchema, ArrowError> {
+        if let Some(json) = schema.metadata.get(SCHEMA_METADATA_KEY) {
+            return Ok(AvroSchema::new(json.clone()));
+        }
+        let order = null_order.unwrap_or_default();
+        let mut name_gen = NameGenerator::default();
+        let fields_json = schema
+            .fields()
+            .iter()
+            .map(|f| arrow_field_to_avro(f, &mut name_gen, order))
+            .collect::<Result<Vec<_>, _>>()?;
+        let record_name = schema
+            .metadata
+            .get(AVRO_NAME_METADATA_KEY)
+            .map_or("topLevelRecord", |s| s.as_str());
+        let mut record = JsonMap::with_capacity(schema.metadata.len() + 4);
+        record.insert("type".into(), Value::String("record".into()));
+        record.insert(
+            "name".into(),
+            Value::String(sanitise_avro_name(record_name)),
+        );
+        if let Some(ns) = schema.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+            record.insert("namespace".into(), Value::String(ns.clone()));
+        }
+        if let Some(doc) = schema.metadata.get(AVRO_DOC_METADATA_KEY) {
+            record.insert("doc".into(), Value::String(doc.clone()));
+        }
+        record.insert("fields".into(), Value::Array(fields_json));
+        extend_with_passthrough_metadata(&mut record, &schema.metadata);
+        let json_string = serde_json::to_string(&Value::Object(record))
+            .map_err(|e| ArrowError::SchemaError(format!("Serializing Avro JSON failed: {e}")))?;
+        Ok(AvroSchema::new(json_string))
     }
 }
 
@@ -862,6 +879,24 @@ fn is_internal_arrow_key(key: &str) -> bool {
     key.starts_with("ARROW:") || key == SCHEMA_METADATA_KEY
 }
 
+/// Copies Arrow schema metadata entries to the provided JSON map,
+/// skipping keys that are Avro-reserved, internal Arrow keys, or
+/// nested under the `avro.schema.` namespace. Values that parse as
+/// JSON are inserted as JSON; otherwise the raw string is preserved.
+fn extend_with_passthrough_metadata(
+    target: &mut JsonMap<String, Value>,
+    metadata: &HashMap<String, String>,
+) {
+    for (meta_key, meta_val) in metadata {
+        if meta_key.starts_with("avro.") || is_internal_arrow_key(meta_key) {
+            continue;
+        }
+        let json_val =
+            serde_json::from_str(meta_val).unwrap_or_else(|_| Value::String(meta_val.clone()));
+        target.insert(meta_key.clone(), json_val);
+    }
+}
+
 // Sanitize an arbitrary string so it is a valid Avro field or type name
 fn sanitise_avro_name(base_name: &str) -> String {
     if base_name.is_empty() {
@@ -932,12 +967,21 @@ fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
     }
 }
 
-// Convert an Arrow `DataType` into an Avro schema `Value`.
+fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
+    let null = Value::String("null".into());
+    let elements = match null_order {
+        Nullability::NullFirst => vec![null, inner],
+        Nullability::NullSecond => vec![inner, null],
+    };
+    Value::Array(elements)
+}
+
 fn datatype_to_avro(
     dt: &DataType,
     field_name: &str,
     metadata: &HashMap<String, String>,
     name_gen: &mut NameGenerator,
+    null_order: Nullability,
 ) -> Result<(Value, JsonMap<String, Value>), ArrowError> {
     let mut extras = JsonMap::new();
     let val = match dt {
@@ -1051,20 +1095,32 @@ fn datatype_to_avro(
             if matches!(dt, DataType::LargeList(_)) {
                 extras.insert("arrowLargeList".into(), Value::Bool(true));
             }
-            let (items, ie) =
-                datatype_to_avro(child.data_type(), child.name(), child.metadata(), name_gen)?;
+            let items_schema = process_datatype(
+                child.data_type(),
+                child.name(),
+                child.metadata(),
+                name_gen,
+                null_order,
+                child.is_nullable(),
+            )?;
             json!({
                 "type": "array",
-                "items": merge_extras(items, ie)
+                "items": items_schema
             })
         }
         DataType::FixedSizeList(child, len) => {
             extras.insert("arrowFixedSize".into(), json!(len));
-            let (items, ie) =
-                datatype_to_avro(child.data_type(), child.name(), child.metadata(), name_gen)?;
+            let items_schema = process_datatype(
+                child.data_type(),
+                child.name(),
+                child.metadata(),
+                name_gen,
+                null_order,
+                child.is_nullable(),
+            )?;
             json!({
                 "type": "array",
-                "items": merge_extras(items, ie)
+                "items": items_schema
             })
         }
         DataType::Map(entries, _) => {
@@ -1076,21 +1132,23 @@ fn datatype_to_avro(
                     ))
                 }
             };
-            let (val_schema, value_entry) = datatype_to_avro(
+            let values_schema = process_datatype(
                 value_field.data_type(),
                 value_field.name(),
                 value_field.metadata(),
                 name_gen,
+                null_order,
+                value_field.is_nullable(),
             )?;
             json!({
                 "type": "map",
-                "values": merge_extras(val_schema, value_entry)
+                "values": values_schema
             })
         }
         DataType::Struct(fields) => {
             let avro_fields = fields
                 .iter()
-                .map(|field| arrow_field_to_avro(field, name_gen))
+                .map(|field| arrow_field_to_avro(field, name_gen, null_order))
                 .collect::<Result<Vec<_>, _>>()?;
             json!({
                 "type": "record",
@@ -1108,19 +1166,24 @@ fn datatype_to_avro(
                     "symbols": symbols
                 })
             } else {
-                let (inner, ie) = datatype_to_avro(value.as_ref(), field_name, metadata, name_gen)?;
-                merge_extras(inner, ie)
+                process_datatype(
+                    value.as_ref(),
+                    field_name,
+                    metadata,
+                    name_gen,
+                    null_order,
+                    false,
+                )?
             }
         }
-        DataType::RunEndEncoded(_, values) => {
-            let (inner, ie) = datatype_to_avro(
-                values.data_type(),
-                values.name(),
-                values.metadata(),
-                name_gen,
-            )?;
-            merge_extras(inner, ie)
-        }
+        DataType::RunEndEncoded(_, values) => process_datatype(
+            values.data_type(),
+            values.name(),
+            values.metadata(),
+            name_gen,
+            null_order,
+            false,
+        )?,
         DataType::Union(_, _) => {
             return Err(ArrowError::NotYetImplemented(
                 "Arrow Union to Avro Union not yet supported".into(),
@@ -1135,27 +1198,40 @@ fn datatype_to_avro(
     Ok((val, extras))
 }
 
+fn process_datatype(
+    dt: &DataType,
+    field_name: &str,
+    metadata: &HashMap<String, String>,
+    name_gen: &mut NameGenerator,
+    null_order: Nullability,
+    is_nullable: bool,
+) -> Result<Value, ArrowError> {
+    let (schema, extras) = datatype_to_avro(dt, field_name, metadata, name_gen, null_order)?;
+    let mut merged = merge_extras(schema, extras);
+    if is_nullable {
+        merged = wrap_nullable(merged, null_order)
+    }
+    Ok(merged)
+}
+
 fn arrow_field_to_avro(
     field: &ArrowField,
     name_gen: &mut NameGenerator,
+    null_order: Nullability,
 ) -> Result<Value, ArrowError> {
-    // Sanitize field name to ensure Avro validity but store the original in metadata
     let avro_name = sanitise_avro_name(field.name());
-    let (schema, extras) =
-        datatype_to_avro(field.data_type(), &avro_name, field.metadata(), name_gen)?;
-    // If nullable, wrap `[ "null", <type> ]`, NOTE: second order nullability to be added in a follow-up
-    let mut schema = if field.is_nullable() {
-        Value::Array(vec![
-            Value::String("null".into()),
-            merge_extras(schema, extras),
-        ])
-    } else {
-        merge_extras(schema, extras)
-    };
+    let schema_value = process_datatype(
+        field.data_type(),
+        &avro_name,
+        field.metadata(),
+        name_gen,
+        null_order,
+        field.is_nullable(),
+    )?;
     // Build the field map
     let mut map = JsonMap::with_capacity(field.metadata().len() + 3);
     map.insert("name".into(), Value::String(avro_name));
-    map.insert("type".into(), schema);
+    map.insert("type".into(), schema_value);
     // Transfer selected metadata
     for (meta_key, meta_val) in field.metadata() {
         if is_internal_arrow_key(meta_key) {
@@ -1728,7 +1804,7 @@ mod tests {
                 r#type: Schema::Type(Type {
                     r#type: TypeName::Primitive(PrimitiveType::Bytes),
                     attributes: Attributes {
-                        logical_type: Some("decimal"),
+                        logical_type: None,
                         additional: HashMap::from([("precision", json!(4))]),
                     },
                 }),
@@ -2055,5 +2131,13 @@ mod tests {
         );
 
         assert_eq!(arrow_field, expected);
+    }
+
+    #[test]
+    fn default_order_is_consistent() {
+        let arrow_schema = ArrowSchema::new(vec![ArrowField::new("s", DataType::Utf8, true)]);
+        let a = AvroSchema::try_from(&arrow_schema).unwrap().json_string;
+        let b = AvroSchema::from_arrow_with_options(&arrow_schema, None);
+        assert_eq!(a, b.unwrap().json_string);
     }
 }
