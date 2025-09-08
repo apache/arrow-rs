@@ -1246,47 +1246,6 @@ impl From<Option<LogicalType>> for ConvertedType {
 }
 
 // ----------------------------------------------------------------------
-// crate::format::CompressionCodec <=> Compression conversion
-
-impl TryFrom<crate::format::CompressionCodec> for Compression {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::CompressionCodec) -> Result<Self> {
-        Ok(match value {
-            crate::format::CompressionCodec::UNCOMPRESSED => Compression::UNCOMPRESSED,
-            crate::format::CompressionCodec::SNAPPY => Compression::SNAPPY,
-            crate::format::CompressionCodec::GZIP => Compression::GZIP(Default::default()),
-            crate::format::CompressionCodec::LZO => Compression::LZO,
-            crate::format::CompressionCodec::BROTLI => Compression::BROTLI(Default::default()),
-            crate::format::CompressionCodec::LZ4 => Compression::LZ4,
-            crate::format::CompressionCodec::ZSTD => Compression::ZSTD(Default::default()),
-            crate::format::CompressionCodec::LZ4_RAW => Compression::LZ4_RAW,
-            _ => {
-                return Err(general_err!(
-                    "unexpected parquet compression codec: {}",
-                    value.0
-                ))
-            }
-        })
-    }
-}
-
-impl From<Compression> for crate::format::CompressionCodec {
-    fn from(value: Compression) -> Self {
-        match value {
-            Compression::UNCOMPRESSED => crate::format::CompressionCodec::UNCOMPRESSED,
-            Compression::SNAPPY => crate::format::CompressionCodec::SNAPPY,
-            Compression::GZIP(_) => crate::format::CompressionCodec::GZIP,
-            Compression::LZO => crate::format::CompressionCodec::LZO,
-            Compression::BROTLI(_) => crate::format::CompressionCodec::BROTLI,
-            Compression::LZ4 => crate::format::CompressionCodec::LZ4,
-            Compression::ZSTD(_) => crate::format::CompressionCodec::ZSTD,
-            Compression::LZ4_RAW => crate::format::CompressionCodec::LZ4_RAW,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
 // String conversions for schema parsing.
 
 impl str::FromStr for Repetition {
@@ -1997,70 +1956,6 @@ mod tests {
         assert_eq!(
             Compression::ZSTD(Default::default()).to_string(),
             "ZSTD(ZstdLevel(1))"
-        );
-    }
-
-    #[test]
-    fn test_from_compression() {
-        assert_eq!(
-            Compression::try_from(crate::format::CompressionCodec::UNCOMPRESSED).unwrap(),
-            Compression::UNCOMPRESSED
-        );
-        assert_eq!(
-            Compression::try_from(crate::format::CompressionCodec::SNAPPY).unwrap(),
-            Compression::SNAPPY
-        );
-        assert_eq!(
-            Compression::try_from(crate::format::CompressionCodec::GZIP).unwrap(),
-            Compression::GZIP(Default::default())
-        );
-        assert_eq!(
-            Compression::try_from(crate::format::CompressionCodec::LZO).unwrap(),
-            Compression::LZO
-        );
-        assert_eq!(
-            Compression::try_from(crate::format::CompressionCodec::BROTLI).unwrap(),
-            Compression::BROTLI(Default::default())
-        );
-        assert_eq!(
-            Compression::try_from(crate::format::CompressionCodec::LZ4).unwrap(),
-            Compression::LZ4
-        );
-        assert_eq!(
-            Compression::try_from(crate::format::CompressionCodec::ZSTD).unwrap(),
-            Compression::ZSTD(Default::default())
-        );
-    }
-
-    #[test]
-    fn test_into_compression() {
-        assert_eq!(
-            crate::format::CompressionCodec::UNCOMPRESSED,
-            Compression::UNCOMPRESSED.into()
-        );
-        assert_eq!(
-            crate::format::CompressionCodec::SNAPPY,
-            Compression::SNAPPY.into()
-        );
-        assert_eq!(
-            crate::format::CompressionCodec::GZIP,
-            Compression::GZIP(Default::default()).into()
-        );
-        assert_eq!(
-            crate::format::CompressionCodec::LZO,
-            Compression::LZO.into()
-        );
-        assert_eq!(
-            crate::format::CompressionCodec::BROTLI,
-            Compression::BROTLI(Default::default()).into()
-        );
-        assert_eq!(
-            crate::format::CompressionCodec::LZ4,
-            Compression::LZ4.into()
-        );
-        assert_eq!(
-            crate::format::CompressionCodec::ZSTD,
-            Compression::ZSTD(Default::default()).into()
         );
     }
 
