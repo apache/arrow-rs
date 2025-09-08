@@ -726,14 +726,14 @@ impl<'a> Utf8ViewArrowToVariantBuilder<'a> {
 /// Generic Timestamp builder for Arrow timestamp arrays
 pub(crate) struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType> {
     array: &'a arrow::array::PrimitiveArray<T>,
-    time_zone: Option<Arc<str>>,
+    has_time_zone: bool,
 }
 
 impl<'a, T: ArrowTimestampType> TimestampArrowToVariantBuilder<'a, T> {
-    fn new(array: &'a dyn Array, time_zone: Option<Arc<str>>) -> Self {
+    fn new(array: &'a dyn Array, has_time_zone: bool) -> Self {
         Self {
             array: array.as_primitive::<T>(),
-            time_zone,
+            has_time_zone,
         }
     }
     
@@ -744,20 +744,18 @@ impl<'a, T: ArrowTimestampType> TimestampArrowToVariantBuilder<'a, T> {
             let timestamp_value = self.array.value(index);
             
             // Convert using Arrow's temporal conversion functions
-            if let Some(naive_datetime) = as_datetime::<T>(timestamp_value) {
-                let variant = if self.time_zone.is_none() {
-                    // No timezone -> NaiveDateTime -> TimestampNtzMicros/TimestampNtzNanos
-                    Variant::from(naive_datetime) // Uses From<NaiveDateTime> for Variant
-                } else {
-                    // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos  
-                    let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
-                    Variant::from(utc_dt) // Uses From<DateTime<Utc>> for Variant
-                };
-                builder.append_value(variant);
+            let Some(naive_datetime) = as_datetime::<T>(timestamp_value) else {
+                return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
+            };
+            let variant = if self.has_time_zone {
+                // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos  
+                let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
+                Variant::from(utc_dt) // Uses From<DateTime<Utc>> for Variant
             } else {
-                // Conversion failed -> append null
-                builder.append_null();
-            }
+                // No timezone -> NaiveDateTime -> TimestampNtzMicros/TimestampNtzNanos
+                Variant::from(naive_datetime) // Uses From<NaiveDateTime> for Variant
+            };
+            builder.append_value(variant);
         }
         Ok(())
     }
@@ -834,16 +832,16 @@ fn make_arrow_to_variant_row_builder<'a>(
         DataType::Timestamp(time_unit, time_zone) => {
             match time_unit {
                 TimeUnit::Second => Ok(ArrowToVariantRowBuilder::TimestampSecond(
-                    TimestampArrowToVariantBuilder::new(array, time_zone.clone())
+                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
                 )),
                 TimeUnit::Millisecond => Ok(ArrowToVariantRowBuilder::TimestampMillisecond(
-                    TimestampArrowToVariantBuilder::new(array, time_zone.clone())
+                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
                 )),
                 TimeUnit::Microsecond => Ok(ArrowToVariantRowBuilder::TimestampMicrosecond(
-                    TimestampArrowToVariantBuilder::new(array, time_zone.clone())
+                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
                 )),
                 TimeUnit::Nanosecond => Ok(ArrowToVariantRowBuilder::TimestampNanosecond(
-                    TimestampArrowToVariantBuilder::new(array, time_zone.clone())
+                    TimestampArrowToVariantBuilder::new(array, time_zone.is_some())
                 )),
             }
         }
