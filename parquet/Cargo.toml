@@ -45,6 +45,10 @@ arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
+parquet-variant = { workspace = true, optional = true }
+parquet-variant-json = { workspace = true, optional = true }
+parquet-variant-compute = { workspace = true, optional = true }
+
 object_store = { version = "0.12.0", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
@@ -108,7 +112,7 @@ json = ["serde_json", "base64"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
-experimental = []
+experimental = ["variant_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
@@ -124,6 +128,8 @@ encryption = ["dep:ring"]
 # Explicitely enabling rust_backend and zlib-rs features for flate2
 flate2-rust_backened = ["flate2/rust_backend"]
 flate2-zlib-rs = ["flate2/zlib-rs"]
+# Enable parquet variant support
+variant_experimental = ["parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
 
 
 [[example]]
