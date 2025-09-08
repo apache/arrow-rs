@@ -1013,8 +1013,28 @@ fn datatype_to_avro(
                 })
             }
         }
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
-            // Prefer fixed if original size info present
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
+            // Scale must be >= 0 and <= precision; otherwise the logical
+            // type is invalid. We surface a schema error at generation time
+            // to avoid silently downgrading to the base type later.
+            // Ref: Specification §Logical Types / Decimal.
+            if *scale < 0 {
+                return Err(ArrowError::SchemaError(format!(
+                    "Invalid Avro decimal for field '{field_name}': scale ({scale}) must be >= 0"
+                )));
+            }
+            let s = *scale as usize;
+            if s > *precision as usize {
+                return Err(ArrowError::SchemaError(format!(
+                    "Invalid Avro decimal for field '{field_name}': scale ({scale}) \
+                     must be <= precision ({precision})"
+                )));
+            }
+            // Prefer fixed if an original size hint is present in field metadata.
+            // Otherwise, emit bytes-backed decimal (reader/writer compatible).
             let mut meta = JsonMap::from_iter([
                 ("logicalType".into(), json!("decimal")),
                 ("precision".into(), json!(*precision)),

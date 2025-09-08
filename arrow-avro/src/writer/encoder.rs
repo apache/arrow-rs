@@ -246,6 +246,30 @@ impl<'a> FieldEncoder<'a> {
                 DataType::LargeBinary => {
                     Encoder::LargeBinary(BinaryEncoder(array.as_binary::<i64>()))
                 }
+                DataType::FixedSizeBinary(len) => {
+                    // Decide between Avro `fixed` (raw bytes) and `uuid` logical string
+                    // based on Field metadata, mirroring schema generation rules.
+                    let arr = array
+                        .as_any()
+                        .downcast_ref::<FixedSizeBinaryArray>()
+                        .ok_or_else(|| {
+                            ArrowError::SchemaError("Expected FixedSizeBinaryArray".into())
+                        })?;
+                    let md = field.metadata();
+                    let is_uuid = md.get("logicalType").is_some_and(|v| v == "uuid")
+                        || (*len == 16
+                        && md.get("ARROW:extension:name").is_some_and(|v| v == "uuid"));
+                    if is_uuid {
+                        if *len != 16 {
+                            return Err(ArrowError::InvalidArgumentError(
+                                "logicalType=uuid requires FixedSizeBinary(16)".into(),
+                            ));
+                        }
+                        Encoder::Uuid(UuidEncoder(arr))
+                    } else {
+                        Encoder::Fixed(FixedEncoder(arr))
+                    }
+                }
                 DataType::Timestamp(TimeUnit::Microsecond, _) => Encoder::Timestamp(LongEncoder(
                     array.as_primitive::<TimestampMicrosecondType>(),
                 )),
@@ -263,6 +287,26 @@ impl<'a> FieldEncoder<'a> {
                     IntervalUnit::DayTime => Encoder::IntervalDayTime(IntervalDayTimeEncoder(
                         array.as_primitive::<IntervalDayTimeType>(),
                     )),
+                }
+                DataType::Duration(_) => {
+                    return Err(ArrowError::NotYetImplemented(
+                        "Avro writer: Arrow Duration(TimeUnit) has no standard Avro mapping; cast to Interval(MonthDayNano) to use Avro 'duration'".into(),
+                    ));
+                }
+                // Composite or mismatched types under scalar plan
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::Map(_, _)
+                | DataType::Struct(_)
+                | DataType::Dictionary(_, _)
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Avro scalar site incompatible with Arrow type: {:?}",
+                        array.data_type()
+                    )))
                 }
                 other => {
                     return Err(ArrowError::NotYetImplemented(format!(
