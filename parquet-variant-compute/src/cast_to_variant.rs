@@ -155,7 +155,7 @@ macro_rules! define_row_builder {
     (
         struct $name:ident<$lifetime:lifetime $(, $generic:ident: $($bound:path)+)?>
         $(where $where_path:path: $where_bound:path)?
-        $({ $($this:ident.$field:ident: $field_type:ty, )+ })?,
+        $({ $($field:ident: $field_type:ty),* $(,)? })?,
         |$array_param:ident| -> $array_type:ty { $init_expr:expr },
         |$value:ident| $value_transform:expr
     ) => {
@@ -181,7 +181,8 @@ macro_rules! define_row_builder {
                     builder.append_null();
                 } else {
                     let $value = self.array.value(index);
-                    $( $(let $this = self;)+ )?
+                    // Capture fields as variables the transform can access (hygiene)
+                    $($(let $field = &self.$field;)*)?
                     builder.append_value($value_transform);
                 }
                 Ok(())
@@ -530,36 +531,36 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
 // Decimal32 builder for Arrow Decimal32Array
 define_row_builder!(
     struct Decimal32ArrowToVariantBuilder<'a>
-    { this.scale: i8, },
+    { scale: i8 },
     |array| -> arrow::array::Decimal32Array { array.as_primitive::<Decimal32Type>() },
-    |value| decimal_to_variant_decimal!(value, &this.scale, i32, VariantDecimal4)
+    |value| decimal_to_variant_decimal!(value, scale, i32, VariantDecimal4)
 );
 
 // Decimal64 builder for Arrow Decimal64Array
 define_row_builder!(
     struct Decimal64ArrowToVariantBuilder<'a>
-    { this.scale: i8, },
+    { scale: i8 },
     |array| -> arrow::array::Decimal64Array { array.as_primitive::<Decimal64Type>() },
-    |value| decimal_to_variant_decimal!(value, &this.scale, i64, VariantDecimal8)
+    |value| decimal_to_variant_decimal!(value, scale, i64, VariantDecimal8)
 );
 
 // Decimal128 builder for Arrow Decimal128Array
 define_row_builder!(
     struct Decimal128ArrowToVariantBuilder<'a>
-    { this.scale: i8, },
+    { scale: i8 },
     |array| -> arrow::array::Decimal128Array { array.as_primitive::<Decimal128Type>() },
-    |value| decimal_to_variant_decimal!(value, &this.scale, i128, VariantDecimal16)
+    |value| decimal_to_variant_decimal!(value, scale, i128, VariantDecimal16)
 );
 
 // Decimal256 builder for Arrow Decimal256Array
 define_row_builder!(
     struct Decimal256ArrowToVariantBuilder<'a>
-    { this.scale: i8, },
+    { scale: i8 },
     |array| -> arrow::array::Decimal256Array { array.as_primitive::<Decimal256Type>() },
     |value| {
         // Decimal256 needs special handling - convert to i128 if possible
         match value.to_i128() {
-            Some(i128_val) => decimal_to_variant_decimal!(i128_val, &this.scale, i128, VariantDecimal16),
+            Some(i128_val) => decimal_to_variant_decimal!(i128_val, scale, i128, VariantDecimal16),
             None => Variant::Null, // Value too large for i128
         }
     }
@@ -596,14 +597,14 @@ define_row_builder!(
 // Generic Timestamp builder for Arrow timestamp arrays
 define_row_builder!(
     struct TimestampArrowToVariantBuilder<'a, T: ArrowTimestampType>
-    { this.has_time_zone: bool, },
+    { has_time_zone: bool },
     |array| -> arrow::array::PrimitiveArray<T> { array.as_primitive() },
     |value| {
         // Convert using Arrow's temporal conversion functions
         let Some(naive_datetime) = as_datetime::<T>(value) else {
             return Err(ArrowError::CastError("Failed to convert Arrow timestamp value to chrono::NaiveDateTime".to_string()));
         };
-        if this.has_time_zone {
+        if *has_time_zone {
             // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos  
             let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
             Variant::from(utc_dt) // Uses From<DateTime<Utc>> for Variant
