@@ -964,6 +964,13 @@ fn make_arrow_to_variant_row_builder<'a>(
             }
         }
         
+        DataType::Duration(_) | DataType::Interval(_) => {
+            return Err(ArrowError::InvalidArgumentError(
+                "Casting duration/interval types to Variant is not supported. \
+                 The Variant format does not define duration/interval types."
+                    .to_string(),
+            ));
+        }
         _ => Err(ArrowError::CastError(format!("Unsupported type for row builder: {data_type:?}"))),
     }
 }
