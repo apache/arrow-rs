@@ -2297,7 +2297,7 @@ mod tests {
         let expected_schema = Arc::new(parse_message_type(message_type).unwrap());
         let mut buf = schema_to_buf(&expected_schema).unwrap();
         let mut thrift_schema = buf_to_schema_list(&mut buf).unwrap();
-        thrift_schema[0].repetition_type = Some(Repetition::REQUIRED.into());
+        thrift_schema[0].repetition_type = Some(Repetition::REQUIRED);
 
         let result_schema = parquet_schema_from_array(thrift_schema).unwrap();
         assert_eq!(result_schema, expected_schema);
@@ -2310,7 +2310,7 @@ mod tests {
         let expected_schema = Arc::new(parse_message_type(message_type).unwrap());
         let mut buf = schema_to_buf(&expected_schema).unwrap();
         let mut thrift_schema = buf_to_schema_list(&mut buf).unwrap();
-        thrift_schema[0].repetition_type = Some(Repetition::REQUIRED.into());
+        thrift_schema[0].repetition_type = Some(Repetition::REQUIRED);
 
         let result_schema = parquet_schema_from_array(thrift_schema).unwrap();
         assert_eq!(result_schema, expected_schema);

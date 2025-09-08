@@ -65,28 +65,6 @@ macro_rules! thrift_enum {
                 Ok(field_id)
             }
         }
-
-        // TODO: remove when we finally get rid of the format module
-        impl TryFrom<crate::format::$identifier> for $identifier {
-            type Error = ParquetError;
-
-            #[allow(deprecated)]
-            fn try_from(value: crate::format::$identifier) -> Result<Self> {
-                Ok(match value {
-                    $(crate::format::$identifier::$field_name => Self::$field_name,)*
-                    _ => return Err(general_err!("Unexpected parquet {}: {}", stringify!($identifier), value.0)),
-                })
-            }
-        }
-
-        impl From<$identifier> for crate::format::$identifier {
-            #[allow(deprecated)]
-            fn from(value: $identifier) -> Self {
-                match value {
-                    $($identifier::$field_name => Self::$field_name,)*
-                }
-            }
-        }
     }
 }
 
@@ -147,23 +125,6 @@ macro_rules! thrift_union_all_empty {
                 writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)
-            }
-        }
-
-        // TODO: remove when we finally get rid of the format module
-        impl From<crate::format::$identifier> for $identifier {
-            fn from(value: crate::format::$identifier) -> Self {
-                match value {
-                    $(crate::format::$identifier::$field_name(_) => Self::$field_name,)*
-                }
-            }
-        }
-
-        impl From<$identifier> for crate::format::$identifier {
-            fn from(value: $identifier) -> Self {
-                match value {
-                    $($identifier::$field_name => Self::$field_name(Default::default()),)*
-                }
             }
         }
     }

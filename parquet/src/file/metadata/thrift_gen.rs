@@ -1574,13 +1574,13 @@ pub(crate) mod tests {
         // write SchemaElements
         write_schema(&schema, &mut writer)?;
 
-        let mut prot = ThriftSliceInputProtocol::new(&mut buf);
+        let mut prot = ThriftSliceInputProtocol::new(&buf);
         let se: Vec<SchemaElement> = read_thrift_vec(&mut prot)?;
         parquet_schema_from_array(se)
     }
 
     pub(crate) fn schema_to_buf(schema: &TypePtr) -> Result<Vec<u8>> {
-        let num_nodes = num_nodes(&schema)?;
+        let num_nodes = num_nodes(schema)?;
         let mut buf = Vec::new();
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
 
