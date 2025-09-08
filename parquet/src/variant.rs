@@ -45,7 +45,7 @@
 //!  let mut builder = VariantArrayBuilder::new(3);
 //!  // row 1: {"name": "Alice"}
 //!  let mut variant_builder = builder.variant_builder();
-//!  variant_builder.new_object().with_field("name", "Alice").finish()?;
+//!  variant_builder.new_object().with_field("name", "Alice").finish();
 //!  variant_builder.finish();
 //!  let array = builder.build();
 //!
@@ -63,6 +63,7 @@
 //!  writer.write(&batch)?;
 //!  writer.close()?;
 //!
+//! # std::fs::remove_file("variant.parquet")?;
 //! # Ok(())
 //! # }
 //! ```
@@ -101,6 +102,7 @@
 //!  let mut writer = ArrowWriter::try_new(file, batch.schema(), None)?;
 //!  writer.write(&batch)?;
 //!  writer.close()?;
+//! # std::fs::remove_file("variant-json.parquet")?;
 //! # Ok(())
 //! # }
 //! ```
