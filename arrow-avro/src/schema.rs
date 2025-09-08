@@ -432,7 +432,7 @@ impl AvroSchema {
     ///
     /// If the input Arrow schema already contains Avro JSON in
     /// [`SCHEMA_METADATA_KEY`], that JSON is returned verbatim to preserve
-    ///  the exact header encoding alignment; otherwise, a new JSON is generated
+    /// the exact header encoding alignment; otherwise, a new JSON is generated
     /// honoring `null_union_order` at **all nullable sites**.
     pub fn from_arrow_with_options(
         schema: &ArrowSchema,
