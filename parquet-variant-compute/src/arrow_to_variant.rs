@@ -306,14 +306,16 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
 }
 
 /// Macro to define (possibly generic) row builders with consistent structure and behavior.
-/// Supports optional extra fields that are passed to the constructor.
+/// Supports an optional transform for values read from the underlying array. Also supports optional
+/// extra fields that are passed to the constructor and which are available by reference in the
+/// value transform.
 macro_rules! define_row_builder {
     (
         struct $name:ident<$lifetime:lifetime $(, $generic:ident: $($bound:path)+)?>
         $(where $where_path:path: $where_bound:path)?
         $({ $($field:ident: $field_type:ty),* $(,)? })?,
-        |$array_param:ident| -> $array_type:ty { $init_expr:expr },
-        |$value:ident| $value_transform:expr
+        |$array_param:ident| -> $array_type:ty { $init_expr:expr }
+        $(, |$value:ident| $value_transform:expr)?
     ) => {
         pub(crate) struct $name<$lifetime $(, $generic: $($bound)+)?>
         $(where $where_path: $where_bound)?
@@ -336,10 +338,16 @@ macro_rules! define_row_builder {
                 if self.array.is_null(index) {
                     builder.append_null();
                 } else {
-                    let $value = self.array.value(index);
                     // Capture fields as variables the transform can access (hygiene)
                     $($(let $field = &self.$field;)*)?
-                    builder.append_value($value_transform);
+
+                    // Apply the value transform, if any (with name swapping for hygiene)
+                    let value = self.array.value(index);
+                    $(
+                        let $value = value;
+                        let value = $value_transform;
+                    )?
+                    builder.append_value(value);
                 }
                 Ok(())
             }
@@ -349,15 +357,13 @@ macro_rules! define_row_builder {
 
 define_row_builder!(
     struct BooleanArrowToVariantBuilder<'a>,
-    |array| -> arrow::array::BooleanArray { array.as_boolean() },
-    |value| value
+    |array| -> arrow::array::BooleanArray { array.as_boolean() }
 );
 
 define_row_builder!(
     struct PrimitiveArrowToVariantBuilder<'a, T: ArrowPrimitiveType>
     where T::Native: Into<Variant<'a, 'a>>,
-    |array| -> PrimitiveArray<T> { array.as_primitive() },
-    |value| value
+    |array| -> PrimitiveArray<T> { array.as_primitive() }
 );
 
 define_row_builder!(
@@ -443,32 +449,27 @@ define_row_builder!(
 
 define_row_builder!(
     struct BinaryArrowToVariantBuilder<'a, O: OffsetSizeTrait>,
-    |array| -> GenericBinaryArray<O> { array.as_binary() },
-    |value| value
+    |array| -> GenericBinaryArray<O> { array.as_binary() }
 );
 
 define_row_builder!(
     struct BinaryViewArrowToVariantBuilder<'a>,
-    |array| -> arrow::array::BinaryViewArray { array.as_byte_view() },
-    |value| value
+    |array| -> arrow::array::BinaryViewArray { array.as_byte_view() }
 );
 
 define_row_builder!(
     struct FixedSizeBinaryArrowToVariantBuilder<'a>,
-    |array| -> arrow::array::FixedSizeBinaryArray { array.as_fixed_size_binary() },
-    |value| value
+    |array| -> arrow::array::FixedSizeBinaryArray { array.as_fixed_size_binary() }
 );
 
 define_row_builder!(
     struct StringArrowToVariantBuilder<'a, O: OffsetSizeTrait>,
-    |array| -> GenericStringArray<O> { array.as_string() },
-    |value| value
+    |array| -> GenericStringArray<O> { array.as_string() }
 );
 
 define_row_builder!(
     struct StringViewArrowToVariantBuilder<'a>,
-    |array| -> arrow::array::StringViewArray { array.as_string_view() },
-    |value| value
+    |array| -> arrow::array::StringViewArray { array.as_string_view() }
 );
 
 /// Null builder that always appends null
