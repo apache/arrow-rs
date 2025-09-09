@@ -88,8 +88,8 @@ mod tests {
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
-        i256, BinaryType, BinaryViewType, Date32Type, Date64Type, Int32Type, Int64Type,
-        Int8Type, IntervalDayTime, IntervalMonthDayNano, LargeBinaryType,
+        i256, BinaryType, BinaryViewType, Date32Type, Date64Type, Int32Type, Int64Type, Int8Type,
+        IntervalDayTime, IntervalMonthDayNano, LargeBinaryType,
     };
     use arrow_schema::{DataType, Field, Fields, UnionFields};
     use arrow_schema::{
@@ -97,7 +97,9 @@ mod tests {
     };
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
-    use parquet_variant::{Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8};
+    use parquet_variant::{
+        Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+    };
     use std::{sync::Arc, vec};
 
     macro_rules! max_unscaled_value {
