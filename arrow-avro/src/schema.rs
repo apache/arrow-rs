@@ -1032,7 +1032,7 @@ fn datatype_to_avro(
                 || (*len == 16
                     && metadata
                         .get("ARROW:extension:name")
-                        .is_some_and(|value| value == "uuid"));
+                        .is_some_and(|value| value == "arrow.uuid"));
             if is_uuid {
                 json!({ "type": "string", "logicalType": "uuid" })
             } else {
