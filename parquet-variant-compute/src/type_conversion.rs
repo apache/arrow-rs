@@ -17,6 +17,19 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
+/// Options for controlling the behavior of `cast_to_variant_with_options`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CastOptions {
+    /// If true, return error on conversion failure. If false, insert null for failed conversions.
+    pub strict: bool,
+}
+
+impl Default for CastOptions {
+    fn default() -> Self {
+        Self { strict: true }
+    }
+}
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{

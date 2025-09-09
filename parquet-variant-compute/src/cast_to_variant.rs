@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow_to_variant::make_arrow_to_variant_row_builder;
-use crate::{VariantArray, VariantArrayBuilder};
+use crate::{CastOptions, VariantArray, VariantArrayBuilder};
 use arrow::array::Array;
 use arrow_schema::ArrowError;
 
@@ -49,9 +49,16 @@ use arrow_schema::ArrowError;
 /// `1970-01-01T00:00:01.234567890Z`
 /// will be truncated to
 /// `1970-01-01T00:00:01.234567Z`
-pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
+///
+/// # Arguments
+/// * `input` - The array to convert to VariantArray
+/// * `options` - Options controlling conversion behavior
+pub fn cast_to_variant_with_options(
+    input: &dyn Array,
+    options: &CastOptions,
+) -> Result<VariantArray, ArrowError> {
     // Create row builder for the input array type
-    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input)?;
+    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
 
     // Create output array builder
     let mut array_builder = VariantArrayBuilder::new(input.len());
@@ -64,6 +71,15 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     }
 
     Ok(array_builder.build())
+}
+
+/// Convert an array to a [`VariantArray`] with strict mode enabled (returns errors on conversion
+/// failures).
+///
+/// This function provides backward compatibility. For non-strict behavior,
+/// use [`cast_to_variant_with_options`] with `CastOptions { strict: false }`.
+pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
+    cast_to_variant_with_options(input, &CastOptions::default())
 }
 
 // TODO do we need a cast_with_options to allow specifying conversion behavior,
@@ -1835,9 +1851,9 @@ mod tests {
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
     /// against the expected values. It also tests the handling of nulls by
     /// setting one element to null and verifying the output.
-    fn run_test(values: ArrayRef, expected: Vec<Option<Variant>>) {
-        // test without nulls
-        let variant_array = cast_to_variant(&values).unwrap();
+    fn run_test_with_options(values: ArrayRef, expected: Vec<Option<Variant>>, strict: bool) {
+        let options = CastOptions { strict };
+        let variant_array = cast_to_variant_with_options(&values, &options).unwrap();
         assert_eq!(variant_array.len(), expected.len());
         for (i, expected_value) in expected.iter().enumerate() {
             match expected_value {
@@ -1850,5 +1866,67 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn run_test(values: ArrayRef, expected: Vec<Option<Variant>>) {
+        run_test_with_options(values, expected, true);
+    }
+
+    fn run_test_non_strict(values: ArrayRef, expected: Vec<Option<Variant>>) {
+        run_test_with_options(values, expected, false);
+    }
+
+    #[test]
+    fn test_cast_to_variant_non_strict_mode_date64() {
+        let date64_values = Date64Array::from(vec![Some(i64::MAX), Some(0), Some(i64::MIN)]);
+
+        let values = Arc::new(date64_values);
+        run_test_non_strict(
+            values,
+            vec![
+                None,
+                Some(Variant::Date(Date64Type::to_naive_date_opt(0).unwrap())),
+                None,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_non_strict_mode_time32() {
+        let time32_array = Time32SecondArray::from(vec![Some(90000), Some(3600), Some(-1)]);
+
+        let values = Arc::new(time32_array);
+        run_test_non_strict(
+            values,
+            vec![
+                None,
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(3600, 0).unwrap(),
+                )),
+                None,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_non_strict_mode_timestamp() {
+        use arrow::temporal_conversions::timestamp_s_to_datetime;
+
+        let ts_array = TimestampSecondArray::from(vec![Some(i64::MAX), Some(0), Some(1609459200)])
+            .with_timezone_opt(None::<&str>);
+
+        let values = Arc::new(ts_array);
+        run_test_non_strict(
+            values,
+            vec![
+                None, // Invalid timestamp becomes null
+                Some(Variant::TimestampNtzMicros(
+                    timestamp_s_to_datetime(0).unwrap(),
+                )),
+                Some(Variant::TimestampNtzMicros(
+                    timestamp_s_to_datetime(1609459200).unwrap(),
+                )),
+            ],
+        );
     }
 }
