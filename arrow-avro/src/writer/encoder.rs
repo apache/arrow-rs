@@ -315,6 +315,7 @@ impl<'a> FieldEncoder<'a> {
                 }
             },
             FieldPlan::Decimal {size} => match array.data_type() {
+                #[cfg(feature = "small_decimals")]
                 DataType::Decimal32(_,_) => {
                     let arr = array
                         .as_any()
@@ -322,25 +323,26 @@ impl<'a> FieldEncoder<'a> {
                         .ok_or_else(|| ArrowError::SchemaError("Expected Decimal32Array".into()))?;
                     Encoder::Decimal32(DecimalEncoder::<4, Decimal32Array>::new(arr, *size))
                 }
+                #[cfg(feature = "small_decimals")]
                 DataType::Decimal64(_,_) => {
                     let arr = array
                         .as_any()
                         .downcast_ref::<Decimal64Array>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected Decimal32Array".into()))?;
+                        .ok_or_else(|| ArrowError::SchemaError("Expected Decimal64Array".into()))?;
                     Encoder::Decimal64(DecimalEncoder::<8, Decimal64Array>::new(arr, *size))
                 }
                 DataType::Decimal128(_,_) => {
                     let arr = array
                         .as_any()
                         .downcast_ref::<Decimal128Array>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected Decimal32Array".into()))?;
+                        .ok_or_else(|| ArrowError::SchemaError("Expected Decimal128Array".into()))?;
                     Encoder::Decimal128(DecimalEncoder::<16, Decimal128Array>::new(arr, *size))
                 }
                 DataType::Decimal256(_,_) => {
                     let arr = array
                         .as_any()
                         .downcast_ref::<Decimal256Array>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected Decimal32Array".into()))?;
+                        .ok_or_else(|| ArrowError::SchemaError("Expected Decimal256Array".into()))?;
                     Encoder::Decimal256(DecimalEncoder::<32, Decimal256Array>::new(arr, *size))
                 }
                 other => {
@@ -704,7 +706,9 @@ impl FieldPlan {
             // decimal site (bytes or fixed(N)) with precision/scale validation
             Codec::Decimal(precision, scale_opt, fixed_size_opt) => {
                 let (ap, as_) = match arrow_field.data_type() {
+                    #[cfg(feature = "small_decimals")]
                     DataType::Decimal32(p, s) => (*p as usize, *s as i32),
+                    #[cfg(feature = "small_decimals")]
                     DataType::Decimal64(p, s) => (*p as usize, *s as i32),
                     DataType::Decimal128(p, s) => (*p as usize, *s as i32),
                     DataType::Decimal256(p, s) => (*p as usize, *s as i32),
@@ -764,7 +768,9 @@ enum Encoder<'a> {
     IntervalDayTime(IntervalDayTimeEncoder<'a>),
     /// Avro `enum` encoder: writes the key (int) as the enum index.
     Enum(EnumEncoder<'a>),
+    #[cfg(feature = "small_decimals")]
     Decimal32(Decimal32Encoder<'a>),
+    #[cfg(feature = "small_decimals")]
     Decimal64(Decimal64Encoder<'a>),
     Decimal128(Decimal128Encoder<'a>),
     Decimal256(Decimal256Encoder<'a>),
@@ -794,7 +800,9 @@ impl<'a> Encoder<'a> {
             Encoder::IntervalYearMonth(e) => (e).encode(out, idx),
             Encoder::IntervalDayTime(e) => (e).encode(out, idx),
             Encoder::Enum(e) => (e).encode(out, idx),
+            #[cfg(feature = "small_decimals")]
             Encoder::Decimal32(e) => (e).encode(out, idx),
+            #[cfg(feature = "small_decimals")]
             Encoder::Decimal64(e) => (e).encode(out, idx),
             Encoder::Decimal128(e) => (e).encode(out, idx),
             Encoder::Decimal256(e) => (e).encode(out, idx),
@@ -1230,12 +1238,13 @@ impl IntervalDayTimeEncoder<'_> {
 trait DecimalBeBytes<const N: usize> {
     fn value_be_bytes(&self, idx: usize) -> [u8; N];
 }
-
+#[cfg(feature = "small_decimals")]
 impl DecimalBeBytes<4> for Decimal32Array {
     fn value_be_bytes(&self, idx: usize) -> [u8; 4] {
         self.value(idx).to_be_bytes()
     }
 }
+#[cfg(feature = "small_decimals")]
 impl DecimalBeBytes<8> for Decimal64Array {
     fn value_be_bytes(&self, idx: usize) -> [u8; 8] {
         self.value(idx).to_be_bytes()
@@ -1281,7 +1290,9 @@ impl<'a, const N: usize, A: DecimalBeBytes<N>> DecimalEncoder<'a, N, A> {
     }
 }
 
+#[cfg(feature = "small_decimals")]
 type Decimal32Encoder<'a> = DecimalEncoder<'a, 4, Decimal32Array>;
+#[cfg(feature = "small_decimals")]
 type Decimal64Encoder<'a> = DecimalEncoder<'a, 8, Decimal64Array>;
 type Decimal128Encoder<'a> = DecimalEncoder<'a, 16, Decimal128Array>;
 type Decimal256Encoder<'a> = DecimalEncoder<'a, 32, Decimal256Array>;
@@ -1505,29 +1516,26 @@ mod tests {
 
     #[test]
     fn decimal_bytes_and_fixed() {
-        // Decimal64 with small positives and negatives
-        let dec = Decimal64Array::from(vec![1i64, -1i64, 0i64])
-            .with_precision_and_scale(10, 0)
+        // Use Decimal128 with small positives and negatives
+        let dec = Decimal128Array::from(vec![1i128, -1i128, 0i128])
+            .with_precision_and_scale(20, 0)
             .unwrap();
         // bytes(decimal): minimal two's complement length-prefixed
         let plan_bytes = FieldPlan::Decimal { size: None };
         let got_bytes = encode_all(&dec, &plan_bytes, None);
         // 1 -> 0x01; -1 -> 0xFF; 0 -> 0x00
         let mut expected_bytes = Vec::new();
-        expected_bytes.extend(avro_len_prefixed_bytes(
-            &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01][7..],
-        )); // 0x01
+        expected_bytes.extend(avro_len_prefixed_bytes(&[0x01]));
         expected_bytes.extend(avro_len_prefixed_bytes(&[0xFF]));
         expected_bytes.extend(avro_len_prefixed_bytes(&[0x00]));
         assert_bytes_eq(&got_bytes, &expected_bytes);
 
-        // fixed(8): sign-extend to 8 bytes as-is
-        let plan_fixed = FieldPlan::Decimal { size: Some(8) };
+        let plan_fixed = FieldPlan::Decimal { size: Some(16) };
         let got_fixed = encode_all(&dec, &plan_fixed, None);
         let mut expected_fixed = Vec::new();
-        expected_fixed.extend_from_slice(&1i64.to_be_bytes());
-        expected_fixed.extend_from_slice(&(-1i64).to_be_bytes());
-        expected_fixed.extend_from_slice(&0i64.to_be_bytes());
+        expected_fixed.extend_from_slice(&1i128.to_be_bytes());
+        expected_fixed.extend_from_slice(&(-1i128).to_be_bytes());
+        expected_fixed.extend_from_slice(&0i128.to_be_bytes());
         assert_bytes_eq(&got_fixed, &expected_fixed);
     }
 
