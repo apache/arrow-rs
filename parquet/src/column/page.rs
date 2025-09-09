@@ -273,7 +273,7 @@ impl CompressedPage {
                 page_header.dictionary_page_header = Some(dictionary_page_header);
             }
         }
-        page_header
+        Ok(page_header)
     }
 
     /// Update the compressed buffer for a page.
