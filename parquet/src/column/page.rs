@@ -503,4 +503,28 @@ mod tests {
         assert_eq!(cpage.encoding(), Encoding::PLAIN);
         assert_eq!(cpage.data(), &[0, 1, 2]);
     }
+
+    #[test]
+    fn test_compressed_page_uncompressed_size_overflow() {
+        // Test that to_thrift_header fails when uncompressed size exceeds i32::MAX
+        let data_page = Page::DataPage {
+            buf: Bytes::from(vec![0, 1, 2]),
+            num_values: 10,
+            encoding: Encoding::PLAIN,
+            def_level_encoding: Encoding::RLE,
+            rep_level_encoding: Encoding::RLE,
+            statistics: None,
+        };
+
+        // Create a CompressedPage with uncompressed size larger than i32::MAX
+        let uncompressed_size = (i32::MAX as usize) + 1;
+        let cpage = CompressedPage::new(data_page, uncompressed_size);
+
+        // Verify that to_thrift_header returns an error
+        let result = cpage.to_thrift_header();
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Page uncompressed size overflow"));
+    }
 }
