@@ -196,9 +196,21 @@ impl CompressedPage {
     }
 
     /// Returns the thrift page header
-    pub(crate) fn to_thrift_header(&self) -> PageHeader {
+    pub(crate) fn to_thrift_header(&self) -> Result<PageHeader> {
         let uncompressed_size = self.uncompressed_size();
         let compressed_size = self.compressed_size();
+        if uncompressed_size > i32::MAX as usize {
+            return Err(general_err!(
+                "Page uncompressed size overflow: {}",
+                uncompressed_size
+            ));
+        }
+        if compressed_size > i32::MAX as usize {
+            return Err(general_err!(
+                "Page compressed size overflow: {}",
+                uncompressed_size
+            ));
+        }
         let num_values = self.num_values();
         let encoding = self.encoding();
         let page_type = self.page_type();
@@ -207,6 +219,7 @@ impl CompressedPage {
             type_: page_type.into(),
             uncompressed_page_size: uncompressed_size as i32,
             compressed_page_size: compressed_size as i32,
+            // TODO: Add support for crc checksum
             crc: None,
             data_page_header: None,
             index_page_header: None,
