@@ -35,6 +35,7 @@
 //! [`VariantPath`]: parquet_variant::VariantPath
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
+mod arrow_to_variant;
 pub mod cast_to_variant;
 mod from_json;
 mod to_json;
