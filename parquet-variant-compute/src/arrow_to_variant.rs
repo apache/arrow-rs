@@ -89,55 +89,57 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
 }
 
 impl<'a> ArrowToVariantRowBuilder<'a> {
+    /// Appends a single row at the given index to the supplied builder.
     pub fn append_row(
         &mut self,
         builder: &mut impl VariantBuilderExt,
         index: usize,
     ) -> Result<(), ArrowError> {
+        use ArrowToVariantRowBuilder::*;
         match self {
-            ArrowToVariantRowBuilder::Null(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Boolean(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveInt8(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveInt16(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveInt32(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveInt64(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveUInt8(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveUInt16(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveUInt32(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveUInt64(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveFloat16(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveFloat32(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::PrimitiveFloat64(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Decimal32(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Decimal64(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Decimal128(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Decimal256(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::TimestampSecond(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::TimestampMillisecond(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::TimestampMicrosecond(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::TimestampNanosecond(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Date32(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Date64(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Time32Second(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Time32Millisecond(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Time64Microsecond(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Time64Nanosecond(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Binary(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::LargeBinary(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::BinaryView(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::FixedSizeBinary(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Utf8(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::LargeUtf8(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Utf8View(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::List(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::LargeList(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Struct(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Map(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Union(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::Dictionary(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::RunEndEncodedInt16(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::RunEndEncodedInt32(b) => b.append_row(builder, index),
-            ArrowToVariantRowBuilder::RunEndEncodedInt64(b) => b.append_row(builder, index),
+            Null(b) => b.append_row(builder, index),
+            Boolean(b) => b.append_row(builder, index),
+            PrimitiveInt8(b) => b.append_row(builder, index),
+            PrimitiveInt16(b) => b.append_row(builder, index),
+            PrimitiveInt32(b) => b.append_row(builder, index),
+            PrimitiveInt64(b) => b.append_row(builder, index),
+            PrimitiveUInt8(b) => b.append_row(builder, index),
+            PrimitiveUInt16(b) => b.append_row(builder, index),
+            PrimitiveUInt32(b) => b.append_row(builder, index),
+            PrimitiveUInt64(b) => b.append_row(builder, index),
+            PrimitiveFloat16(b) => b.append_row(builder, index),
+            PrimitiveFloat32(b) => b.append_row(builder, index),
+            PrimitiveFloat64(b) => b.append_row(builder, index),
+            Decimal32(b) => b.append_row(builder, index),
+            Decimal64(b) => b.append_row(builder, index),
+            Decimal128(b) => b.append_row(builder, index),
+            Decimal256(b) => b.append_row(builder, index),
+            TimestampSecond(b) => b.append_row(builder, index),
+            TimestampMillisecond(b) => b.append_row(builder, index),
+            TimestampMicrosecond(b) => b.append_row(builder, index),
+            TimestampNanosecond(b) => b.append_row(builder, index),
+            Date32(b) => b.append_row(builder, index),
+            Date64(b) => b.append_row(builder, index),
+            Time32Second(b) => b.append_row(builder, index),
+            Time32Millisecond(b) => b.append_row(builder, index),
+            Time64Microsecond(b) => b.append_row(builder, index),
+            Time64Nanosecond(b) => b.append_row(builder, index),
+            Binary(b) => b.append_row(builder, index),
+            LargeBinary(b) => b.append_row(builder, index),
+            BinaryView(b) => b.append_row(builder, index),
+            FixedSizeBinary(b) => b.append_row(builder, index),
+            Utf8(b) => b.append_row(builder, index),
+            LargeUtf8(b) => b.append_row(builder, index),
+            Utf8View(b) => b.append_row(builder, index),
+            List(b) => b.append_row(builder, index),
+            LargeList(b) => b.append_row(builder, index),
+            Struct(b) => b.append_row(builder, index),
+            Map(b) => b.append_row(builder, index),
+            Union(b) => b.append_row(builder, index),
+            Dictionary(b) => b.append_row(builder, index),
+            RunEndEncodedInt16(b) => b.append_row(builder, index),
+            RunEndEncodedInt32(b) => b.append_row(builder, index),
+            RunEndEncodedInt64(b) => b.append_row(builder, index),
         }
     }
 }
@@ -148,170 +150,128 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
     array: &'a dyn Array,
     options: &'a CastOptions,
 ) -> Result<ArrowToVariantRowBuilder<'a>, ArrowError> {
-    let builder = match data_type {
-        DataType::Null => ArrowToVariantRowBuilder::Null(NullArrowToVariantBuilder),
-        DataType::Boolean => {
-            ArrowToVariantRowBuilder::Boolean(BooleanArrowToVariantBuilder::new(array))
-        }
-        DataType::Int8 => {
-            ArrowToVariantRowBuilder::PrimitiveInt8(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::Int16 => {
-            ArrowToVariantRowBuilder::PrimitiveInt16(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::Int32 => {
-            ArrowToVariantRowBuilder::PrimitiveInt32(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::Int64 => {
-            ArrowToVariantRowBuilder::PrimitiveInt64(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::UInt8 => {
-            ArrowToVariantRowBuilder::PrimitiveUInt8(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::UInt16 => {
-            ArrowToVariantRowBuilder::PrimitiveUInt16(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::UInt32 => {
-            ArrowToVariantRowBuilder::PrimitiveUInt32(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::UInt64 => {
-            ArrowToVariantRowBuilder::PrimitiveUInt64(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::Float16 => {
-            ArrowToVariantRowBuilder::PrimitiveFloat16(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::Float32 => {
-            ArrowToVariantRowBuilder::PrimitiveFloat32(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::Float64 => {
-            ArrowToVariantRowBuilder::PrimitiveFloat64(PrimitiveArrowToVariantBuilder::new(array))
-        }
-        DataType::Decimal32(_, scale) => {
-            ArrowToVariantRowBuilder::Decimal32(Decimal32ArrowToVariantBuilder::new(array, *scale))
-        }
-        DataType::Decimal64(_, scale) => {
-            ArrowToVariantRowBuilder::Decimal64(Decimal64ArrowToVariantBuilder::new(array, *scale))
-        }
-        DataType::Decimal128(_, scale) => ArrowToVariantRowBuilder::Decimal128(
-            Decimal128ArrowToVariantBuilder::new(array, *scale),
-        ),
-        DataType::Decimal256(_, scale) => ArrowToVariantRowBuilder::Decimal256(
-            Decimal256ArrowToVariantBuilder::new(array, *scale),
-        ),
-        DataType::Timestamp(time_unit, time_zone) => match time_unit {
-            TimeUnit::Second => ArrowToVariantRowBuilder::TimestampSecond(
-                TimestampArrowToVariantBuilder::new(array, options, time_zone.is_some()),
-            ),
-            TimeUnit::Millisecond => ArrowToVariantRowBuilder::TimestampMillisecond(
-                TimestampArrowToVariantBuilder::new(array, options, time_zone.is_some()),
-            ),
-            TimeUnit::Microsecond => ArrowToVariantRowBuilder::TimestampMicrosecond(
-                TimestampArrowToVariantBuilder::new(array, options, time_zone.is_some()),
-            ),
-            TimeUnit::Nanosecond => ArrowToVariantRowBuilder::TimestampNanosecond(
-                TimestampArrowToVariantBuilder::new(array, options, time_zone.is_some()),
-            ),
-        },
-        DataType::Date32 => {
-            ArrowToVariantRowBuilder::Date32(DateArrowToVariantBuilder::new(array, options))
-        }
-        DataType::Date64 => {
-            ArrowToVariantRowBuilder::Date64(DateArrowToVariantBuilder::new(array, options))
-        }
-        DataType::Time32(time_unit) => match time_unit {
-            TimeUnit::Second => ArrowToVariantRowBuilder::Time32Second(
-                TimeArrowToVariantBuilder::new(array, options),
-            ),
-            TimeUnit::Millisecond => ArrowToVariantRowBuilder::Time32Millisecond(
-                TimeArrowToVariantBuilder::new(array, options),
-            ),
-            _ => {
-                return Err(ArrowError::CastError(format!(
-                    "Unsupported Time32 unit: {time_unit:?}"
-                )))
+    use ArrowToVariantRowBuilder::*;
+    let builder =
+        match data_type {
+            DataType::Null => Null(NullArrowToVariantBuilder),
+            DataType::Boolean => Boolean(BooleanArrowToVariantBuilder::new(array)),
+            DataType::Int8 => PrimitiveInt8(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::Int16 => PrimitiveInt16(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::Int32 => PrimitiveInt32(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::Int64 => PrimitiveInt64(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::UInt8 => PrimitiveUInt8(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::UInt16 => PrimitiveUInt16(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::UInt32 => PrimitiveUInt32(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::UInt64 => PrimitiveUInt64(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::Float16 => PrimitiveFloat16(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::Float32 => PrimitiveFloat32(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::Float64 => PrimitiveFloat64(PrimitiveArrowToVariantBuilder::new(array)),
+            DataType::Decimal32(_, scale) => {
+                Decimal32(Decimal32ArrowToVariantBuilder::new(array, *scale))
             }
-        },
-        DataType::Time64(time_unit) => match time_unit {
-            TimeUnit::Microsecond => ArrowToVariantRowBuilder::Time64Microsecond(
-                TimeArrowToVariantBuilder::new(array, options),
-            ),
-            TimeUnit::Nanosecond => ArrowToVariantRowBuilder::Time64Nanosecond(
-                TimeArrowToVariantBuilder::new(array, options),
-            ),
-            _ => {
-                return Err(ArrowError::CastError(format!(
-                    "Unsupported Time64 unit: {time_unit:?}"
-                )))
+            DataType::Decimal64(_, scale) => {
+                Decimal64(Decimal64ArrowToVariantBuilder::new(array, *scale))
             }
-        },
-        DataType::Duration(_) | DataType::Interval(_) => {
-            return Err(ArrowError::InvalidArgumentError(
-                "Casting duration/interval types to Variant is not supported. \
+            DataType::Decimal128(_, scale) => {
+                Decimal128(Decimal128ArrowToVariantBuilder::new(array, *scale))
+            }
+            DataType::Decimal256(_, scale) => {
+                Decimal256(Decimal256ArrowToVariantBuilder::new(array, *scale))
+            }
+            DataType::Timestamp(time_unit, time_zone) => {
+                match time_unit {
+                    TimeUnit::Second => TimestampSecond(TimestampArrowToVariantBuilder::new(
+                        array,
+                        options,
+                        time_zone.is_some(),
+                    )),
+                    TimeUnit::Millisecond => TimestampMillisecond(
+                        TimestampArrowToVariantBuilder::new(array, options, time_zone.is_some()),
+                    ),
+                    TimeUnit::Microsecond => TimestampMicrosecond(
+                        TimestampArrowToVariantBuilder::new(array, options, time_zone.is_some()),
+                    ),
+                    TimeUnit::Nanosecond => TimestampNanosecond(
+                        TimestampArrowToVariantBuilder::new(array, options, time_zone.is_some()),
+                    ),
+                }
+            }
+            DataType::Date32 => Date32(DateArrowToVariantBuilder::new(array, options)),
+            DataType::Date64 => Date64(DateArrowToVariantBuilder::new(array, options)),
+            DataType::Time32(time_unit) => match time_unit {
+                TimeUnit::Second => Time32Second(TimeArrowToVariantBuilder::new(array, options)),
+                TimeUnit::Millisecond => {
+                    Time32Millisecond(TimeArrowToVariantBuilder::new(array, options))
+                }
+                _ => {
+                    return Err(ArrowError::CastError(format!(
+                        "Unsupported Time32 unit: {time_unit:?}"
+                    )))
+                }
+            },
+            DataType::Time64(time_unit) => match time_unit {
+                TimeUnit::Microsecond => {
+                    Time64Microsecond(TimeArrowToVariantBuilder::new(array, options))
+                }
+                TimeUnit::Nanosecond => {
+                    Time64Nanosecond(TimeArrowToVariantBuilder::new(array, options))
+                }
+                _ => {
+                    return Err(ArrowError::CastError(format!(
+                        "Unsupported Time64 unit: {time_unit:?}"
+                    )))
+                }
+            },
+            DataType::Duration(_) | DataType::Interval(_) => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Casting duration/interval types to Variant is not supported. \
                  The Variant format does not define duration/interval types."
-                    .to_string(),
-            ))
-        }
-        DataType::Binary => {
-            ArrowToVariantRowBuilder::Binary(BinaryArrowToVariantBuilder::new(array))
-        }
-        DataType::LargeBinary => {
-            ArrowToVariantRowBuilder::LargeBinary(BinaryArrowToVariantBuilder::new(array))
-        }
-        DataType::BinaryView => {
-            ArrowToVariantRowBuilder::BinaryView(BinaryViewArrowToVariantBuilder::new(array))
-        }
-        DataType::FixedSizeBinary(_) => ArrowToVariantRowBuilder::FixedSizeBinary(
-            FixedSizeBinaryArrowToVariantBuilder::new(array),
-        ),
-        DataType::Utf8 => ArrowToVariantRowBuilder::Utf8(StringArrowToVariantBuilder::new(array)),
-        DataType::LargeUtf8 => {
-            ArrowToVariantRowBuilder::LargeUtf8(StringArrowToVariantBuilder::new(array))
-        }
-        DataType::Utf8View => {
-            ArrowToVariantRowBuilder::Utf8View(StringViewArrowToVariantBuilder::new(array))
-        }
-        DataType::List(_) => {
-            ArrowToVariantRowBuilder::List(ListArrowToVariantBuilder::new(array, options)?)
-        }
-        DataType::LargeList(_) => {
-            ArrowToVariantRowBuilder::LargeList(ListArrowToVariantBuilder::new(array, options)?)
-        }
-        DataType::Struct(_) => ArrowToVariantRowBuilder::Struct(StructArrowToVariantBuilder::new(
-            array.as_struct(),
-            options,
-        )?),
-        DataType::Map(_, _) => {
-            ArrowToVariantRowBuilder::Map(MapArrowToVariantBuilder::new(array, options)?)
-        }
-        DataType::Union(_, _) => {
-            ArrowToVariantRowBuilder::Union(UnionArrowToVariantBuilder::new(array, options)?)
-        }
-        DataType::Dictionary(_, _) => ArrowToVariantRowBuilder::Dictionary(
-            DictionaryArrowToVariantBuilder::new(array, options)?,
-        ),
-        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-            DataType::Int16 => ArrowToVariantRowBuilder::RunEndEncodedInt16(
-                RunEndEncodedArrowToVariantBuilder::new(array, options)?,
-            ),
-            DataType::Int32 => ArrowToVariantRowBuilder::RunEndEncodedInt32(
-                RunEndEncodedArrowToVariantBuilder::new(array, options)?,
-            ),
-            DataType::Int64 => ArrowToVariantRowBuilder::RunEndEncodedInt64(
-                RunEndEncodedArrowToVariantBuilder::new(array, options)?,
-            ),
-            _ => {
+                        .to_string(),
+                ))
+            }
+            DataType::Binary => Binary(BinaryArrowToVariantBuilder::new(array)),
+            DataType::LargeBinary => LargeBinary(BinaryArrowToVariantBuilder::new(array)),
+            DataType::BinaryView => BinaryView(BinaryViewArrowToVariantBuilder::new(array)),
+            DataType::FixedSizeBinary(_) => {
+                FixedSizeBinary(FixedSizeBinaryArrowToVariantBuilder::new(array))
+            }
+            DataType::Utf8 => Utf8(StringArrowToVariantBuilder::new(array)),
+            DataType::LargeUtf8 => LargeUtf8(StringArrowToVariantBuilder::new(array)),
+            DataType::Utf8View => Utf8View(StringViewArrowToVariantBuilder::new(array)),
+            DataType::List(_) => List(ListArrowToVariantBuilder::new(array, options)?),
+            DataType::LargeList(_) => LargeList(ListArrowToVariantBuilder::new(array, options)?),
+            DataType::Struct(_) => Struct(StructArrowToVariantBuilder::new(
+                array.as_struct(),
+                options,
+            )?),
+            DataType::Map(_, _) => Map(MapArrowToVariantBuilder::new(array, options)?),
+            DataType::Union(_, _) => Union(UnionArrowToVariantBuilder::new(array, options)?),
+            DataType::Dictionary(_, _) => {
+                Dictionary(DictionaryArrowToVariantBuilder::new(array, options)?)
+            }
+            DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
+                DataType::Int16 => {
+                    RunEndEncodedInt16(RunEndEncodedArrowToVariantBuilder::new(array, options)?)
+                }
+                DataType::Int32 => {
+                    RunEndEncodedInt32(RunEndEncodedArrowToVariantBuilder::new(array, options)?)
+                }
+                DataType::Int64 => {
+                    RunEndEncodedInt64(RunEndEncodedArrowToVariantBuilder::new(array, options)?)
+                }
+                _ => {
+                    return Err(ArrowError::CastError(format!(
+                        "Unsupported run ends type: {:?}",
+                        run_ends.data_type()
+                    )));
+                }
+            },
+            dt => {
                 return Err(ArrowError::CastError(format!(
-                    "Unsupported run ends type: {:?}",
-                    run_ends.data_type()
+                    "Unsupported data type for casting to Variant: {dt:?}",
                 )));
             }
-        },
-        dt => {
-            return Err(ArrowError::CastError(format!(
-                "Unsupported data type for casting to Variant: {dt:?}",
-            )));
-        }
-    };
+        };
     Ok(builder)
 }
 
@@ -826,25 +786,6 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
         })
     }
 
-    fn append_row(
-        &mut self,
-        builder: &mut impl VariantBuilderExt,
-        index: usize,
-    ) -> Result<(), ArrowError> {
-        self.set_run_for_index(index)?;
-
-        // Handle null values
-        if self.run_array.values().is_null(self.run_number) {
-            builder.append_null();
-            return Ok(());
-        }
-
-        // Re-encode the value
-        self.values_builder.append_row(builder, self.run_number)?;
-
-        Ok(())
-    }
-
     fn set_run_for_index(&mut self, index: usize) -> Result<(), ArrowError> {
         if index >= self.run_start {
             let Some(run_end) = self.run_ends.get(self.run_number) else {
@@ -876,6 +817,25 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
             0 => 0,
             _ => self.run_ends[run_number - 1].as_usize(),
         };
+        Ok(())
+    }
+
+    fn append_row(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        index: usize,
+    ) -> Result<(), ArrowError> {
+        self.set_run_for_index(index)?;
+
+        // Handle null values
+        if self.run_array.values().is_null(self.run_number) {
+            builder.append_null();
+            return Ok(());
+        }
+
+        // Re-encode the value
+        self.values_builder.append_row(builder, self.run_number)?;
+
         Ok(())
     }
 }
