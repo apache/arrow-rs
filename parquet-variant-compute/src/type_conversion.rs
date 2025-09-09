@@ -17,26 +17,6 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-/// Convert the input array to a `VariantArray` row by row, using `method`
-/// not requiring a generic type to downcast the generic array to a specific
-/// array type and `cast_fn` to transform each element to a type compatible with Variant
-#[allow(unused)]
-macro_rules! non_generic_conversion_array {
-    ($array:expr, $cast_fn:expr, $builder:expr) => {{
-        let array = $array;
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
-    }};
-}
-#[allow(unused)]
-pub(crate) use non_generic_conversion_array;
-
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{
@@ -51,22 +31,6 @@ macro_rules! non_generic_conversion_single_value {
 }
 pub(crate) use non_generic_conversion_single_value;
 
-/// Convert the input array to a `VariantArray` row by row, using `method`
-/// requiring a generic type to downcast the generic array to a specific
-/// array type and `cast_fn` to transform each element to a type compatible with Variant
-#[allow(unused)]
-macro_rules! generic_conversion_array {
-    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        $crate::type_conversion::non_generic_conversion_array!(
-            $input.$method::<$t>(),
-            $cast_fn,
-            $builder
-        )
-    }};
-}
-#[allow(unused)]
-pub(crate) use generic_conversion_array;
-
 /// Convert the value at a specific index in the given array into a `Variant`,
 /// using `method` requiring a generic type to downcast the generic array
 /// to a specific array type and `cast_fn` to transform the element.
@@ -80,23 +44,6 @@ macro_rules! generic_conversion_single_value {
     }};
 }
 pub(crate) use generic_conversion_single_value;
-
-/// Convert the input array of a specific primitive type to a `VariantArray`
-/// row by row
-#[allow(unused)]
-macro_rules! primitive_conversion_array {
-    ($t:ty, $input:expr, $builder:expr) => {{
-        $crate::type_conversion::generic_conversion_array!(
-            $t,
-            as_primitive,
-            |v| v,
-            $input,
-            $builder
-        )
-    }};
-}
-#[allow(unused)]
-pub(crate) use primitive_conversion_array;
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! primitive_conversion_single_value {

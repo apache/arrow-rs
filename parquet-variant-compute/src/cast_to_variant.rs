@@ -59,7 +59,7 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
     // Process each row using the row builder
     for i in 0..input.len() {
         let mut builder = array_builder.variant_builder();
-        row_builder.append_row(i, &mut builder)?;
+        row_builder.append_row(&mut builder, i)?;
         builder.finish();
     }
 

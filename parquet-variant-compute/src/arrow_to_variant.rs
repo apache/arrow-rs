@@ -91,53 +91,53 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
 impl<'a> ArrowToVariantRowBuilder<'a> {
     pub fn append_row(
         &mut self,
-        index: usize,
         builder: &mut impl VariantBuilderExt,
+        index: usize,
     ) -> Result<(), ArrowError> {
         match self {
-            ArrowToVariantRowBuilder::Null(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Boolean(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveInt8(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveInt16(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveInt32(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveInt64(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveUInt8(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveUInt16(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveUInt32(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveUInt64(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveFloat16(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveFloat32(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::PrimitiveFloat64(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Decimal32(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Decimal64(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Decimal128(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Decimal256(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::TimestampSecond(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::TimestampMillisecond(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::TimestampMicrosecond(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::TimestampNanosecond(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Date32(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Date64(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Time32Second(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Time32Millisecond(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Time64Microsecond(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Time64Nanosecond(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Binary(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::LargeBinary(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::BinaryView(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::FixedSizeBinary(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Utf8(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::LargeUtf8(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Utf8View(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::List(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::LargeList(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Struct(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Map(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Union(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::Dictionary(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::RunEndEncodedInt16(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::RunEndEncodedInt32(b) => b.append_row(index, builder),
-            ArrowToVariantRowBuilder::RunEndEncodedInt64(b) => b.append_row(index, builder),
+            ArrowToVariantRowBuilder::Null(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Boolean(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveInt8(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveInt16(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveInt32(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveInt64(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveUInt8(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveUInt16(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveUInt32(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveUInt64(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveFloat16(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveFloat32(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::PrimitiveFloat64(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Decimal32(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Decimal64(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Decimal128(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Decimal256(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::TimestampSecond(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::TimestampMillisecond(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::TimestampMicrosecond(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::TimestampNanosecond(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Date32(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Date64(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Time32Second(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Time32Millisecond(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Time64Microsecond(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Time64Nanosecond(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Binary(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::LargeBinary(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::BinaryView(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::FixedSizeBinary(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Utf8(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::LargeUtf8(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Utf8View(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::List(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::LargeList(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Struct(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Map(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Union(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::Dictionary(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::RunEndEncodedInt16(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::RunEndEncodedInt32(b) => b.append_row(builder, index),
+            ArrowToVariantRowBuilder::RunEndEncodedInt64(b) => b.append_row(builder, index),
         }
     }
 }
@@ -332,7 +332,7 @@ macro_rules! define_row_builder {
                 }
             }
 
-            fn append_row(&self, index: usize, builder: &mut impl VariantBuilderExt) -> Result<(), ArrowError> {
+            fn append_row(&self, builder: &mut impl VariantBuilderExt, index: usize) -> Result<(), ArrowError> {
                 if self.array.is_null(index) {
                     builder.append_null();
                 } else {
@@ -477,8 +477,8 @@ pub(crate) struct NullArrowToVariantBuilder;
 impl NullArrowToVariantBuilder {
     fn append_row(
         &mut self,
-        _index: usize,
         builder: &mut impl VariantBuilderExt,
+        _index: usize,
     ) -> Result<(), ArrowError> {
         builder.append_null();
         Ok(())
@@ -506,8 +506,8 @@ impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
 
     fn append_row(
         &mut self,
-        index: usize,
         builder: &mut impl VariantBuilderExt,
+        index: usize,
     ) -> Result<(), ArrowError> {
         if self.list_array.is_null(index) {
             builder.append_null();
@@ -521,7 +521,7 @@ impl<'a, O: OffsetSizeTrait> ListArrowToVariantBuilder<'a, O> {
         let mut list_builder = builder.try_new_list()?;
         for value_index in start..end {
             self.values_builder
-                .append_row(value_index, &mut list_builder)?;
+                .append_row(&mut list_builder, value_index)?;
         }
         list_builder.finish();
         Ok(())
@@ -557,8 +557,8 @@ impl<'a> StructArrowToVariantBuilder<'a> {
 
     fn append_row(
         &mut self,
-        index: usize,
         builder: &mut impl VariantBuilderExt,
+        index: usize,
     ) -> Result<(), ArrowError> {
         if self.struct_array.is_null(index) {
             builder.append_null();
@@ -570,7 +570,7 @@ impl<'a> StructArrowToVariantBuilder<'a> {
             for (field_name, row_builder) in &mut self.field_builders {
                 let mut field_builder =
                     parquet_variant::ObjectFieldBuilder::new(field_name, &mut obj_builder);
-                row_builder.append_row(index, &mut field_builder)?;
+                row_builder.append_row(&mut field_builder, index)?;
             }
 
             obj_builder.finish();
@@ -590,7 +590,7 @@ impl<'a> MapArrowToVariantBuilder<'a> {
     pub(crate) fn new(array: &'a dyn Array) -> Result<Self, ArrowError> {
         let map_array = array.as_map();
 
-        // Pre-cast keys to strings once (like existing convert_map code)
+        // Pre-cast keys to strings once
         let keys = cast(map_array.keys(), &DataType::Utf8)?;
         let key_strings = keys.as_string::<i32>().clone();
 
@@ -608,8 +608,8 @@ impl<'a> MapArrowToVariantBuilder<'a> {
 
     fn append_row(
         &mut self,
-        index: usize,
         builder: &mut impl VariantBuilderExt,
+        index: usize,
     ) -> Result<(), ArrowError> {
         // Check for NULL map first (via null bitmap)
         if self.map_array.is_null(index) {
@@ -621,7 +621,7 @@ impl<'a> MapArrowToVariantBuilder<'a> {
         let start = offsets[index].as_usize();
         let end = offsets[index + 1].as_usize();
 
-        // Create object builder for this map (even if empty)
+        // Create object builder for this map
         let mut object_builder = builder.try_new_object()?;
 
         // Add each key-value pair (loop does nothing for empty maps - correct!)
@@ -629,15 +629,17 @@ impl<'a> MapArrowToVariantBuilder<'a> {
             let key = self.key_strings.value(kv_index);
             let mut field_builder = ObjectFieldBuilder::new(key, &mut object_builder);
             self.values_builder
-                .append_row(kv_index, &mut field_builder)?;
+                .append_row(&mut field_builder, kv_index)?;
         }
 
-        object_builder.finish(); // Empty map becomes empty object {}
+        object_builder.finish();
         Ok(())
     }
 }
 
 /// Union builder for both sparse and dense union arrays
+///
+/// NOTE: Union type ids are _not_ required to be dense, hence the hash map for child builders.
 pub(crate) struct UnionArrowToVariantBuilder<'a> {
     union_array: &'a arrow::array::UnionArray,
     child_builders: HashMap<i8, Box<ArrowToVariantRowBuilder<'a>>>,
@@ -665,15 +667,15 @@ impl<'a> UnionArrowToVariantBuilder<'a> {
 
     fn append_row(
         &mut self,
-        index: usize,
         builder: &mut impl VariantBuilderExt,
+        index: usize,
     ) -> Result<(), ArrowError> {
         let type_id = self.union_array.type_id(index);
         let value_offset = self.union_array.value_offset(index);
 
         // Delegate to the appropriate child builder, or append null to handle an invalid type_id
         match self.child_builders.get_mut(&type_id) {
-            Some(child_builder) => child_builder.append_row(value_offset, builder)?,
+            Some(child_builder) => child_builder.append_row(builder, value_offset)?,
             None => builder.append_null(),
         }
 
@@ -710,14 +712,14 @@ impl<'a> DictionaryArrowToVariantBuilder<'a> {
 
     fn append_row(
         &mut self,
-        index: usize,
         builder: &mut impl VariantBuilderExt,
+        index: usize,
     ) -> Result<(), ArrowError> {
         if self.keys.is_null(index) {
             builder.append_null();
         } else {
             let normalized_key = self.normalized_keys[index];
-            self.values_builder.append_row(normalized_key, builder)?;
+            self.values_builder.append_row(builder, normalized_key)?;
         }
         Ok(())
     }
@@ -754,8 +756,8 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
 
     fn append_row(
         &mut self,
-        index: usize,
         builder: &mut impl VariantBuilderExt,
+        index: usize,
     ) -> Result<(), ArrowError> {
         self.set_run_for_index(index)?;
 
@@ -766,7 +768,7 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
         }
 
         // Re-encode the value
-        self.values_builder.append_row(self.run_number, builder)?;
+        self.values_builder.append_row(builder, self.run_number)?;
 
         Ok(())
     }
@@ -824,17 +826,17 @@ mod tests {
 
         // Test first value
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(0, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 0).unwrap();
         variant_builder.finish();
 
         // Test null value
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(1, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 1).unwrap();
         variant_builder.finish();
 
         // Test second value
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(2, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 2).unwrap();
         variant_builder.finish();
 
         let variant_array = array_builder.build();
@@ -853,13 +855,13 @@ mod tests {
         let mut array_builder = VariantArrayBuilder::new(3);
 
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(0, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 0).unwrap();
         variant_builder.finish();
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(1, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 1).unwrap();
         variant_builder.finish();
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(2, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 2).unwrap();
         variant_builder.finish();
 
         let variant_array = array_builder.build();
@@ -878,13 +880,13 @@ mod tests {
         let mut array_builder = VariantArrayBuilder::new(3);
 
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(0, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 0).unwrap();
         variant_builder.finish();
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(1, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 1).unwrap();
         variant_builder.finish();
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(2, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 2).unwrap();
         variant_builder.finish();
 
         let variant_array = array_builder.build();
@@ -924,17 +926,17 @@ mod tests {
 
         // Test first row
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(0, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 0).unwrap();
         variant_builder.finish();
 
         // Test second row (with null int field)
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(1, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 1).unwrap();
         variant_builder.finish();
 
         // Test third row (with null string field)
         let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(2, &mut variant_builder).unwrap();
+        row_builder.append_row(&mut variant_builder, 2).unwrap();
         variant_builder.finish();
 
         let variant_array = array_builder.build();
@@ -981,7 +983,7 @@ mod tests {
         // Test sequential access (most common case)
         for i in 0..6 {
             let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut variant_builder).unwrap();
+            row_builder.append_row(&mut variant_builder, i).unwrap();
             variant_builder.finish();
         }
 
@@ -1017,7 +1019,7 @@ mod tests {
         for (i, &index) in access_pattern.iter().enumerate() {
             let mut array_builder = VariantArrayBuilder::new(1);
             let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(index, &mut variant_builder).unwrap();
+            row_builder.append_row(&mut variant_builder, index).unwrap();
             variant_builder.finish();
 
             let variant_array = array_builder.build();
@@ -1042,7 +1044,7 @@ mod tests {
         // Test sequential access
         for i in 0..5 {
             let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut variant_builder).unwrap();
+            row_builder.append_row(&mut variant_builder, i).unwrap();
             variant_builder.finish();
         }
 
@@ -1074,7 +1076,7 @@ mod tests {
         // Test sequential access
         for i in 0..5 {
             let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut variant_builder).unwrap();
+            row_builder.append_row(&mut variant_builder, i).unwrap();
             variant_builder.finish();
         }
 
@@ -1106,7 +1108,7 @@ mod tests {
         // Test sequential access
         for i in 0..5 {
             let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut variant_builder).unwrap();
+            row_builder.append_row(&mut variant_builder, i).unwrap();
             variant_builder.finish();
         }
 
@@ -1141,7 +1143,7 @@ mod tests {
         for (i, &index) in access_pattern.iter().enumerate() {
             let mut array_builder = VariantArrayBuilder::new(1);
             let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(index, &mut variant_builder).unwrap();
+            row_builder.append_row(&mut variant_builder, index).unwrap();
             variant_builder.finish();
 
             let variant_array = array_builder.build();
@@ -1179,7 +1181,7 @@ mod tests {
         // Test sequential access
         for i in 0..5 {
             let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut variant_builder).unwrap();
+            row_builder.append_row(&mut variant_builder, i).unwrap();
             variant_builder.finish();
         }
 
@@ -1232,7 +1234,7 @@ mod tests {
 
         for i in 0..list_array.len() {
             let mut builder = variant_array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1266,40 +1268,6 @@ mod tests {
     }
 
     #[test]
-    fn test_large_list_row_builder() {
-        use arrow::array::LargeListArray;
-
-        // Create a large list array: [[1, 2], null]
-        let data = vec![Some(vec![Some(1i64), Some(2i64)]), None];
-        let list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
-
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(list_array.data_type(), &list_array).unwrap();
-        let mut variant_array_builder = VariantArrayBuilder::new(list_array.len());
-
-        for i in 0..list_array.len() {
-            let mut builder = variant_array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = variant_array_builder.build();
-
-        // Verify results
-        assert_eq!(variant_array.len(), 2);
-
-        // Row 0: [1, 2]
-        let row0 = variant_array.value(0);
-        let list0 = row0.as_list().unwrap();
-        assert_eq!(list0.len(), 2);
-        assert_eq!(list0.get(0), Some(Variant::from(1i64)));
-        assert_eq!(list0.get(1), Some(Variant::from(2i64)));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-    }
-
-    #[test]
     fn test_sliced_list_row_builder() {
         use arrow::array::ListArray;
 
@@ -1320,7 +1288,7 @@ mod tests {
 
         // Test the single row
         let mut builder = variant_array_builder.variant_builder();
-        row_builder.append_row(0, &mut builder).unwrap();
+        row_builder.append_row(&mut builder, 0).unwrap();
         builder.finish();
 
         let variant_array = variant_array_builder.build();
@@ -1363,7 +1331,7 @@ mod tests {
 
         for i in 0..outer_list.len() {
             let mut builder = variant_array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1446,7 +1414,7 @@ mod tests {
         // Test each row
         for i in 0..4 {
             let mut builder = variant_array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1520,7 +1488,7 @@ mod tests {
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
             let mut builder = variant_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
         let variant_array = variant_builder.build();
@@ -1593,7 +1561,7 @@ mod tests {
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
             let mut builder = variant_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
         let variant_array = variant_builder.build();
@@ -1657,7 +1625,7 @@ mod tests {
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
             let mut builder = variant_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
         let variant_array = variant_builder.build();
@@ -1689,7 +1657,7 @@ mod tests {
 
         for i in 0..decimal_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1729,7 +1697,7 @@ mod tests {
 
         for i in 0..decimal_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1770,7 +1738,7 @@ mod tests {
 
         for i in 0..decimal_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1807,7 +1775,7 @@ mod tests {
 
         for i in 0..binary_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1830,49 +1798,6 @@ mod tests {
     }
 
     #[test]
-    fn test_large_binary_row_builder() {
-        use arrow::array::LargeBinaryArray;
-
-        // Test LargeBinaryArray
-        let binary_data = vec![
-            Some(b"large binary data".as_slice()),
-            None,
-            Some(b"another large chunk".as_slice()),
-        ];
-        let large_binary_array = LargeBinaryArray::from(binary_data);
-
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(large_binary_array.data_type(), &large_binary_array)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..large_binary_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: large binary data
-        assert_eq!(
-            variant_array.value(0),
-            Variant::from(b"large binary data".as_slice())
-        );
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: another large chunk
-        assert_eq!(
-            variant_array.value(2),
-            Variant::from(b"another large chunk".as_slice())
-        );
-    }
-
-    #[test]
     fn test_binary_view_row_builder() {
         use arrow::array::BinaryViewArray;
 
@@ -1892,7 +1817,7 @@ mod tests {
 
         for i in 0..binary_view_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1934,7 +1859,7 @@ mod tests {
 
         for i in 0..fixed_binary_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -1973,7 +1898,7 @@ mod tests {
 
         for i in 0..string_view_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2015,7 +1940,7 @@ mod tests {
 
         for i in 0..timestamp_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2057,7 +1982,7 @@ mod tests {
 
         for i in 0..timestamp_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2096,7 +2021,7 @@ mod tests {
 
         for i in 0..timestamp_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2137,7 +2062,7 @@ mod tests {
 
         for i in 0..timestamp_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2179,7 +2104,7 @@ mod tests {
 
         for i in 0..date_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2223,7 +2148,7 @@ mod tests {
 
         for i in 0..date_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2267,7 +2192,7 @@ mod tests {
 
         for i in 0..time_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2311,7 +2236,7 @@ mod tests {
 
         for i in 0..time_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2355,7 +2280,7 @@ mod tests {
 
         for i in 0..time_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
@@ -2399,7 +2324,7 @@ mod tests {
 
         for i in 0..time_array.len() {
             let mut builder = array_builder.variant_builder();
-            row_builder.append_row(i, &mut builder).unwrap();
+            row_builder.append_row(&mut builder, i).unwrap();
             builder.finish();
         }
 
