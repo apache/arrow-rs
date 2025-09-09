@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::{AvroDataType, Codec, Nullability, Promotion, ResolutionInfo};
+use crate::codec::{AvroDataType, Codec, Promotion, ResolutionInfo};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::reader::header::Header;
 use crate::schema::*;
 use arrow_array::builder::{
-    ArrayBuilder, Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder,
-    PrimitiveBuilder,
+    ArrayBuilder, Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
+    IntervalMonthDayNanoBuilder, PrimitiveBuilder,
 };
 use arrow_array::types::*;
 use arrow_array::*;
@@ -31,6 +31,8 @@ use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
     Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Read;
@@ -38,6 +40,25 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const DEFAULT_CAPACITY: usize = 1024;
+
+/// Macro to decode a decimal payload for a given width and integer type.
+macro_rules! decode_decimal {
+    ($size:expr, $buf:expr, $builder:expr, $N:expr, $Int:ty) => {{
+        let bytes = read_decimal_bytes_be::<{ $N }>($buf, $size)?;
+        $builder.append_value(<$Int>::from_be_bytes(bytes));
+    }};
+}
+
+/// Macro to finish a decimal builder into an array with precision/scale and nulls.
+macro_rules! flush_decimal {
+    ($builder:expr, $precision:expr, $scale:expr, $nulls:expr, $ArrayTy:ty) => {{
+        let (_, vals, _) = $builder.finish().into_parts();
+        let dec = <$ArrayTy>::new(vals, $nulls)
+            .with_precision_and_scale(*$precision as u8, $scale.unwrap_or(0) as i8)
+            .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+        Arc::new(dec) as ArrayRef
+    }};
+}
 
 #[derive(Debug)]
 pub(crate) struct RecordDecoderBuilder<'a> {
@@ -101,8 +122,6 @@ impl RecordDecoder {
     /// # Arguments
     /// * `data_type` - The Avro data type to decode.
     /// * `use_utf8view` - A flag indicating whether to use `Utf8View` for string types.
-    /// * `strict_mode` - A flag to enable strict decoding, returning an error if the data
-    ///   does not conform to the schema.
     ///
     /// # Errors
     /// This function will return an error if the provided `data_type` is not a `Record`.
@@ -245,9 +264,17 @@ enum Decoder {
     Enum(Vec<i32>, Arc<[String]>),
     Duration(IntervalMonthDayNanoBuilder),
     Uuid(Vec<u8>),
+    Decimal32(usize, Option<usize>, Option<usize>, Decimal32Builder),
+    Decimal64(usize, Option<usize>, Option<usize>, Decimal64Builder),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
+    EnumResolved {
+        indices: Vec<i32>,
+        symbols: Arc<[String]>,
+        mapping: Arc<[i32]>,
+        default_index: i32,
+    },
     /// Resolved record that needs writer->reader projection and skipping writer-only fields
     RecordResolved {
         fields: Fields,
@@ -323,36 +350,43 @@ impl Decoder {
             (Codec::Decimal(precision, scale, size), _) => {
                 let p = *precision;
                 let s = *scale;
-                let sz = *size;
                 let prec = p as u8;
                 let scl = s.unwrap_or(0) as i8;
-                match (sz, p) {
-                    (Some(fixed_size), _) if fixed_size <= 16 => {
-                        let builder =
-                            Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
-                        Self::Decimal128(p, s, sz, builder)
-                    }
-                    (Some(fixed_size), _) if fixed_size <= 32 => {
-                        let builder =
-                            Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
-                        Self::Decimal256(p, s, sz, builder)
-                    }
-                    (Some(fixed_size), _) => {
+                #[cfg(feature = "small_decimals")]
+                {
+                    if p <= DECIMAL32_MAX_PRECISION as usize {
+                        let builder = Decimal32Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal32(p, s, *size, builder)
+                    } else if p <= DECIMAL64_MAX_PRECISION as usize {
+                        let builder = Decimal64Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal64(p, s, *size, builder)
+                    } else if p <= DECIMAL128_MAX_PRECISION as usize {
+                        let builder = Decimal128Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal128(p, s, *size, builder)
+                    } else if p <= DECIMAL256_MAX_PRECISION as usize {
+                        let builder = Decimal256Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal256(p, s, *size, builder)
+                    } else {
                         return Err(ArrowError::ParseError(format!(
-                            "Unsupported decimal size: {fixed_size:?}"
+                            "Decimal precision {p} exceeds maximum supported"
                         )));
                     }
-                    (None, p) if p <= DECIMAL128_MAX_PRECISION as usize => {
-                        let builder =
-                            Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
-                        Self::Decimal128(p, s, sz, builder)
-                    }
-                    (None, p) if p <= DECIMAL256_MAX_PRECISION as usize => {
-                        let builder =
-                            Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
-                        Self::Decimal256(p, s, sz, builder)
-                    }
-                    (None, _) => {
+                }
+                #[cfg(not(feature = "small_decimals"))]
+                {
+                    if p <= DECIMAL128_MAX_PRECISION as usize {
+                        let builder = Decimal128Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal128(p, s, *size, builder)
+                    } else if p <= DECIMAL256_MAX_PRECISION as usize {
+                        let builder = Decimal256Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal256(p, s, *size, builder)
+                    } else {
                         return Err(ArrowError::ParseError(format!(
                             "Decimal precision {p} exceeds maximum supported"
                         )));
@@ -369,7 +403,16 @@ impl Decoder {
                 )
             }
             (Codec::Enum(symbols), _) => {
-                Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone())
+                if let Some(ResolutionInfo::EnumMapping(mapping)) = data_type.resolution.as_ref() {
+                    Self::EnumResolved {
+                        indices: Vec::with_capacity(DEFAULT_CAPACITY),
+                        symbols: symbols.clone(),
+                        mapping: mapping.mapping.clone(),
+                        default_index: mapping.default_index,
+                    }
+                } else {
+                    Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone())
+                }
             }
             (Codec::Struct(fields), _) => {
                 let mut arrow_fields = Vec::with_capacity(fields.len());
@@ -458,9 +501,12 @@ impl Decoder {
             Self::Fixed(sz, accum) => {
                 accum.extend(std::iter::repeat_n(0u8, *sz as usize));
             }
+            Self::Decimal32(_, _, _, builder) => builder.append_value(0),
+            Self::Decimal64(_, _, _, builder) => builder.append_value(0),
             Self::Decimal128(_, _, _, builder) => builder.append_value(0),
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
             Self::Enum(indices, _) => indices.push(0),
+            Self::EnumResolved { indices, .. } => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
             Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
@@ -532,28 +578,40 @@ impl Decoder {
                 let fx = buf.get_fixed(*sz as usize)?;
                 accum.extend_from_slice(fx);
             }
+            Self::Decimal32(_, _, size, builder) => {
+                decode_decimal!(size, buf, builder, 4, i32);
+            }
+            Self::Decimal64(_, _, size, builder) => {
+                decode_decimal!(size, buf, builder, 8, i64);
+            }
             Self::Decimal128(_, _, size, builder) => {
-                let raw = if let Some(s) = size {
-                    buf.get_fixed(*s)?
-                } else {
-                    buf.get_bytes()?
-                };
-                let ext = sign_extend_to::<16>(raw)?;
-                let val = i128::from_be_bytes(ext);
-                builder.append_value(val);
+                decode_decimal!(size, buf, builder, 16, i128);
             }
             Self::Decimal256(_, _, size, builder) => {
-                let raw = if let Some(s) = size {
-                    buf.get_fixed(*s)?
-                } else {
-                    buf.get_bytes()?
-                };
-                let ext = sign_extend_to::<32>(raw)?;
-                let val = i256::from_be_bytes(ext);
-                builder.append_value(val);
+                decode_decimal!(size, buf, builder, 32, i256);
             }
             Self::Enum(indices, _) => {
                 indices.push(buf.get_int()?);
+            }
+            Self::EnumResolved {
+                indices,
+                mapping,
+                default_index,
+                ..
+            } => {
+                let raw = buf.get_int()?;
+                let resolved = usize::try_from(raw)
+                    .ok()
+                    .and_then(|idx| mapping.get(idx).copied())
+                    .filter(|&idx| idx >= 0)
+                    .unwrap_or(*default_index);
+                if resolved >= 0 {
+                    indices.push(resolved);
+                } else {
+                    return Err(ArrowError::ParseError(format!(
+                        "Enum symbol index {raw} not resolvable and no default provided",
+                    )));
+                }
             }
             Self::Duration(builder) => {
                 let b = buf.get_fixed(12)?;
@@ -706,29 +764,22 @@ impl Decoder {
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(arr)
             }
+            Self::Decimal32(precision, scale, _, builder) => {
+                flush_decimal!(builder, precision, scale, nulls, Decimal32Array)
+            }
+            Self::Decimal64(precision, scale, _, builder) => {
+                flush_decimal!(builder, precision, scale, nulls, Decimal64Array)
+            }
             Self::Decimal128(precision, scale, _, builder) => {
-                let (_, vals, _) = builder.finish().into_parts();
-                let scl = scale.unwrap_or(0);
-                let dec = Decimal128Array::new(vals, nulls)
-                    .with_precision_and_scale(*precision as u8, scl as i8)
-                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                Arc::new(dec)
+                flush_decimal!(builder, precision, scale, nulls, Decimal128Array)
             }
             Self::Decimal256(precision, scale, _, builder) => {
-                let (_, vals, _) = builder.finish().into_parts();
-                let scl = scale.unwrap_or(0);
-                let dec = Decimal256Array::new(vals, nulls)
-                    .with_precision_and_scale(*precision as u8, scl as i8)
-                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                Arc::new(dec)
+                flush_decimal!(builder, precision, scale, nulls, Decimal256Array)
             }
-            Self::Enum(indices, symbols) => {
-                let keys = flush_primitive::<Int32Type>(indices, nulls);
-                let values = Arc::new(StringArray::from(
-                    symbols.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                ));
-                Arc::new(DictionaryArray::try_new(keys, values)?)
-            }
+            Self::Enum(indices, symbols) => flush_dict(indices, symbols, nulls)?,
+            Self::EnumResolved {
+                indices, symbols, ..
+            } => flush_dict(indices, symbols, nulls)?,
             Self::Duration(builder) => {
                 let (_, vals, _) = builder.finish().into_parts();
                 let vals = IntervalMonthDayNanoArray::try_new(vals, nulls)
@@ -767,6 +818,21 @@ fn skip_blocks(
 }
 
 #[inline]
+fn flush_dict(
+    indices: &mut Vec<i32>,
+    symbols: &[String],
+    nulls: Option<NullBuffer>,
+) -> Result<ArrayRef, ArrowError> {
+    let keys = flush_primitive::<Int32Type>(indices, nulls);
+    let values = Arc::new(StringArray::from_iter_values(
+        symbols.iter().map(|s| s.as_str()),
+    ));
+    DictionaryArray::try_new(keys, values)
+        .map_err(|e| ArrowError::ParseError(e.to_string()))
+        .map(|arr| Arc::new(arr) as ArrayRef)
+}
+
+#[inline]
 fn read_blocks(
     buf: &mut AvroCursor,
     decode_entry: impl FnMut(&mut AvroCursor) -> Result<(), ArrowError>,
@@ -790,8 +856,6 @@ fn process_blockwise(
         match block_count.cmp(&0) {
             Ordering::Equal => break,
             Ordering::Less => {
-                // If block_count is negative, read the absolute value of count,
-                // then read the block size as a long and discard
                 let count = (-block_count) as usize;
                 // A negative count is followed by a long of the size in bytes
                 let size_in_bytes = buf.get_long()? as usize;
@@ -810,7 +874,6 @@ fn process_blockwise(
                 total += count;
             }
             Ordering::Greater => {
-                // If block_count is positive, decode that many items
                 let count = block_count as usize;
                 for _ in 0..count {
                     on_item(buf)?;
@@ -840,29 +903,77 @@ fn flush_primitive<T: ArrowPrimitiveType>(
     PrimitiveArray::new(flush_values(values).into(), nulls)
 }
 
-/// Sign extends a byte slice to a fixed-size array of N bytes.
-/// This is done by filling the leading bytes with 0x00 for positive numbers
-/// or 0xFF for negative numbers.
 #[inline]
-fn sign_extend_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
-    if raw.len() > N {
-        return Err(ArrowError::ParseError(format!(
-            "Cannot extend a slice of length {} to {} bytes.",
-            raw.len(),
-            N
-        )));
+fn read_decimal_bytes_be<const N: usize>(
+    buf: &mut AvroCursor<'_>,
+    size: &Option<usize>,
+) -> Result<[u8; N], ArrowError> {
+    match size {
+        Some(n) if *n == N => {
+            let raw = buf.get_fixed(N)?;
+            let mut arr = [0u8; N];
+            arr.copy_from_slice(raw);
+            Ok(arr)
+        }
+        Some(n) => {
+            let raw = buf.get_fixed(*n)?;
+            sign_cast_to::<N>(raw)
+        }
+        None => {
+            let raw = buf.get_bytes()?;
+            sign_cast_to::<N>(raw)
+        }
     }
-    let mut arr = [0u8; N];
-    let pad_len = N - raw.len();
-    // Determine the byte to use for padding based on the sign bit of the raw data.
-    let extension_byte = if raw.is_empty() || (raw[0] & 0x80 == 0) {
-        0x00
-    } else {
-        0xFF
-    };
-    arr[..pad_len].fill(extension_byte);
-    arr[pad_len..].copy_from_slice(raw);
-    Ok(arr)
+}
+
+/// Sign-extend or (when larger) validate-and-truncate a big-endian two's-complement
+/// integer into exactly `N` bytes. This matches Avro's decimal binary encoding:
+/// the payload is a big-endian two's-complement integer, and when narrowing it must
+/// be representable without changing sign or value.
+///
+/// If `raw.len() < N`, the value is sign-extended.
+/// If `raw.len() > N`, all truncated leading bytes must match the sign-extension byte
+/// and the MSB of the first kept byte must match the sign (to avoid silent overflow).
+#[inline]
+fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
+    let len = raw.len();
+    // Fast path: exact width, just copy
+    if len == N {
+        let mut out = [0u8; N];
+        out.copy_from_slice(raw);
+        return Ok(out);
+    }
+    // Determine sign byte from MSB of first byte (empty => positive)
+    let first = raw.first().copied().unwrap_or(0u8);
+    let sign_byte = if (first & 0x80) == 0 { 0x00 } else { 0xFF };
+    // Pre-fill with sign byte to support sign extension
+    let mut out = [sign_byte; N];
+    if len > N {
+        // Validate truncation: all dropped leading bytes must equal sign_byte,
+        // and the MSB of the first kept byte must match the sign.
+        let extra = len - N;
+        // Any non-sign byte in the truncated prefix indicates overflow
+        if raw[..extra].iter().any(|&b| b != sign_byte) {
+            return Err(ArrowError::ParseError(format!(
+                "Decimal value with {} bytes cannot be represented in {} bytes without overflow",
+                len, N
+            )));
+        }
+        if N > 0 {
+            let first_kept = raw[extra];
+            let sign_bit_mismatch = ((first_kept ^ sign_byte) & 0x80) != 0;
+            if sign_bit_mismatch {
+                return Err(ArrowError::ParseError(format!(
+                    "Decimal value with {} bytes cannot be represented in {} bytes without overflow",
+                    len, N
+                )));
+            }
+        }
+        out.copy_from_slice(&raw[extra..]);
+        return Ok(out);
+    }
+    out[N - len..].copy_from_slice(raw);
+    Ok(out)
 }
 
 /// Lightweight skipper for non‑projected writer fields
@@ -1030,8 +1141,9 @@ mod tests {
     use super::*;
     use crate::codec::AvroField;
     use arrow_array::{
-        cast::AsArray, Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
-        IntervalMonthDayNanoArray, ListArray, MapArray, StringArray, StructArray,
+        cast::AsArray, Array, Decimal128Array, Decimal256Array, Decimal32Array, DictionaryArray,
+        FixedSizeBinaryArray, IntervalMonthDayNanoArray, ListArray, MapArray, StringArray,
+        StructArray,
     };
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
@@ -1478,7 +1590,7 @@ mod tests {
 
     #[test]
     fn test_decimal_decoding_fixed256() {
-        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(32)));
+        let dt = avro_from_codec(Codec::Decimal(50, Some(2), Some(32)));
         let mut decoder = Decoder::try_new(&dt).unwrap();
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1505,7 +1617,7 @@ mod tests {
 
     #[test]
     fn test_decimal_decoding_fixed128() {
-        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(16)));
+        let dt = avro_from_codec(Codec::Decimal(28, Some(2), Some(16)));
         let mut decoder = Decoder::try_new(&dt).unwrap();
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1529,6 +1641,79 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_decoding_fixed32_from_32byte_fixed_storage() {
+        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(32)));
+        let mut decoder = Decoder::try_new(&dt).unwrap();
+        let row1 = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x30, 0x39,
+        ];
+        let row2 = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0x85,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&row1);
+        data.extend_from_slice(&row2);
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let arr = decoder.flush(None).unwrap();
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+    }
+
+    #[test]
+    fn test_decimal_decoding_fixed32_from_16byte_fixed_storage() {
+        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(16)));
+        let mut decoder = Decoder::try_new(&dt).unwrap();
+        let row1 = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x30, 0x39,
+        ];
+        let row2 = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0x85,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&row1);
+        data.extend_from_slice(&row2);
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+
+        let arr = decoder.flush(None).unwrap();
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+    }
+
+    #[test]
     fn test_decimal_decoding_bytes_with_nulls() {
         let dt = avro_from_codec(Codec::Decimal(4, Some(1), None));
         let inner = Decoder::try_new(&dt).unwrap();
@@ -1544,21 +1729,34 @@ mod tests {
         data.extend_from_slice(&encode_avro_int(0));
         data.extend_from_slice(&encode_avro_bytes(&[0xFB, 0x2E]));
         let mut cursor = AvroCursor::new(&data);
-        decoder.decode(&mut cursor).unwrap(); // row1
-        decoder.decode(&mut cursor).unwrap(); // row2
-        decoder.decode(&mut cursor).unwrap(); // row3
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
         let arr = decoder.flush(None).unwrap();
-        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        assert_eq!(dec_arr.len(), 3);
-        assert!(dec_arr.is_valid(0));
-        assert!(!dec_arr.is_valid(1));
-        assert!(dec_arr.is_valid(2));
-        assert_eq!(dec_arr.value_as_string(0), "123.4");
-        assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "123.4");
+            assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "123.4");
+            assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        }
     }
 
     #[test]
-    fn test_decimal_decoding_bytes_with_nulls_fixed_size() {
+    fn test_decimal_decoding_bytes_with_nulls_fixed_size_narrow_result() {
         let dt = avro_from_codec(Codec::Decimal(6, Some(2), Some(16)));
         let inner = Decoder::try_new(&dt).unwrap();
         let mut decoder = Decoder::Nullable(
@@ -1585,13 +1783,26 @@ mod tests {
         decoder.decode(&mut cursor).unwrap();
         decoder.decode(&mut cursor).unwrap();
         let arr = decoder.flush(None).unwrap();
-        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        assert_eq!(dec_arr.len(), 3);
-        assert!(dec_arr.is_valid(0));
-        assert!(!dec_arr.is_valid(1));
-        assert!(dec_arr.is_valid(2));
-        assert_eq!(dec_arr.value_as_string(0), "1234.56");
-        assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "1234.56");
+            assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "1234.56");
+            assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        }
     }
 
     #[test]
@@ -1612,7 +1823,6 @@ mod tests {
             .as_any()
             .downcast_ref::<DictionaryArray<Int32Type>>()
             .unwrap();
-
         assert_eq!(dict_array.len(), 3);
         let values = dict_array
             .values()
@@ -1759,6 +1969,101 @@ mod tests {
         let int_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert!(int_array.is_null(0)); // row1 is null
         assert_eq!(int_array.value(1), 42); // row3 value is 42
+    }
+
+    #[test]
+    fn test_enum_mapping_reordered_symbols() {
+        let reader_symbols: Arc<[String]> =
+            vec!["B".to_string(), "C".to_string(), "A".to_string()].into();
+        let mapping: Arc<[i32]> = Arc::from(vec![2, 0, 1]);
+        let default_index: i32 = -1;
+        let mut dec = Decoder::EnumResolved {
+            indices: Vec::with_capacity(DEFAULT_CAPACITY),
+            symbols: reader_symbols.clone(),
+            mapping,
+            default_index,
+        };
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&encode_avro_int(1));
+        data.extend_from_slice(&encode_avro_int(2));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        dec.decode(&mut cur).unwrap();
+        dec.decode(&mut cur).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let dict = arr
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let expected_keys = Int32Array::from(vec![2, 0, 1]);
+        assert_eq!(dict.keys(), &expected_keys);
+        let values = dict
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(0), "B");
+        assert_eq!(values.value(1), "C");
+        assert_eq!(values.value(2), "A");
+    }
+
+    #[test]
+    fn test_enum_mapping_unknown_symbol_and_out_of_range_fall_back_to_default() {
+        let reader_symbols: Arc<[String]> = vec!["A".to_string(), "B".to_string()].into();
+        let default_index: i32 = 1;
+        let mapping: Arc<[i32]> = Arc::from(vec![0, 1]);
+        let mut dec = Decoder::EnumResolved {
+            indices: Vec::with_capacity(DEFAULT_CAPACITY),
+            symbols: reader_symbols.clone(),
+            mapping,
+            default_index,
+        };
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&encode_avro_int(1));
+        data.extend_from_slice(&encode_avro_int(99));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        dec.decode(&mut cur).unwrap();
+        dec.decode(&mut cur).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let dict = arr
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let expected_keys = Int32Array::from(vec![0, 1, 1]);
+        assert_eq!(dict.keys(), &expected_keys);
+        let values = dict
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(0), "A");
+        assert_eq!(values.value(1), "B");
+    }
+
+    #[test]
+    fn test_enum_mapping_unknown_symbol_without_default_errors() {
+        let reader_symbols: Arc<[String]> = vec!["A".to_string()].into();
+        let default_index: i32 = -1; // indicates no default at type-level
+        let mapping: Arc<[i32]> = Arc::from(vec![-1]);
+        let mut dec = Decoder::EnumResolved {
+            indices: Vec::with_capacity(DEFAULT_CAPACITY),
+            symbols: reader_symbols,
+            mapping,
+            default_index,
+        };
+        let data = encode_avro_int(0);
+        let mut cur = AvroCursor::new(&data);
+        let err = dec
+            .decode(&mut cur)
+            .expect_err("expected decode error for unresolved enum without default");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not resolvable") && msg.contains("no default"),
+            "unexpected error message: {msg}"
+        );
     }
 
     fn make_record_resolved_decoder(
