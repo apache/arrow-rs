@@ -208,7 +208,7 @@ impl CompressedPage {
         if compressed_size > i32::MAX as usize {
             return Err(general_err!(
                 "Page compressed size overflow: {}",
-                uncompressed_size
+                compressed_size
             ));
         }
         let num_values = self.num_values();
