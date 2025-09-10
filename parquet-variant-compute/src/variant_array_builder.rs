@@ -65,12 +65,10 @@ impl CustomParentState for ArrayBuilderState<'_> {
 /// builder.append_variant(Variant::from(42));
 /// // append a null row (note not a Variant::Null)
 /// builder.append_null();
-/// // append an object to the builder
-/// let mut vb = builder.variant_builder();
-/// vb.new_object()
+/// // append an object to the builder using VariantBuilderExt methods directly
+/// builder.new_object()
 ///   .with_field("foo", "bar")
 ///   .finish();
-///  vb.finish(); // must call finish to write the variant to the buffers
 ///
 /// // create the final VariantArray
 /// let variant_array = builder.build();
@@ -375,26 +373,22 @@ mod test {
         }
     }
 
-    /// Test using sub builders to append variants
+    /// Test using appending variants to the array builder
     #[test]
-    fn test_variant_array_builder_variant_builder() {
+    fn test_variant_array_builder() {
         let mut builder = VariantArrayBuilder::new(10);
         builder.append_null(); // should not panic
         builder.append_variant(Variant::from(42i32));
 
-        // let's make a sub-object in the next row
-        let mut sub_builder = builder.variant_builder();
-        sub_builder.new_object().with_field("foo", "bar").finish();
-        sub_builder.finish(); // must call finish to write the variant to the buffers
+        // make an object in the next row
+        builder.new_object().with_field("foo", "bar").finish();
 
         // append a new list
-        let mut sub_builder = builder.variant_builder();
-        sub_builder
+        builder
             .new_list()
             .with_value(Variant::from(1i32))
             .with_value(Variant::from(2i32))
             .finish();
-        sub_builder.finish();
         let variant_array = builder.build();
 
         assert_eq!(variant_array.len(), 4);
