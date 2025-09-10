@@ -20,9 +20,28 @@
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
-use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
+use parquet_variant::{CustomParentState, ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
 use parquet_variant::{ParentState, ValueBuilder, WritableMetadataBuilder};
 use std::sync::Arc;
+
+/// Custom parent state for array building that manages array-level offsets and nulls
+#[derive(Debug)]
+struct ArrayBuilderState<'a> {
+    metadata_offsets: &'a mut Vec<usize>,
+    value_offsets: &'a mut Vec<usize>,
+    nulls: &'a mut NullBufferBuilder,
+}
+
+impl CustomParentState for ArrayBuilderState<'_> {
+    fn finish(&mut self, metadata_offset: usize, value_offset: usize) {
+        self.metadata_offsets.push(metadata_offset);
+        self.value_offsets.push(value_offset);
+        self.nulls.append_non_null();
+    }
+
+    // No special rollback needed - offsets and nulls weren't modified yet during construction
+    fn rollback(&mut self) {}
+}
 
 /// A builder for [`VariantArray`]
 ///
@@ -144,9 +163,7 @@ impl VariantArrayBuilder {
 
     /// Append the [`Variant`] to the builder as the next row
     pub fn append_variant(&mut self, variant: Variant) {
-        let mut direct_builder = self.variant_builder();
-        direct_builder.append_value(variant);
-        direct_builder.finish()
+        ValueBuilder::append_variant(self.parent_state(), variant);
     }
 
     /// Return a `VariantArrayVariantBuilder` that writes directly to the
@@ -183,6 +200,40 @@ impl VariantArrayBuilder {
     ///  ```
     pub fn variant_builder(&mut self) -> VariantArrayVariantBuilder<'_> {
         VariantArrayVariantBuilder::new(self)
+    }
+
+    /// Create a custom parent state for use with direct builder creation
+    fn parent_state(&mut self) -> ParentState<'_> {
+        let custom_state = ArrayBuilderState {
+            metadata_offsets: &mut self.metadata_offsets,
+            value_offsets: &mut self.value_offsets,
+            nulls: &mut self.nulls,
+        };
+
+        ParentState::custom(
+            &mut self.value_builder,
+            &mut self.metadata_builder,
+            custom_state,
+        )
+    }
+}
+
+impl VariantBuilderExt for VariantArrayBuilder {
+    /// Appending NULL to a variant array produces an actual NULL value
+    fn append_null(&mut self) {
+        self.append_null();
+    }
+
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.append_variant(value.into());
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        Ok(ListBuilder::new(self.parent_state(), false))
+    }
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        Ok(ObjectBuilder::new(self.parent_state(), false))
     }
 }
 

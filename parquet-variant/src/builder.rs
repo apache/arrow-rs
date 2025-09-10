@@ -669,6 +669,24 @@ impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
     }
 }
 
+/// A trait for managing state associated with a custom `ParentState` instance.
+pub trait CustomParentState: std::fmt::Debug {
+    /// Called when variant construction completes successfully.
+    /// This is where custom state should commit any pending changes.
+    ///
+    /// Parameters:
+    /// - `metadata_offset`: The final offset in the metadata buffer after construction
+    /// - `value_offset`: The final offset in the value buffer after construction
+    fn finish(&mut self, metadata_offset: usize, value_offset: usize);
+
+    /// Called when variant construction is being rolled back (either explicitly or on drop).
+    /// This is where custom state should revert any changes made during construction.
+    ///
+    /// The base `ParentState` will handle rolling back the value and metadata builders,
+    /// but custom state may need to revert its own changes.
+    fn rollback(&mut self);
+}
+
 /// Tracks information needed to correctly finalize a nested builder, for each parent builder type.
 ///
 /// A child builder has no effect on its parent unless/until its `finalize` method is called, at
@@ -707,6 +725,14 @@ pub enum ParentState<'a> {
         saved_metadata_builder_dict_size: usize,
         fields: &'a mut IndexMap<u32, usize>,
         saved_fields_size: usize,
+        finished: bool,
+    },
+    Custom {
+        value_builder: &'a mut ValueBuilder,
+        saved_value_builder_offset: usize,
+        metadata_builder: &'a mut dyn MetadataBuilder,
+        saved_metadata_builder_dict_size: usize,
+        state: Box<dyn CustomParentState + 'a>,
         finished: bool,
     },
 }
@@ -793,6 +819,25 @@ impl<'a> ParentState<'a> {
         })
     }
 
+    /// Creates a new instance on behalf of a custom variant builder. The value and metadata builder
+    /// state is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The
+    /// custom state is governed by its own `finish` and `rollback` calls, which are respectively if
+    /// [`Self::finish`] is called or not.
+    pub fn custom<T: CustomParentState + 'a>(
+        value_builder: &'a mut ValueBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
+        state: T,
+    ) -> Self {
+        ParentState::Custom {
+            saved_value_builder_offset: value_builder.offset(),
+            value_builder,
+            saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
+            metadata_builder,
+            state: Box::new(state),
+            finished: false,
+        }
+    }
+
     fn value_builder(&mut self) -> &mut ValueBuilder {
         self.value_and_metadata_builders().0
     }
@@ -814,6 +859,10 @@ impl<'a> ParentState<'a> {
             | ParentState::Object {
                 saved_value_builder_offset,
                 ..
+            }
+            | ParentState::Custom {
+                saved_value_builder_offset,
+                ..
             } => *saved_value_builder_offset,
         }
     }
@@ -822,12 +871,27 @@ impl<'a> ParentState<'a> {
         match self {
             ParentState::Variant { finished, .. }
             | ParentState::List { finished, .. }
-            | ParentState::Object { finished, .. } => finished,
+            | ParentState::Object { finished, .. }
+            | ParentState::Custom { finished, .. } => finished,
         }
     }
 
     /// Mark the insertion as having succeeded. Internal state will no longer roll back on drop.
+    /// For custom parent states, this automatically calls the custom state's finish method with
+    /// the appropriate offsets.
     pub fn finish(&mut self) {
+        if let ParentState::Custom {
+            state,
+            metadata_builder,
+            value_builder,
+            ..
+        } = self
+        {
+            let metadata_offset = metadata_builder.finish();
+            let value_offset = value_builder.offset();
+            state.finish(metadata_offset, value_offset);
+        }
+
         *self.is_finished() = true
     }
 
@@ -859,6 +923,13 @@ impl<'a> ParentState<'a> {
                 metadata_builder,
                 saved_metadata_builder_dict_size,
                 ..
+            }
+            | ParentState::Custom {
+                value_builder,
+                saved_value_builder_offset,
+                metadata_builder,
+                saved_metadata_builder_dict_size,
+                ..
             } => {
                 value_builder
                     .inner_mut()
@@ -870,6 +941,9 @@ impl<'a> ParentState<'a> {
         // List and Object builders also need to roll back the starting offset they stored.
         match self {
             ParentState::Variant { .. } => (),
+            ParentState::Custom { state, .. } => {
+                state.rollback();
+            }
             ParentState::List {
                 offsets,
                 saved_offsets_size,
@@ -898,6 +972,11 @@ impl<'a> ParentState<'a> {
                 ..
             }
             | ParentState::Object {
+                value_builder,
+                metadata_builder,
+                ..
+            }
+            | ParentState::Custom {
                 value_builder,
                 metadata_builder,
                 ..
