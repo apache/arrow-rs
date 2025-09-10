@@ -562,7 +562,7 @@ pub struct WritableMetadataBuilder {
 
 impl WritableMetadataBuilder {
     /// Upsert field name to dictionary, return its ID
-    fn upsert_field_name(&mut self, field_name: &str) -> u32 {
+    pub fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
 
         if new_entry {

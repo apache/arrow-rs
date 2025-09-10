@@ -1320,7 +1320,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// Return the metadata associated with this variant, if any.
     ///
     /// Returns `Some(&VariantMetadata)` for object and list variants,
-    pub fn metadata(&self) -> Option<&'m VariantMetadata<'_>> {
+    pub fn metadata(&self) -> Option<&VariantMetadata<'m>> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
             | Variant::List(VariantList { metadata, .. }) => Some(metadata),
