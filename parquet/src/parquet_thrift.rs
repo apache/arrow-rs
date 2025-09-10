@@ -566,24 +566,36 @@ where
 /////////////////////////
 // thrift compact output
 
+/// Low-level object used to serialize structs to the Thrift [compact output] protocol.
+///
+/// This struct serves as a wrapper around a [`Write`] object, to which thrift encoded data
+/// will written. The implementation provides functions to write Thrift primitive types, as well
+/// as functions used in the encoding of lists and structs. This should rarely be used directly,
+/// but is instead intended for use by implementers of [`WriteThrift`] and [`WriteThriftField`].
+///
+/// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
     writer: W,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
+    /// Create a new `ThriftCompactOutputProtocol` wrapping the byte sink `writer`.
     pub(crate) fn new(writer: W) -> Self {
         Self { writer }
     }
 
+    /// Return a reference to the underlying `Write`.
     pub(crate) fn inner(&self) -> &W {
         &self.writer
     }
 
+    /// Write a single byte to the output stream.
     fn write_byte(&mut self, b: u8) -> Result<()> {
         self.writer.write_all(&[b])?;
         Ok(())
     }
 
+    /// Write the given `u64` as a ULEB128 encoded varint.
     fn write_vlq(&mut self, val: u64) -> Result<()> {
         let mut v = val;
         while v > 0x7f {
@@ -593,11 +605,16 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         self.write_byte(v as u8)
     }
 
+    /// Write the given `i64` as a zig-zag encoded varint.
     fn write_zig_zag(&mut self, val: i64) -> Result<()> {
         let s = (val < 0) as i64;
         self.write_vlq((((val ^ -s) << 1) + s) as u64)
     }
 
+    /// Used to mark the start of a Thrift struct field of type `field_type`. `last_field_id`
+    /// is used to compute a delta to the given `field_id` per the compact protocol [spec].
+    ///
+    /// [spec]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct-encoding
     pub(crate) fn write_field_begin(
         &mut self,
         field_type: FieldType,
@@ -613,6 +630,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         }
     }
 
+    /// Used to indicate the start of a list of `element_type` elements.
     pub(crate) fn write_list_begin(&mut self, element_type: ElementType, len: usize) -> Result<()> {
         if len < 15 {
             self.write_byte((len as u8) << 4 | element_type as u8)
@@ -622,22 +640,29 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         }
     }
 
+    /// Used to mark the end of a struct. This must be called after all fields of the struct have
+    /// been written.
     pub(crate) fn write_struct_end(&mut self) -> Result<()> {
         self.write_byte(0)
     }
 
+    /// Serialize a slice of `u8`s. This will encode a length, and then write the bytes without
+    /// further encoding.
     pub(crate) fn write_bytes(&mut self, val: &[u8]) -> Result<()> {
         self.write_vlq(val.len() as u64)?;
         self.writer.write_all(val)?;
         Ok(())
     }
 
+    /// Short-cut method used to encode structs that have no fields (often used in Thrift unions).
+    /// This simply encodes the field id and then immediately writes the end-of-struct marker.
     pub(crate) fn write_empty_struct(&mut self, field_id: i16, last_field_id: i16) -> Result<i16> {
         self.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
         self.write_struct_end()?;
         Ok(last_field_id)
     }
 
+    /// Write a boolean value.
     pub(crate) fn write_bool(&mut self, val: bool) -> Result<()> {
         match val {
             true => self.write_byte(1),
@@ -645,35 +670,47 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         }
     }
 
+    /// Write a zig-zag encoded `i8` value.
     pub(crate) fn write_i8(&mut self, val: i8) -> Result<()> {
         self.write_byte(val as u8)
     }
 
+    /// Write a zig-zag encoded `i16` value.
     pub(crate) fn write_i16(&mut self, val: i16) -> Result<()> {
         self.write_zig_zag(val as _)
     }
 
+    /// Write a zig-zag encoded `i32` value.
     pub(crate) fn write_i32(&mut self, val: i32) -> Result<()> {
         self.write_zig_zag(val as _)
     }
 
+    /// Write a zig-zag encoded `i64` value.
     pub(crate) fn write_i64(&mut self, val: i64) -> Result<()> {
         self.write_zig_zag(val as _)
     }
 
+    /// Write a double value.
     pub(crate) fn write_double(&mut self, val: f64) -> Result<()> {
         self.writer.write_all(&val.to_le_bytes())?;
         Ok(())
     }
 }
 
+/// Trait implemented by objects that are to be serialized to a Thrift [compact output] protocol
+/// stream. Implementations are also provided for primitive Thrift types.
+///
+/// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
 pub(crate) trait WriteThrift {
+    /// The [`ElementType`] to use when a list of this object is written.
     const ELEMENT_TYPE: ElementType;
 
-    // used to write generated enums and structs
+    /// Serialize this object to the given `writer`.
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()>;
 }
 
+/// Implementation for a vector of thrift serializable objects that implement [`WriteThrift`].
+/// This will write the necessary list header and then serialize the elements one-at-a-time.
 impl<T> WriteThrift for Vec<T>
 where
     T: WriteThrift,
@@ -761,9 +798,55 @@ impl WriteThrift for String {
     }
 }
 
+/// Trait implemented by objects that are fields of Thrift structs.
+///
+/// For example, given the Thrift struct definition
+/// ```
+/// struct MyStruct {
+///   1: required i32 field1
+///   2: optional bool field2
+///   3: optional OtherStruct field3
+/// }
+/// ```
+///
+/// which becomes in Rust
+/// ```rust
+/// struct MyStruct {
+///   field1: i32,
+///   field2: Option<bool>,
+///   field3: Option<OtherStruct>,
+/// }
+/// ```
+/// the impl of `WriteThrift` for `MyStruct` will use the `WriteThriftField` impls for `i32`,
+/// `bool`, and `OtherStruct`.
+///
+/// ```
+/// impl WriteThrift for MyStruct {
+///   const ELEMENT_TYPE: ElementType = ElementType::Double;
+///
+///   fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+///     let mut last_field_id = 0i16;
+///     last_field_id = self.field1.write_thrift_field(writer, 1, last_field_id)?;
+///     if self.field2.is_some() {
+///       // if field2 is `None` then this assignment won't happen and last_field_id will remain
+///       // `1` when writing `field3`
+///       last_field_id = self.field2.write_thrift_field(writer, 2, last_field_id)?;
+///     }
+///     if self.field3.is_some() {
+///       // no need to assign last_field_id since this is the final field.
+///       self.field3.write_thrift_field(writer, 3, last_field_id)?;
+///     }
+///   }
+/// }
+/// ```
+///
 pub(crate) trait WriteThriftField {
-    // used to write struct fields (which may be basic types or generated types).
-    // write the field header and field value. returns `field_id`.
+    /// Used to write struct fields (which may be primitive or IDL defined types). This will
+    /// write the field marker for the given `field_id`, using `last_field_id` to compute the
+    /// field delta used by the Thrift [compact protocol]. On success this will return `field_id`
+    /// to be used in chaining.
+    ///
+    /// [compact protocol]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct-encoding
     fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
