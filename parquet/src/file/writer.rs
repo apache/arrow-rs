@@ -1572,7 +1572,7 @@ mod tests {
                 total_num_values as usize,
                 None,
                 Arc::new(props),
-                None, // No caching for writer
+                None,
             )
             .unwrap();
 

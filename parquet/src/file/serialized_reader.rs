@@ -328,7 +328,7 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
             usize::try_from(self.metadata.num_rows())?,
             page_locations,
             props,
-            None, // No caching for sync readers
+            None,
         )?))
     }
 
@@ -1784,7 +1784,7 @@ mod tests {
             usize::try_from(row_group.metadata.num_rows())?,
             page_locations,
             props,
-            None, // No caching for sync readers
+            None,
         )
     }
 
