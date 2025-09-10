@@ -843,94 +843,75 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VariantArrayBuilder;
+    use crate::{VariantArray, VariantArrayBuilder};
     use arrow::array::{ArrayRef, BooleanArray, Int32Array, StringArray};
     use std::sync::Arc;
 
-    #[test]
-    fn test_primitive_row_builder() {
-        // Test Int32Array
-        let int_array = Int32Array::from(vec![Some(42), None, Some(100)]);
+    /// Builds a VariantArray from an Arrow array using the row builder.
+    fn execute_row_builder_test(array: &dyn Array) -> VariantArray {
         let options = CastOptions::default();
         let mut row_builder =
-            make_arrow_to_variant_row_builder(int_array.data_type(), &int_array, &options).unwrap();
+            make_arrow_to_variant_row_builder(array.data_type(), array, &options).unwrap();
 
-        let mut array_builder = VariantArrayBuilder::new(3);
+        let mut array_builder = VariantArrayBuilder::new(array.len());
 
-        // Test first value
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 0).unwrap();
-        variant_builder.finish();
-
-        // Test null value
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 1).unwrap();
-        variant_builder.finish();
-
-        // Test second value
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 2).unwrap();
-        variant_builder.finish();
+        // The repetitive loop that appears in every test
+        for i in 0..array.len() {
+            let mut variant_builder = array_builder.variant_builder();
+            row_builder.append_row(&mut variant_builder, i).unwrap();
+            variant_builder.finish();
+        }
 
         let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-        assert_eq!(variant_array.value(0), Variant::Int32(42));
-        assert!(variant_array.is_null(1));
-        assert_eq!(variant_array.value(2), Variant::Int32(100));
+        assert_eq!(variant_array.len(), array.len());
+        variant_array
+    }
+
+    /// Generic helper function to test row builders with basic assertion patterns.
+    /// Uses execute_row_builder_test and adds simple value comparison assertions.
+    fn test_row_builder_basic(array: &dyn Array, expected_values: Vec<Option<Variant>>) {
+        let variant_array = execute_row_builder_test(array);
+
+        // The repetitive assertion pattern
+        for (i, expected) in expected_values.iter().enumerate() {
+            match expected {
+                Some(variant) => {
+                    assert_eq!(variant_array.value(i), *variant, "Mismatch at index {}", i)
+                }
+                None => assert!(variant_array.is_null(i), "Expected null at index {}", i),
+            }
+        }
+    }
+
+    #[test]
+    fn test_primitive_row_builder() {
+        let int_array = Int32Array::from(vec![Some(42), None, Some(100)]);
+        test_row_builder_basic(
+            &int_array,
+            vec![Some(Variant::Int32(42)), None, Some(Variant::Int32(100))],
+        );
     }
 
     #[test]
     fn test_string_row_builder() {
         let string_array = StringArray::from(vec![Some("hello"), None, Some("world")]);
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(string_array.data_type(), &string_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 0).unwrap();
-        variant_builder.finish();
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 1).unwrap();
-        variant_builder.finish();
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 2).unwrap();
-        variant_builder.finish();
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-        assert_eq!(variant_array.value(0), Variant::from("hello"));
-        assert!(variant_array.is_null(1));
-        assert_eq!(variant_array.value(2), Variant::from("world"));
+        test_row_builder_basic(
+            &string_array,
+            vec![
+                Some(Variant::from("hello")),
+                None,
+                Some(Variant::from("world")),
+            ],
+        );
     }
 
     #[test]
     fn test_boolean_row_builder() {
         let bool_array = BooleanArray::from(vec![Some(true), None, Some(false)]);
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(bool_array.data_type(), &bool_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 0).unwrap();
-        variant_builder.finish();
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 1).unwrap();
-        variant_builder.finish();
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 2).unwrap();
-        variant_builder.finish();
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-        assert_eq!(variant_array.value(0), Variant::from(true));
-        assert!(variant_array.is_null(1));
-        assert_eq!(variant_array.value(2), Variant::from(false));
+        test_row_builder_basic(
+            &bool_array,
+            vec![Some(Variant::from(true)), None, Some(Variant::from(false))],
+        );
     }
 
     #[test]
@@ -956,30 +937,7 @@ mod tests {
         )
         .unwrap();
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(struct_array.data_type(), &struct_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        // Test first row
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 0).unwrap();
-        variant_builder.finish();
-
-        // Test second row (with null int field)
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 1).unwrap();
-        variant_builder.finish();
-
-        // Test third row (with null string field)
-        let mut variant_builder = array_builder.variant_builder();
-        row_builder.append_row(&mut variant_builder, 2).unwrap();
-        variant_builder.finish();
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
+        let variant_array = execute_row_builder_test(&struct_array);
 
         // Check first row - should have both fields
         let first_variant = variant_array.value(0);
@@ -1015,20 +973,7 @@ mod tests {
         let run_ends = Int32Array::from(vec![2, 5, 6]);
         let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(run_array.data_type(), &run_array, &options).unwrap();
-        let mut array_builder = VariantArrayBuilder::new(6);
-
-        // Test sequential access (most common case)
-        for i in 0..6 {
-            let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(&mut variant_builder, i).unwrap();
-            variant_builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 6);
+        let variant_array = execute_row_builder_test(&run_array);
 
         // Verify the values
         assert_eq!(variant_array.value(0), Variant::from("A")); // Run 0
@@ -1111,21 +1056,7 @@ mod tests {
         let keys = Int32Array::from(vec![0, 1, 0, 2, 1]);
         let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(dict_array.data_type(), &dict_array, &options)
-                .unwrap();
-        let mut array_builder = VariantArrayBuilder::new(5);
-
-        // Test sequential access
-        for i in 0..5 {
-            let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(&mut variant_builder, i).unwrap();
-            variant_builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 5);
+        let variant_array = execute_row_builder_test(&dict_array);
 
         // Verify the values match the dictionary lookup
         assert_eq!(variant_array.value(0), Variant::from("apple")); // keys[0] = 0 -> values[0] = "apple"
@@ -1278,22 +1209,7 @@ mod tests {
         ];
         let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(list_array.data_type(), &list_array, &options)
-                .unwrap();
-        let mut variant_array_builder = VariantArrayBuilder::new(list_array.len());
-
-        for i in 0..list_array.len() {
-            let mut builder = variant_array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = variant_array_builder.build();
-
-        // Verify results
-        assert_eq!(variant_array.len(), 4);
+        let variant_array = execute_row_builder_test(&list_array);
 
         // Row 0: [1, 2]
         let row0 = variant_array.value(0);
@@ -1463,22 +1379,7 @@ mod tests {
         )
         .unwrap();
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(map_array.data_type(), &map_array, &options).unwrap();
-        let mut variant_array_builder = VariantArrayBuilder::new(4);
-
-        // Test each row
-        for i in 0..4 {
-            let mut builder = variant_array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = variant_array_builder.build();
-
-        // Verify results
-        assert_eq!(variant_array.len(), 4);
+        let variant_array = execute_row_builder_test(&map_array);
 
         // Map 0: {"key1": 1}
         let map0 = variant_array.value(0);
@@ -1538,39 +1439,12 @@ mod tests {
         )
         .unwrap();
 
-        // Test the row builder
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(union_array.data_type(), &union_array, &options)
-                .unwrap();
-
-        let mut variant_builder = VariantArrayBuilder::new(union_array.len());
-        for i in 0..union_array.len() {
-            let mut builder = variant_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-        let variant_array = variant_builder.build();
-
-        // Verify results
-        assert_eq!(variant_array.len(), 6);
-
-        // Row 0: int 1
+        let variant_array = execute_row_builder_test(&union_array);
         assert_eq!(variant_array.value(0), Variant::Int32(1));
-
-        // Row 1: float 3.2
         assert_eq!(variant_array.value(1), Variant::Double(3.2));
-
-        // Row 2: string "hello"
         assert_eq!(variant_array.value(2), Variant::from("hello"));
-
-        // Row 3: float 32.5
         assert_eq!(variant_array.value(3), Variant::Double(32.5));
-
-        // Row 4: int 34
         assert_eq!(variant_array.value(4), Variant::Int32(34));
-
-        // Row 5: null (int array has null at this position)
         assert!(variant_array.is_null(5));
     }
 
@@ -1627,25 +1501,12 @@ mod tests {
         }
         let variant_array = variant_builder.build();
 
-        // Verify results
         assert_eq!(variant_array.len(), 6);
-
-        // Row 0: int 1 (offset 0 in int_array)
         assert_eq!(variant_array.value(0), Variant::Int32(1));
-
-        // Row 1: float 3.2 (offset 0 in float_array)
         assert_eq!(variant_array.value(1), Variant::Double(3.2));
-
-        // Row 2: string "hello" (offset 0 in string_array)
         assert_eq!(variant_array.value(2), Variant::from("hello"));
-
-        // Row 3: float 32.5 (offset 1 in float_array)
         assert_eq!(variant_array.value(3), Variant::Double(32.5));
-
-        // Row 4: int 34 (offset 1 in int_array)
         assert_eq!(variant_array.value(4), Variant::Int32(34));
-
-        // Row 5: null (offset 2 in int_array, which has null)
         assert!(variant_array.is_null(5));
     }
 
@@ -1713,35 +1574,13 @@ mod tests {
             .with_precision_and_scale(9, 2)
             .unwrap();
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(decimal_array.data_type(), &decimal_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..decimal_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: 12.34 (1234 with scale 2)
-        assert_eq!(
-            variant_array.value(0),
-            Variant::from(VariantDecimal4::try_new(1234, 2).unwrap())
-        );
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: -56.78 (-5678 with scale 2)
-        assert_eq!(
-            variant_array.value(2),
-            Variant::from(VariantDecimal4::try_new(-5678, 2).unwrap())
+        test_row_builder_basic(
+            &decimal_array,
+            vec![
+                Some(Variant::from(VariantDecimal4::try_new(1234, 2).unwrap())),
+                None,
+                Some(Variant::from(VariantDecimal4::try_new(-5678, 2).unwrap())),
+            ],
         );
     }
 
@@ -1755,35 +1594,13 @@ mod tests {
             .with_precision_and_scale(10, -2)
             .unwrap();
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(decimal_array.data_type(), &decimal_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..decimal_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: 123 * 10^2 = 12300 with scale 0 (negative scale handling)
-        assert_eq!(
-            variant_array.value(0),
-            Variant::from(VariantDecimal16::try_new(12300, 0).unwrap())
-        );
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 456 * 10^2 = 45600 with scale 0
-        assert_eq!(
-            variant_array.value(2),
-            Variant::from(VariantDecimal16::try_new(45600, 0).unwrap())
+        test_row_builder_basic(
+            &decimal_array,
+            vec![
+                Some(Variant::from(VariantDecimal16::try_new(12300, 0).unwrap())),
+                None,
+                Some(Variant::from(VariantDecimal16::try_new(45600, 0).unwrap())),
+            ],
         );
     }
 
@@ -1798,29 +1615,12 @@ mod tests {
             .with_precision_and_scale(76, 3)
             .unwrap();
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(decimal_array.data_type(), &decimal_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(2);
-
-        for i in 0..decimal_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 2);
-
-        // Row 0: overflow value becomes Variant::Null
-        assert_eq!(variant_array.value(0), Variant::Null);
-
-        // Row 1: normal value converts successfully
-        assert_eq!(
-            variant_array.value(1),
-            Variant::from(VariantDecimal16::try_new(123, 3).unwrap())
+        test_row_builder_basic(
+            &decimal_array,
+            vec![
+                Some(Variant::Null), // Overflow value becomes Null
+                Some(Variant::from(VariantDecimal16::try_new(123, 3).unwrap())),
+            ],
         );
     }
 
@@ -1828,7 +1628,6 @@ mod tests {
     fn test_binary_row_builder() {
         use arrow::array::BinaryArray;
 
-        // Test BinaryArray with various binary data
         let binary_data = vec![
             Some(b"hello".as_slice()),
             None,
@@ -1837,42 +1636,21 @@ mod tests {
         ];
         let binary_array = BinaryArray::from(binary_data);
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(binary_array.data_type(), &binary_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(4);
-
-        for i in 0..binary_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 4);
-
-        // Row 0: "hello" bytes
-        assert_eq!(variant_array.value(0), Variant::from(b"hello".as_slice()));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: binary with special bytes
-        let bytes = [0x00, 0x01, 0x02, 0xFF];
-        assert_eq!(variant_array.value(2), Variant::from(bytes.as_slice()));
-
-        // Row 3: empty binary
-        let bytes = [];
-        assert_eq!(variant_array.value(3), Variant::from(bytes.as_slice()));
+        test_row_builder_basic(
+            &binary_array,
+            vec![
+                Some(Variant::from(b"hello".as_slice())),
+                None,
+                Some(Variant::from([0x00, 0x01, 0x02, 0xFF].as_slice())),
+                Some(Variant::from([].as_slice())),
+            ],
+        );
     }
 
     #[test]
     fn test_binary_view_row_builder() {
         use arrow::array::BinaryViewArray;
 
-        // Test BinaryViewArray
         let binary_data = vec![
             Some(b"short".as_slice()),
             None,
@@ -1880,35 +1658,15 @@ mod tests {
         ];
         let binary_view_array = BinaryViewArray::from(binary_data);
 
-        let options = CastOptions::default();
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            binary_view_array.data_type(),
+        test_row_builder_basic(
             &binary_view_array,
-            &options,
-        )
-        .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..binary_view_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: short binary
-        assert_eq!(variant_array.value(0), Variant::from(b"short".as_slice()));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: long binary view
-        assert_eq!(
-            variant_array.value(2),
-            Variant::from(b"this is a longer binary view that exceeds inline storage".as_slice())
+            vec![
+                Some(Variant::from(b"short".as_slice())),
+                None,
+                Some(Variant::from(
+                    b"this is a longer binary view that exceeds inline storage".as_slice(),
+                )),
+            ],
         );
     }
 
@@ -1916,7 +1674,6 @@ mod tests {
     fn test_fixed_size_binary_row_builder() {
         use arrow::array::FixedSizeBinaryArray;
 
-        // Test FixedSizeBinaryArray with 4-byte values
         let binary_data = vec![
             Some([0x01, 0x02, 0x03, 0x04]),
             None,
@@ -1926,42 +1683,20 @@ mod tests {
             FixedSizeBinaryArray::try_from_sparse_iter_with_size(binary_data.into_iter(), 4)
                 .unwrap();
 
-        let options = CastOptions::default();
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            fixed_binary_array.data_type(),
+        test_row_builder_basic(
             &fixed_binary_array,
-            &options,
-        )
-        .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..fixed_binary_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: fixed size binary
-        let bytes = [0x01, 0x02, 0x03, 0x04];
-        assert_eq!(variant_array.value(0), Variant::from(bytes.as_slice()));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: another fixed size binary
-        let bytes = [0xFF, 0xFE, 0xFD, 0xFC];
-        assert_eq!(variant_array.value(2), Variant::from(bytes.as_slice()));
+            vec![
+                Some(Variant::from([0x01, 0x02, 0x03, 0x04].as_slice())),
+                None,
+                Some(Variant::from([0xFF, 0xFE, 0xFD, 0xFC].as_slice())),
+            ],
+        );
     }
 
     #[test]
     fn test_utf8_view_row_builder() {
         use arrow::array::StringViewArray;
 
-        // Test StringViewArray (Utf8View)
         let string_data = vec![
             Some("short"),
             None,
@@ -1969,37 +1704,15 @@ mod tests {
         ];
         let string_view_array = StringViewArray::from(string_data);
 
-        let options = CastOptions::default();
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            string_view_array.data_type(),
+        test_row_builder_basic(
             &string_view_array,
-            &options,
-        )
-        .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..string_view_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: short string
-        assert_eq!(variant_array.value(0), Variant::from("short"));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: long string view
-        assert_eq!(
-            variant_array.value(2),
-            Variant::from(
-                "this is a much longer string that will be stored out-of-line in the buffer"
-            )
+            vec![
+                Some(Variant::from("short")),
+                None,
+                Some(Variant::from(
+                    "this is a much longer string that will be stored out-of-line in the buffer",
+                )),
+            ],
         );
     }
 
@@ -2007,7 +1720,6 @@ mod tests {
     fn test_timestamp_second_row_builder() {
         use arrow::array::TimestampSecondArray;
 
-        // Test TimestampSecondArray without timezone
         let timestamp_data = vec![
             Some(1609459200), // 2021-01-01 00:00:00 UTC
             None,
@@ -2015,35 +1727,17 @@ mod tests {
         ];
         let timestamp_array = TimestampSecondArray::from(timestamp_data);
 
-        let options = CastOptions::default();
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            timestamp_array.data_type(),
-            &timestamp_array,
-            &options,
-        )
-        .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..timestamp_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: 2021-01-01 00:00:00 (no timezone -> NaiveDateTime -> TimestampNtzMicros)
-        let expected_naive = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
-        assert_eq!(variant_array.value(0), Variant::from(expected_naive));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 2022-01-01 00:00:00
+        let expected_naive1 = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
         let expected_naive2 = DateTime::from_timestamp(1640995200, 0).unwrap().naive_utc();
-        assert_eq!(variant_array.value(2), Variant::from(expected_naive2));
+
+        test_row_builder_basic(
+            &timestamp_array,
+            vec![
+                Some(Variant::from(expected_naive1)),
+                None,
+                Some(Variant::from(expected_naive2)),
+            ],
+        );
     }
 
     #[test]
@@ -2051,7 +1745,6 @@ mod tests {
         use arrow::array::TimestampMicrosecondArray;
         use chrono::DateTime;
 
-        // Test TimestampMicrosecondArray with timezone
         let timestamp_data = vec![
             Some(1609459200000000), // 2021-01-01 00:00:00 UTC (in microseconds)
             None,
@@ -2059,44 +1752,25 @@ mod tests {
         ];
         let timezone = "UTC".to_string();
         let timestamp_array =
-            TimestampMicrosecondArray::from(timestamp_data).with_timezone(timezone.clone());
+            TimestampMicrosecondArray::from(timestamp_data).with_timezone(timezone);
 
-        let options = CastOptions::default();
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            timestamp_array.data_type(),
-            &timestamp_array,
-            &options,
-        )
-        .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..timestamp_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: 2021-01-01 00:00:00 UTC (with timezone -> DateTime<Utc> -> TimestampMicros)
-        let expected_utc = DateTime::from_timestamp(1609459200, 0).unwrap();
-        assert_eq!(variant_array.value(0), Variant::from(expected_utc));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 2022-01-01 00:00:00 UTC
+        let expected_utc1 = DateTime::from_timestamp(1609459200, 0).unwrap();
         let expected_utc2 = DateTime::from_timestamp(1640995200, 0).unwrap();
-        assert_eq!(variant_array.value(2), Variant::from(expected_utc2));
+
+        test_row_builder_basic(
+            &timestamp_array,
+            vec![
+                Some(Variant::from(expected_utc1)),
+                None,
+                Some(Variant::from(expected_utc2)),
+            ],
+        );
     }
 
     #[test]
     fn test_timestamp_nanosecond_precision_row_builder() {
         use arrow::array::TimestampNanosecondArray;
 
-        // Test TimestampNanosecondArray with nanosecond precision
         let timestamp_data = vec![
             Some(1609459200123456789), // 2021-01-01 00:00:00.123456789 UTC
             None,
@@ -2104,44 +1778,25 @@ mod tests {
         ];
         let timestamp_array = TimestampNanosecondArray::from(timestamp_data);
 
-        let options = CastOptions::default();
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            timestamp_array.data_type(),
-            &timestamp_array,
-            &options,
-        )
-        .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..timestamp_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: with nanoseconds -> should use TimestampNtzNanos
         let expected_with_nanos = DateTime::from_timestamp(1609459200, 123456789)
             .unwrap()
             .naive_utc();
-        assert_eq!(variant_array.value(0), Variant::from(expected_with_nanos));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: no fractional seconds -> should use TimestampNtzMicros
         let expected_no_nanos = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
-        assert_eq!(variant_array.value(2), Variant::from(expected_no_nanos));
+
+        test_row_builder_basic(
+            &timestamp_array,
+            vec![
+                Some(Variant::from(expected_with_nanos)),
+                None,
+                Some(Variant::from(expected_no_nanos)),
+            ],
+        );
     }
 
     #[test]
     fn test_timestamp_millisecond_row_builder() {
         use arrow::array::TimestampMillisecondArray;
 
-        // Test TimestampMillisecondArray
         let timestamp_data = vec![
             Some(1609459200123), // 2021-01-01 00:00:00.123 UTC
             None,
@@ -2149,37 +1804,19 @@ mod tests {
         ];
         let timestamp_array = TimestampMillisecondArray::from(timestamp_data);
 
-        let options = CastOptions::default();
-        let mut row_builder = make_arrow_to_variant_row_builder(
-            timestamp_array.data_type(),
-            &timestamp_array,
-            &options,
-        )
-        .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(3);
-
-        for i in 0..timestamp_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 3);
-
-        // Row 0: with milliseconds -> TimestampNtzMicros (123ms = 123000000ns)
         let expected_with_millis = DateTime::from_timestamp(1609459200, 123000000)
             .unwrap()
             .naive_utc();
-        assert_eq!(variant_array.value(0), Variant::from(expected_with_millis));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: no fractional seconds -> TimestampNtzMicros
         let expected_no_millis = DateTime::from_timestamp(1609459200, 0).unwrap().naive_utc();
-        assert_eq!(variant_array.value(2), Variant::from(expected_no_millis));
+
+        test_row_builder_basic(
+            &timestamp_array,
+            vec![
+                Some(Variant::from(expected_with_millis)),
+                None,
+                Some(Variant::from(expected_no_millis)),
+            ],
+        );
     }
 
     #[test]
@@ -2187,7 +1824,6 @@ mod tests {
         use arrow::array::Date32Array;
         use chrono::NaiveDate;
 
-        // Test Date32Array with various dates
         let date_data = vec![
             Some(0), // 1970-01-01
             None,
@@ -2196,36 +1832,19 @@ mod tests {
         ];
         let date_array = Date32Array::from(date_data);
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(date_array.data_type(), &date_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(4);
-
-        for i in 0..date_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 4);
-
-        // Row 0: 1970-01-01 (epoch)
         let expected_epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        assert_eq!(variant_array.value(0), Variant::from(expected_epoch));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 2024-01-01
         let expected_2024 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
-        assert_eq!(variant_array.value(2), Variant::from(expected_2024));
-
-        // Row 3: 0001-01-01 (near minimum date)
         let expected_min = NaiveDate::from_ymd_opt(1, 1, 1).unwrap();
-        assert_eq!(variant_array.value(3), Variant::from(expected_min));
+
+        test_row_builder_basic(
+            &date_array,
+            vec![
+                Some(Variant::from(expected_epoch)),
+                None,
+                Some(Variant::from(expected_2024)),
+                Some(Variant::from(expected_min)),
+            ],
+        );
     }
 
     #[test]
@@ -2242,36 +1861,19 @@ mod tests {
         ];
         let date_array = Date64Array::from(date_data);
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(date_array.data_type(), &date_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(4);
-
-        for i in 0..date_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 4);
-
-        // Row 0: 1970-01-01 (epoch)
         let expected_epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        assert_eq!(variant_array.value(0), Variant::from(expected_epoch));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 2024-01-01
         let expected_2024 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
-        assert_eq!(variant_array.value(2), Variant::from(expected_2024));
-
-        // Row 3: 1970-01-02
         let expected_next_day = NaiveDate::from_ymd_opt(1970, 1, 2).unwrap();
-        assert_eq!(variant_array.value(3), Variant::from(expected_next_day));
+
+        test_row_builder_basic(
+            &date_array,
+            vec![
+                Some(Variant::from(expected_epoch)),
+                None,
+                Some(Variant::from(expected_2024)),
+                Some(Variant::from(expected_next_day)),
+            ],
+        );
     }
 
     #[test]
@@ -2288,36 +1890,19 @@ mod tests {
         ];
         let time_array = Time32SecondArray::from(time_data);
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(time_array.data_type(), &time_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(4);
-
-        for i in 0..time_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 4);
-
-        // Row 0: 00:00:00 (midnight)
         let expected_midnight = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 01:01:01
         let expected_time = NaiveTime::from_hms_opt(1, 1, 1).unwrap();
-        assert_eq!(variant_array.value(2), Variant::from(expected_time));
-
-        // Row 3: 23:59:59 (last second of day)
         let expected_last = NaiveTime::from_hms_opt(23, 59, 59).unwrap();
-        assert_eq!(variant_array.value(3), Variant::from(expected_last));
+
+        test_row_builder_basic(
+            &time_array,
+            vec![
+                Some(Variant::from(expected_midnight)),
+                None,
+                Some(Variant::from(expected_time)),
+                Some(Variant::from(expected_last)),
+            ],
+        );
     }
 
     #[test]
@@ -2334,36 +1919,19 @@ mod tests {
         ];
         let time_array = Time32MillisecondArray::from(time_data);
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(time_array.data_type(), &time_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(4);
-
-        for i in 0..time_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 4);
-
-        // Row 0: 00:00:00.000 (midnight)
         let expected_midnight = NaiveTime::from_hms_milli_opt(0, 0, 0, 0).unwrap();
-        assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 01:01:01.123
         let expected_time = NaiveTime::from_hms_milli_opt(1, 1, 1, 123).unwrap();
-        assert_eq!(variant_array.value(2), Variant::from(expected_time));
-
-        // Row 3: 23:59:59.999 (last millisecond of day)
         let expected_last = NaiveTime::from_hms_milli_opt(23, 59, 59, 999).unwrap();
-        assert_eq!(variant_array.value(3), Variant::from(expected_last));
+
+        test_row_builder_basic(
+            &time_array,
+            vec![
+                Some(Variant::from(expected_midnight)),
+                None,
+                Some(Variant::from(expected_time)),
+                Some(Variant::from(expected_last)),
+            ],
+        );
     }
 
     #[test]
@@ -2380,36 +1948,19 @@ mod tests {
         ];
         let time_array = Time64MicrosecondArray::from(time_data);
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(time_array.data_type(), &time_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(4);
-
-        for i in 0..time_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 4);
-
-        // Row 0: 00:00:00.000000 (midnight)
         let expected_midnight = NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap();
-        assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 01:01:01.123456
         let expected_time = NaiveTime::from_hms_micro_opt(1, 1, 1, 123456).unwrap();
-        assert_eq!(variant_array.value(2), Variant::from(expected_time));
-
-        // Row 3: 23:59:59.999999 (last microsecond of day)
         let expected_last = NaiveTime::from_hms_micro_opt(23, 59, 59, 999999).unwrap();
-        assert_eq!(variant_array.value(3), Variant::from(expected_last));
+
+        test_row_builder_basic(
+            &time_array,
+            vec![
+                Some(Variant::from(expected_midnight)),
+                None,
+                Some(Variant::from(expected_time)),
+                Some(Variant::from(expected_last)),
+            ],
+        );
     }
 
     #[test]
@@ -2426,35 +1977,19 @@ mod tests {
         ];
         let time_array = Time64NanosecondArray::from(time_data);
 
-        let options = CastOptions::default();
-        let mut row_builder =
-            make_arrow_to_variant_row_builder(time_array.data_type(), &time_array, &options)
-                .unwrap();
-
-        let mut array_builder = VariantArrayBuilder::new(4);
-
-        for i in 0..time_array.len() {
-            let mut builder = array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
-        }
-
-        let variant_array = array_builder.build();
-        assert_eq!(variant_array.len(), 4);
-
-        // Row 0: 00:00:00.000000000 (midnight)
         let expected_midnight = NaiveTime::from_hms_nano_opt(0, 0, 0, 0).unwrap();
-        assert_eq!(variant_array.value(0), Variant::from(expected_midnight));
-
-        // Row 1: null
-        assert!(variant_array.is_null(1));
-
-        // Row 2: 01:01:01.123456789 -> truncated to 01:01:01.123456000 (microsecond precision)
+        // Nanoseconds are truncated to microsecond precision in Variant
         let expected_time = NaiveTime::from_hms_micro_opt(1, 1, 1, 123456).unwrap();
-        assert_eq!(variant_array.value(2), Variant::from(expected_time));
-
-        // Row 3: 23:59:59.999999999 -> truncated to 23:59:59.999999000 (microsecond precision)
         let expected_last = NaiveTime::from_hms_micro_opt(23, 59, 59, 999999).unwrap();
-        assert_eq!(variant_array.value(3), Variant::from(expected_last));
+
+        test_row_builder_basic(
+            &time_array,
+            vec![
+                Some(Variant::from(expected_midnight)),
+                None,
+                Some(Variant::from(expected_time)),
+                Some(Variant::from(expected_last)),
+            ],
+        );
     }
 }
