@@ -247,7 +247,7 @@ fn make_interval_mdn_array(n: usize) -> PrimitiveArray<IntervalMonthDayNanoType>
 
 #[inline]
 fn make_bool_array(n: usize) -> BooleanArray {
-    make_bool_array_with_tag(n, 0xB00_1)
+    make_bool_array_with_tag(n, 0xB001)
 }
 #[inline]
 fn make_i32_array(n: usize) -> PrimitiveArray<Int32Type> {
@@ -527,7 +527,7 @@ static STRUCT_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
             Field::new("s2", DataType::Int32, false),
             Field::new("s3", DataType::Float64, false),
         ]
-            .into(),
+        .into(),
     );
     let schema = schema_single("field1", struct_dt);
     SIZES
