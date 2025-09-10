@@ -17,7 +17,7 @@
 
 use crate::schema::{
     Attributes, AvroSchema, ComplexType, Enum, Nullability, PrimitiveType, Record, Schema, Type,
-    TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
+    TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_ROOT_RECORD_DEFAULT_NAME,
 };
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
@@ -250,7 +250,7 @@ impl AvroField {
     ) -> Result<Self, ArrowError> {
         let top_name = match reader_schema {
             Schema::Complex(ComplexType::Record(r)) => r.name.to_string(),
-            _ => "root".to_string(),
+            _ => AVRO_ROOT_RECORD_DEFAULT_NAME.to_string(),
         };
         let mut resolver = Maker::new(use_utf8view, strict_mode);
         let data_type = resolver.make_data_type(writer_schema, Some(reader_schema), None)?;
@@ -1711,5 +1711,16 @@ mod tests {
         } else {
             panic!("Top-level schema is not a struct");
         }
+    }
+
+    #[test]
+    fn test_resolve_from_writer_and_reader_defaults_root_name_for_non_record_reader() {
+        let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
+        let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
+        let field =
+            AvroField::resolve_from_writer_and_reader(&writer_schema, &reader_schema, false, false)
+                .expect("resolution should succeed");
+        assert_eq!(field.name(), AVRO_ROOT_RECORD_DEFAULT_NAME);
+        assert!(matches!(field.data_type().codec(), Codec::Utf8));
     }
 }
