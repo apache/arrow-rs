@@ -20,11 +20,15 @@
 //! Refer to [`parquet.thrift`](https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift)
 //! file to see raw definitions.
 
+use std::io::Write;
 use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
-use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::parquet_thrift::{
+    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
+    WriteThriftField,
+};
 use crate::{thrift_enum, thrift_struct, thrift_union_all_empty};
 
 use crate::errors::{ParquetError, Result};
@@ -190,6 +194,28 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ConvertedType {
             21 => Self::INTERVAL,
             _ => return Err(general_err!("Unexpected ConvertedType {}", val)),
         })
+    }
+}
+
+impl WriteThrift for ConvertedType {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        // because we've added NONE, the variant values are off by 1, so correct that here
+        writer.write_i32(*self as i32 - 1)
+    }
+}
+
+impl WriteThriftField for ConvertedType {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
     }
 }
 
@@ -450,35 +476,137 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
     }
 }
 
+impl WriteThrift for LogicalType {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        match self {
+            Self::String => {
+                writer.write_empty_struct(1, 0)?;
+            }
+            Self::Map => {
+                writer.write_empty_struct(2, 0)?;
+            }
+            Self::List => {
+                writer.write_empty_struct(3, 0)?;
+            }
+            Self::Enum => {
+                writer.write_empty_struct(4, 0)?;
+            }
+            Self::Decimal { scale, precision } => {
+                DecimalType {
+                    scale: *scale,
+                    precision: *precision,
+                }
+                .write_thrift_field(writer, 5, 0)?;
+            }
+            Self::Date => {
+                writer.write_empty_struct(6, 0)?;
+            }
+            Self::Time {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
+                TimeType {
+                    is_adjusted_to_u_t_c: *is_adjusted_to_u_t_c,
+                    unit: *unit,
+                }
+                .write_thrift_field(writer, 7, 0)?;
+            }
+            Self::Timestamp {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
+                TimestampType {
+                    is_adjusted_to_u_t_c: *is_adjusted_to_u_t_c,
+                    unit: *unit,
+                }
+                .write_thrift_field(writer, 8, 0)?;
+            }
+            Self::Integer {
+                bit_width,
+                is_signed,
+            } => {
+                IntType {
+                    bit_width: *bit_width,
+                    is_signed: *is_signed,
+                }
+                .write_thrift_field(writer, 10, 0)?;
+            }
+            Self::Unknown => {
+                writer.write_empty_struct(11, 0)?;
+            }
+            Self::Json => {
+                writer.write_empty_struct(12, 0)?;
+            }
+            Self::Bson => {
+                writer.write_empty_struct(13, 0)?;
+            }
+            Self::Uuid => {
+                writer.write_empty_struct(14, 0)?;
+            }
+            Self::Float16 => {
+                writer.write_empty_struct(15, 0)?;
+            }
+            Self::Variant {
+                specification_version,
+            } => {
+                VariantType {
+                    specification_version: *specification_version,
+                }
+                .write_thrift_field(writer, 16, 0)?;
+            }
+            Self::Geometry { crs } => {
+                GeometryType {
+                    crs: crs.as_ref().map(|s| s.as_str()),
+                }
+                .write_thrift_field(writer, 17, 0)?;
+            }
+            Self::Geography { crs, algorithm } => {
+                GeographyType {
+                    crs: crs.as_ref().map(|s| s.as_str()),
+                    algorithm: *algorithm,
+                }
+                .write_thrift_field(writer, 18, 0)?;
+            }
+            _ => return Err(nyi_err!("logical type")),
+        }
+        writer.write_struct_end()
+    }
+}
+
+impl WriteThriftField for LogicalType {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::FieldRepetitionType`
 //
 // Cannot use macro since the name is changed
 
+thrift_enum!(
 /// Representation of field types in schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum Repetition {
-    /// Field is required (can not be null) and each record has exactly 1 value.
-    REQUIRED,
-    /// Field is optional (can be null) and each record has 0 or 1 values.
-    OPTIONAL,
-    /// Field is repeated and can contain 0 or more values.
-    REPEATED,
+enum FieldRepetitionType {
+  /// This field is required (can not be null) and each row has exactly 1 value.
+  REQUIRED = 0;
+  /// The field is optional (can be null) and each row has 0 or 1 values.
+  OPTIONAL = 1;
+  /// The field is repeated and can contain 0 or more values.
+  REPEATED = 2;
 }
+);
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Repetition {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        let val = prot.read_i32()?;
-        Ok(match val {
-            0 => Self::REQUIRED,
-            1 => Self::OPTIONAL,
-            2 => Self::REPEATED,
-            _ => return Err(general_err!("Unexpected FieldRepetitionType {}", val)),
-        })
-    }
-}
+/// Type alias for thrift `FieldRepetitionType`
+pub type Repetition = FieldRepetitionType;
 
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `crate::format::Encoding`
@@ -643,6 +771,40 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Compression {
             7 => Self::LZ4_RAW,
             _ => return Err(general_err!("Unexpected CompressionCodec {}", val)),
         })
+    }
+}
+
+// TODO(ets): explore replacing this with a thrift_enum!(ThriftCompression) for the serialization
+// and then provide `From` impls to convert back and forth. This is necessary due to the addition
+// of compression level to some variants.
+impl WriteThrift for Compression {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let id: i32 = match *self {
+            Self::UNCOMPRESSED => 0,
+            Self::SNAPPY => 1,
+            Self::GZIP(_) => 2,
+            Self::LZO => 3,
+            Self::BROTLI(_) => 4,
+            Self::LZ4 => 5,
+            Self::ZSTD(_) => 6,
+            Self::LZ4_RAW => 7,
+        };
+        writer.write_i32(id)
+    }
+}
+
+impl WriteThriftField for Compression {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
     }
 }
 
@@ -993,16 +1155,26 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
     }
 }
 
+impl WriteThrift for ColumnOrder {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        match *self {
+            Self::TYPE_DEFINED_ORDER(_) => {
+                writer.write_field_begin(FieldType::Struct, 1, 0)?;
+                writer.write_struct_end()?;
+            }
+            _ => return Err(general_err!("Attempt to write undefined ColumnOrder")),
+        }
+        // write end of struct for this union
+        writer.write_struct_end()
+    }
+}
+
 // ----------------------------------------------------------------------
 // Display handlers
 
 impl fmt::Display for ConvertedType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
-
-impl fmt::Display for Repetition {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
     }
@@ -1260,37 +1432,6 @@ impl From<Option<LogicalType>> for ConvertedType {
 }
 
 // ----------------------------------------------------------------------
-// crate::format::FieldRepetitionType <=> Repetition conversion
-
-impl TryFrom<crate::format::FieldRepetitionType> for Repetition {
-    type Error = ParquetError;
-
-    fn try_from(value: crate::format::FieldRepetitionType) -> Result<Self> {
-        Ok(match value {
-            crate::format::FieldRepetitionType::REQUIRED => Repetition::REQUIRED,
-            crate::format::FieldRepetitionType::OPTIONAL => Repetition::OPTIONAL,
-            crate::format::FieldRepetitionType::REPEATED => Repetition::REPEATED,
-            _ => {
-                return Err(general_err!(
-                    "unexpected parquet repetition type: {}",
-                    value.0
-                ))
-            }
-        })
-    }
-}
-
-impl From<Repetition> for crate::format::FieldRepetitionType {
-    fn from(value: Repetition) -> Self {
-        match value {
-            Repetition::REQUIRED => crate::format::FieldRepetitionType::REQUIRED,
-            Repetition::OPTIONAL => crate::format::FieldRepetitionType::OPTIONAL,
-            Repetition::REPEATED => crate::format::FieldRepetitionType::REPEATED,
-        }
-    }
-}
-
-// ----------------------------------------------------------------------
 // crate::format::CompressionCodec <=> Compression conversion
 
 impl TryFrom<crate::format::CompressionCodec> for Compression {
@@ -1442,6 +1583,7 @@ impl str::FromStr for LogicalType {
 #[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {
     use super::*;
+    use crate::parquet_thrift::tests::test_roundtrip;
 
     #[test]
     fn test_display_type() {
@@ -1547,6 +1689,32 @@ mod tests {
                 .unwrap(),
             Type::FIXED_LEN_BYTE_ARRAY
         );
+    }
+
+    #[test]
+    fn test_converted_type_roundtrip() {
+        test_roundtrip(ConvertedType::UTF8);
+        test_roundtrip(ConvertedType::MAP);
+        test_roundtrip(ConvertedType::MAP_KEY_VALUE);
+        test_roundtrip(ConvertedType::LIST);
+        test_roundtrip(ConvertedType::ENUM);
+        test_roundtrip(ConvertedType::DECIMAL);
+        test_roundtrip(ConvertedType::DATE);
+        test_roundtrip(ConvertedType::TIME_MILLIS);
+        test_roundtrip(ConvertedType::TIME_MICROS);
+        test_roundtrip(ConvertedType::TIMESTAMP_MILLIS);
+        test_roundtrip(ConvertedType::TIMESTAMP_MICROS);
+        test_roundtrip(ConvertedType::UINT_8);
+        test_roundtrip(ConvertedType::UINT_16);
+        test_roundtrip(ConvertedType::UINT_32);
+        test_roundtrip(ConvertedType::UINT_64);
+        test_roundtrip(ConvertedType::INT_8);
+        test_roundtrip(ConvertedType::INT_16);
+        test_roundtrip(ConvertedType::INT_32);
+        test_roundtrip(ConvertedType::INT_64);
+        test_roundtrip(ConvertedType::JSON);
+        test_roundtrip(ConvertedType::BSON);
+        test_roundtrip(ConvertedType::INTERVAL);
     }
 
     #[test]
@@ -2107,6 +2275,89 @@ mod tests {
     }
 
     #[test]
+    fn test_logical_type_roundtrip() {
+        test_roundtrip(LogicalType::String);
+        test_roundtrip(LogicalType::Map);
+        test_roundtrip(LogicalType::List);
+        test_roundtrip(LogicalType::Enum);
+        test_roundtrip(LogicalType::Decimal {
+            scale: 0,
+            precision: 20,
+        });
+        test_roundtrip(LogicalType::Date);
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MICROS,
+        });
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::MILLIS,
+        });
+        test_roundtrip(LogicalType::Time {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::NANOS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::MICROS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MILLIS,
+        });
+        test_roundtrip(LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::NANOS,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 8,
+            is_signed: true,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 16,
+            is_signed: false,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 32,
+            is_signed: true,
+        });
+        test_roundtrip(LogicalType::Integer {
+            bit_width: 64,
+            is_signed: false,
+        });
+        test_roundtrip(LogicalType::Json);
+        test_roundtrip(LogicalType::Bson);
+        test_roundtrip(LogicalType::Uuid);
+        test_roundtrip(LogicalType::Float16);
+        test_roundtrip(LogicalType::Variant {
+            specification_version: Some(1),
+        });
+        test_roundtrip(LogicalType::Variant {
+            specification_version: None,
+        });
+        test_roundtrip(LogicalType::Geometry {
+            crs: Some("foo".to_owned()),
+        });
+        test_roundtrip(LogicalType::Geometry { crs: None });
+        test_roundtrip(LogicalType::Geography {
+            crs: Some("foo".to_owned()),
+            algorithm: Some(EdgeInterpolationAlgorithm::ANDOYER),
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: None,
+            algorithm: Some(EdgeInterpolationAlgorithm::KARNEY),
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: Some("foo".to_owned()),
+            algorithm: None,
+        });
+        test_roundtrip(LogicalType::Geography {
+            crs: None,
+            algorithm: None,
+        });
+    }
+
+    #[test]
     fn test_display_repetition() {
         assert_eq!(Repetition::REQUIRED.to_string(), "REQUIRED");
         assert_eq!(Repetition::OPTIONAL.to_string(), "OPTIONAL");
@@ -2409,6 +2660,12 @@ mod tests {
             "TYPE_DEFINED_ORDER(UNDEFINED)"
         );
         assert_eq!(ColumnOrder::UNDEFINED.to_string(), "UNDEFINED");
+    }
+
+    #[test]
+    fn test_column_order_roundtrip() {
+        // SortOrder::SIGNED is the default on read.
+        test_roundtrip(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED))
     }
 
     #[test]

@@ -20,6 +20,10 @@
 // They allow for pasting sections of the Parquet thrift IDL file
 // into a macro to generate rust structures and implementations.
 
+// TODO(ets): These macros need a good bit of documentation so other developers will be able
+// to use them correctly. Also need to write a .md file with complete examples of both how
+// to use the macros, and how to implement custom readers and writers when necessary.
+
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 /// macro to generate rust enums from a thrift enum definition
@@ -48,6 +52,22 @@ macro_rules! thrift_enum {
         impl fmt::Display for $identifier {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 write!(f, "{self:?}")
+            }
+        }
+
+        impl WriteThrift for $identifier {
+            const ELEMENT_TYPE: ElementType = ElementType::I32;
+
+            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                writer.write_i32(*self as i32)
+            }
+        }
+
+        impl WriteThriftField for $identifier {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
             }
         }
 
@@ -119,6 +139,26 @@ macro_rules! thrift_union_all_empty {
             }
         }
 
+        impl WriteThrift for $identifier {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                match *self {
+                    $(Self::$field_name => writer.write_empty_struct($field_id, 0)?,)*
+                };
+                // write end of struct for this union
+                writer.write_struct_end()
+            }
+        }
+
+        impl WriteThriftField for $identifier {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
+
         // TODO: remove when we finally get rid of the format module
         impl From<crate::format::$identifier> for $identifier {
             fn from(value: crate::format::$identifier) -> Self {
@@ -183,7 +223,49 @@ macro_rules! thrift_union {
                 Ok(ret)
             }
         }
+
+        impl WriteThrift for $identifier {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                match self {
+                    $($crate::__thrift_write_variant_lhs!($field_name $($field_type)?, variant_val) =>
+                      $crate::__thrift_write_variant_rhs!($field_id $($field_type)?, writer, variant_val),)*
+                };
+                writer.write_struct_end()
+            }
+        }
+
+        impl WriteThriftField for $identifier {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
     }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_variant_lhs {
+    ($field_name:ident $field_type:ident, $val:tt) => {
+        Self::$field_name($val)
+    };
+    ($field_name:ident, $val:tt) => {
+        Self::$field_name
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_variant_rhs {
+    ($field_id:literal $field_type:ident, $writer:tt, $val:ident) => {
+        $val.write_thrift_field($writer, $field_id, 0)?
+    };
+    ($field_id:literal, $writer:tt, $val:tt) => {
+        $writer.write_empty_struct($field_id, 0)?
+    };
 }
 
 /// macro to generate rust structs from a thrift struct definition
@@ -228,14 +310,86 @@ macro_rules! thrift_struct {
                 })
             }
         }
+
+        impl $(<$lt>)? WriteThrift for $identifier $(<$lt>)? {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+            #[allow(unused_assignments)]
+            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                let mut last_field_id = 0i16;
+                $($crate::__thrift_write_required_or_optional_field!($required_or_optional $field_name, $field_id, $field_type, self, writer, last_field_id);)*
+                writer.write_struct_end()
+            }
+        }
+
+        impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
     }
 }
 
-/// macro to use when decoding struct fields
+#[doc(hidden)]
 #[macro_export]
-macro_rules! thrift_read_field {
-    ($field_name:ident, $prot:tt, $field_type:ident) => {
-        $field_name = Some($crate::__thrift_read_field!($prot, $field_type));
+macro_rules! __thrift_write_required_or_optional_field {
+    (required $field_name:ident, $field_id:literal, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
+        $crate::__thrift_write_required_field!(
+            $field_type,
+            $field_name,
+            $field_id,
+            $self,
+            $writer,
+            $last_id
+        )
+    };
+    (optional $field_name:ident, $field_id:literal, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
+        $crate::__thrift_write_optional_field!(
+            $field_type,
+            $field_name,
+            $field_id,
+            $self,
+            $writer,
+            $last_id
+        )
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_required_field {
+    (binary, $field_name:ident, $field_id:literal, $self:ident, $writer:ident, $last_id:ident) => {
+        $writer.write_field_begin(FieldType::Binary, $field_id, $last_id)?;
+        $writer.write_bytes($self.$field_name)?;
+        $last_id = $field_id;
+    };
+    ($field_type:ident, $field_name:ident, $field_id:literal, $self:ident, $writer:ident, $last_id:ident) => {
+        $last_id = $self
+            .$field_name
+            .write_thrift_field($writer, $field_id, $last_id)?;
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_optional_field {
+    (binary, $field_name:ident, $field_id:literal, $self:ident, $writer:tt, $last_id:tt) => {
+        if $self.$field_name.is_some() {
+            $writer.write_field_begin(FieldType::Binary, $field_id, $last_id)?;
+            $writer.write_bytes($self.$field_name.as_ref().unwrap())?;
+            $last_id = $field_id;
+        }
+    };
+    ($field_type:ident, $field_name:ident, $field_id:literal, $self:ident, $writer:tt, $last_id:tt) => {
+        if $self.$field_name.is_some() {
+            $last_id = $self
+                .$field_name
+                .as_ref()
+                .unwrap()
+                .write_thrift_field($writer, $field_id, $last_id)?;
+        }
     };
 }
 

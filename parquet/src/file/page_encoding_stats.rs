@@ -17,9 +17,14 @@
 
 //! Per-page encoding information.
 
+use std::io::Write;
+
 use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
-use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::parquet_thrift::{
+    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
+    WriteThriftField,
+};
 use crate::thrift_struct;
 
 // TODO: This should probably all be moved to thrift_gen

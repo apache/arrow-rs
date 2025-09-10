@@ -17,6 +17,7 @@
 
 // a collection of generated structs used to parse thrift metadata
 
+use std::io::Write;
 use std::sync::Arc;
 
 #[cfg(feature = "encryption")]
@@ -33,7 +34,10 @@ use crate::{
         page_encoding_stats::PageEncodingStats,
         statistics::ValueStatistics,
     },
-    parquet_thrift::{FieldType, ThriftCompactInputProtocol},
+    parquet_thrift::{
+        ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+        WriteThrift, WriteThriftField,
+    },
     schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor},
     thrift_struct,
     util::bit_util::FromBytes,
@@ -505,5 +509,47 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ParquetMetaData {
         );
 
         Ok(ParquetMetaData::new(fmd, row_groups))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::file::metadata::thrift_gen::BoundingBox;
+    use crate::parquet_thrift::tests::test_roundtrip;
+
+    #[test]
+    fn test_bounding_box_roundtrip() {
+        test_roundtrip(BoundingBox {
+            xmin: 0.1.into(),
+            xmax: 10.3.into(),
+            ymin: 0.001.into(),
+            ymax: 128.5.into(),
+            zmin: None,
+            zmax: None,
+            mmin: None,
+            mmax: None,
+        });
+
+        test_roundtrip(BoundingBox {
+            xmin: 0.1.into(),
+            xmax: 10.3.into(),
+            ymin: 0.001.into(),
+            ymax: 128.5.into(),
+            zmin: Some(11.0.into()),
+            zmax: Some(1300.0.into()),
+            mmin: None,
+            mmax: None,
+        });
+
+        test_roundtrip(BoundingBox {
+            xmin: 0.1.into(),
+            xmax: 10.3.into(),
+            ymin: 0.001.into(),
+            ymax: 128.5.into(),
+            zmin: Some(11.0.into()),
+            zmax: Some(1300.0.into()),
+            mmin: Some(3.7.into()),
+            mmax: Some(42.0.into()),
+        });
     }
 }

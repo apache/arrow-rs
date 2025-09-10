@@ -19,7 +19,12 @@
 //!
 //! [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
-use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use std::io::Write;
+
+use crate::parquet_thrift::{
+    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
+    WriteThriftField,
+};
 use crate::{
     errors::{ParquetError, Result},
     thrift_struct,
@@ -192,4 +197,37 @@ fn read_page_location<'a>(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<P
         compressed_page_size,
         first_row_index,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parquet_thrift::tests::test_roundtrip;
+
+    #[test]
+    fn test_offset_idx_roundtrip() {
+        let page_locations = [
+            PageLocation {
+                offset: 0,
+                compressed_page_size: 10,
+                first_row_index: 0,
+            },
+            PageLocation {
+                offset: 10,
+                compressed_page_size: 20,
+                first_row_index: 100,
+            },
+        ]
+        .to_vec();
+        let unenc = [0i64, 100i64].to_vec();
+
+        test_roundtrip(OffsetIndexMetaData {
+            page_locations: page_locations.clone(),
+            unencoded_byte_array_data_bytes: Some(unenc),
+        });
+        test_roundtrip(OffsetIndexMetaData {
+            page_locations,
+            unencoded_byte_array_data_bytes: None,
+        });
+    }
 }

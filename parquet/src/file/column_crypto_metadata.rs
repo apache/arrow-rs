@@ -17,13 +17,18 @@
 
 //! Column chunk encryption metadata
 
+use std::io::Write;
+
 use crate::errors::{ParquetError, Result};
 use crate::format::{
     ColumnCryptoMetaData as TColumnCryptoMetaData,
     EncryptionWithColumnKey as TEncryptionWithColumnKey,
     EncryptionWithFooterKey as TEncryptionWithFooterKey,
 };
-use crate::parquet_thrift::{FieldType, ThriftCompactInputProtocol};
+use crate::parquet_thrift::{
+    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
+    WriteThriftField,
+};
 use crate::{thrift_struct, thrift_union};
 
 // define this and ColumnCryptoMetadata here so they're only defined when
@@ -84,6 +89,7 @@ pub fn to_thrift(column_crypto_metadata: &ColumnCryptoMetaData) -> TColumnCrypto
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parquet_thrift::tests::test_roundtrip;
 
     #[test]
     fn test_encryption_with_footer_key_from_thrift() {
@@ -100,5 +106,25 @@ mod tests {
         });
 
         assert_eq!(try_from_thrift(&to_thrift(&metadata)).unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_column_crypto_roundtrip() {
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY);
+
+        let path_in_schema = vec!["foo".to_owned(), "bar".to_owned(), "really".to_owned()];
+        let key_metadata = vec![1u8; 32];
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(
+            EncryptionWithColumnKey {
+                path_in_schema: path_in_schema.clone(),
+                key_metadata: None,
+            },
+        ));
+        test_roundtrip(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(
+            EncryptionWithColumnKey {
+                path_in_schema,
+                key_metadata: Some(key_metadata),
+            },
+        ));
     }
 }
