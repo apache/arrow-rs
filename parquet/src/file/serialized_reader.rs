@@ -582,7 +582,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
             total_rows,
             page_locations,
             props,
-            None, // No caching by default
+            None,
         )
     }
 

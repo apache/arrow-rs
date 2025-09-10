@@ -162,7 +162,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
-            page_cache: None,                            // No default caching for sync readers
+            page_cache: None,
         }
     }
 
