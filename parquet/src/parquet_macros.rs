@@ -20,6 +20,10 @@
 // They allow for pasting sections of the Parquet thrift IDL file
 // into a macro to generate rust structures and implementations.
 
+// TODO(ets): These macros need a good bit of documentation so other developers will be able
+// to use them correctly. Also need to write a .md file with complete examples of both how
+// to use the macros, and how to implement custom readers and writers when necessary.
+
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 /// macro to generate rust enums from a thrift enum definition

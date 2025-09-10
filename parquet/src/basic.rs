@@ -774,8 +774,9 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Compression {
     }
 }
 
-// FIXME
-// ugh...why did we add compression level to some variants if we don't use them????
+// TODO(ets): explore replacing this with a thrift_enum!(ThriftCompression) for the serialization
+// and then provide `From` impls to convert back and forth. This is necessary due to the addition
+// of compression level to some variants.
 impl WriteThrift for Compression {
     const ELEMENT_TYPE: ElementType = ElementType::I32;
 
