@@ -1706,6 +1706,10 @@ impl<'a> ObjectBuilder<'a> {
 /// Allows users to append values to a [`VariantBuilder`], [`ListBuilder`] or
 /// [`ObjectBuilder`]. using the same interface.
 pub trait VariantBuilderExt {
+    /// Appends a NULL value to this builder. The semantics depend on the implementation, but will
+    /// often translate to appending a [`Variant::Null`] value.
+    fn append_null(&mut self);
+
     /// Appends a new variant value to this builder. See e.g. [`VariantBuilder::append_value`].
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
@@ -1731,6 +1735,10 @@ pub trait VariantBuilderExt {
 }
 
 impl VariantBuilderExt for ListBuilder<'_> {
+    /// Variant arrays cannot encode NULL values, only `Variant::Null`.
+    fn append_null(&mut self) {
+        self.append_value(Variant::Null);
+    }
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
@@ -1745,6 +1753,11 @@ impl VariantBuilderExt for ListBuilder<'_> {
 }
 
 impl VariantBuilderExt for VariantBuilder {
+    /// Variant values cannot encode NULL, only [`Variant::Null`]. This is different from the column
+    /// that holds variant values being NULL at some positions.
+    fn append_null(&mut self) {
+        self.append_value(Variant::Null);
+    }
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
@@ -1755,6 +1768,34 @@ impl VariantBuilderExt for VariantBuilder {
 
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
         Ok(self.new_object())
+    }
+}
+
+/// A [`VariantBuilderExt`] that inserts a new field into a variant object.
+pub struct ObjectFieldBuilder<'o, 'v, 's> {
+    key: &'s str,
+    builder: &'o mut ObjectBuilder<'v>,
+}
+
+impl<'o, 'v, 's> ObjectFieldBuilder<'o, 'v, 's> {
+    pub fn new(key: &'s str, builder: &'o mut ObjectBuilder<'v>) -> Self {
+        Self { key, builder }
+    }
+}
+
+impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
+    /// A NULL object field is interpreted as missing, so nothing gets inserted at all.
+    fn append_null(&mut self) {}
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.builder.insert(self.key, value);
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+        self.builder.try_new_list(self.key)
+    }
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+        self.builder.try_new_object(self.key)
     }
 }
 
