@@ -366,30 +366,31 @@ impl AvroDataType {
                     for f in fields.as_ref() {
                         let name = f.name().to_string();
                         if let Some(sub) = obj.get(&name) {
-                            // Explicit value provided in the record default object
-                            let lit = f.data_type().parse_default_literal(sub)?;
-                            out.insert(name, lit);
-                        } else if let Some(default_json) =
-                            f.data_type().metadata.get(AVRO_FIELD_DEFAULT_METADATA_KEY)
-                        {
-                            // Use the subfield's own stored default (validate and parse)
-                            let v: Value = serde_json::from_str(default_json).map_err(|e| {
-                                ArrowError::SchemaError(format!(
-                                    "Failed to parse stored subfield default JSON for '{}': {e}",
-                                    f.name(),
-                                ))
-                            })?;
-                            let lit = f.data_type().parse_default_literal(&v)?;
-                            out.insert(name, lit);
-                        } else if f.data_type().nullability() == Some(Nullability::default()) {
-                            // Only a NullFirst union may implicitly supply null for the missing subfield
-                            out.insert(name, AvroLiteral::Null);
+                            out.insert(name, f.data_type().parse_default_literal(sub)?);
                         } else {
-                            return Err(ArrowError::SchemaError(format!(
-                                "Record default missing required subfield '{}' with non-nullable type {:?}",
-                                f.name(),
-                                f.data_type().codec()
-                            )));
+                            // Cache metadata lookup once
+                            let stored_default =
+                                f.data_type().metadata.get(AVRO_FIELD_DEFAULT_METADATA_KEY);
+                            if stored_default.is_none()
+                                && f.data_type().nullability() == Some(Nullability::default())
+                            {
+                                out.insert(name, AvroLiteral::Null);
+                            } else if let Some(default_json) = stored_default {
+                                let v: Value =
+                                    serde_json::from_str(default_json).map_err(|e| {
+                                        ArrowError::SchemaError(format!(
+                                            "Failed to parse stored subfield default JSON for '{}': {e}",
+                                            f.name(),
+                                        ))
+                                    })?;
+                                out.insert(name, f.data_type().parse_default_literal(&v)?);
+                            } else {
+                                return Err(ArrowError::SchemaError(format!(
+                                    "Record default missing required subfield '{}' with non-nullable type {:?}",
+                                    f.name(),
+                                    f.data_type().codec()
+                                )));
+                            }
                         }
                     }
                     AvroLiteral::Map(out)
@@ -2188,7 +2189,7 @@ mod tests {
         let err = dt_dec_fixed
             .parse_and_store_default(&json_string("toolong"))
             .unwrap_err();
-        assert!(format!("{err}").contains("Default length"));
+        assert!(err.to_string().contains("Default length"));
         let mut dt_dec_bytes =
             AvroDataType::new(Codec::Decimal(10, Some(2), None), HashMap::new(), None);
         let l = dt_dec_bytes
@@ -2209,7 +2210,7 @@ mod tests {
         let err = dt_interval
             .parse_and_store_default(&json_string("short"))
             .unwrap_err();
-        assert!(format!("{err}").contains("Default length"));
+        assert!(err.to_string().contains("Default length"));
     }
 
     #[test]
@@ -2225,7 +2226,7 @@ mod tests {
         let err = dt_enum
             .parse_and_store_default(&json_string("YELLOW"))
             .unwrap_err();
-        assert!(format!("{err}").contains("Default enum symbol"));
+        assert!(err.to_string().contains("Default enum symbol"));
         let item = AvroDataType::new(Codec::Int64, HashMap::new(), None);
         let mut dt_list = AvroDataType::new(Codec::List(Arc::new(item)), HashMap::new(), None);
         let val = serde_json::json!([1, 2, 3]);
@@ -2241,7 +2242,7 @@ mod tests {
         let err = dt_list
             .parse_and_store_default(&serde_json::json!({"not":"array"}))
             .unwrap_err();
-        assert!(format!("{err}").contains("JSON array"));
+        assert!(err.to_string().contains("JSON array"));
         let val_dt = AvroDataType::new(Codec::Float64, HashMap::new(), None);
         let mut dt_map = AvroDataType::new(Codec::Map(Arc::new(val_dt)), HashMap::new(), None);
         let mv = serde_json::json!({"x": 1.5, "y": 2.5});
@@ -2254,7 +2255,7 @@ mod tests {
         let err = dt_map
             .parse_and_store_default(&serde_json::json!(123))
             .unwrap_err();
-        assert!(format!("{err}").contains("JSON object"));
+        assert!(err.to_string().contains("JSON object"));
         let mut field_a = AvroField {
             name: "a".into(),
             data_type: AvroDataType::new(Codec::Int32, HashMap::new(), None),
@@ -2297,13 +2298,13 @@ mod tests {
             .parse_and_store_default(&serde_json::json!({}))
             .unwrap_err();
         assert!(
-            format!("{err}").contains("missing required subfield 'req'"),
+            err.to_string().contains("missing required subfield 'req'"),
             "unexpected error: {err}"
         );
         let err = dt_struct
             .parse_and_store_default(&serde_json::json!(10))
             .unwrap_err();
-        assert!(format!("{err}").contains("must be a JSON object"));
+        err.to_string().contains("must be a JSON object");
     }
 
     #[test]
