@@ -1006,6 +1006,9 @@ pub struct SchemaDescriptor {
     /// -- -- -- -- d
     /// ```
     leaf_to_base: Vec<usize>,
+
+    /// Mapping between the column dotstring path to the leaf index.
+    leaf_to_idx: HashMap<String, usize>,
 }
 
 impl fmt::Debug for SchemaDescriptor {
@@ -1030,15 +1033,26 @@ impl SchemaDescriptor {
         assert!(tp.is_group(), "SchemaDescriptor should take a GroupType");
         let mut leaves = vec![];
         let mut leaf_to_base = Vec::new();
+        let mut leaf_to_idx = HashMap::new();
         for (root_idx, f) in tp.get_fields().iter().enumerate() {
             let mut path = vec![];
-            build_tree(f, root_idx, 0, 0, &mut leaves, &mut leaf_to_base, &mut path);
+            build_tree(
+                f,
+                root_idx,
+                0,
+                0,
+                &mut leaves,
+                &mut leaf_to_base,
+                &mut leaf_to_idx,
+                &mut path,
+            );
         }
 
         Self {
             schema: tp,
             leaves,
             leaf_to_base,
+            leaf_to_idx,
         }
     }
 
@@ -1061,6 +1075,11 @@ impl SchemaDescriptor {
     /// Returns number of leaf-level columns.
     pub fn num_columns(&self) -> usize {
         self.leaves.len()
+    }
+
+    /// Gets the index of a column its dotstring path, or -1 if not found.
+    pub fn column_index(&self, node_path: &str) -> i64 {
+        self.leaf_to_idx.get(node_path).map_or(-1, |value| *value as i64)
     }
 
     /// Returns column root [`Type`] for a leaf position.
@@ -1117,6 +1136,7 @@ fn build_tree<'a>(
     mut max_def_level: i16,
     leaves: &mut Vec<ColumnDescPtr>,
     leaf_to_base: &mut Vec<usize>,
+    leaf_to_idx: &mut HashMap<String, usize>,
     path_so_far: &mut Vec<&'a str>,
 ) {
     assert!(tp.get_basic_info().has_repetition());
@@ -1137,6 +1157,7 @@ fn build_tree<'a>(
         Type::PrimitiveType { .. } => {
             let mut path: Vec<String> = vec![];
             path.extend(path_so_far.iter().copied().map(String::from));
+            leaf_to_idx.insert(path.join("."), leaves.len());
             leaves.push(Arc::new(ColumnDescriptor::new(
                 tp.clone(),
                 max_def_level,
@@ -1154,6 +1175,7 @@ fn build_tree<'a>(
                     max_def_level,
                     leaves,
                     leaf_to_base,
+                    leaf_to_idx,
                     path_so_far,
                 );
                 path_so_far.pop();
@@ -1891,6 +1913,17 @@ mod tests {
         assert_eq!(descr.column(3).path().string(), "bag.records.item1");
         assert_eq!(descr.column(4).path().string(), "bag.records.item2");
         assert_eq!(descr.column(5).path().string(), "bag.records.item3");
+
+        assert_eq!(descr.column_index("a"), 0);
+        assert_eq!(descr.column_index("b"), 1);
+        assert_eq!(descr.column_index("c"), 2);
+        assert_eq!(descr.column_index("bag.records.item1"), 3);
+        assert_eq!(descr.column_index("bag.records.item2"), 4);
+        assert_eq!(descr.column_index("bag.records.item3"), 5);
+        assert_eq!(descr.column_index("d"), -1);
+        assert_eq!(descr.column_index("bag"), -1);
+        assert_eq!(descr.column_index("bag.records"), -1);
+        assert_eq!(descr.column_index("bag.records.item4"), -1);
 
         assert_eq!(descr.get_column_root(0).name(), "a");
         assert_eq!(descr.get_column_root(3).name(), "bag");
