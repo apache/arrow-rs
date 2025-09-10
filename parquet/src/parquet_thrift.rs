@@ -746,7 +746,7 @@ impl WriteThrift for String {
 /// Trait implemented by objects that are fields of Thrift structs.
 ///
 /// For example, given the Thrift struct definition
-/// ```
+/// ```ignore
 /// struct MyStruct {
 ///   1: required i32 field1
 ///   2: optional bool field2
@@ -755,7 +755,8 @@ impl WriteThrift for String {
 /// ```
 ///
 /// which becomes in Rust
-/// ```rust
+/// ```no_run
+/// # struct OtherStruct {}
 /// struct MyStruct {
 ///   field1: i32,
 ///   field2: Option<bool>,
@@ -765,10 +766,8 @@ impl WriteThrift for String {
 /// the impl of `WriteThrift` for `MyStruct` will use the `WriteThriftField` impls for `i32`,
 /// `bool`, and `OtherStruct`.
 ///
-/// ```
+/// ```ignore
 /// impl WriteThrift for MyStruct {
-///   const ELEMENT_TYPE: ElementType = ElementType::Double;
-///
 ///   fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
 ///     let mut last_field_id = 0i16;
 ///     last_field_id = self.field1.write_thrift_field(writer, 1, last_field_id)?;
@@ -781,6 +780,7 @@ impl WriteThrift for String {
 ///       // no need to assign last_field_id since this is the final field.
 ///       self.field3.write_thrift_field(writer, 3, last_field_id)?;
 ///     }
+///     writer.write_struct_end()
 ///   }
 /// }
 /// ```
