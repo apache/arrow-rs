@@ -164,42 +164,6 @@ impl VariantArrayBuilder {
         ValueBuilder::append_variant(self.parent_state(), variant);
     }
 
-    /// Return a `VariantArrayVariantBuilder` that writes directly to the
-    /// buffers of this builder.
-    ///
-    /// You must call [`VariantArrayVariantBuilder::finish`] to complete the builder
-    ///
-    /// # Example
-    /// ```
-    /// # use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
-    /// # use parquet_variant_compute::{VariantArray, VariantArrayBuilder};
-    /// let mut array_builder = VariantArrayBuilder::new(10);
-    ///
-    /// // First row has a string
-    /// let mut variant_builder = array_builder.variant_builder();
-    /// variant_builder.append_value("Hello, World!");
-    /// // must call finish to write the variant to the buffers
-    /// variant_builder.finish();
-    ///
-    /// // Second row is an object
-    /// let mut variant_builder = array_builder.variant_builder();
-    /// variant_builder
-    ///     .new_object()
-    ///     .with_field("my_field", 42i64)
-    ///     .finish();
-    /// variant_builder.finish();
-    ///
-    /// // finalize the array
-    /// let variant_array: VariantArray = array_builder.build();
-    ///
-    /// // verify what we wrote is still there
-    /// assert_eq!(variant_array.value(0), Variant::from("Hello, World!"));
-    /// assert!(variant_array.value(1).as_object().is_some());
-    ///  ```
-    pub fn variant_builder(&mut self) -> VariantArrayVariantBuilder<'_> {
-        VariantArrayVariantBuilder::new(self)
-    }
-
     /// Create a custom parent state for use with direct builder creation
     fn parent_state(&mut self) -> ParentState<'_> {
         let custom_state = ArrayBuilderState {
@@ -233,92 +197,6 @@ impl VariantBuilderExt for VariantArrayBuilder {
     fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
         Ok(ObjectBuilder::new(self.parent_state(), false))
     }
-}
-
-/// A `VariantBuilderExt` that writes directly to the buffers of a `VariantArrayBuilder`.
-///
-// This struct implements [`VariantBuilderExt`], so in most cases it can be used as a
-// [`VariantBuilder`] to perform variant-related operations for [`VariantArrayBuilder`].
-///
-/// If [`Self::finish`] is not called, any changes will be rolled back
-///
-/// See [`VariantArrayBuilder::variant_builder`] for an example
-pub struct VariantArrayVariantBuilder<'a> {
-    parent_state: ParentState<'a>,
-    metadata_offsets: &'a mut Vec<usize>,
-    value_offsets: &'a mut Vec<usize>,
-    nulls: &'a mut NullBufferBuilder,
-    is_null: bool,
-}
-
-impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
-    /// Appending NULL to a variant array produces an actual NULL value
-    fn append_null(&mut self) {
-        self.is_null = true;
-    }
-    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        ValueBuilder::append_variant(self.parent_state(), value.into());
-    }
-
-    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
-        Ok(ListBuilder::new(self.parent_state(), false))
-    }
-
-    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
-        Ok(ObjectBuilder::new(self.parent_state(), false))
-    }
-}
-
-impl<'a> VariantArrayVariantBuilder<'a> {
-    /// Constructs a new VariantArrayVariantBuilder
-    ///
-    /// Note this is not public as this is a structure that is logically
-    /// part of the [`VariantArrayBuilder`] and relies on its internal structure
-    fn new(builder: &'a mut VariantArrayBuilder) -> Self {
-        let parent_state =
-            ParentState::variant(&mut builder.value_builder, &mut builder.metadata_builder);
-        VariantArrayVariantBuilder {
-            parent_state,
-            metadata_offsets: &mut builder.metadata_offsets,
-            value_offsets: &mut builder.value_offsets,
-            nulls: &mut builder.nulls,
-            is_null: false,
-        }
-    }
-
-    /// Called to finish the in progress variant and write it to the underlying
-    /// buffers
-    ///
-    /// Note if you do not call finish, on drop any changes made to the
-    /// underlying buffers will be rolled back.
-    pub fn finish(mut self) {
-        // Record the ending offsets after finishing metadata and finish the parent state.
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-        let (metadata_offset, value_offset, not_null) = if self.is_null {
-            // Do not `finish`, just repeat the previous offset for a physically empty result
-            let metadata_offset = self.metadata_offsets.last().copied().unwrap_or(0);
-            let value_offset = self.value_offsets.last().copied().unwrap_or(0);
-            (metadata_offset, value_offset, false)
-        } else {
-            let metadata_offset = metadata_builder.finish();
-            let value_offset = value_builder.offset();
-            self.parent_state.finish();
-            (metadata_offset, value_offset, true)
-        };
-        self.metadata_offsets.push(metadata_offset);
-        self.value_offsets.push(value_offset);
-        self.nulls.append(not_null);
-    }
-
-    fn parent_state(&mut self) -> ParentState<'_> {
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-        ParentState::variant(value_builder, metadata_builder)
-    }
-}
-
-// Empty Drop to help with borrow checking - warns users if they forget to call finish()
-impl Drop for VariantArrayVariantBuilder<'_> {
-    fn drop(&mut self) {}
 }
 
 fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> BinaryViewArray {
@@ -403,46 +281,5 @@ mod test {
         let variant = variant_array.value(3);
         let list = variant.as_list().expect("variant to be a list");
         assert_eq!(list.len(), 2);
-    }
-
-    /// Test using non-finished sub builders to append variants
-    #[test]
-    fn test_variant_array_builder_variant_builder_reset() {
-        let mut builder = VariantArrayBuilder::new(10);
-
-        // make a sub-object in the first row
-        let mut sub_builder = builder.variant_builder();
-        sub_builder.new_object().with_field("foo", 1i32).finish();
-        sub_builder.finish(); // must call finish to write the variant to the buffers
-
-        // start appending an object but don't finish
-        let mut sub_builder = builder.variant_builder();
-        sub_builder.new_object().with_field("bar", 2i32).finish();
-        drop(sub_builder); // drop the sub builder without finishing it
-
-        // make a third sub-object (this should reset the previous unfinished object)
-        let mut sub_builder = builder.variant_builder();
-        sub_builder.new_object().with_field("baz", 3i32).finish();
-        sub_builder.finish(); // must call finish to write the variant to the buffers
-
-        let variant_array = builder.build();
-
-        // only the two finished objects should be present
-        assert_eq!(variant_array.len(), 2);
-        assert!(!variant_array.is_null(0));
-        let variant = variant_array.value(0);
-        assert_eq!(
-            variant.get_object_field("foo"),
-            Some(Variant::from(1i32)),
-            "Expected an object with field \"foo\", got: {variant:?}"
-        );
-
-        assert!(!variant_array.is_null(1));
-        let variant = variant_array.value(1);
-        assert_eq!(
-            variant.get_object_field("baz"),
-            Some(Variant::from(3i32)),
-            "Expected an object with field \"baz\", got: {variant:?}"
-        );
     }
 }
