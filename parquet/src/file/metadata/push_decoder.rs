@@ -133,8 +133,8 @@ use crate::DecodeResult;
 /// // you still need to call `try_decode` in a loop until it returns `DecodeResult::Data`
 /// // as shown in  the previous example
 ///  match decoder.try_decode() {
-///      Ok(DecodeResult::Data(metadata)) => { return Ok(metadata); } // decode successful]
-///      other @ _ => { panic!("expected DecodeResult::Data, got: {other:?}") }
+///      Ok(DecodeResult::Data(metadata)) => { return Ok(metadata); } // decode successful
+///      other => { panic!("expected DecodeResult::Data, got: {other:?}") }
 ///  }
 /// # }
 /// ```
