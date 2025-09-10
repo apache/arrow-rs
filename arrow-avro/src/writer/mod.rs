@@ -445,6 +445,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(feature = "canonical_extension_types"))]
     #[test]
     fn test_round_trip_duration_and_uuid_ocf() -> Result<(), ArrowError> {
         let in_file =
