@@ -608,7 +608,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     ) -> Self {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         // Store for use in cache key generation
         self.column_idx = column_idx;
 
