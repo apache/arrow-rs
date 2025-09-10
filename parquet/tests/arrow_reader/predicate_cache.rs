@@ -52,6 +52,10 @@ async fn test_default_read() {
 async fn test_async_cache_with_filters() {
     let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(49);
     let async_builder = test.async_builder().await;
+
+    // Disable page caching to ensure deterministic predicate cache behavior
+    let async_builder = async_builder.with_page_cache(None);
+
     let async_builder = test.add_project_ab_and_filter_b(async_builder);
     test.run_async(async_builder).await;
 }
@@ -72,10 +76,18 @@ async fn test_cache_disabled_with_filters() {
     // expect no records to be read from cache, because the cache is disabled
     let test = ParquetPredicateCacheTest::new().with_expected_records_read_from_cache(0);
     let sync_builder = test.sync_builder().with_max_predicate_cache_size(0);
+
+    // Disable page caching to ensure deterministic behavior both alone and together
+    let sync_builder = sync_builder.with_page_cache(None);
+
     let sync_builder = test.add_project_ab_and_filter_b(sync_builder);
     test.run_sync(sync_builder);
 
     let async_builder = test.async_builder().await.with_max_predicate_cache_size(0);
+
+    // Disable page caching to ensure deterministic behavior both alone and together
+    let async_builder = async_builder.with_page_cache(None);
+
     let async_builder = test.add_project_ab_and_filter_b(async_builder);
     test.run_async(async_builder).await;
 }

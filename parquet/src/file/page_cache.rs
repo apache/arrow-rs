@@ -18,10 +18,9 @@
 //! Page-level cache for storing decompressed pages to avoid redundant I/O and decompression
 
 use crate::column::page::Page;
-use dashmap::DashMap;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::Mutex;
+use moka::sync::Cache;
+use std::fmt;
+use std::sync::{Arc, OnceLock};
 
 /// Cache key that uniquely identifies a page within a file
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -50,14 +49,10 @@ impl PageCacheKey {
 
 /// Configuration options for the page cache
 pub enum PageCacheConfig {
-    /// No caching
-    NoCache,
-    /// Two-queue caching with specified max size and probationary ratio
-    TwoQueue {
+    /// Moka-based caching with specified max size
+    Moka {
         /// Maximum number of pages to cache
-        max_pages: usize,
-        /// Ratio of probationary pages
-        probationary_ratio: f64,
+        max_pages: u64,
     },
 }
 
@@ -70,144 +65,45 @@ pub trait PageCacheStrategy: Send + Sync {
     fn put(&self, key: PageCacheKey, page: Arc<Page>);
 }
 
-/// Two-queue page cache implementation
-pub struct TwoQueuePageCache {
-    /// Main storage mapping cache keys to (page, is_protected) tuples
-    map: DashMap<PageCacheKey, (Arc<Page>, bool)>,
-    /// Maximum number of entries in the probationary queue
-    probationary_max: usize,
-    /// Maximum number of entries in the protected queue
-    protected_max: usize,
-
-    /// Queue tracking probationary pages in LRU order
-    probationary: Mutex<VecDeque<PageCacheKey>>,
-    /// Queue tracking protected pages in LRU order
-    protected: Mutex<VecDeque<PageCacheKey>>,
+/// Moka-based page cache implementation (thread-safe, production-ready)
+pub struct MokaPageCache {
+    cache: Cache<PageCacheKey, Arc<Page>>,
 }
 
-impl TwoQueuePageCache {
-    /// Create a new TwoQueuePageCache with specified max size and probationary ratio
-    pub fn new(max_pages: usize, probationary_ratio: f64) -> Self {
-        let probationary_max = ((max_pages as f64) * probationary_ratio).ceil() as usize;
-        let protected_max = max_pages - probationary_max;
+impl MokaPageCache {
+    /// Create a new MokaPageCache with specified max number of pages
+    pub fn new(max_pages: u64) -> Self {
+        // MokaPageCache created with capacity: {} pages
         Self {
-            map: DashMap::new(),
-            probationary_max,
-            protected_max,
-            probationary: Mutex::new(VecDeque::new()),
-            protected: Mutex::new(VecDeque::new()),
-        }
-    }
-
-    /// Evict pages to maintain probationary/protected size ratios
-    fn evict_if_needed(&self) {
-        // Evict from probationary first
-        let mut prob = self.probationary.lock().unwrap();
-        while prob.len() > self.probationary_max {
-            if let Some(oldest) = prob.pop_front() {
-                self.map.remove(&oldest);
-            }
-        }
-        drop(prob);
-
-        // Evict from protected if necessary
-        let mut prot = self.protected.lock().unwrap();
-        while prot.len() > self.protected_max {
-            if let Some(oldest) = prot.pop_front() {
-                self.map.remove(&oldest);
-            }
+            cache: Cache::builder().max_capacity(max_pages).build(),
         }
     }
 }
 
-impl PageCacheStrategy for TwoQueuePageCache {
-    /// Get a page from the cache
+impl PageCacheStrategy for MokaPageCache {
     fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>> {
-        if let Some(mut entry) = self.map.get_mut(key) {
-            let (page, is_protected) = &mut *entry;
-            let page_clone = page.clone();
-
-            if !*is_protected {
-                // Promote to protected
-                *is_protected = true;
-
-                let mut prob = self.probationary.lock().unwrap();
-                prob.retain(|k| k != key);
-                drop(prob);
-
-                let mut prot = self.protected.lock().unwrap();
-                prot.retain(|k| k != key);
-                prot.push_back(key.clone());
-                drop(prot);
-
-                // Release the DashMap entry before calling evict_if_needed to avoid deadlock
-                drop(entry);
-                // Ensure protected does not exceed limit
-                self.evict_if_needed();
-            } else {
-                // Refresh protected LRU
-                let mut prot = self.protected.lock().unwrap();
-                prot.retain(|k| k != key);
-                prot.push_back(key.clone());
-            }
-
-            Some(page_clone)
-        } else {
-            None
-        }
+        self.cache.get(key)
     }
 
-    /// Put a page into the cache
     fn put(&self, key: PageCacheKey, page: Arc<Page>) {
-        if self.map.contains_key(&key) {
-            // Reset to probationary
-            self.map.insert(key.clone(), (page, false));
-            {
-                let mut prob = self.probationary.lock().unwrap();
-                prob.retain(|k| k != &key);
-                prob.push_back(key.clone());
-            }
-            // Remove from protected if it was there
-            {
-                let mut prot = self.protected.lock().unwrap();
-                prot.retain(|k| k != &key);
-            }
-            self.evict_if_needed();
-            return;
-        }
-
-        // Insert into probationary
-        self.map.insert(key.clone(), (page, false));
-        {
-            let mut prob = self.probationary.lock().unwrap();
-            prob.retain(|k| k != &key);
-            prob.push_back(key);
-        }
-
-        self.evict_if_needed();
+        self.cache.insert(key, page);
     }
 }
 
-/// No caching strategy (no-op)
-pub struct NoPageCache;
-
-/// No-op implementation of PageCacheStrategy
-impl PageCacheStrategy for NoPageCache {
-    fn get(&self, _key: &PageCacheKey) -> Option<Arc<Page>> {
-        None
-    }
-
-    fn put(&self, _key: PageCacheKey, _page: Arc<Page>) {
-        // No-op
+impl fmt::Debug for MokaPageCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MokaPageCache")
+            .field("cached_pages", &self.cache.entry_count())
+            .field("weighted_size", &self.cache.weighted_size())
+            .finish()
     }
 }
 
 /// Enum to hold different page cache strategies and do static dispatch
+#[derive(Debug)]
 pub enum PageCacheType {
-    /// No caching
-    NoCache(NoPageCache),
-    /// Two-queue caching
-    TwoQueue(TwoQueuePageCache),
+    /// Moka-based caching (recommended for production)
+    Moka(MokaPageCache),
 }
 
 /// Dispatch methods to the underlying cache strategy
@@ -215,16 +111,65 @@ impl PageCacheType {
     /// Get a page from the cache
     pub fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>> {
         match self {
-            PageCacheType::NoCache(c) => c.get(key),
-            PageCacheType::TwoQueue(c) => c.get(key),
+            PageCacheType::Moka(c) => c.get(key),
         }
     }
 
     /// Put a page into the cache
     pub fn put(&self, key: PageCacheKey, page: Arc<Page>) {
         match self {
-            PageCacheType::NoCache(c) => c.put(key, page),
-            PageCacheType::TwoQueue(c) => c.put(key, page),
+            PageCacheType::Moka(c) => c.put(key, page),
         }
+    }
+}
+
+/// High-level context struct that holds shared resources for Parquet operations
+/// This allows cache sharing across different files, threads, and readers
+#[derive(Debug, Clone)]
+pub struct ParquetContext {
+    /// Page cache shared across all readers using this context
+    /// None for zero overhead when caching is disabled
+    pub page_cache: Option<Arc<PageCacheType>>,
+}
+
+impl Default for ParquetContext {
+    fn default() -> Self {
+        Self {
+            page_cache: Some(Arc::new(PageCacheType::Moka(MokaPageCache::new(100)))),
+        }
+    }
+}
+
+/// Shared default ParquetContext instance to ensure cache sharing across all readers
+static DEFAULT_PARQUET_CONTEXT: OnceLock<ParquetContext> = OnceLock::new();
+
+impl ParquetContext {
+    /// Create a new ParquetContext with default configuration (100-page Moka cache)
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a new ParquetContext with no caching (zero overhead)
+    pub fn new_no_cache() -> Self {
+        Self { page_cache: None }
+    }
+
+    /// Create a new ParquetContext with a specific page cache
+    pub fn with_page_cache(page_cache: Option<Arc<PageCacheType>>) -> Self {
+        Self { page_cache }
+    }
+
+    /// Set the global shared default ParquetContext
+    ///
+    /// This must be called before any readers are created to take effect.
+    /// Returns `Ok(())` if successful, `Err(context)` if already initialized.
+    pub fn set_shared_default(context: ParquetContext) -> Result<(), ParquetContext> {
+        DEFAULT_PARQUET_CONTEXT.set(context)
+    }
+
+    /// Get the shared default ParquetContext instance
+    /// This ensures all readers share the same cache when no explicit context is provided
+    pub fn shared_default() -> &'static ParquetContext {
+        DEFAULT_PARQUET_CONTEXT.get_or_init(|| ParquetContext::default())
     }
 }

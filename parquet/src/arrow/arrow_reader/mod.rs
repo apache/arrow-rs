@@ -38,6 +38,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::page_cache::PageCacheType;
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::schema::types::SchemaDescriptor;
@@ -123,7 +124,7 @@ pub struct ArrowReaderBuilder<T> {
 
     pub(crate) max_predicate_cache_size: usize,
 
-    pub(crate) page_cache: Option<Arc<dyn crate::file::page_cache::PageCacheStrategy>>,
+    pub(crate) page_cache: Option<Arc<PageCacheType>>,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -161,7 +162,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
-            page_cache: None,                            // Will be set to default for async readers
+            page_cache: None,                            // No default caching for sync readers
         }
     }
 
@@ -379,14 +380,8 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// This method allows you to provide a custom cache instance that can be shared
     /// across multiple readers for cross-file caching.
-    pub fn with_page_cache(
-        self,
-        page_cache: Arc<dyn crate::file::page_cache::PageCacheStrategy>,
-    ) -> Self {
-        Self {
-            page_cache: Some(page_cache),
-            ..self
-        }
+    pub fn with_page_cache(self, page_cache: Option<Arc<PageCacheType>>) -> Self {
+        Self { page_cache, ..self }
     }
 }
 

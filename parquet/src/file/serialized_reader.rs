@@ -41,9 +41,7 @@ use crate::schema::types::Type as SchemaType;
 use crate::thrift::TCompactSliceInputProtocol;
 use crate::thrift::TSerializable;
 use bytes::Bytes;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
 use std::{fs::File, io::Read, path::Path, sync::Arc};
 use thrift::protocol::TCompactInputProtocol;
 
@@ -357,12 +355,10 @@ pub(crate) fn decode_page_cached(
     page_cache: Option<&Arc<PageCacheType>>,
 ) -> Result<Page> {
     // Try cache first if cache key and cache are provided
-    if let (Some(ref key), Some(cache)) = (&cache_key, page_cache) {
+    if let (Some(key), Some(cache)) = (cache_key.as_ref(), page_cache) {
         if let Some(cached_page) = cache.get(key) {
-            println!("\x1b[32mPage cache hit for key: {:?} \x1b[0m", key);
             return Ok((*cached_page).clone());
         }
-        println!("\x1b[31mPage cache miss for key: {:?} \x1b[0m", cache_key);
     }
 
     // Cache miss or no caching - decode the page
@@ -567,7 +563,7 @@ pub struct SerializedPageReader<R: ChunkReader> {
     /// Column index for page caching
     column_idx: usize,
 
-    /// Page cache instance, None means no caching
+    /// Page cache reference for caching resolved pages
     page_cache: Option<Arc<PageCacheType>>,
 }
 
@@ -603,77 +599,57 @@ impl<R: ChunkReader> SerializedPageReader<R> {
     }
 
     /// Set cache context for stable cache keys using UUID from file metadata
+    #[cfg(feature = "async")]
     pub(crate) fn set_cache_context_metadata(
         mut self,
         rg_idx: usize,
         column_idx: usize,
         parquet_metadata: &ParquetMetaData,
     ) -> Self {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        // Store for use in cache key generation
         self.column_idx = column_idx;
 
-        // Store rg_idx for use in cache key generation
         self.rg_idx = rg_idx;
 
-        // Extract UUID from Arrow schema metadata for unique file identification
-        #[cfg(feature = "arrow")]
-        let uuid_str = if let Ok(arrow_schema) = crate::arrow::parquet_to_arrow_schema(
-            parquet_metadata.file_metadata().schema_descr(),
-            parquet_metadata.file_metadata().key_value_metadata(),
-        ) {
-            arrow_schema.metadata().get("uuid").cloned()
-        } else {
-            None
-        };
+        // Generate file ID based on stable metadata characteristics
+        let mut hasher = DefaultHasher::new();
 
-        #[cfg(not(feature = "arrow"))]
-        let uuid_str: Option<String> = None;
+        // Hash version (format version)
+        parquet_metadata.file_metadata().version().hash(&mut hasher);
 
-        let file_uuid_id = if let Some(uuid) = uuid_str.as_ref() {
-            let mut hasher = DefaultHasher::new();
-            uuid.hash(&mut hasher);
-            hasher.finish()
-        } else {
-            // TODO: Impl better fallback hasher
-            let mut hasher = DefaultHasher::new();
+        // Hash number of rows (stable across row groups)
+        parquet_metadata
+            .file_metadata()
+            .num_rows()
+            .hash(&mut hasher);
 
-            // Hash version (format version)
-            parquet_metadata.file_metadata().version().hash(&mut hasher);
+        // Hash schema root name
+        parquet_metadata
+            .file_metadata()
+            .schema_descr()
+            .name()
+            .hash(&mut hasher);
 
-            // Hash number of rows (stable across row groups)
+        // Hash key_value_metadata if present (often contains unique identifiers)
+        parquet_metadata
+            .file_metadata()
+            .key_value_metadata()
+            .hash(&mut hasher);
+
+        // Include first row group's first column offset for uniqueness
+        if parquet_metadata.num_row_groups() > 0 && parquet_metadata.row_group(0).num_columns() > 0
+        {
             parquet_metadata
-                .file_metadata()
-                .num_rows()
+                .row_group(0)
+                .column(0)
+                .data_page_offset()
                 .hash(&mut hasher);
+        }
 
-            // Hash schema root name
-            parquet_metadata
-                .file_metadata()
-                .schema_descr()
-                .name()
-                .hash(&mut hasher);
-
-            // Hash key_value_metadata if present (often contains unique identifiers)
-            parquet_metadata
-                .file_metadata()
-                .key_value_metadata()
-                .hash(&mut hasher);
-
-            // As a last resort, include first row group's first column offset for uniqueness
-            if parquet_metadata.num_row_groups() > 0
-                && parquet_metadata.row_group(0).num_columns() > 0
-            {
-                parquet_metadata
-                    .row_group(0)
-                    .column(0)
-                    .data_page_offset()
-                    .hash(&mut hasher);
-            }
-
-            hasher.finish()
-        };
-
-        // Use UUID-based file ID directly - column info is already in cache key
-        self.file_id = file_uuid_id;
+        self.file_id = hasher.finish();
 
         self
     }
@@ -1028,28 +1004,32 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         self.context
                             .decrypt_page_data(buffer, *page_index, *require_dictionary)?;
 
-                    // Only use page caching for async readers that have set cache context
-                    // Sync readers have file_id=0 and should not use caching
-                    // TODO: Switch to a more elegant way
-                    let cache_key = if self.file_id != 0 {
-                        Some(PageCacheKey::new(
+                    let page = if let Some(page_cache) = &self.page_cache {
+                        let cache_key = PageCacheKey::new(
                             self.file_id,
                             self.rg_idx,
                             self.column_idx,
-                            *offset,
-                        ))
-                    } else {
-                        None
-                    };
+                            // Page start offset
+                            *offset - data_len as u64,
+                        );
 
-                    let page = decode_page_cached(
-                        header,
-                        Bytes::from(buffer),
-                        self.physical_type,
-                        self.decompressor.as_mut(),
-                        cache_key,
-                        self.page_cache.as_ref(),
-                    )?;
+                        decode_page_cached(
+                            header,
+                            Bytes::from(buffer),
+                            self.physical_type,
+                            self.decompressor.as_mut(),
+                            Some(cache_key),
+                            Some(page_cache),
+                        )?
+                    } else {
+                        // No cache - skip all cache logic entirely
+                        decode_page(
+                            header,
+                            Bytes::from(buffer),
+                            self.physical_type,
+                            self.decompressor.as_mut(),
+                        )?
+                    };
                     if page.is_data_page() {
                         *page_index += 1;
                     } else if page.is_dictionary_page() {
@@ -1089,27 +1069,34 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *page_index += 1;
                     }
 
-                    // Only use page caching for async readers that have set cache context
-                    // Sync readers have file_id=0 and should not use caching (consistent with predicate cache design)
-                    let cache_key = if self.file_id != 0 {
-                        Some(PageCacheKey::new(
+                    // Zero overhead caching: Only create cache key if cache exists and file_id is set
+                    let page = if let Some(page_cache) = &self.page_cache {
+                        let cache_key = PageCacheKey::new(
                             self.file_id,
                             self.rg_idx,
                             self.column_idx,
                             front.offset as u64,
-                        ))
+                        );
+
+                        decode_page_cached(
+                            header,
+                            bytes,
+                            self.physical_type,
+                            self.decompressor.as_mut(),
+                            Some(cache_key),
+                            Some(page_cache),
+                        )?
                     } else {
-                        None
+                        // No cache - skip all cache logic entirely
+                        decode_page(
+                            header,
+                            bytes,
+                            self.physical_type,
+                            self.decompressor.as_mut(),
+                        )?
                     };
 
-                    decode_page_cached(
-                        header,
-                        bytes,
-                        self.physical_type,
-                        self.decompressor.as_mut(),
-                        cache_key,
-                        self.page_cache.as_ref(),
-                    )?
+                    page
                 }
             };
 
