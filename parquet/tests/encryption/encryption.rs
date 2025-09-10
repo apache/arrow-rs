@@ -720,6 +720,92 @@ fn test_write_uniform_encryption_plaintext_footer() {
 }
 
 #[test]
+pub fn test_row_group_statistics_plaintext_encrypted_write() {
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_key = b"1234567890123450".to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .with_plaintext_footer(true)
+        .build()
+        .unwrap();
+
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(file_encryption_properties)
+        .build();
+
+    // Write encrypted data with plaintext footer
+    let values = Int32Array::from(vec![8, 3, 4, 19, 5]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "x",
+        values.data_type().clone(),
+        true,
+    )]));
+    let values = Arc::new(values);
+    let record_batches = vec![RecordBatch::try_new(schema.clone(), vec![values]).unwrap()];
+
+    let temp_file = tempfile::tempfile().unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, schema, Some(props)).unwrap();
+    for batch in record_batches.clone() {
+        writer.write(&batch).unwrap();
+    }
+    let _file_metadata = writer.close().unwrap();
+
+    // Check column statistics can be read by decrypting
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
+    let metadata = reader_metadata.metadata();
+
+    assert_eq!(metadata.num_row_groups(), 1);
+
+    let row_group = &metadata.row_groups()[0];
+    assert_eq!(row_group.columns().len(), 1);
+    let column_stats = &row_group.columns()[0].statistics().unwrap();
+    assert_eq!(
+        column_stats.min_bytes_opt(),
+        Some(3i32.to_le_bytes().as_slice())
+    );
+    assert_eq!(
+        column_stats.max_bytes_opt(),
+        Some(19i32.to_le_bytes().as_slice())
+    );
+
+    // TODO: statistics should be available without decryption when footer is plaintext
+    //
+    // Check column statistics are not available in plaintext footer
+    let options = ArrowReaderOptions::default();
+    let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
+    let metadata = reader_metadata.metadata();
+
+    assert_eq!(metadata.num_row_groups(), 1);
+
+    let row_group = &metadata.row_groups()[0];
+    assert_eq!(row_group.columns().len(), 1);
+    let column_stats = &row_group.columns()[0].statistics().unwrap();
+    assert_eq!(
+        column_stats.min_bytes_opt(),
+        Some(3i32.to_le_bytes().as_slice())
+    );
+    assert_eq!(
+        column_stats.max_bytes_opt(),
+        Some(19i32.to_le_bytes().as_slice())
+    );
+
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(temp_file, options).unwrap();
+    let mut record_reader = builder.build().unwrap();
+    assert_eq!(
+        record_reader.next().unwrap().unwrap_err().to_string(),
+        "Parquet argument error: External: protocol error"
+    );
+}
+
+#[test]
 fn test_write_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
