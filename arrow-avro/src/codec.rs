@@ -2178,7 +2178,7 @@ mod tests {
         let err = dt_fixed
             .parse_and_store_default(&json_string("TOO LONG"))
             .unwrap_err();
-        assert!(format!("{err}").contains("Default length"));
+        assert!(err.to_string().contains("Default length"));
         let mut dt_dec_fixed =
             AvroDataType::new(Codec::Decimal(10, Some(2), Some(3)), HashMap::new(), None);
         let l = dt_dec_fixed
