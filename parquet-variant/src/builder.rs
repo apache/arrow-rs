@@ -329,9 +329,8 @@ impl ValueBuilder {
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
     pub fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
-        let builder = state.value_builder();
         variant_append_value!(
-            builder,
+            state.value_builder(),
             variant,
             Variant::Object(obj) => return Self::append_object(state, obj),
             Variant::List(list) => return Self::append_list(state, list)
@@ -347,9 +346,8 @@ impl ValueBuilder {
         mut state: ParentState<'_>,
         variant: Variant<'_, '_>,
     ) -> Result<(), ArrowError> {
-        let builder = state.value_builder();
         variant_append_value!(
-            builder,
+            state.value_builder(),
             variant,
             Variant::Object(obj) => return Self::try_append_object(state, obj),
             Variant::List(list) => return Self::try_append_list(state, list)
@@ -673,6 +671,8 @@ impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
 pub trait BuilderSpecificState: std::fmt::Debug {
     /// Called by [`ParentState::finish`] to apply any pending builder-specific changes.
     ///
+    /// The provided implementation does nothing by default.
+    ///
     /// Parameters:
     /// - `metadata_builder`: The metadata builder that was used
     /// - `value_builder`: The value builder that was used
@@ -680,26 +680,20 @@ pub trait BuilderSpecificState: std::fmt::Debug {
         &mut self,
         _metadata_builder: &mut dyn MetadataBuilder,
         _value_builder: &mut ValueBuilder,
-    );
-
-    /// Called by [`ParentState::rollback`] to revert any changes that were eagerly applied.
-    ///
-    /// The base [`ParentState`] will handle rolling back the value and metadata builders,
-    /// but builder-specific state may need to revert its own changes.
-    fn rollback(&mut self);
-}
-
-/// Empty no-op implementation for top-level variant building
-impl BuilderSpecificState for () {
-    fn finish(
-        &mut self,
-        _metadata_builder: &mut dyn MetadataBuilder,
-        _value_builder: &mut ValueBuilder,
     ) {
     }
 
+    /// Called by [`ParentState::rollback`] to revert any changes that were eagerly applied.
+    ///
+    /// The provided implementation does nothing by default.
+    ///
+    /// The base [`ParentState`] will handle rolling back the value and metadata builders,
+    /// but builder-specific state may need to revert its own changes.
     fn rollback(&mut self) {}
 }
+
+/// Empty no-op implementation for top-level variant building
+impl BuilderSpecificState for () {}
 
 /// Internal state for list building
 #[derive(Debug)]
@@ -708,15 +702,8 @@ struct ListParentState<'a> {
     saved_offsets_size: usize,
 }
 
+// `ListBuilder::finish()` eagerly updates the list offsets, which we should rollback on failure.
 impl BuilderSpecificState for ListParentState<'_> {
-    // Nothing to do - list header writing happens in `ListBuilder::finish()`
-    fn finish(
-        &mut self,
-        _metadata_builder: &mut dyn MetadataBuilder,
-        _value_builder: &mut ValueBuilder,
-    ) {
-    }
-
     fn rollback(&mut self) {
         self.offsets.truncate(self.saved_offsets_size);
     }
@@ -729,15 +716,8 @@ struct ObjectParentState<'a> {
     saved_fields_size: usize,
 }
 
+// `ObjectBuilder::finish()` eagerly updates the field offsets, which we should rollback on failure.
 impl BuilderSpecificState for ObjectParentState<'_> {
-    // Nothing to do - object header writing happens in `ObjectBuilder::finish()`
-    fn finish(
-        &mut self,
-        _metadata_builder: &mut dyn MetadataBuilder,
-        _value_builder: &mut ValueBuilder,
-    ) {
-    }
-
     fn rollback(&mut self) {
         self.fields.truncate(self.saved_fields_size);
     }
@@ -863,33 +843,18 @@ impl<'a> ParentState<'a> {
             finished: false,
         })
     }
-    fn value_builder(&mut self) -> &mut ValueBuilder {
-        self.value_and_metadata_builders().0
-    }
-
-    fn metadata_builder(&mut self) -> &mut dyn MetadataBuilder {
-        self.value_and_metadata_builders().1
-    }
-
-    fn saved_value_builder_offset(&mut self) -> usize {
-        self.saved_value_builder_offset
-    }
-
-    fn is_finished(&mut self) -> &mut bool {
-        &mut self.finished
-    }
 
     /// Marks the insertion as having succeeded and invokes
     /// [`BuilderSpecificState::finish`]. Internal state will no longer roll back on drop.
     pub fn finish(&mut self) {
         self.builder_state
             .finish(self.metadata_builder, self.value_builder);
-        *self.is_finished() = true
+        self.finished = true
     }
 
     // Rolls back value and metadata builder changes and invokes [`BuilderSpecificState::rollback`].
     fn rollback(&mut self) {
-        if *self.is_finished() {
+        if self.finished {
             return;
         }
 
@@ -901,10 +866,14 @@ impl<'a> ParentState<'a> {
         self.builder_state.rollback();
     }
 
-    /// Return mutable references to the value and metadata builders that this
-    /// parent state is using.
-    pub fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut dyn MetadataBuilder) {
-        (self.value_builder, &mut *self.metadata_builder)
+    // Useful because e.g. `let b = self.value_builder;` fails compilation.
+    fn value_builder(&mut self) -> &mut ValueBuilder {
+        self.value_builder
+    }
+
+    // Useful because e.g. `let b = self.metadata_builder;` fails compilation.
+    fn metadata_builder(&mut self) -> &mut dyn MetadataBuilder {
+        self.metadata_builder
     }
 }
 
@@ -1332,13 +1301,11 @@ impl<'a> ListBuilder<'a> {
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
     fn parent_state(&mut self) -> (ParentState<'_>, bool) {
-        let saved_parent_value_builder_offset = self.parent_state.saved_value_builder_offset();
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
         let state = ParentState::list(
-            value_builder,
-            metadata_builder,
+            self.parent_state.value_builder,
+            self.parent_state.metadata_builder,
             &mut self.offsets,
-            saved_parent_value_builder_offset,
+            self.parent_state.saved_value_builder_offset,
         );
         (state, self.validate_unique_fields)
     }
@@ -1416,7 +1383,7 @@ impl<'a> ListBuilder<'a> {
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) {
-        let starting_offset = self.parent_state.saved_value_builder_offset();
+        let starting_offset = self.parent_state.saved_value_builder_offset;
         let value_builder = self.parent_state.value_builder();
 
         let data_size = value_builder
@@ -1584,14 +1551,12 @@ impl<'a> ObjectBuilder<'a> {
         &'b mut self,
         field_name: &'b str,
     ) -> Result<(ParentState<'b>, bool), ArrowError> {
-        let saved_parent_value_builder_offset = self.parent_state.saved_value_builder_offset();
         let validate_unique_fields = self.validate_unique_fields;
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
         let state = ParentState::try_object(
-            value_builder,
-            metadata_builder,
+            self.parent_state.value_builder,
+            self.parent_state.metadata_builder,
             &mut self.fields,
-            saved_parent_value_builder_offset,
+            self.parent_state.saved_value_builder_offset,
             field_name,
             validate_unique_fields,
         )?;
@@ -1649,7 +1614,7 @@ impl<'a> ObjectBuilder<'a> {
         let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
         let id_size = int_size(max_id as usize);
 
-        let starting_offset = self.parent_state.saved_value_builder_offset();
+        let starting_offset = self.parent_state.saved_value_builder_offset;
         let value_builder = self.parent_state.value_builder();
         let current_offset = value_builder.offset();
         // Current object starts from `object_start_offset`

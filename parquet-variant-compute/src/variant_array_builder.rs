@@ -34,6 +34,7 @@ struct ArrayBuilderState<'a> {
     nulls: &'a mut NullBufferBuilder,
 }
 
+// All changes are pending until finalized
 impl BuilderSpecificState for ArrayBuilderState<'_> {
     fn finish(
         &mut self,
@@ -44,9 +45,6 @@ impl BuilderSpecificState for ArrayBuilderState<'_> {
         self.value_offsets.push(value_builder.offset());
         self.nulls.append_non_null();
     }
-
-    // No special rollback needed - offsets and nulls weren't modified yet during construction
-    fn rollback(&mut self) {}
 }
 
 /// A builder for [`VariantArray`]
