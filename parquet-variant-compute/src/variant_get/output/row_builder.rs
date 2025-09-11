@@ -22,8 +22,8 @@ use arrow::datatypes::ArrowPrimitiveType;
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
-use crate::VariantArrayBuilder;
 use crate::type_conversion::VariantAsPrimitive;
+use crate::VariantArrayBuilder;
 
 use std::sync::Arc;
 
