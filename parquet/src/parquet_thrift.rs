@@ -489,8 +489,10 @@ fn eof_error() -> ParquetError {
     eof_err!("Unexpected EOF")
 }
 
-// input protocol that's only intended for use in reading page headers. not fully implemented
-// so this shouldn't be used generally.
+/// A Thrift input protocol that wraps a [`Read`] object.
+///
+/// Note that this is only intended for use in reading Parquet page headers. This will panic
+/// if Thrift `binary` data is encountered because a slice of that data cannot be returned.
 pub(crate) struct ThriftReadInputProtocol<R: Read> {
     reader: R,
 }
