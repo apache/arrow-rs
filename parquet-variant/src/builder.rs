@@ -683,7 +683,8 @@ pub trait BuilderSpecificState: std::fmt::Debug {
     ) {
     }
 
-    /// Called by [`ParentState::rollback`] to revert any changes that were eagerly applied.
+    /// Called by [`ParentState::drop`] to revert any changes that were eagerly applied, if
+    /// [`ParentState::finish`] was never invoked.
     ///
     /// The provided implementation does nothing by default.
     ///
