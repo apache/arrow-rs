@@ -27,10 +27,9 @@ use std::{
 
 use crate::errors::{ParquetError, Result};
 
-// Couldn't implement thrift structs with f64 do to lack of Eq
-// for f64. This is a hacky workaround for now...there are other
-// wrappers out there that should probably be used instead.
-// thrift seems to re-export an impl from ordered-float
+/// Wrapper for thrift `double` fields. This is used to provide
+/// an implementation of `Eq` for floats. This implementation
+/// uses IEEE 754 total order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OrderedF64(f64);
 
@@ -159,27 +158,54 @@ impl TryFrom<u8> for ElementType {
     }
 }
 
+/// Struct used to describe a [thrift struct] field during decoding.
+///
+/// [thrift struct]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct-encoding
 pub(crate) struct FieldIdentifier {
+    /// The type for the field.
     pub(crate) field_type: FieldType,
+    /// The field's `id`. May be computed from delta or directly decoded.
     pub(crate) id: i16,
+    /// Stores the value for booleans.
+    ///
+    /// Boolean fields store no data, instead the field type is either boolean true, or
+    /// boolean false.
     pub(crate) bool_val: Option<bool>,
 }
 
+/// Struct used to describe a [thrift list].
+///
+/// [thrift list]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ListIdentifier {
+    /// The type for each element in the list.
     pub(crate) element_type: ElementType,
+    /// Number of elements contained in the list.
     pub(crate) size: i32,
 }
 
+/// Low-level object used to deserialize structs encoded with the Thrift [compact] protocol.
+///
+/// Implementation of this trait must provide the low-level functions `read_byte`, `read_bytes`,
+/// `skip_bytes`, and `read_double`. These primitives are used by the default functions provided
+/// here to perform deserialization.
+///
+/// [compact]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
 pub(crate) trait ThriftCompactInputProtocol<'a> {
+    /// Read a single byte from the input.
     fn read_byte(&mut self) -> Result<u8>;
 
+    /// Read a Thrift encoded [binary] from the input.
+    ///
+    /// [binary]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#binary-encoding
     fn read_bytes(&mut self) -> Result<&'a [u8]>;
 
     fn read_bytes_owned(&mut self) -> Result<Vec<u8>>;
 
+    /// Skip the next `n` bytes of input.
     fn skip_bytes(&mut self, n: usize) -> Result<()>;
 
+    /// Read a ULEB128 encoded unsigned varint from the input.
     fn read_vlq(&mut self) -> Result<u64> {
         let mut in_progress = 0;
         let mut shift = 0;
@@ -193,11 +219,13 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         }
     }
 
+    /// Read a zig-zag encoded signed varint from the input.
     fn read_zig_zag(&mut self) -> Result<i64> {
         let val = self.read_vlq()?;
         Ok((val >> 1) as i64 ^ -((val & 1) as i64))
     }
 
+    /// Read the [`ListIdentifier`] for a Thrift encoded list.
     fn read_list_begin(&mut self) -> Result<ListIdentifier> {
         let header = self.read_byte()?;
         let element_type = ElementType::try_from(header & 0x0f)?;
@@ -216,6 +244,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         })
     }
 
+    /// Read the [`FieldIdentifier`] for a field in a Thrift encoded struct.
     fn read_field_begin(&mut self, last_field_id: i16) -> Result<FieldIdentifier> {
         // we can read at least one byte, which is:
         // - the type
@@ -261,12 +290,12 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         }
     }
 
-    // This is a specialized version of read_field_begin, solely for use in parsing
-    // PageLocation structs in the offset index. This function assumes that the delta
-    // field will always be less than 0xf, fields will be in order, and no boolean fields
-    // will be read. This also skips validation of the field type.
-    //
-    // Returns a tuple of (field_type, field_delta)
+    /// This is a specialized version of [`Self::read_field_begin`], solely for use in parsing
+    /// simple structs. This function assumes that the delta field will always be less than 0xf,
+    /// fields will be in order, and no boolean fields will be read.
+    /// This also skips validation of the field type.
+    ///
+    /// Returns a tuple of `(field_type, field_delta)`.
     fn read_field_header(&mut self) -> Result<(u8, u8)> {
         let field_type = self.read_byte()?;
         let field_delta = (field_type & 0xf0) >> 4;
@@ -274,7 +303,8 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         Ok((field_type, field_delta))
     }
 
-    // not to be used for bool struct fields, just for bool arrays
+    /// Read a boolean list element. This should not be used for struct fields. For the latter,
+    /// use the [`FieldIdentifier::bool_val`] field.
     fn read_bool(&mut self) -> Result<bool> {
         let b = self.read_byte()?;
         // Previous versions of the thrift specification said to use 0 and 1 inside collections,
@@ -288,29 +318,38 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         }
     }
 
+    /// Read a Thrift [binary] as a UTF-8 encoded string.
+    ///
+    /// [binary]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#binary-encoding
     fn read_string(&mut self) -> Result<&'a str> {
         let slice = self.read_bytes()?;
         Ok(std::str::from_utf8(slice)?)
     }
 
+    /// Read an `i8`.
     fn read_i8(&mut self) -> Result<i8> {
         Ok(self.read_byte()? as _)
     }
 
+    /// Read an `i16`.
     fn read_i16(&mut self) -> Result<i16> {
         Ok(self.read_zig_zag()? as _)
     }
 
+    /// Read an `i32`.
     fn read_i32(&mut self) -> Result<i32> {
         Ok(self.read_zig_zag()? as _)
     }
 
+    /// Read an `i64`.
     fn read_i64(&mut self) -> Result<i64> {
         self.read_zig_zag()
     }
 
+    /// Read a Thrift `double` as `f64`.
     fn read_double(&mut self) -> Result<f64>;
 
+    /// Skip a ULEB128 encoded varint.
     fn skip_vlq(&mut self) -> Result<()> {
         loop {
             let byte = self.read_byte()?;
@@ -320,20 +359,24 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         }
     }
 
+    /// Skip a thrift [binary].
+    ///
+    /// [binary]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#binary-encoding
     fn skip_binary(&mut self) -> Result<()> {
         let len = self.read_vlq()? as usize;
         self.skip_bytes(len)
     }
 
     /// Skip a field with type `field_type` recursively until the default
-    /// maximum skip depth is reached.
+    /// maximum skip depth (currently 64) is reached.
     fn skip(&mut self, field_type: FieldType) -> Result<()> {
-        // TODO: magic number
-        self.skip_till_depth(field_type, 64)
+        const DEFAULT_SKIP_DEPTH: i8 = 64;
+        self.skip_till_depth(field_type, DEFAULT_SKIP_DEPTH)
     }
 
     /// Empty structs in unions consist of a single byte of 0 for the field stop record.
-    /// This skips that byte without pushing to the field id stack.
+    /// This skips that byte without encuring the cost of processing the [`FieldIdentifier`].
+    /// Will return an error if the struct is not actually empty.
     fn skip_empty_struct(&mut self) -> Result<()> {
         let b = self.read_byte()?;
         if b != 0 {
@@ -384,19 +427,23 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     }
 }
 
+/// A high performance Thrift reader that reads from a slice of bytes.
 pub(crate) struct ThriftSliceInputProtocol<'a> {
     buf: &'a [u8],
 }
 
 impl<'a> ThriftSliceInputProtocol<'a> {
+    /// Create a new `ThriftSliceInputProtocol` using the bytes in `buf`.
     pub fn new(buf: &'a [u8]) -> Self {
         Self { buf }
     }
 
+    /// Re-initialize this reader with a new slice.
     pub fn reset_buffer(&mut self, buf: &'a [u8]) {
         self.buf = buf;
     }
 
+    /// Return the current buffer as a slice.
     pub fn as_slice(&self) -> &'a [u8] {
         self.buf
     }
@@ -442,8 +489,10 @@ fn eof_error() -> ParquetError {
     eof_err!("Unexpected EOF")
 }
 
-// input protocol that's only intended for use in reading page headers. not fully implemented
-// so this shouldn't be used generally.
+/// A Thrift input protocol that wraps a [`Read`] object.
+///
+/// Note that this is only intended for use in reading Parquet page headers. This will panic
+/// if Thrift `binary` data is encountered because a slice of that data cannot be returned.
 pub(crate) struct ThriftReadInputProtocol<R: Read> {
     reader: R,
 }
@@ -488,8 +537,10 @@ impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> 
     }
 }
 
+/// Trait implemented for objects that can be deserialized from a Thrift input stream.
+/// Implementations are provided for Thrift primitive types.
 pub(crate) trait ReadThrift<'a, R: ThriftCompactInputProtocol<'a>> {
-    // used to read generated enums and structs
+    /// Read an object of type `Self` from the input protocol object.
     fn read_thrift(prot: &mut R) -> Result<Self>
     where
         Self: Sized;
@@ -549,6 +600,9 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for &'a [u8] {
     }
 }
 
+/// Read a Thrift encoded [list] from the input protocol object.
+///
+/// [list]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
 pub(crate) fn read_thrift_vec<'a, T, R>(prot: &mut R) -> Result<Vec<T>>
 where
     R: ThriftCompactInputProtocol<'a>,
