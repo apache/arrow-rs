@@ -22,6 +22,7 @@ use arrow::datatypes::ArrowPrimitiveType;
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
+use crate::type_conversion::VariantAsPrimitive;
 use crate::VariantArrayBuilder;
 
 use std::sync::Arc;
@@ -121,47 +122,6 @@ impl<T: VariantShreddingRowBuilder> VariantShreddingRowBuilder for VariantPathRo
     }
     fn finish(&mut self) -> Result<ArrayRef> {
         self.builder.finish()
-    }
-}
-
-/// Helper trait for converting `Variant` values to arrow primitive values.
-trait VariantAsPrimitive<T: ArrowPrimitiveType> {
-    fn as_primitive(&self) -> Option<T::Native>;
-}
-
-impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i32> {
-        self.as_int32()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i16> {
-        self.as_int16()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int8Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i8> {
-        self.as_int8()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int64Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i64> {
-        self.as_int64()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<half::f16> {
-        self.as_f16()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<f32> {
-        self.as_f32()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<f64> {
-        self.as_f64()
     }
 }
 

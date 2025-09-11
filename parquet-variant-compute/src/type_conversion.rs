@@ -17,6 +17,9 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
+use arrow::datatypes::{self, ArrowPrimitiveType};
+use parquet_variant::Variant;
+
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CastOptions {
@@ -27,6 +30,47 @@ pub struct CastOptions {
 impl Default for CastOptions {
     fn default() -> Self {
         Self { strict: true }
+    }
+}
+
+/// Helper trait for converting `Variant` values to arrow primitive values.
+pub(crate) trait VariantAsPrimitive<T: ArrowPrimitiveType> {
+    fn as_primitive(&self) -> Option<T::Native>;
+}
+
+impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i32> {
+        self.as_int32()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i16> {
+        self.as_int16()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int8Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i8> {
+        self.as_int8()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i64> {
+        self.as_int64()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<half::f16> {
+        self.as_f16()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<f32> {
+        self.as_f32()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<f64> {
+        self.as_f64()
     }
 }
 
