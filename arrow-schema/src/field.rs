@@ -864,6 +864,22 @@ impl std::fmt::Display for Field {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // NOTE: `Display` and `Debug` formatting are ALWAYS the same,
         // because we want BOTH to be easy to read AND reversible!
+        //
+        // Many error messages in `datafusion`, `arrow`, and 3rd party crates mistakingly use the
+        // `Debug` formatting of `DataType` and/or `Field` instead of `Display`,
+        // which means we end up with huge difficult-to-read error messages.
+        //
+        // There are three solutions to this, afaict:
+        //
+        // A) Use `Display`=`Debug`, like we do here
+        //
+        // B) Replace all uses of `{:?}` with `{}` when printing datatypes and fields in datafusion, arrow, and other third party crates.
+        // This is VERY hard to do, as I know of no automated tool to find all these places.
+        //
+        // C) Improve `Debug` formatting by omitting empty/default fields.
+        // This will _help_ a lot.
+        // If you want to go down that route, consider omitting the field name if it is `item`,
+        // or special-case `Debug` formatting of `Datatype::List` some other way 🙏
         write!(f, "{self:?}")
     }
 }

@@ -23,6 +23,22 @@ impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // NOTE: `Display` and `Debug` formatting are ALWAYS the same,
         // because we want BOTH to be easy to read AND reversible!
+        //
+        // Many error messages in `datafusion`, `arrow`, and 3rd party crates mistakingly use the
+        // `Debug` formatting of `DataType` instead of `Display`,
+        // which means we end up with huge difficult-to-read error messages.
+        //
+        // There are three solutions to this, afaict:
+        //
+        // A) Use `Display`=`Debug`, like we do here
+        //
+        // B) Replace all uses of `{:?}` with `{}` when printing datatypes in datafusion, arrow, and other third party crates.
+        // This is VERY hard to do, as I know of no automated tool to find all these places.
+        //
+        // C) Improve `Debug` formatting by omitting empty/default fields.
+        // This will _help_, but the Debug format for `DataType::List` will still be very ugly, since it wraps a `Field`.
+        // If you want to go down that route, please make sure that the `Debug` formating of a List is still nice and readable 🙏
+
         write!(f, "{self:?}")
     }
 }
