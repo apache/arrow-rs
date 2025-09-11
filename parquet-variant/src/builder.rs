@@ -789,11 +789,18 @@ impl<'a> ParentState<'a> {
         let saved_offsets_size = offsets.len();
         offsets.push(saved_value_builder_offset - saved_parent_value_builder_offset);
 
-        let builder_state = ListParentState {
+        let builder_state = Box::new(ListParentState {
             offsets,
             saved_offsets_size,
-        };
-        Self::new(value_builder, metadata_builder, builder_state)
+        });
+        ParentState {
+            saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
+            saved_value_builder_offset,
+            metadata_builder,
+            value_builder,
+            builder_state,
+            finished: false,
+        }
     }
 
     /// Creates a new instance suitable for an [`ObjectBuilder`]. The value and metadata builder state
@@ -814,6 +821,7 @@ impl<'a> ParentState<'a> {
         // is created). The variant field_offset entry for this field is their difference.
         let saved_value_builder_offset = value_builder.offset();
         let saved_fields_size = fields.len();
+        let saved_metadata_builder_dict_size = metadata_builder.num_field_names();
         let field_id = metadata_builder.try_upsert_field_name(field_name)?;
         let field_start = saved_value_builder_offset - saved_parent_value_builder_offset;
         if fields.insert(field_id, field_start).is_some() && validate_unique_fields {
@@ -822,11 +830,18 @@ impl<'a> ParentState<'a> {
             )));
         }
 
-        let builder_state = ObjectParentState {
+        let builder_state = Box::new(ObjectParentState {
             fields,
             saved_fields_size,
-        };
-        Ok(Self::new(value_builder, metadata_builder, builder_state))
+        });
+        Ok(ParentState {
+            saved_metadata_builder_dict_size,
+            saved_value_builder_offset,
+            value_builder,
+            metadata_builder,
+            builder_state,
+            finished: false,
+        })
     }
     fn value_builder(&mut self) -> &mut ValueBuilder {
         self.value_and_metadata_builders().0
