@@ -20,11 +20,13 @@
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
-use parquet_variant::{CustomParentState, ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
+use parquet_variant::{
+    BuilderSpecificState, ListBuilder, ObjectBuilder, Variant, VariantBuilderExt,
+};
 use parquet_variant::{ParentState, ValueBuilder, WritableMetadataBuilder};
 use std::sync::Arc;
 
-/// Custom parent state for array building that manages array-level offsets and nulls
+/// Builder-specific state for array building that manages array-level offsets and nulls
 #[derive(Debug)]
 struct ArrayBuilderState<'a> {
     metadata_offsets: &'a mut Vec<usize>,
@@ -32,7 +34,7 @@ struct ArrayBuilderState<'a> {
     nulls: &'a mut NullBufferBuilder,
 }
 
-impl CustomParentState for ArrayBuilderState<'_> {
+impl BuilderSpecificState for ArrayBuilderState<'_> {
     fn finish(&mut self, metadata_offset: usize, value_offset: usize) {
         self.metadata_offsets.push(metadata_offset);
         self.value_offsets.push(value_offset);
@@ -164,19 +166,15 @@ impl VariantArrayBuilder {
         ValueBuilder::append_variant(self.parent_state(), variant);
     }
 
-    /// Create a custom parent state for use with direct builder creation
+    /// Creates a builder-specific parent state
     fn parent_state(&mut self) -> ParentState<'_> {
-        let custom_state = ArrayBuilderState {
+        let state = ArrayBuilderState {
             metadata_offsets: &mut self.metadata_offsets,
             value_offsets: &mut self.value_offsets,
             nulls: &mut self.nulls,
         };
 
-        ParentState::custom(
-            &mut self.value_builder,
-            &mut self.metadata_builder,
-            custom_state,
-        )
+        ParentState::new(&mut self.value_builder, &mut self.metadata_builder, state)
     }
 }
 
