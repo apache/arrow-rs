@@ -172,7 +172,7 @@ where
 /// [`RowSelection`]: crate::arrow::arrow_reader::RowSelection
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]
-    pub predicates: Vec<Box<dyn ArrowPredicate>>,
+    pub(crate) predicates: Vec<Box<dyn ArrowPredicate>>,
 }
 
 impl Debug for RowFilter {
@@ -185,5 +185,13 @@ impl RowFilter {
     /// Create a new [`RowFilter`] from an array of [`ArrowPredicate`]
     pub fn new(predicates: Vec<Box<dyn ArrowPredicate>>) -> Self {
         Self { predicates }
+    }
+    /// Returns the inner predicates
+    pub fn predicates(&self) -> &Vec<Box<dyn ArrowPredicate>> { 
+        &self.predicates
+    }
+    /// Returns the inner predicates, consuming self
+    pub fn into_predicates(self) -> Vec<Box<dyn ArrowPredicate>> {
+        self.predicates
     }
 }
