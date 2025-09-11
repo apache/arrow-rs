@@ -130,6 +130,7 @@ impl VariantMetadataHeader {
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantMetadata<'m> {
+    /// (Only) the bytes that make up this metadata instance.
     pub(crate) bytes: &'m [u8],
     header: VariantMetadataHeader,
     dictionary_size: u32,
@@ -299,7 +300,7 @@ impl<'m> VariantMetadata<'m> {
         self.header.version
     }
 
-    /// Gets an offset array entry by index.
+    /// Gets an offset into the dictionary entry by index.
     ///
     /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
     /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
@@ -307,6 +308,11 @@ impl<'m> VariantMetadata<'m> {
         let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let bytes = slice_from_slice(self.bytes, offset_byte_range)?;
         self.header.offset_size.unpack_u32(bytes, i)
+    }
+
+    /// Returns the last byte offset of the metadata dictionary, which is also the total size of
+    pub fn size(&self) -> usize {
+        self.bytes.len()
     }
 
     /// Attempts to retrieve a dictionary entry by index, failing if out of bounds or if the
