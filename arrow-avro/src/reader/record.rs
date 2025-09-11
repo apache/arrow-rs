@@ -15,27 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::{AvroDataType, Codec, Promotion, ResolutionInfo};
+use crate::codec::{
+    AvroDataType, AvroField, AvroLiteral, Codec, Promotion, ResolutionInfo, ResolvedRecord,
+};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
-use crate::reader::header::Header;
-use crate::schema::*;
+use crate::schema::Nullability;
 use arrow_array::builder::{
-    ArrayBuilder, Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
-    IntervalMonthDayNanoBuilder, PrimitiveBuilder,
+    Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder, StringViewBuilder,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_array::builder::{Decimal32Builder, Decimal64Builder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
-    Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 #[cfg(feature = "small_decimals")]
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::io::Read;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -57,6 +57,29 @@ macro_rules! flush_decimal {
             .with_precision_and_scale(*$precision as u8, $scale.unwrap_or(0) as i8)
             .map_err(|e| ArrowError::ParseError(e.to_string()))?;
         Arc::new(dec) as ArrayRef
+    }};
+}
+
+/// Macro to append a default decimal value from two's-complement big-endian bytes
+/// into the corresponding decimal builder, with compile-time constructed error text.
+macro_rules! append_decimal_default {
+    ($lit:expr, $builder:expr, $N:literal, $Int:ty, $name:literal) => {{
+        match $lit {
+            AvroLiteral::Bytes(b) => {
+                let ext = sign_cast_to::<$N>(b)?;
+                let val = <$Int>::from_be_bytes(ext);
+                $builder.append_value(val);
+                Ok(())
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                concat!(
+                    "Default for ",
+                    $name,
+                    " must be bytes (two's-complement big-endian)"
+                )
+                .to_string(),
+            )),
+        }
     }};
 }
 
@@ -91,15 +114,7 @@ pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     use_utf8view: bool,
-    resolved: Option<ResolvedRuntime>,
-}
-
-#[derive(Debug)]
-struct ResolvedRuntime {
-    /// writer field index -> reader field index (or None if writer-only)
-    writer_to_reader: Arc<[Option<usize>]>,
-    /// per-writer-field skipper (Some only when writer-only)
-    skip_decoders: Vec<Option<Skipper>>,
+    projector: Option<Projector>,
 }
 
 impl RecordDecoder {
@@ -138,22 +153,19 @@ impl RecordDecoder {
                     arrow_fields.push(avro_field.field());
                     encodings.push(Decoder::try_new(avro_field.data_type())?);
                 }
-                // If this record carries resolution metadata, prepare top-level runtime helpers
-                let resolved = match data_type.resolution.as_ref() {
-                    Some(ResolutionInfo::Record(rec)) => {
-                        let skip_decoders = build_skip_decoders(&rec.skip_fields)?;
-                        Some(ResolvedRuntime {
-                            writer_to_reader: rec.writer_to_reader.clone(),
-                            skip_decoders,
-                        })
-                    }
+                let projector = match data_type.resolution.as_ref() {
+                    Some(ResolutionInfo::Record(rec)) => Some(
+                        ProjectorBuilder::try_new(rec)
+                            .with_reader_fields(reader_fields)
+                            .build()?,
+                    ),
                     _ => None,
                 };
                 Ok(Self {
                     schema: Arc::new(ArrowSchema::new(arrow_fields)),
                     fields: encodings,
                     use_utf8view,
-                    resolved,
+                    projector,
                 })
             }
             other => Err(ArrowError::ParseError(format!(
@@ -170,17 +182,10 @@ impl RecordDecoder {
     /// Decode `count` records from `buf`
     pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
         let mut cursor = AvroCursor::new(buf);
-        match self.resolved.as_mut() {
-            Some(runtime) => {
-                // Top-level resolved record: read writer fields in writer order,
-                // project into reader fields, and skip writer-only fields
+        match self.projector.as_mut() {
+            Some(proj) => {
                 for _ in 0..count {
-                    decode_with_resolution(
-                        &mut cursor,
-                        &mut self.fields,
-                        &runtime.writer_to_reader,
-                        &mut runtime.skip_decoders,
-                    )?;
+                    proj.project_record(&mut cursor, &mut self.fields)?;
                 }
             }
             None => {
@@ -205,24 +210,10 @@ impl RecordDecoder {
     }
 }
 
-fn decode_with_resolution(
-    buf: &mut AvroCursor<'_>,
-    encodings: &mut [Decoder],
-    writer_to_reader: &[Option<usize>],
-    skippers: &mut [Option<Skipper>],
-) -> Result<(), ArrowError> {
-    for (w_idx, (target, skipper_opt)) in writer_to_reader.iter().zip(skippers).enumerate() {
-        match (*target, skipper_opt.as_mut()) {
-            (Some(r_idx), _) => encodings[r_idx].decode(buf)?,
-            (None, Some(sk)) => sk.skip(buf)?,
-            (None, None) => {
-                return Err(ArrowError::SchemaError(format!(
-                    "No skipper available for writer-only field at index {w_idx}",
-                )));
-            }
-        }
-    }
-    Ok(())
+#[derive(Debug)]
+struct EnumResolution {
+    mapping: Arc<[i32]>,
+    default_index: i32,
 }
 
 #[derive(Debug)]
@@ -252,7 +243,7 @@ enum Decoder {
     /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
     StringView(OffsetBufferBuilder<i32>, Vec<u8>),
     Array(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
-    Record(Fields, Vec<Decoder>),
+    Record(Fields, Vec<Decoder>, Option<Projector>),
     Map(
         FieldRef,
         OffsetBufferBuilder<i32>,
@@ -261,27 +252,16 @@ enum Decoder {
         Box<Decoder>,
     ),
     Fixed(i32, Vec<u8>),
-    Enum(Vec<i32>, Arc<[String]>),
+    Enum(Vec<i32>, Arc<[String]>, Option<EnumResolution>),
     Duration(IntervalMonthDayNanoBuilder),
     Uuid(Vec<u8>),
+    #[cfg(feature = "small_decimals")]
     Decimal32(usize, Option<usize>, Option<usize>, Decimal32Builder),
+    #[cfg(feature = "small_decimals")]
     Decimal64(usize, Option<usize>, Option<usize>, Decimal64Builder),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
-    EnumResolved {
-        indices: Vec<i32>,
-        symbols: Arc<[String]>,
-        mapping: Arc<[i32]>,
-        default_index: i32,
-    },
-    /// Resolved record that needs writer->reader projection and skipping writer-only fields
-    RecordResolved {
-        fields: Fields,
-        encodings: Vec<Decoder>,
-        writer_to_reader: Arc<[Option<usize>]>,
-        skip_decoders: Vec<Option<Skipper>>,
-    },
 }
 
 impl Decoder {
@@ -403,16 +383,14 @@ impl Decoder {
                 )
             }
             (Codec::Enum(symbols), _) => {
-                if let Some(ResolutionInfo::EnumMapping(mapping)) = data_type.resolution.as_ref() {
-                    Self::EnumResolved {
-                        indices: Vec::with_capacity(DEFAULT_CAPACITY),
-                        symbols: symbols.clone(),
+                let res = match data_type.resolution.as_ref() {
+                    Some(ResolutionInfo::EnumMapping(mapping)) => Some(EnumResolution {
                         mapping: mapping.mapping.clone(),
                         default_index: mapping.default_index,
-                    }
-                } else {
-                    Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone())
-                }
+                    }),
+                    _ => None,
+                };
+                Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone(), res)
             }
             (Codec::Struct(fields), _) => {
                 let mut arrow_fields = Vec::with_capacity(fields.len());
@@ -422,17 +400,17 @@ impl Decoder {
                     arrow_fields.push(avro_field.field());
                     encodings.push(encoding);
                 }
-                if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
-                    let skip_decoders = build_skip_decoders(&rec.skip_fields)?;
-                    Self::RecordResolved {
-                        fields: arrow_fields.into(),
-                        encodings,
-                        writer_to_reader: rec.writer_to_reader.clone(),
-                        skip_decoders,
-                    }
-                } else {
-                    Self::Record(arrow_fields.into(), encodings)
-                }
+                let projector =
+                    if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
+                        Some(
+                            ProjectorBuilder::try_new(rec)
+                                .with_reader_fields(fields)
+                                .build()?,
+                        )
+                    } else {
+                        None
+                    };
+                Self::Record(arrow_fields.into(), encodings, projector)
             }
             (Codec::Map(child), _) => {
                 let val_field = child.field_with_name("value");
@@ -494,27 +472,263 @@ impl Decoder {
             Self::Array(_, offsets, e) => {
                 offsets.push_length(0);
             }
-            Self::Record(_, e) => e.iter_mut().for_each(|e| e.append_null()),
+            Self::Record(_, e, _) => e.iter_mut().for_each(|e| e.append_null()),
             Self::Map(_, _koff, moff, _, _) => {
                 moff.push_length(0);
             }
             Self::Fixed(sz, accum) => {
                 accum.extend(std::iter::repeat_n(0u8, *sz as usize));
             }
+            #[cfg(feature = "small_decimals")]
             Self::Decimal32(_, _, _, builder) => builder.append_value(0),
+            #[cfg(feature = "small_decimals")]
             Self::Decimal64(_, _, _, builder) => builder.append_value(0),
             Self::Decimal128(_, _, _, builder) => builder.append_value(0),
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
-            Self::Enum(indices, _) => indices.push(0),
-            Self::EnumResolved { indices, .. } => indices.push(0),
+            Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
             Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null();
             }
-            Self::RecordResolved { encodings, .. } => {
-                encodings.iter_mut().for_each(|e| e.append_null());
+        }
+    }
+
+    /// Append a single default literal into the decoder's buffers
+    fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), ArrowError> {
+        match self {
+            Self::Nullable(_, nb, inner) => {
+                if matches!(lit, AvroLiteral::Null) {
+                    nb.append(false);
+                    inner.append_null();
+                    Ok(())
+                } else {
+                    nb.append(true);
+                    inner.append_default(lit)
+                }
             }
+            Self::Null(count) => match lit {
+                AvroLiteral::Null => {
+                    *count += 1;
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Non-null default for null type".to_string(),
+                )),
+            },
+            Self::Boolean(b) => match lit {
+                AvroLiteral::Boolean(v) => {
+                    b.append(*v);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for boolean must be boolean".to_string(),
+                )),
+            },
+            Self::Int32(v) | Self::Date32(v) | Self::TimeMillis(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for int32/date32/time-millis must be int".to_string(),
+                )),
+            },
+            Self::Int64(v)
+            | Self::Int32ToInt64(v)
+            | Self::TimeMicros(v)
+            | Self::TimestampMillis(_, v)
+            | Self::TimestampMicros(_, v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                AvroLiteral::Int(i) => {
+                    v.push(*i as i64);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for long/time-micros/timestamp must be long or int".to_string(),
+                )),
+            },
+            Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => match lit {
+                AvroLiteral::Float(f) => {
+                    v.push(*f);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for float must be float".to_string(),
+                )),
+            },
+            Self::Float64(v)
+            | Self::Int32ToFloat64(v)
+            | Self::Int64ToFloat64(v)
+            | Self::Float32ToFloat64(v) => match lit {
+                AvroLiteral::Double(f) => {
+                    v.push(*f);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for double must be double".to_string(),
+                )),
+            },
+            Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    offsets.push_length(b.len());
+                    values.extend_from_slice(b);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for bytes must be bytes".to_string(),
+                )),
+            },
+            Self::BytesToString(offsets, values)
+            | Self::String(offsets, values)
+            | Self::StringView(offsets, values) => match lit {
+                AvroLiteral::String(s) => {
+                    let b = s.as_bytes();
+                    offsets.push_length(b.len());
+                    values.extend_from_slice(b);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for string must be string".to_string(),
+                )),
+            },
+            Self::Uuid(values) => match lit {
+                AvroLiteral::String(s) => {
+                    let uuid = Uuid::try_parse(s).map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!("Invalid UUID default: {s} ({e})"))
+                    })?;
+                    values.extend_from_slice(uuid.as_bytes());
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for uuid must be string".to_string(),
+                )),
+            },
+            Self::Fixed(sz, accum) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != *sz as usize {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Fixed default length {} does not match size {sz}",
+                            b.len(),
+                        )));
+                    }
+                    accum.extend_from_slice(b);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for fixed must be bytes".to_string(),
+                )),
+            },
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal32(_, _, _, builder) => {
+                append_decimal_default!(lit, builder, 4, i32, "decimal32")
+            }
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal64(_, _, _, builder) => {
+                append_decimal_default!(lit, builder, 8, i64, "decimal64")
+            }
+            Self::Decimal128(_, _, _, builder) => {
+                append_decimal_default!(lit, builder, 16, i128, "decimal128")
+            }
+            Self::Decimal256(_, _, _, builder) => {
+                append_decimal_default!(lit, builder, 32, i256, "decimal256")
+            }
+            Self::Duration(builder) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 12 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Duration default must be exactly 12 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    let months = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                    let days = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                    let millis = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
+                    let nanos = (millis as i64) * 1_000_000;
+                    builder.append_value(IntervalMonthDayNano::new(
+                        months as i32,
+                        days as i32,
+                        nanos,
+                    ));
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for duration must be 12-byte little-endian months/days/millis"
+                        .to_string(),
+                )),
+            },
+            Self::Array(_, offsets, inner) => match lit {
+                AvroLiteral::Array(items) => {
+                    offsets.push_length(items.len());
+                    for item in items {
+                        inner.append_default(item)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for array must be an array literal".to_string(),
+                )),
+            },
+            Self::Map(_, koff, moff, kdata, valdec) => match lit {
+                AvroLiteral::Map(entries) => {
+                    moff.push_length(entries.len());
+                    for (k, v) in entries {
+                        let kb = k.as_bytes();
+                        koff.push_length(kb.len());
+                        kdata.extend_from_slice(kb);
+                        valdec.append_default(v)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for map must be a map/object literal".to_string(),
+                )),
+            },
+            Self::Enum(indices, symbols, _) => match lit {
+                AvroLiteral::Enum(sym) => {
+                    let pos = symbols.iter().position(|s| s == sym).ok_or_else(|| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "Enum default symbol {sym:?} not in reader symbols"
+                        ))
+                    })?;
+                    indices.push(pos as i32);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for enum must be a symbol".to_string(),
+                )),
+            },
+            Self::Record(field_meta, decoders, projector) => match lit {
+                AvroLiteral::Map(entries) => {
+                    for (i, dec) in decoders.iter_mut().enumerate() {
+                        let name = field_meta[i].name();
+                        if let Some(sub) = entries.get(name) {
+                            dec.append_default(sub)?;
+                        } else if let Some(proj) = projector.as_ref() {
+                            proj.project_default(dec, i)?;
+                        } else {
+                            dec.append_null();
+                        }
+                    }
+                    Ok(())
+                }
+                AvroLiteral::Null => {
+                    for (i, dec) in decoders.iter_mut().enumerate() {
+                        if let Some(proj) = projector.as_ref() {
+                            proj.project_default(dec, i)?;
+                        } else {
+                            dec.append_null();
+                        }
+                    }
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for record must be a map/object or null".to_string(),
+                )),
+            },
         }
     }
 
@@ -560,10 +774,13 @@ impl Decoder {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
                 off.push_length(total_items);
             }
-            Self::Record(_, encodings) => {
+            Self::Record(_, encodings, None) => {
                 for encoding in encodings {
                     encoding.decode(buf)?;
                 }
+            }
+            Self::Record(_, encodings, Some(proj)) => {
+                proj.project_record(buf, encodings)?;
             }
             Self::Map(_, koff, moff, kdata, valdec) => {
                 let newly_added = read_blocks(buf, |cur| {
@@ -578,9 +795,11 @@ impl Decoder {
                 let fx = buf.get_fixed(*sz as usize)?;
                 accum.extend_from_slice(fx);
             }
+            #[cfg(feature = "small_decimals")]
             Self::Decimal32(_, _, size, builder) => {
                 decode_decimal!(size, buf, builder, 4, i32);
             }
+            #[cfg(feature = "small_decimals")]
             Self::Decimal64(_, _, size, builder) => {
                 decode_decimal!(size, buf, builder, 8, i64);
             }
@@ -590,21 +809,16 @@ impl Decoder {
             Self::Decimal256(_, _, size, builder) => {
                 decode_decimal!(size, buf, builder, 32, i256);
             }
-            Self::Enum(indices, _) => {
+            Self::Enum(indices, _, None) => {
                 indices.push(buf.get_int()?);
             }
-            Self::EnumResolved {
-                indices,
-                mapping,
-                default_index,
-                ..
-            } => {
+            Self::Enum(indices, _, Some(res)) => {
                 let raw = buf.get_int()?;
                 let resolved = usize::try_from(raw)
                     .ok()
-                    .and_then(|idx| mapping.get(idx).copied())
+                    .and_then(|idx| res.mapping.get(idx).copied())
                     .filter(|&idx| idx >= 0)
-                    .unwrap_or(*default_index);
+                    .unwrap_or(res.default_index);
                 if resolved >= 0 {
                     indices.push(resolved);
                 } else {
@@ -634,14 +848,6 @@ impl Decoder {
                     encoding.append_null();
                 }
                 nb.append(is_not_null);
-            }
-            Self::RecordResolved {
-                encodings,
-                writer_to_reader,
-                skip_decoders,
-                ..
-            } => {
-                decode_with_resolution(buf, encodings, writer_to_reader, skip_decoders)?;
             }
         }
         Ok(())
@@ -711,7 +917,7 @@ impl Decoder {
                 let offsets = flush_offsets(offsets);
                 Arc::new(ListArray::new(field.clone(), offsets, values, nulls))
             }
-            Self::Record(fields, encodings) => {
+            Self::Record(fields, encodings, _) => {
                 let arrays = encodings
                     .iter_mut()
                     .map(|x| x.flush(None))
@@ -764,9 +970,11 @@ impl Decoder {
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(arr)
             }
+            #[cfg(feature = "small_decimals")]
             Self::Decimal32(precision, scale, _, builder) => {
                 flush_decimal!(builder, precision, scale, nulls, Decimal32Array)
             }
+            #[cfg(feature = "small_decimals")]
             Self::Decimal64(precision, scale, _, builder) => {
                 flush_decimal!(builder, precision, scale, nulls, Decimal64Array)
             }
@@ -776,24 +984,12 @@ impl Decoder {
             Self::Decimal256(precision, scale, _, builder) => {
                 flush_decimal!(builder, precision, scale, nulls, Decimal256Array)
             }
-            Self::Enum(indices, symbols) => flush_dict(indices, symbols, nulls)?,
-            Self::EnumResolved {
-                indices, symbols, ..
-            } => flush_dict(indices, symbols, nulls)?,
+            Self::Enum(indices, symbols, _) => flush_dict(indices, symbols, nulls)?,
             Self::Duration(builder) => {
                 let (_, vals, _) = builder.finish().into_parts();
                 let vals = IntervalMonthDayNanoArray::try_new(vals, nulls)
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(vals)
-            }
-            Self::RecordResolved {
-                fields, encodings, ..
-            } => {
-                let arrays = encodings
-                    .iter_mut()
-                    .map(|x| x.flush(None))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Arc::new(StructArray::new(fields.clone(), arrays, nulls))
             }
         })
     }
@@ -976,6 +1172,127 @@ fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
     Ok(out)
 }
 
+#[derive(Debug)]
+struct Projector {
+    writer_to_reader: Arc<[Option<usize>]>,
+    skip_decoders: Vec<Option<Skipper>>,
+    field_defaults: Vec<Option<AvroLiteral>>,
+    default_injections: Arc<[(usize, AvroLiteral)]>,
+}
+
+#[derive(Debug)]
+struct ProjectorBuilder<'a> {
+    rec: &'a ResolvedRecord,
+    reader_fields: Option<Arc<[AvroField]>>,
+}
+
+impl<'a> ProjectorBuilder<'a> {
+    #[inline]
+    fn try_new(rec: &'a ResolvedRecord) -> Self {
+        Self {
+            rec,
+            reader_fields: None,
+        }
+    }
+
+    #[inline]
+    fn with_reader_fields(mut self, reader_fields: &Arc<[AvroField]>) -> Self {
+        self.reader_fields = Some(reader_fields.clone());
+        self
+    }
+
+    #[inline]
+    fn build(self) -> Result<Projector, ArrowError> {
+        let reader_fields = self.reader_fields.ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
+                "ProjectorBuilder requires reader_fields to be provided".to_string(),
+            )
+        })?;
+        let mut field_defaults: Vec<Option<AvroLiteral>> = Vec::with_capacity(reader_fields.len());
+        for avro_field in reader_fields.iter() {
+            if let Some(ResolutionInfo::DefaultValue(lit)) =
+                avro_field.data_type().resolution.as_ref()
+            {
+                field_defaults.push(Some(lit.clone()));
+            } else {
+                field_defaults.push(None);
+            }
+        }
+        let mut default_injections: Vec<(usize, AvroLiteral)> =
+            Vec::with_capacity(self.rec.default_fields.len());
+        for &idx in self.rec.default_fields.iter() {
+            let lit = field_defaults
+                .get(idx)
+                .and_then(|lit| lit.clone())
+                .unwrap_or(AvroLiteral::Null);
+            default_injections.push((idx, lit));
+        }
+        let mut skip_decoders: Vec<Option<Skipper>> =
+            Vec::with_capacity(self.rec.skip_fields.len());
+        for datatype in self.rec.skip_fields.iter() {
+            let skipper = match datatype {
+                Some(datatype) => Some(Skipper::from_avro(datatype)?),
+                None => None,
+            };
+            skip_decoders.push(skipper);
+        }
+        Ok(Projector {
+            writer_to_reader: self.rec.writer_to_reader.clone(),
+            skip_decoders,
+            field_defaults,
+            default_injections: default_injections.into(),
+        })
+    }
+}
+
+impl Projector {
+    #[inline]
+    fn project_default(&self, decoder: &mut Decoder, index: usize) -> Result<(), ArrowError> {
+        // SAFETY: `index` is obtained by listing the reader's record fields (i.e., from
+        // `decoders.iter_mut().enumerate()`), and `field_defaults` was built in
+        // `ProjectorBuilder::build` to have exactly one element per reader field.
+        // Therefore, `index < self.field_defaults.len()` always holds here, so
+        // `self.field_defaults[index]` cannot panic. We only take an immutable reference
+        // via `.as_ref()`, and `self` is borrowed immutably.
+        if let Some(default_literal) = self.field_defaults[index].as_ref() {
+            decoder.append_default(default_literal)
+        } else {
+            decoder.append_null();
+            Ok(())
+        }
+    }
+
+    #[inline]
+    fn project_record(
+        &mut self,
+        buf: &mut AvroCursor<'_>,
+        encodings: &mut [Decoder],
+    ) -> Result<(), ArrowError> {
+        let n_writer = self.writer_to_reader.len();
+        let n_injections = self.default_injections.len();
+        for index in 0..(n_writer + n_injections) {
+            if index < n_writer {
+                match (
+                    self.writer_to_reader[index],
+                    self.skip_decoders[index].as_mut(),
+                ) {
+                    (Some(reader_index), _) => encodings[reader_index].decode(buf)?,
+                    (None, Some(skipper)) => skipper.skip(buf)?,
+                    (None, None) => {
+                        return Err(ArrowError::SchemaError(format!(
+                            "No skipper available for writer-only field at index {index}",
+                        )));
+                    }
+                }
+            } else {
+                let (reader_index, ref lit) = self.default_injections[index - n_writer];
+                encodings[reader_index].append_default(lit)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Lightweight skipper for non‑projected writer fields
 /// (fields present in the writer schema but omitted by the reader/projection);
 /// per Avro 1.11.1 schema resolution these fields are ignored.
@@ -1126,25 +1443,12 @@ impl Skipper {
     }
 }
 
-#[inline]
-fn build_skip_decoders(
-    skip_fields: &[Option<AvroDataType>],
-) -> Result<Vec<Option<Skipper>>, ArrowError> {
-    skip_fields
-        .iter()
-        .map(|opt| opt.as_ref().map(Skipper::from_avro).transpose())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codec::AvroField;
-    use arrow_array::{
-        cast::AsArray, Array, Decimal128Array, Decimal256Array, Decimal32Array, DictionaryArray,
-        FixedSizeBinaryArray, IntervalMonthDayNanoArray, ListArray, MapArray, StringArray,
-        StructArray,
-    };
+    use crate::schema::{PrimitiveType, Schema, TypeName};
+    use arrow_array::cast::AsArray;
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -1977,12 +2281,14 @@ mod tests {
             vec!["B".to_string(), "C".to_string(), "A".to_string()].into();
         let mapping: Arc<[i32]> = Arc::from(vec![2, 0, 1]);
         let default_index: i32 = -1;
-        let mut dec = Decoder::EnumResolved {
-            indices: Vec::with_capacity(DEFAULT_CAPACITY),
-            symbols: reader_symbols.clone(),
-            mapping,
-            default_index,
-        };
+        let mut dec = Decoder::Enum(
+            Vec::with_capacity(DEFAULT_CAPACITY),
+            reader_symbols.clone(),
+            Some(EnumResolution {
+                mapping,
+                default_index,
+            }),
+        );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(0));
         data.extend_from_slice(&encode_avro_int(1));
@@ -2013,12 +2319,14 @@ mod tests {
         let reader_symbols: Arc<[String]> = vec!["A".to_string(), "B".to_string()].into();
         let default_index: i32 = 1;
         let mapping: Arc<[i32]> = Arc::from(vec![0, 1]);
-        let mut dec = Decoder::EnumResolved {
-            indices: Vec::with_capacity(DEFAULT_CAPACITY),
-            symbols: reader_symbols.clone(),
-            mapping,
-            default_index,
-        };
+        let mut dec = Decoder::Enum(
+            Vec::with_capacity(DEFAULT_CAPACITY),
+            reader_symbols.clone(),
+            Some(EnumResolution {
+                mapping,
+                default_index,
+            }),
+        );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(0));
         data.extend_from_slice(&encode_avro_int(1));
@@ -2048,12 +2356,14 @@ mod tests {
         let reader_symbols: Arc<[String]> = vec!["A".to_string()].into();
         let default_index: i32 = -1; // indicates no default at type-level
         let mapping: Arc<[i32]> = Arc::from(vec![-1]);
-        let mut dec = Decoder::EnumResolved {
-            indices: Vec::with_capacity(DEFAULT_CAPACITY),
-            symbols: reader_symbols,
-            mapping,
-            default_index,
-        };
+        let mut dec = Decoder::Enum(
+            Vec::with_capacity(DEFAULT_CAPACITY),
+            reader_symbols,
+            Some(EnumResolution {
+                mapping,
+                default_index,
+            }),
+        );
         let data = encode_avro_int(0);
         let mut cur = AvroCursor::new(&data);
         let err = dec
@@ -2069,7 +2379,7 @@ mod tests {
     fn make_record_resolved_decoder(
         reader_fields: &[(&str, DataType, bool)],
         writer_to_reader: Vec<Option<usize>>,
-        mut skip_decoders: Vec<Option<super::Skipper>>,
+        skip_decoders: Vec<Option<Skipper>>,
     ) -> Decoder {
         let mut field_refs: Vec<FieldRef> = Vec::with_capacity(reader_fields.len());
         let mut encodings: Vec<Decoder> = Vec::with_capacity(reader_fields.len());
@@ -2086,12 +2396,16 @@ mod tests {
             encodings.push(enc);
         }
         let fields: Fields = field_refs.into();
-        Decoder::RecordResolved {
+        Decoder::Record(
             fields,
             encodings,
-            writer_to_reader: Arc::from(writer_to_reader),
-            skip_decoders,
-        }
+            Some(Projector {
+                writer_to_reader: Arc::from(writer_to_reader),
+                skip_decoders,
+                field_defaults: vec![None; reader_fields.len()],
+                default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
+            }),
+        )
     }
 
     #[test]
