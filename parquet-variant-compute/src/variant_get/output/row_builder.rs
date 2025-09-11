@@ -37,7 +37,7 @@ pub(crate) fn make_shredding_row_builder<'a>(
     };
 
     let builder = match data_type {
-        // If no data type was requested, build a VariantArray that preserves existing shredding.
+        // If no data type was requested, build an unshredded VariantArray.
         None => VariantArrayShreddingRowBuilder::new(16).with_path(path),
         Some(datatypes::DataType::Int8) => {
             PrimitiveVariantShreddingRowBuilder::<Int8Type>::new(cast_options).with_path(path)
