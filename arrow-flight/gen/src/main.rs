@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // protoc in Ubuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src")
+        .file_descriptor_set_path("src/flight_descriptor.bin")
         .compile_protos_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
     // read file contents to string
@@ -52,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // protoc in Ubuntu builder needs this option
         .protoc_arg("--experimental_allow_proto3_optional")
         .out_dir("src/sql")
+        .file_descriptor_set_path("src/sql/flight_sql_descriptor.bin")
         .compile_protos_with_config(prost_config(), &[proto_path], &[proto_dir])?;
 
     // read file contents to string
