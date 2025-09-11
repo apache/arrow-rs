@@ -98,12 +98,10 @@ use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
+use crate::file::metadata::thrift_gen::PageEncodingStats;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
+use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
-use crate::file::{
-    page_encoding_stats::PageEncodingStats,
-    page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation},
-};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,

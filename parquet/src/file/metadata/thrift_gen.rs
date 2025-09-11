@@ -31,7 +31,6 @@ use crate::{
             ColumnChunkMetaData, KeyValue, LevelHistogram, ParquetMetaData, RowGroupMetaData,
             SortingColumn,
         },
-        page_encoding_stats::PageEncodingStats,
         statistics::ValueStatistics,
     },
     parquet_thrift::{
@@ -51,6 +50,15 @@ use crate::{
     parquet_thrift::ThriftSliceInputProtocol,
     schema::types::SchemaDescPtr,
 };
+
+thrift_struct!(
+/// PageEncodingStats for a column chunk and data page.
+pub struct PageEncodingStats {
+  1: required PageType page_type;
+  2: required Encoding encoding;
+  3: required i32 count;
+}
+);
 
 // this needs to be visible to the schema conversion code
 thrift_struct!(
