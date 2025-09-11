@@ -199,9 +199,14 @@ pub struct VariantArrayVariantBuilder<'a> {
     metadata_offsets: &'a mut Vec<usize>,
     value_offsets: &'a mut Vec<usize>,
     nulls: &'a mut NullBufferBuilder,
+    is_null: bool,
 }
 
 impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
+    /// Appending NULL to a variant array produces an actual NULL value
+    fn append_null(&mut self) {
+        self.is_null = true;
+    }
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         ValueBuilder::append_variant(self.parent_state(), value.into());
     }
@@ -228,6 +233,7 @@ impl<'a> VariantArrayVariantBuilder<'a> {
             metadata_offsets: &mut builder.metadata_offsets,
             value_offsets: &mut builder.value_offsets,
             nulls: &mut builder.nulls,
+            is_null: false,
         }
     }
 
@@ -239,10 +245,20 @@ impl<'a> VariantArrayVariantBuilder<'a> {
     pub fn finish(mut self) {
         // Record the ending offsets after finishing metadata and finish the parent state.
         let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-        self.metadata_offsets.push(metadata_builder.finish());
-        self.value_offsets.push(value_builder.offset());
-        self.nulls.append_non_null();
-        self.parent_state.finish();
+        let (metadata_offset, value_offset, not_null) = if self.is_null {
+            // Do not `finish`, just repeat the previous offset for a physically empty result
+            let metadata_offset = self.metadata_offsets.last().copied().unwrap_or(0);
+            let value_offset = self.value_offsets.last().copied().unwrap_or(0);
+            (metadata_offset, value_offset, false)
+        } else {
+            let metadata_offset = metadata_builder.finish();
+            let value_offset = value_builder.offset();
+            self.parent_state.finish();
+            (metadata_offset, value_offset, true)
+        };
+        self.metadata_offsets.push(metadata_offset);
+        self.value_offsets.push(value_offset);
+        self.nulls.append(not_null);
     }
 
     fn parent_state(&mut self) -> ParentState<'_> {
