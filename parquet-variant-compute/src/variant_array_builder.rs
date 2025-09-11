@@ -21,7 +21,7 @@ use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{
-    BuilderSpecificState, ListBuilder, ObjectBuilder, Variant, VariantBuilderExt,
+    BuilderSpecificState, ListBuilder, MetadataBuilder, ObjectBuilder, Variant, VariantBuilderExt,
 };
 use parquet_variant::{ParentState, ValueBuilder, WritableMetadataBuilder};
 use std::sync::Arc;
@@ -35,9 +35,13 @@ struct ArrayBuilderState<'a> {
 }
 
 impl BuilderSpecificState for ArrayBuilderState<'_> {
-    fn finish(&mut self, metadata_offset: usize, value_offset: usize) {
-        self.metadata_offsets.push(metadata_offset);
-        self.value_offsets.push(value_offset);
+    fn finish(
+        &mut self,
+        metadata_builder: &mut dyn MetadataBuilder,
+        value_builder: &mut ValueBuilder,
+    ) {
+        self.metadata_offsets.push(metadata_builder.finish());
+        self.value_offsets.push(value_builder.offset());
         self.nulls.append_non_null();
     }
 

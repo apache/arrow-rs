@@ -674,9 +674,13 @@ pub trait BuilderSpecificState: std::fmt::Debug {
     /// Called by [`ParentState::finish`] to apply any pending builder-specific changes.
     ///
     /// Parameters:
-    /// - `metadata_offset`: The final offset in the metadata buffer after construction
-    /// - `value_offset`: The final offset in the value buffer after construction
-    fn finish(&mut self, metadata_offset: usize, value_offset: usize);
+    /// - `metadata_builder`: The metadata builder that was used
+    /// - `value_builder`: The value builder that was used
+    fn finish(
+        &mut self,
+        _metadata_builder: &mut dyn MetadataBuilder,
+        _value_builder: &mut ValueBuilder,
+    );
 
     /// Called by [`ParentState::rollback`] to revert any changes that were eagerly applied.
     ///
@@ -687,7 +691,13 @@ pub trait BuilderSpecificState: std::fmt::Debug {
 
 /// Empty no-op implementation for top-level variant building
 impl BuilderSpecificState for () {
-    fn finish(&mut self, _metadata_offset: usize, _value_offset: usize) {}
+    fn finish(
+        &mut self,
+        _metadata_builder: &mut dyn MetadataBuilder,
+        _value_builder: &mut ValueBuilder,
+    ) {
+    }
+
     fn rollback(&mut self) {}
 }
 
@@ -700,7 +710,12 @@ struct ListParentState<'a> {
 
 impl BuilderSpecificState for ListParentState<'_> {
     // Nothing to do - list header writing happens in `ListBuilder::finish()`
-    fn finish(&mut self, _metadata_offset: usize, _value_offset: usize) {}
+    fn finish(
+        &mut self,
+        _metadata_builder: &mut dyn MetadataBuilder,
+        _value_builder: &mut ValueBuilder,
+    ) {
+    }
 
     fn rollback(&mut self) {
         self.offsets.truncate(self.saved_offsets_size);
@@ -716,7 +731,12 @@ struct ObjectParentState<'a> {
 
 impl BuilderSpecificState for ObjectParentState<'_> {
     // Nothing to do - object header writing happens in `ObjectBuilder::finish()`
-    fn finish(&mut self, _metadata_offset: usize, _value_offset: usize) {}
+    fn finish(
+        &mut self,
+        _metadata_builder: &mut dyn MetadataBuilder,
+        _value_builder: &mut ValueBuilder,
+    ) {
+    }
 
     fn rollback(&mut self) {
         self.fields.truncate(self.saved_fields_size);
@@ -862,10 +882,8 @@ impl<'a> ParentState<'a> {
     /// Marks the insertion as having succeeded and invokes
     /// [`BuilderSpecificState::finish`]. Internal state will no longer roll back on drop.
     pub fn finish(&mut self) {
-        let metadata_offset = self.metadata_builder.finish();
-        let value_offset = self.value_builder.offset();
-        self.builder_state.finish(metadata_offset, value_offset);
-
+        self.builder_state
+            .finish(self.metadata_builder, self.value_builder);
         *self.is_finished() = true
     }
 
