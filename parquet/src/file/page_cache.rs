@@ -170,6 +170,6 @@ impl ParquetContext {
     /// Get the shared default ParquetContext instance
     /// This ensures all readers share the same cache when no explicit context is provided
     pub fn shared_default() -> &'static ParquetContext {
-        DEFAULT_PARQUET_CONTEXT.get_or_init(|| ParquetContext::default())
+        DEFAULT_PARQUET_CONTEXT.get_or_init(ParquetContext::default)
     }
 }
