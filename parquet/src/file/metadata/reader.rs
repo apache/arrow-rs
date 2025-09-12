@@ -15,32 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "async")]
+use bytes::Bytes;
 use std::{io::Read, ops::Range};
 
 #[cfg(feature = "encryption")]
-use crate::encryption::{
-    decrypt::{FileDecryptionProperties, FileDecryptor},
-    modules::create_footer_aad,
-};
-use bytes::Bytes;
+use crate::encryption::decrypt::FileDecryptionProperties;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataPushDecoder};
-use crate::file::page_index::index::Index;
-use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
+use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
-#[cfg(feature = "encryption")]
-use crate::format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData};
-use crate::thrift::TSerializable;
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
-#[cfg(feature = "encryption")]
-use crate::encryption::decrypt::CryptoContext;
-use crate::file::metadata::parser::{parse_column_index, parse_offset_index};
+use crate::file::metadata::parser::{decode_metadata, parse_column_index, parse_offset_index};
 use crate::file::metadata::push_decoder::range_for_page_index;
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
 ///
@@ -600,7 +590,6 @@ impl ParquetMetaDataReader {
 
     fn range_for_page_index(&self) -> Option<Range<u64>> {
         // sanity check
-        let metadata = self.metadata.as_ref()?;
         range_for_page_index(
             self.metadata.as_ref()?,
             self.column_index,
@@ -795,7 +784,7 @@ impl ParquetMetaDataReader {
         footer_tail: &FooterTail,
     ) -> Result<ParquetMetaData> {
         #[cfg(feature = "encryption")]
-        let result = Self::decode_metadata_with_encryption(
+        let result = crate::file::metadata::parser::decode_metadata_with_encryption(
             buf,
             footer_tail.is_encrypted_footer(),
             self.file_decryption_properties.as_ref(),
@@ -813,112 +802,6 @@ impl ParquetMetaDataReader {
         result
     }
 
-    /// Decodes [`ParquetMetaData`] from the provided bytes, handling metadata that may be encrypted.
-    ///
-    /// Typically this is used to decode the metadata from the end of a parquet
-    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
-    /// by the [Parquet Spec]. Buffer can be encrypted with AES GCM or AES CTR
-    /// ciphers as specfied in the [Parquet Encryption Spec].
-    ///
-    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
-    /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
-    #[cfg(feature = "encryption")]
-    fn decode_metadata_with_encryption(
-        buf: &[u8],
-        encrypted_footer: bool,
-        file_decryption_properties: Option<&FileDecryptionProperties>,
-    ) -> Result<ParquetMetaData> {
-        let mut prot = TCompactSliceInputProtocol::new(buf);
-        let mut file_decryptor = None;
-        let decrypted_fmd_buf;
-
-        if encrypted_footer {
-            if let Some(file_decryption_properties) = file_decryption_properties {
-                let t_file_crypto_metadata: TFileCryptoMetaData =
-                    TFileCryptoMetaData::read_from_in_protocol(&mut prot)
-                        .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
-                let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
-                    EncryptionAlgorithm::AESGCMV1(algo) => algo.supply_aad_prefix,
-                    _ => Some(false),
-                }
-                .unwrap_or(false);
-                if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
-                    return Err(general_err!(
-                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
-                        but no AAD prefix was provided in the file decryption properties"
-                    ));
-                }
-                let decryptor = get_file_decryptor(
-                    t_file_crypto_metadata.encryption_algorithm,
-                    t_file_crypto_metadata.key_metadata.as_deref(),
-                    file_decryption_properties,
-                )?;
-                let footer_decryptor = decryptor.get_footer_decryptor();
-                let aad_footer = create_footer_aad(decryptor.file_aad())?;
-
-                decrypted_fmd_buf = footer_decryptor?
-                    .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
-                    .map_err(|_| {
-                        general_err!(
-                            "Provided footer key and AAD were unable to decrypt parquet footer"
-                        )
-                    })?;
-                prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
-
-                file_decryptor = Some(decryptor);
-            } else {
-                return Err(general_err!("Parquet file has an encrypted footer but decryption properties were not provided"));
-            }
-        }
-
-        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
-            .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
-        let schema = types::from_thrift(&t_file_metadata.schema)?;
-        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
-
-        if let (Some(algo), Some(file_decryption_properties)) = (
-            t_file_metadata.encryption_algorithm,
-            file_decryption_properties,
-        ) {
-            // File has a plaintext footer but encryption algorithm is set
-            let file_decryptor_value = get_file_decryptor(
-                algo,
-                t_file_metadata.footer_signing_key_metadata.as_deref(),
-                file_decryption_properties,
-            )?;
-            if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
-                file_decryptor_value.verify_plaintext_footer_signature(buf)?;
-            }
-            file_decryptor = Some(file_decryptor_value);
-        }
-
-        let mut row_groups = Vec::new();
-        for rg in t_file_metadata.row_groups {
-            let r = RowGroupMetaData::from_encrypted_thrift(
-                schema_descr.clone(),
-                rg,
-                file_decryptor.as_ref(),
-            )?;
-            row_groups.push(r);
-        }
-        let column_orders =
-            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
-
-        let file_metadata = FileMetaData::new(
-            t_file_metadata.version,
-            t_file_metadata.num_rows,
-            t_file_metadata.created_by,
-            t_file_metadata.key_value_metadata,
-            schema_descr,
-            column_orders,
-        );
-        let mut metadata = ParquetMetaData::new(file_metadata, row_groups);
-
-        metadata.with_file_decryptor(file_decryptor);
-
-        Ok(metadata)
-    }
-
     /// Decodes [`ParquetMetaData`] from the provided bytes.
     ///
     /// Typically this is used to decode the metadata from the end of a parquet
@@ -927,51 +810,16 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        Self::decode_metadata(buf)
-    }
-}
-
-#[cfg(feature = "encryption")]
-fn get_file_decryptor(
-    encryption_algorithm: EncryptionAlgorithm,
-    footer_key_metadata: Option<&[u8]>,
-    file_decryption_properties: &FileDecryptionProperties,
-) -> Result<FileDecryptor> {
-    match encryption_algorithm {
-        EncryptionAlgorithm::AESGCMV1(algo) => {
-            let aad_file_unique = algo
-                .aad_file_unique
-                .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
-            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
-                aad_prefix.clone()
-            } else {
-                algo.aad_prefix.unwrap_or_default()
-            };
-
-            FileDecryptor::new(
-                file_decryption_properties,
-                footer_key_metadata,
-                aad_file_unique,
-                aad_prefix,
-            )
-        }
-        EncryptionAlgorithm::AESGCMCTRV1(_) => Err(nyi_err!(
-            "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
-        )),
+        decode_metadata(buf)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
-
-    use crate::basic::SortOrder;
-    use crate::basic::Type;
     use crate::file::reader::Length;
-    use crate::format::TypeDefinedOrder;
-    use crate::schema::types::Type as SchemaType;
     use crate::util::test_common::file_util::get_test_file;
+    use bytes::Bytes;
 
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {

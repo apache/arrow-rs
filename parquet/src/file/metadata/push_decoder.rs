@@ -15,24 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::basic::ColumnOrder;
 use crate::errors::ParquetError;
 use crate::file::metadata::parser::{decode_metadata, parse_column_index, parse_offset_index};
-use crate::file::metadata::{
-    FileMetaData, FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
-    RowGroupMetaData,
-};
-use crate::file::page_index::index_reader::{acc_range, decode_column_index};
+use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData};
+use crate::file::page_index::index_reader::acc_range;
 use crate::file::reader::ChunkReader;
 use crate::file::FOOTER_SIZE;
-use crate::schema::types;
-use crate::schema::types::SchemaDescriptor;
-use crate::thrift::TCompactSliceInputProtocol;
-use crate::thrift::TSerializable;
 use crate::DecodeResult;
 use bytes::Bytes;
 use std::ops::Range;
-use std::sync::Arc;
 
 /// A push decoder for [`ParquetMetaData`].
 ///
@@ -332,7 +323,7 @@ impl ParquetMetaDataPushDecoder {
 
                     let metadata_bytes = self.get_bytes(&metadata_range)?;
                     let metadata = decode_metadata(&metadata_bytes)?;
-                    self.state = DecodeState::ReadingPageIndex(metadata);
+                    self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
                     continue;
                 }
 
@@ -346,7 +337,7 @@ impl ParquetMetaDataPushDecoder {
                     let Some(page_index_range) = range else {
                         // no ranges means no page indexes are needed
                         self.state = DecodeState::Finished;
-                        return Ok(DecodeResult::Data(metadata));
+                        return Ok(DecodeResult::Data(*metadata));
                     };
 
                     if !self.buffers.has_range(&page_index_range) {
@@ -359,7 +350,7 @@ impl ParquetMetaDataPushDecoder {
                     parse_column_index(&mut metadata, self.column_index_policy, &buffer, offset)?;
                     parse_offset_index(&mut metadata, self.offset_index_policy, &buffer, offset)?;
                     self.state = DecodeState::Finished;
-                    return Ok(DecodeResult::Data(metadata));
+                    return Ok(DecodeResult::Data(*metadata));
                 }
 
                 DecodeState::Finished => return Ok(DecodeResult::Finished),
@@ -385,7 +376,6 @@ impl ParquetMetaDataPushDecoder {
 
 /// returns a DecodeResults that describes needing the given range
 fn needs_range(range: Range<u64>) -> DecodeResult<ParquetMetaData> {
-    #[expect(clippy::single_range_in_vec_init)]
     DecodeResult::NeedsData(vec![range])
 }
 
@@ -397,7 +387,7 @@ enum DecodeState {
     /// Reading the metadata thrift structure
     ReadingMetadata(FooterTail),
     //
-    ReadingPageIndex(ParquetMetaData),
+    ReadingPageIndex(Box<ParquetMetaData>),
     // todo read boom filters?
     Finished,
     /// State left during decoding. This should never be observed outside
