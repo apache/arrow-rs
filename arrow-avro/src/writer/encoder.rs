@@ -1454,7 +1454,7 @@ mod tests {
     #[test]
     fn fixed_encoder_plain() {
         // Two values of width 4
-        let data = vec![[0xDE, 0xAD, 0xBE, 0xEF], [0x00, 0x01, 0x02, 0x03]];
+        let data = [[0xDE, 0xAD, 0xBE, 0xEF], [0x00, 0x01, 0x02, 0x03]];
         let values: Vec<Vec<u8>> = data.iter().map(|x| x.to_vec()).collect();
         let arr = FixedSizeBinaryArray::try_from_iter(values.into_iter()).unwrap();
         let got = encode_all(&arr, &FieldPlan::Scalar, None);
