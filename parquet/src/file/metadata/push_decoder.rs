@@ -17,12 +17,12 @@
 
 use crate::basic::ColumnOrder;
 use crate::errors::ParquetError;
-use crate::file::metadata::parser::decode_metadata;
+use crate::file::metadata::parser::{decode_metadata, parse_column_index, parse_offset_index};
 use crate::file::metadata::{
     FileMetaData, FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
     RowGroupMetaData,
 };
-use crate::file::page_index::index_reader::acc_range;
+use crate::file::page_index::index_reader::{acc_range, decode_column_index};
 use crate::file::reader::ChunkReader;
 use crate::file::FOOTER_SIZE;
 use crate::schema::types;
@@ -30,6 +30,7 @@ use crate::schema::types::SchemaDescriptor;
 use crate::thrift::TCompactSliceInputProtocol;
 use crate::thrift::TSerializable;
 use crate::DecodeResult;
+use bytes::Bytes;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -307,10 +308,9 @@ impl ParquetMetaDataPushDecoder {
                 DecodeState::ReadingFooter => {
                     // need to have the last 8 bytes of the file to decode the metadata
                     let footer_start = file_len.saturating_sub(footer_len);
-
-                    ensure_range!(&self.buffers, footer_start..file_len);
-                    // decode footer (we just checked we have the bytes)
-                    let footer_bytes = self.buffers.get_bytes(footer_start, FOOTER_SIZE)?;
+                    let footer_range = footer_start..file_len;
+                    ensure_range!(&self.buffers, footer_range);
+                    let footer_bytes = self.get_bytes(&footer_range)?;
                     let footer_tail = FooterTail::try_from(footer_bytes.as_ref())?;
 
                     #[cfg(not(feature = "encryption"))]
@@ -326,33 +326,36 @@ impl ParquetMetaDataPushDecoder {
 
                 DecodeState::ReadingMetadata(footer_tail) => {
                     let metadata_len: u64 = footer_tail.metadata_length() as u64;
-                    let metadata_start = self.buffers.file_len() - footer_len - metadata_len;
+                    let metadata_start = file_len - footer_len - metadata_len;
+                    let metadata_end = metadata_start + metadata_len;
+                    let metadata_range = metadata_start..metadata_end;
 
-                    ensure_range!(&self.buffers, metadata_start..metadata_len);
+                    ensure_range!(&self.buffers, metadata_range);
 
-                    let metadata_bytes = self
-                        .buffers
-                        .get_bytes(metadata_start, footer_tail.metadata_length())?;
+                    let metadata_bytes = self.get_bytes(&metadata_range)?;
                     let metadata = decode_metadata(&metadata_bytes)?;
                     self.state = DecodeState::ReadingPageIndex(metadata);
                     continue;
                 }
 
-                DecodeState::ReadingPageIndex(metadata) => {
+                DecodeState::ReadingPageIndex(mut metadata) => {
                     let range = range_for_page_index(
                         &metadata,
                         self.column_index_policy,
                         self.offset_index_policy,
                     );
-                    let Some(range) = range else {
+                    let Some(page_index_range) = range else {
                         // no ranges means no page indexes are needed
                         self.state = DecodeState::Finished;
                         return Ok(DecodeResult::Data(metadata));
                     };
-                    ensure_range!(&self.buffers, range);
-                    return Err(general_err!(
-                        "ParquetMetaDataPushDecoder: page index reading not yet implemented"
-                    ));
+                    ensure_range!(&self.buffers, page_index_range);
+                    let buffer = self.get_bytes(&page_index_range)?;
+                    let offset = page_index_range.start;
+                    parse_column_index(&mut metadata, self.column_index_policy, &buffer, offset)?;
+                    parse_offset_index(&mut metadata, self.offset_index_policy, &buffer, offset)?;
+                    self.state = DecodeState::Finished;
+                    return Ok(DecodeResult::Data(metadata));
                 }
 
                 DecodeState::Finished => return Ok(DecodeResult::Finished),
@@ -363,6 +366,15 @@ impl ParquetMetaDataPushDecoder {
                 }
             }
         }
+    }
+
+    fn get_bytes(&self, range: &Range<u64>) -> Result<Bytes, ParquetError> {
+        let start = range.start;
+        let raw_len = range.end - range.start;
+        let len: usize = raw_len.try_into().map_err(|_| {
+            ParquetError::General(format!("Range length too large to fit in usize: {raw_len}",))
+        })?;
+        self.buffers.get_bytes(start, len)
     }
 }
 
