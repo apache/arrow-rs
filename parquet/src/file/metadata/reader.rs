@@ -590,8 +590,10 @@ impl ParquetMetaDataReader {
         // Sanity check
         assert_eq!(bytes.len() as u64, range.end - range.start);
 
-        self.parse_column_index(&bytes, range.start)?;
-        self.parse_offset_index(&bytes, range.start)?;
+        if let Some(metadata) = self.metadata.as_mut() {
+            parse_column_index(metadata, self.column_index, &bytes, range.start)?;
+            parse_offset_index(metadata, self.offset_index, &bytes, range.start)?;
+        }
 
         Ok(())
     }
@@ -1130,6 +1132,7 @@ mod async_tests {
     use std::io::{Read, Seek, SeekFrom};
     use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tempfile::NamedTempFile;
 
     use crate::arrow::ArrowWriter;
