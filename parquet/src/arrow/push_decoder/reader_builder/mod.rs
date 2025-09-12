@@ -18,13 +18,14 @@
 mod data;
 mod filter;
 
-use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache};
+use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
+use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::schema::ParquetField;
 use crate::arrow::ProjectionMask;
 use crate::errors::ParquetError;
@@ -38,8 +39,7 @@ use filter::FilterInfo;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-/// Identifies the current row group being read and what
-/// the read plan is for it
+/// The current row group being read and the read plan
 #[derive(Debug)]
 struct RowGroupInfo {
     row_group_idx: usize,
@@ -66,16 +66,20 @@ enum RowGroupDecoderState {
         filter_info: FilterInfo,
         data_request: DataRequest,
     },
-    /// Know what to actually read, after all predicates
+    /// Know what data to actually read, after all predicates
     StartData {
         row_group_info: RowGroupInfo,
         /// Any previously read column chunk data from the filtering phase
         column_chunks: Option<Vec<Option<Arc<ColumnChunkData>>>>,
+        /// Any cached filter results
+        cache_info: Option<CacheInfo>,
     },
     /// Needs data to proceed with reading the output
     WaitingOnData {
         row_group_info: RowGroupInfo,
         data_request: DataRequest,
+        /// Any cached filter results
+        cache_info: Option<CacheInfo>,
     },
     /// Finished (or not yet started) reading this group
     Finished,
@@ -143,11 +147,11 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Offset to apply to remaining row groups (decremented as rows are read)
     offset: Option<usize>,
 
+    /// The size in bytes of the predicate cache
+    max_predicate_cache_size: usize,
+
     /// The metrics collector
     metrics: ArrowReaderMetrics,
-
-    /// Predicate cache
-    row_group_cache: Arc<Mutex<RowGroupCache>>,
 
     /// Current state of the decoder.
     ///
@@ -174,11 +178,6 @@ impl RowGroupReaderBuilder {
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
     ) -> Self {
-        let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(
-            batch_size,
-            max_predicate_cache_size,
-        )));
-
         Self {
             batch_size,
             projection,
@@ -188,7 +187,7 @@ impl RowGroupReaderBuilder {
             limit,
             offset,
             metrics,
-            row_group_cache,
+            max_predicate_cache_size,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -233,6 +232,7 @@ impl RowGroupReaderBuilder {
             )));
         }
         let plan_builder = ReadPlanBuilder::new(self.batch_size).with_selection(selection);
+
         let row_group_info = RowGroupInfo {
             row_group_idx,
             row_count,
@@ -297,6 +297,7 @@ impl RowGroupReaderBuilder {
                     return Ok(NextState::again(RowGroupDecoderState::StartData {
                         row_group_info,
                         column_chunks,
+                        cache_info: None,
                     }));
                 };
                 // no predicates in filter, so start reading immediately
@@ -304,13 +305,23 @@ impl RowGroupReaderBuilder {
                     return Ok(NextState::again(RowGroupDecoderState::StartData {
                         row_group_info,
                         column_chunks,
+                        cache_info: None,
                     }));
                 };
 
                 // we have predicates to evaluate
                 let cache_projection =
                     self.compute_cache_projection(row_group_info.row_group_idx, &filter);
-                let filter_info = FilterInfo::new(filter, cache_projection);
+
+                let cache_info = CacheInfo::new(
+                    cache_projection,
+                    Arc::new(Mutex::new(RowGroupCache::new(
+                        self.batch_size,
+                        self.max_predicate_cache_size,
+                    ))),
+                );
+
+                let filter_info = FilterInfo::new(filter, cache_info);
                 NextState::again(RowGroupDecoderState::Filters {
                     row_group_info,
                     filter_info,
@@ -405,11 +416,7 @@ impl RowGroupReaderBuilder {
                     &mut self.buffers,
                 )?;
 
-                let cache_options = CacheOptionsBuilder::new(
-                    filter_info.cache_projection(),
-                    Arc::clone(&self.row_group_cache),
-                )
-                .producer();
+                let cache_options = filter_info.cache_builder().producer();
 
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_cache_options(Some(&cache_options))
@@ -437,13 +444,14 @@ impl RowGroupReaderBuilder {
                         })
                     }
                     // done with predicates, proceed to reading data
-                    AdvanceResult::Done(filter) => {
+                    AdvanceResult::Done(filter, cache_info) => {
                         // remember we need to put back the filter
                         assert!(self.filter.is_none());
                         self.filter = Some(filter);
                         NextState::again(RowGroupDecoderState::StartData {
                             row_group_info,
                             column_chunks,
+                            cache_info: Some(cache_info),
                         })
                     }
                 }
@@ -451,6 +459,7 @@ impl RowGroupReaderBuilder {
             RowGroupDecoderState::StartData {
                 row_group_info,
                 column_chunks,
+                cache_info,
             } => {
                 let RowGroupInfo {
                     row_group_idx,
@@ -519,12 +528,14 @@ impl RowGroupReaderBuilder {
                 NextState::again(RowGroupDecoderState::WaitingOnData {
                     row_group_info,
                     data_request,
+                    cache_info,
                 })
             }
             // Waiting on data to proceed with reading the output
             RowGroupDecoderState::WaitingOnData {
                 row_group_info,
                 data_request,
+                cache_info,
             } => {
                 let needed_ranges = data_request.needed_ranges(&self.buffers);
                 if !needed_ranges.is_empty() {
@@ -533,6 +544,7 @@ impl RowGroupReaderBuilder {
                         RowGroupDecoderState::WaitingOnData {
                             row_group_info,
                             data_request,
+                            cache_info,
                         },
                         DecodeResult::NeedsData(needed_ranges),
                     ));
@@ -555,8 +567,17 @@ impl RowGroupReaderBuilder {
 
                 let plan = plan_builder.build();
 
-                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .build_array_reader(self.fields.as_deref(), &self.projection)?;
+                // if we have any cached results, connect them up
+                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics);
+                let array_reader = if let Some(cache_info) = cache_info.as_ref() {
+                    let cache_options = cache_info.builder().consumer();
+                    array_reader_builder
+                        .with_cache_options(Some(&cache_options))
+                        .build_array_reader(self.fields.as_deref(), &self.projection)
+                } else {
+                    array_reader_builder
+                        .build_array_reader(self.fields.as_deref(), &self.projection)
+                }?;
 
                 let reader = ParquetRecordBatchReader::new(array_reader, plan);
                 NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))
@@ -626,7 +647,8 @@ impl RowGroupReaderBuilder {
 mod tests {
     use super::*;
     #[test]
+    // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 176);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 184);
     }
 }

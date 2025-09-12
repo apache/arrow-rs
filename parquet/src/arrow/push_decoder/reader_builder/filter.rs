@@ -17,10 +17,17 @@
 
 //! [`FilterInfo`] state machine for evaluating row filters
 
+use crate::arrow::array_reader::{CacheOptionsBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use crate::arrow::ProjectionMask;
 use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 
+/// State machine for evaluating a sequence of predicates
+///
+/// This is somewhat more complicated than one might expect because the
+/// RowFilter must be owned by the FilterInfo so that predicates can
+/// be evaluated (requires mutable access).
 #[derive(Debug)]
 pub(super) struct FilterInfo {
     /// The predicates to evaluate, in order
@@ -30,24 +37,55 @@ pub(super) struct FilterInfo {
     filter: RowFilter,
     /// The next filter to be evaluated
     next_predicate: NonZeroUsize,
+    /// Stores previously computed filter results
+    cache_info: CacheInfo,
+}
+
+/// Predicate cache
+///
+/// Note this is basically the same as CacheOptionsBuilder
+/// but it owns the ProjectionMask and RowGroupCache
+#[derive(Debug)]
+pub(super) struct CacheInfo {
     /// The columns to cache in the predicate cache
     cache_projection: ProjectionMask,
+    row_group_cache: Arc<Mutex<RowGroupCache>>,
+}
+
+impl CacheInfo {
+    pub(super) fn new(
+        cache_projection: ProjectionMask,
+        row_group_cache: Arc<Mutex<RowGroupCache>>,
+    ) -> Self {
+        Self {
+            cache_projection,
+            row_group_cache,
+        }
+    }
+
+    pub(super) fn builder(&self) -> CacheOptionsBuilder<'_> {
+        CacheOptionsBuilder::new(
+            &self.cache_projection,
+            // TODO avoid this clone
+            Arc::clone(&self.row_group_cache),
+        )
+    }
 }
 
 pub(super) enum AdvanceResult {
     /// advanced to the next predicate
     Continue(FilterInfo),
-    /// no more predicates returns the row filter
-    Done(RowFilter),
+    /// no more predicates returns the row filter and cache info
+    Done(RowFilter, CacheInfo),
 }
 
 impl FilterInfo {
     /// Create a new FilterInfo
-    pub(super) fn new(filter: RowFilter, cache_projection: ProjectionMask) -> Self {
+    pub(super) fn new(filter: RowFilter, cache_info: CacheInfo) -> Self {
         Self {
             filter,
             next_predicate: NonZeroUsize::new(1).expect("1 is always non-zero"),
-            cache_projection,
+            cache_info,
         }
     }
 
@@ -55,7 +93,7 @@ impl FilterInfo {
     /// or the completed RowFilter if there are no more predicates
     pub(super) fn advance(mut self) -> AdvanceResult {
         if self.next_predicate.get() >= self.filter.predicates.len() {
-            AdvanceResult::Done(self.filter)
+            AdvanceResult::Done(self.filter, self.cache_info)
         } else {
             self.next_predicate = self
                 .next_predicate
@@ -85,13 +123,18 @@ impl FilterInfo {
             .as_ref()
     }
 
+    /// Return a reference to the cache projection
+    pub(super) fn cache_projection(&self) -> &ProjectionMask {
+        &self.cache_info.cache_projection
+    }
+
+    /// Return a cache builder to save the results of predicate evaluation
+    pub(super) fn cache_builder(&self) -> CacheOptionsBuilder<'_> {
+        self.cache_info.builder()
+    }
+
     /// Returns the inner filter, consuming this FilterInfo
     pub(super) fn into_filter(self) -> RowFilter {
         self.filter
-    }
-
-    /// Return a reference to the cached projection
-    pub(super) fn cache_projection(&self) -> &ProjectionMask {
-        &self.cache_projection
     }
 }
