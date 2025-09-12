@@ -40,7 +40,7 @@ mod primitive;
 use crate::arrow::ProjectionMask;
 pub(crate) use complex::{ParquetField, ParquetFieldType};
 
-use super::PARQUET_FIELD_ID_META_KEY;
+use super::{ADJUSTED_TO_UTC_KEY, PARQUET_FIELD_ID_META_KEY};
 
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///
@@ -569,7 +569,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         }
         DataType::Time32(unit) => Type::primitive_type_builder(name, PhysicalType::INT32)
             .with_logical_type(Some(LogicalType::Time {
-                is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
+                is_adjusted_to_u_t_c: field.metadata().contains_key(ADJUSTED_TO_UTC_KEY),
                 unit: match unit {
                     TimeUnit::Millisecond => ParquetTimeUnit::MILLIS(Default::default()),
                     u => unreachable!("Invalid unit for Time32: {:?}", u),
@@ -580,7 +580,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .build(),
         DataType::Time64(unit) => Type::primitive_type_builder(name, PhysicalType::INT64)
             .with_logical_type(Some(LogicalType::Time {
-                is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
+                is_adjusted_to_u_t_c: field.metadata().contains_key(ADJUSTED_TO_UTC_KEY),
                 unit: match unit {
                     TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
                     TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
@@ -1779,7 +1779,7 @@ mod tests {
                 true,
             )
             .with_metadata(HashMap::from_iter(vec![(
-                "adjusted_to_utc".to_string(),
+                ADJUSTED_TO_UTC_KEY.to_string(),
                 "".to_string(),
             )])),
             Field::new("time_micro", DataType::Time64(TimeUnit::Microsecond), true),
@@ -1789,7 +1789,7 @@ mod tests {
                 true,
             )
             .with_metadata(HashMap::from_iter(vec![(
-                "adjusted_to_utc".to_string(),
+                ADJUSTED_TO_UTC_KEY.to_string(),
                 "".to_string(),
             )])),
             Field::new(
