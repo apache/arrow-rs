@@ -20,10 +20,10 @@
 use std::io::Write;
 use std::sync::Arc;
 
-#[cfg(feature = "encryption")]
-use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 use crate::{
-    basic::{ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, Type},
+    basic::{
+        ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, PageType, Repetition, Type,
+    },
     data_type::{ByteArray, FixedLenByteArray, Int96},
     errors::{ParquetError, Result},
     file::{
@@ -39,8 +39,14 @@ use crate::{
         WriteThrift, WriteThriftField,
     },
     schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor},
-    thrift_struct,
+    thrift_struct, thrift_union,
     util::bit_util::FromBytes,
+};
+#[cfg(feature = "encryption")]
+use crate::{
+    encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
+    file::column_crypto_metadata::ColumnCryptoMetaData,
+    schema::types::SchemaDescPtr,
 };
 
 // this needs to be visible to the schema conversion code
@@ -60,6 +66,153 @@ pub(crate) struct SchemaElement<'a> {
 }
 );
 
+thrift_struct!(
+pub(crate) struct DataPageHeader {
+  /// Number of values, including NULLs, in this data page.
+  ///
+  /// If a OffsetIndex is present, a page must begin at a row
+  /// boundary (repetition_level = 0). Otherwise, pages may begin
+  /// within a row (repetition_level > 0).
+  1: required i32 num_values
+
+  /// Encoding used for this data page
+  2: required Encoding encoding
+
+  /// Encoding used for definition levels
+  3: required Encoding definition_level_encoding;
+
+  /// Encoding used for repetition levels
+  4: required Encoding repetition_level_encoding;
+
+  // Optional statistics for the data in this page
+  // page stats are pretty useless...lets ignore them
+  //5: optional Statistics statistics;
+}
+);
+
+thrift_struct!(
+    pub(crate) struct IndexPageHeader {}
+);
+
+thrift_struct!(
+pub(crate) struct DictionaryPageHeader {
+  /// Number of values in the dictionary
+  1: required i32 num_values;
+
+  /// Encoding using this dictionary page
+  2: required Encoding encoding
+
+  /// If true, the entries in the dictionary are sorted in ascending order
+  3: optional bool is_sorted;
+}
+);
+
+thrift_struct!(
+pub(crate) struct DataPageHeaderV2 {
+  /// Number of values, including NULLs, in this data page.
+  1: required i32 num_values
+  /// Number of NULL values, in this data page.
+  /// Number of non-null = num_values - num_nulls which is also the number of values in the data section
+  2: required i32 num_nulls
+  /// Number of rows in this data page. Every page must begin at a
+  /// row boundary (repetition_level = 0): rows must **not** be
+  /// split across page boundaries when using V2 data pages.
+  3: required i32 num_rows
+  /// Encoding used for data in this page
+  4: required Encoding encoding
+
+  // repetition levels and definition levels are always using RLE (without size in it)
+
+  /// Length of the definition levels
+  5: required i32 definition_levels_byte_length;
+  /// Length of the repetition levels
+  6: required i32 repetition_levels_byte_length;
+
+  /// Whether the values are compressed.
+  /// Which means the section of the page between
+  /// definition_levels_byte_length + repetition_levels_byte_length + 1 and compressed_page_size (included)
+  /// is compressed with the compression_codec.
+  /// If missing it is considered compressed
+  7: optional bool is_compressed = true;
+
+  // Optional statistics for the data in this page
+  //8: optional Statistics statistics;
+}
+);
+
+thrift_struct!(
+#[allow(dead_code)]
+pub(crate) struct PageHeader {
+  /// the type of the page: indicates which of the *_header fields is set
+  1: required PageType type_
+
+  /// Uncompressed page size in bytes (not including this header)
+  2: required i32 uncompressed_page_size
+
+  /// Compressed (and potentially encrypted) page size in bytes, not including this header
+  3: required i32 compressed_page_size
+
+  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
+  4: optional i32 crc
+
+  // Headers for page specific data.  One only will be set.
+  5: optional DataPageHeader data_page_header;
+  6: optional IndexPageHeader index_page_header;
+  7: optional DictionaryPageHeader dictionary_page_header;
+  8: optional DataPageHeaderV2 data_page_header_v2;
+}
+);
+
+thrift_struct!(
+pub(crate) struct AesGcmV1<'a> {
+  /// AAD prefix
+  1: optional binary<'a> aad_prefix
+
+  /// Unique file identifier part of AAD suffix
+  2: optional binary<'a> aad_file_unique
+
+  /// In files encrypted with AAD prefix without storing it,
+  /// readers must supply the prefix
+  3: optional bool supply_aad_prefix
+}
+);
+
+thrift_struct!(
+pub(crate) struct AesGcmCtrV1<'a> {
+  /// AAD prefix
+  1: optional binary<'a> aad_prefix
+
+  /// Unique file identifier part of AAD suffix
+  2: optional binary<'a> aad_file_unique
+
+  /// In files encrypted with AAD prefix without storing it,
+  /// readers must supply the prefix
+  3: optional bool supply_aad_prefix
+}
+);
+
+thrift_union!(
+union EncryptionAlgorithm<'a> {
+  1: (AesGcmV1<'a>) AES_GCM_V1
+  2: (AesGcmCtrV1<'a>) AES_GCM_CTR_V1
+}
+);
+
+#[cfg(feature = "encryption")]
+thrift_struct!(
+/// Crypto metadata for files with encrypted footer
+pub(crate) struct FileCryptoMetaData<'a> {
+  /// Encryption algorithm. This field is only used for files
+  /// with encrypted footer. Files with plaintext footer store algorithm id
+  /// inside footer (FileMetaData structure).
+  1: required EncryptionAlgorithm<'a> encryption_algorithm
+
+  /** Retrieval metadata of key used for encryption of footer,
+   *  and (possibly) columns **/
+  2: optional binary<'a> key_metadata
+}
+);
+
 // the following are only used internally so are private
 thrift_struct!(
 struct FileMetaData<'a> {
@@ -71,8 +224,8 @@ struct FileMetaData<'a> {
   5: optional list<KeyValue> key_value_metadata
   6: optional string created_by
   7: optional list<ColumnOrder> column_orders;
-  //8: optional EncryptionAlgorithm encryption_algorithm
-  //9: optional binary footer_signing_key_metadata
+  8: optional EncryptionAlgorithm<'a> encryption_algorithm
+  9: optional binary<'a> footer_signing_key_metadata
 }
 );
 
@@ -172,7 +325,7 @@ struct SizeStatistics {
 );
 
 thrift_struct!(
-struct Statistics<'a> {
+pub(crate) struct Statistics<'a> {
    1: optional binary<'a> max;
    2: optional binary<'a> min;
    3: optional i64 null_count;
@@ -304,7 +457,7 @@ fn convert_column(
     Ok(result)
 }
 
-fn convert_stats(
+pub(crate) fn convert_stats(
     physical_type: Type,
     thrift_stats: Option<Statistics>,
 ) -> Result<Option<crate::file::statistics::Statistics>> {
@@ -451,6 +604,250 @@ fn convert_stats(
         }
         None => None,
     })
+}
+
+#[cfg(feature = "encryption")]
+fn row_group_from_encrypted_thrift(
+    mut rg: RowGroup,
+    schema_descr: SchemaDescPtr,
+    decryptor: Option<&FileDecryptor>,
+) -> Result<RowGroupMetaData> {
+    if schema_descr.num_columns() != rg.columns.len() {
+        return Err(general_err!(
+            "Column count mismatch. Schema has {} columns while Row Group has {}",
+            schema_descr.num_columns(),
+            rg.columns.len()
+        ));
+    }
+    let total_byte_size = rg.total_byte_size;
+    let num_rows = rg.num_rows;
+    let mut columns = vec![];
+
+    for (i, (mut c, d)) in rg
+        .columns
+        .drain(0..)
+        .zip(schema_descr.columns())
+        .enumerate()
+    {
+        // Read encrypted metadata if it's present and we have a decryptor.
+        if let (true, Some(decryptor)) = (c.encrypted_column_metadata.is_some(), decryptor) {
+            let column_decryptor = match c.crypto_metadata.as_ref() {
+                None => {
+                    return Err(general_err!(
+                        "No crypto_metadata is set for column '{}', which has encrypted metadata",
+                        d.path().string()
+                    ));
+                }
+                Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(crypto_metadata)) => {
+                    let column_name = crypto_metadata.path_in_schema.join(".");
+                    decryptor.get_column_metadata_decryptor(
+                        column_name.as_str(),
+                        crypto_metadata.key_metadata.as_deref(),
+                    )?
+                }
+                Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY) => {
+                    decryptor.get_footer_decryptor()?
+                }
+            };
+
+            let column_aad = crate::encryption::modules::create_module_aad(
+                decryptor.file_aad(),
+                crate::encryption::modules::ModuleType::ColumnMetaData,
+                rg.ordinal.unwrap() as usize,
+                i,
+                None,
+            )?;
+
+            let buf = c.encrypted_column_metadata.unwrap();
+            let decrypted_cc_buf =
+                column_decryptor
+                    .decrypt(buf, column_aad.as_ref())
+                    .map_err(|_| {
+                        general_err!(
+                            "Unable to decrypt column '{}', perhaps the column key is wrong?",
+                            d.path().string()
+                        )
+                    })?;
+
+            let mut prot = ThriftCompactInputProtocol::new(decrypted_cc_buf.as_slice());
+            let col_meta = ColumnMetaData::try_from(&mut prot)?;
+            c.meta_data = Some(col_meta);
+            columns.push(convert_column(c, d.clone())?);
+        } else {
+            columns.push(convert_column(c, d.clone())?);
+        }
+    }
+
+    let sorting_columns = rg.sorting_columns;
+    let file_offset = rg.file_offset;
+    let ordinal = rg.ordinal;
+
+    Ok(RowGroupMetaData {
+        columns,
+        num_rows,
+        sorting_columns,
+        total_byte_size,
+        schema_descr,
+        file_offset,
+        ordinal,
+    })
+}
+
+#[cfg(feature = "encryption")]
+pub(crate) fn parquet_metadata_with_encryption(
+    file_decryption_properties: Option<&FileDecryptionProperties>,
+    encrypted_footer: bool,
+    buf: &[u8],
+) -> Result<ParquetMetaData> {
+    let mut prot = ThriftCompactInputProtocol::new(buf);
+    let mut file_decryptor = None;
+    let decrypted_fmd_buf;
+
+    if encrypted_footer {
+        if let Some(file_decryption_properties) = file_decryption_properties {
+            let t_file_crypto_metadata: FileCryptoMetaData =
+                FileCryptoMetaData::try_from(&mut prot)
+                    .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
+            let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
+                EncryptionAlgorithm::AES_GCM_V1(algo) => algo.supply_aad_prefix,
+                _ => Some(false),
+            }
+            .unwrap_or(false);
+            if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
+                return Err(general_err!(
+                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
+                        but no AAD prefix was provided in the file decryption properties"
+                    ));
+            }
+            let decryptor = get_file_decryptor(
+                t_file_crypto_metadata.encryption_algorithm,
+                t_file_crypto_metadata.key_metadata,
+                file_decryption_properties,
+            )?;
+            let footer_decryptor = decryptor.get_footer_decryptor();
+            let aad_footer = crate::encryption::modules::create_footer_aad(decryptor.file_aad())?;
+
+            decrypted_fmd_buf = footer_decryptor?
+                .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
+                .map_err(|_| {
+                    general_err!(
+                        "Provided footer key and AAD were unable to decrypt parquet footer"
+                    )
+                })?;
+            prot = ThriftCompactInputProtocol::new(decrypted_fmd_buf.as_ref());
+
+            file_decryptor = Some(decryptor);
+        } else {
+            return Err(general_err!(
+                "Parquet file has an encrypted footer but decryption properties were not provided"
+            ));
+        }
+    }
+
+    let file_meta = super::thrift_gen::FileMetaData::try_from(&mut prot)
+        .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
+
+    let version = file_meta.version;
+    let num_rows = file_meta.num_rows;
+    let created_by = file_meta.created_by.map(|c| c.to_owned());
+    let key_value_metadata = file_meta.key_value_metadata;
+
+    let val = parquet_schema_from_array(file_meta.schema)?;
+    let schema_descr = Arc::new(SchemaDescriptor::new(val));
+
+    if let (Some(algo), Some(file_decryption_properties)) =
+        (file_meta.encryption_algorithm, file_decryption_properties)
+    {
+        // File has a plaintext footer but encryption algorithm is set
+        let file_decryptor_value = get_file_decryptor(
+            algo,
+            file_meta.footer_signing_key_metadata,
+            file_decryption_properties,
+        )?;
+        if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
+            file_decryptor_value.verify_plaintext_footer_signature(buf)?;
+        }
+        file_decryptor = Some(file_decryptor_value);
+    }
+
+    // decrypt column chunk info
+    let mut row_groups = Vec::with_capacity(file_meta.row_groups.len());
+    for rg in file_meta.row_groups {
+        let r = row_group_from_encrypted_thrift(rg, schema_descr.clone(), file_decryptor.as_ref())?;
+        row_groups.push(r);
+    }
+
+    // need to map read column orders to actual values based on the schema
+    if file_meta
+        .column_orders
+        .as_ref()
+        .is_some_and(|cos| cos.len() != schema_descr.num_columns())
+    {
+        return Err(general_err!("Column order length mismatch"));
+    }
+
+    let column_orders = file_meta.column_orders.map(|cos| {
+        let mut res = Vec::with_capacity(cos.len());
+        for (i, column) in schema_descr.columns().iter().enumerate() {
+            match cos[i] {
+                ColumnOrder::TYPE_DEFINED_ORDER(_) => {
+                    let sort_order = ColumnOrder::get_sort_order(
+                        column.logical_type(),
+                        column.converted_type(),
+                        column.physical_type(),
+                    );
+                    res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
+                }
+                _ => res.push(cos[i]),
+            }
+        }
+        res
+    });
+
+    let fmd = crate::file::metadata::FileMetaData::new(
+        version,
+        num_rows,
+        created_by,
+        key_value_metadata,
+        schema_descr,
+        column_orders,
+    );
+    let mut metadata = ParquetMetaData::new(fmd, row_groups);
+
+    metadata.with_file_decryptor(file_decryptor);
+
+    Ok(metadata)
+}
+
+#[cfg(feature = "encryption")]
+pub(super) fn get_file_decryptor(
+    encryption_algorithm: EncryptionAlgorithm,
+    footer_key_metadata: Option<&[u8]>,
+    file_decryption_properties: &FileDecryptionProperties,
+) -> Result<FileDecryptor> {
+    match encryption_algorithm {
+        EncryptionAlgorithm::AES_GCM_V1(algo) => {
+            let aad_file_unique = algo
+                .aad_file_unique
+                .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
+            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
+                aad_prefix.clone()
+            } else {
+                algo.aad_prefix.map(|v| v.to_vec()).unwrap_or_default()
+            };
+            let aad_file_unique = aad_file_unique.to_vec();
+
+            FileDecryptor::new(
+                file_decryption_properties,
+                footer_key_metadata,
+                aad_file_unique,
+                aad_prefix,
+            )
+        }
+        EncryptionAlgorithm::AES_GCM_CTR_V1(_) => Err(nyi_err!(
+            "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
+        )),
+    }
 }
 
 /// Create ParquetMetaData from thrift input. Note that this only decodes the file metadata in

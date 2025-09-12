@@ -15,32 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{io::Read, ops::Range, sync::Arc};
+use std::{io::Read, ops::Range};
 
-use crate::{
-    basic::ColumnOrder,
-    file::metadata::{FileMetaData, KeyValue},
-    parquet_thrift::ThriftCompactInputProtocol,
-};
 #[cfg(feature = "encryption")]
-use crate::{
-    encryption::{
-        decrypt::{CryptoContext, FileDecryptionProperties, FileDecryptor},
-        modules::create_footer_aad,
-    },
-    format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData},
-};
+use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
+use crate::parquet_thrift::ThriftCompactInputProtocol;
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
-use crate::schema::types;
-use crate::schema::types::SchemaDescriptor;
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
@@ -960,101 +947,11 @@ impl ParquetMetaDataReader {
         encrypted_footer: bool,
         file_decryption_properties: Option<&FileDecryptionProperties>,
     ) -> Result<ParquetMetaData> {
-        let mut prot = TCompactSliceInputProtocol::new(buf);
-        let mut file_decryptor = None;
-        let decrypted_fmd_buf;
-
-        if encrypted_footer {
-            if let Some(file_decryption_properties) = file_decryption_properties {
-                let t_file_crypto_metadata: TFileCryptoMetaData =
-                    TFileCryptoMetaData::read_from_in_protocol(&mut prot)
-                        .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
-                let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
-                    EncryptionAlgorithm::AESGCMV1(algo) => algo.supply_aad_prefix,
-                    _ => Some(false),
-                }
-                .unwrap_or(false);
-                if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
-                    return Err(general_err!(
-                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
-                        but no AAD prefix was provided in the file decryption properties"
-                    ));
-                }
-                let decryptor = get_file_decryptor(
-                    t_file_crypto_metadata.encryption_algorithm,
-                    t_file_crypto_metadata.key_metadata.as_deref(),
-                    file_decryption_properties,
-                )?;
-                let footer_decryptor = decryptor.get_footer_decryptor();
-                let aad_footer = create_footer_aad(decryptor.file_aad())?;
-
-                decrypted_fmd_buf = footer_decryptor?
-                    .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
-                    .map_err(|_| {
-                        general_err!(
-                            "Provided footer key and AAD were unable to decrypt parquet footer"
-                        )
-                    })?;
-                prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
-
-                file_decryptor = Some(decryptor);
-            } else {
-                return Err(general_err!("Parquet file has an encrypted footer but decryption properties were not provided"));
-            }
-        }
-
-        let t_file_metadata = crate::format::FileMetaData::read_from_in_protocol(&mut prot)
-            .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
-        let schema = types::from_thrift(&t_file_metadata.schema)?;
-        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
-
-        if let (Some(algo), Some(file_decryption_properties)) = (
-            t_file_metadata.encryption_algorithm,
+        super::thrift_gen::parquet_metadata_with_encryption(
             file_decryption_properties,
-        ) {
-            // File has a plaintext footer but encryption algorithm is set
-            let file_decryptor_value = get_file_decryptor(
-                algo,
-                t_file_metadata.footer_signing_key_metadata.as_deref(),
-                file_decryption_properties,
-            )?;
-            if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
-                file_decryptor_value.verify_plaintext_footer_signature(buf)?;
-            }
-            file_decryptor = Some(file_decryptor_value);
-        }
-
-        let mut row_groups = Vec::new();
-        for rg in t_file_metadata.row_groups {
-            let r = RowGroupMetaData::from_encrypted_thrift(
-                schema_descr.clone(),
-                rg,
-                file_decryptor.as_ref(),
-            )?;
-            row_groups.push(r);
-        }
-        let column_orders =
-            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
-
-        let key_value_metadata = t_file_metadata.key_value_metadata.map(|vkv| {
-            vkv.into_iter()
-                .map(|kv| KeyValue::new(kv.key, kv.value))
-                .collect::<Vec<KeyValue>>()
-        });
-
-        let file_metadata = FileMetaData::new(
-            t_file_metadata.version,
-            t_file_metadata.num_rows,
-            t_file_metadata.created_by,
-            key_value_metadata,
-            schema_descr,
-            column_orders,
-        );
-        let mut metadata = ParquetMetaData::new(file_metadata, row_groups);
-
-        metadata.with_file_decryptor(file_decryptor);
-
-        Ok(metadata)
+            encrypted_footer,
+            buf,
+        )
     }
 
     /// Decodes [`ParquetMetaData`] from the provided bytes.
@@ -1065,103 +962,8 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        let mut prot = TCompactSliceInputProtocol::new(buf);
-
-        let t_file_metadata = crate::format::FileMetaData::read_from_in_protocol(&mut prot)
-            .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
-        let schema = types::from_thrift(&t_file_metadata.schema)?;
-        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
-
-        let mut row_groups = Vec::new();
-        for rg in t_file_metadata.row_groups {
-            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
-        }
-        let column_orders =
-            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
-
-        let key_value_metadata = t_file_metadata.key_value_metadata.map(|vkv| {
-            vkv.into_iter()
-                .map(|kv| KeyValue::new(kv.key, kv.value))
-                .collect::<Vec<KeyValue>>()
-        });
-
-        let file_metadata = FileMetaData::new(
-            t_file_metadata.version,
-            t_file_metadata.num_rows,
-            t_file_metadata.created_by,
-            key_value_metadata,
-            schema_descr,
-            column_orders,
-        );
-
-        Ok(ParquetMetaData::new(file_metadata, row_groups))
-    }
-
-    /// create meta data from thrift encoded bytes
-    pub fn decode_file_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
         let mut prot = ThriftCompactInputProtocol::new(buf);
         ParquetMetaData::try_from(&mut prot)
-    }
-
-    /// Parses column orders from Thrift definition.
-    /// If no column orders are defined, returns `None`.
-    fn parse_column_orders(
-        t_column_orders: Option<Vec<crate::format::ColumnOrder>>,
-        schema_descr: &SchemaDescriptor,
-    ) -> Result<Option<Vec<ColumnOrder>>> {
-        match t_column_orders {
-            Some(orders) => {
-                // Should always be the case
-                if orders.len() != schema_descr.num_columns() {
-                    return Err(general_err!("Column order length mismatch"));
-                };
-                let mut res = Vec::new();
-                for (i, column) in schema_descr.columns().iter().enumerate() {
-                    match orders[i] {
-                        crate::format::ColumnOrder::TYPEORDER(_) => {
-                            let sort_order = ColumnOrder::get_sort_order(
-                                column.logical_type(),
-                                column.converted_type(),
-                                column.physical_type(),
-                            );
-                            res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
-                        }
-                    }
-                }
-                Ok(Some(res))
-            }
-            None => Ok(None),
-        }
-    }
-}
-
-#[cfg(feature = "encryption")]
-fn get_file_decryptor(
-    encryption_algorithm: EncryptionAlgorithm,
-    footer_key_metadata: Option<&[u8]>,
-    file_decryption_properties: &FileDecryptionProperties,
-) -> Result<FileDecryptor> {
-    match encryption_algorithm {
-        EncryptionAlgorithm::AESGCMV1(algo) => {
-            let aad_file_unique = algo
-                .aad_file_unique
-                .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
-            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
-                aad_prefix.clone()
-            } else {
-                algo.aad_prefix.unwrap_or_default()
-            };
-
-            FileDecryptor::new(
-                file_decryption_properties,
-                footer_key_metadata,
-                aad_file_unique,
-                aad_prefix,
-            )
-        }
-        EncryptionAlgorithm::AESGCMCTRV1(_) => Err(nyi_err!(
-            "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
-        )),
     }
 }
 
@@ -1169,12 +971,8 @@ fn get_file_decryptor(
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use zstd::zstd_safe::WriteBuf;
 
-    use crate::basic::SortOrder;
-    use crate::basic::Type;
     use crate::file::reader::Length;
-    use crate::schema::types::Type as SchemaType;
     use crate::util::test_common::file_util::get_test_file;
 
     #[test]
@@ -1203,61 +1001,6 @@ mod tests {
             .parse_metadata(&test_file)
             .unwrap_err();
         assert!(matches!(err, ParquetError::NeedMoreData(263)));
-    }
-
-    #[test]
-    fn test_metadata_column_orders_parse() {
-        // Define simple schema, we do not need to provide logical types.
-        let fields = vec![
-            Arc::new(
-                SchemaType::primitive_type_builder("col1", Type::INT32)
-                    .build()
-                    .unwrap(),
-            ),
-            Arc::new(
-                SchemaType::primitive_type_builder("col2", Type::FLOAT)
-                    .build()
-                    .unwrap(),
-            ),
-        ];
-        let schema = SchemaType::group_type_builder("schema")
-            .with_fields(fields)
-            .build()
-            .unwrap();
-        let schema_descr = SchemaDescriptor::new(Arc::new(schema));
-
-        let t_column_orders = Some(vec![
-            crate::format::ColumnOrder::TYPEORDER(Default::default()),
-            crate::format::ColumnOrder::TYPEORDER(Default::default()),
-        ]);
-
-        assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr).unwrap(),
-            Some(vec![
-                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
-                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
-            ])
-        );
-
-        // Test when no column orders are defined.
-        assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(None, &schema_descr).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn test_metadata_column_orders_len_mismatch() {
-        let schema = SchemaType::group_type_builder("schema").build().unwrap();
-        let schema_descr = SchemaDescriptor::new(Arc::new(schema));
-
-        let t_column_orders = Some(vec![crate::format::ColumnOrder::TYPEORDER(
-            Default::default(),
-        )]);
-
-        let res = ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
-        assert!(res.is_err());
-        assert!(format!("{:?}", res.unwrap_err()).contains("Column order length mismatch"));
     }
 
     #[test]
@@ -1374,27 +1117,6 @@ mod tests {
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
     }
-
-    #[test]
-    fn test_new_decoder() {
-        let file = get_test_file("alltypes_tiny_pages.parquet");
-        let len = file.len();
-
-        // read entire file
-        let bytes = file.get_bytes(0, len as usize).unwrap();
-        let mut footer = [0u8; FOOTER_SIZE];
-        footer.copy_from_slice(bytes.slice(len as usize - FOOTER_SIZE..).as_slice());
-        let tail = ParquetMetaDataReader::decode_footer_tail(&footer).unwrap();
-        let meta_len = tail.metadata_length();
-        let metadata_bytes = bytes.slice(len as usize - FOOTER_SIZE - meta_len..);
-
-        // get ParquetMetaData
-        let m = ParquetMetaDataReader::decode_file_metadata(&metadata_bytes).unwrap();
-        let m2 = ParquetMetaDataReader::decode_metadata(&metadata_bytes).unwrap();
-
-        // check that metadatas are equivalent
-        assert_eq!(m, m2);
-    }
 }
 
 #[cfg(all(feature = "async", feature = "arrow", test))]
@@ -1412,6 +1134,7 @@ mod async_tests {
     use std::io::{Read, Seek, SeekFrom};
     use std::ops::Range;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tempfile::NamedTempFile;
 
     use crate::arrow::ArrowWriter;
