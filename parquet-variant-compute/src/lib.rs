@@ -35,6 +35,7 @@
 //! [`VariantPath`]: parquet_variant::VariantPath
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
+mod arrow_to_variant;
 pub mod cast_to_variant;
 mod from_json;
 mod to_json;
@@ -46,6 +47,7 @@ pub mod variant_get;
 pub use variant_array::{ShreddingState, VariantArray};
 pub use variant_array_builder::{VariantArrayBuilder, VariantArrayVariantBuilder};
 
-pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options, CastOptions};
+pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};
 pub use from_json::json_to_variant;
 pub use to_json::variant_to_json;
+pub use type_conversion::CastOptions;
