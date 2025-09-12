@@ -26,8 +26,8 @@ use crate::format::{
     EncryptionWithFooterKey as TEncryptionWithFooterKey,
 };
 use crate::parquet_thrift::{
-    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
-    WriteThriftField,
+    read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
+    ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
 };
 use crate::{thrift_struct, thrift_union};
 

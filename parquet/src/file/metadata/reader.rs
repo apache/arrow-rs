@@ -19,7 +19,7 @@ use std::{io::Read, ops::Range};
 
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{CryptoContext, FileDecryptionProperties};
-use crate::parquet_thrift::ThriftCompactInputProtocol;
+use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
@@ -962,8 +962,8 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        let mut prot = ThriftCompactInputProtocol::new(buf);
-        ParquetMetaData::try_from(&mut prot)
+        let mut prot = ThriftSliceInputProtocol::new(buf);
+        ParquetMetaData::read_thrift(&mut prot)
     }
 }
 

@@ -20,10 +20,10 @@
 use std::io::Write;
 
 use crate::basic::{Encoding, PageType};
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use crate::parquet_thrift::{
-    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
-    WriteThriftField,
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    WriteThrift, WriteThriftField,
 };
 use crate::thrift_struct;
 

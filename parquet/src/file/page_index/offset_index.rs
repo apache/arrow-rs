@@ -22,8 +22,8 @@
 use std::io::Write;
 
 use crate::parquet_thrift::{
-    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
-    WriteThriftField,
+    read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
+    ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
 };
 use crate::{
     errors::{ParquetError, Result},
@@ -113,7 +113,9 @@ impl OffsetIndexMetaData {
     // Fast-path read of offset index. This works because we expect all field deltas to be 1,
     // and there's no nesting beyond PageLocation, so no need to save the last field id. Like
     // read_page_locations(), this will fail if absolute field id's are used.
-    pub(super) fn try_from_fast<'a>(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+    pub(super) fn try_from_fast<'a, R: ThriftCompactInputProtocol<'a>>(
+        prot: &mut R,
+    ) -> Result<Self> {
         // Offset index is a struct with 2 fields. First field is an array of PageLocations,
         // the second an optional array of i64.
 
@@ -140,7 +142,7 @@ impl OffsetIndexMetaData {
                     "encountered unknown field while reading OffsetIndex"
                 ));
             }
-            let vec = Vec::<i64>::try_from(&mut *prot)?;
+            let vec = read_thrift_vec::<i64, R>(&mut *prot)?;
             unencoded_byte_array_data_bytes = Some(vec);
 
             // this one should be Stop
@@ -164,7 +166,7 @@ impl OffsetIndexMetaData {
 
 // Note: this will fail if the fields are either out of order, or if a suboptimal
 // encoder doesn't use field deltas.
-fn read_page_location<'a>(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<PageLocation> {
+fn read_page_location<'a, R: ThriftCompactInputProtocol<'a>>(prot: &mut R) -> Result<PageLocation> {
     // there are 3 fields, all mandatory, so all field deltas should be 1
     let (field_type, delta) = prot.read_field_header()?;
     if delta != 1 || field_type != FieldType::I64 as u8 {
