@@ -63,8 +63,10 @@ macro_rules! variant_test_case {
 }
 
 // Generate test functions for each case
-// Note that case 3 is empty in cases.json, so we skip it here
-// Only cases 40, 42, 87, 127 and 128 are expected to fail, the rest should pass
+// Notes
+// - case 3 is empty in cases.json for some reason
+// - cases 40, 42, 87, 127 and 128 are expected to fail always (they include invalid variants)
+// - the remaining cases are expected to (eventually) pass
 
 variant_test_case!(1, "Unsupported typed_value type: List(");
 variant_test_case!(2, "Unsupported typed_value type: List(");
