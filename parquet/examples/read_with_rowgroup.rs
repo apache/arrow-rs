@@ -153,7 +153,7 @@ impl InMemoryRowGroup {
             None,
         )?;
 
-        ParquetRecordBatchReader::try_new_with_row_groups(&levels, self, batch_size, selection)
+        ParquetRecordBatchReader::try_new_with_row_groups(&levels, self, batch_size, selection, &ProjectionMask::all())
     }
 
     /// fetch data from a reader in sync mode
