@@ -984,6 +984,36 @@ fn datatype_to_avro(
     null_order: Nullability,
 ) -> Result<(Value, JsonMap<String, Value>), ArrowError> {
     let mut extras = JsonMap::new();
+    let mut handle_decimal = |precision: &u8, scale: &i8| -> Result<Value, ArrowError> {
+        if *scale < 0 {
+            return Err(ArrowError::SchemaError(format!(
+                "Invalid Avro decimal for field '{field_name}': scale ({scale}) must be >= 0"
+            )));
+        }
+        if (*scale as usize) > (*precision as usize) {
+            return Err(ArrowError::SchemaError(format!(
+                "Invalid Avro decimal for field '{field_name}': scale ({scale}) \
+                 must be <= precision ({precision})"
+            )));
+        }
+
+        let mut meta = JsonMap::from_iter([
+            ("logicalType".into(), json!("decimal")),
+            ("precision".into(), json!(*precision)),
+            ("scale".into(), json!(*scale)),
+        ]);
+        if let Some(size) = metadata
+            .get("size")
+            .and_then(|val| val.parse::<usize>().ok())
+        {
+            meta.insert("type".into(), json!("fixed"));
+            meta.insert("size".into(), json!(size));
+            meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+        } else {
+            meta.insert("type".into(), json!("bytes"));
+        }
+        Ok(Value::Object(meta))
+    };
     let val = match dt {
         DataType::Null => Value::String("null".into()),
         DataType::Boolean => Value::String("boolean".into()),
@@ -1013,24 +1043,12 @@ fn datatype_to_avro(
                 })
             }
         }
+        #[cfg(feature = "small_decimals")]
+        DataType::Decimal32(precision, scale) | DataType::Decimal64(precision, scale) => {
+            handle_decimal(precision, scale)?
+        }
         DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
-            // Prefer fixed if original size info present
-            let mut meta = JsonMap::from_iter([
-                ("logicalType".into(), json!("decimal")),
-                ("precision".into(), json!(*precision)),
-                ("scale".into(), json!(*scale)),
-            ]);
-            if let Some(size) = metadata
-                .get("size")
-                .and_then(|val| val.parse::<usize>().ok())
-            {
-                meta.insert("type".into(), json!("fixed"));
-                meta.insert("size".into(), json!(size));
-                meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
-            } else {
-                meta.insert("type".into(), json!("bytes"));
-            }
-            Value::Object(meta)
+            handle_decimal(precision, scale)?
         }
         DataType::Date32 => json!({ "type": "int", "logicalType": "date" }),
         DataType::Date64 => json!({ "type": "long", "logicalType": "local-timestamp-millis" }),
