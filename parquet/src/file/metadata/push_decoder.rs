@@ -217,16 +217,6 @@ pub struct ParquetMetaDataPushDecoder {
     buffers: crate::util::push_buffers::PushBuffers,
 }
 
-// Macro that checks if the ranges are in buffer, and if not returns NeedsData
-macro_rules! ensure_range {
-    ($buffers:expr, $range:expr) => {
-        if !$buffers.has_range(&$range) {
-            #[expect(clippy::single_range_in_vec_init)]
-            return Ok(DecodeResult::NeedsData(vec![$range]));
-        }
-    };
-}
-
 impl ParquetMetaDataPushDecoder {
     /// Create a new `ParquetMetaDataPushDecoder` with the given file length.
     ///
@@ -309,12 +299,17 @@ impl ParquetMetaDataPushDecoder {
                     // need to have the last 8 bytes of the file to decode the metadata
                     let footer_start = file_len.saturating_sub(footer_len);
                     let footer_range = footer_start..file_len;
-                    ensure_range!(&self.buffers, footer_range);
+
+                    if !self.buffers.has_range(&footer_range) {
+                        self.state = DecodeState::ReadingFooter;
+                        return Ok(needs_range(footer_range));
+                    }
                     let footer_bytes = self.get_bytes(&footer_range)?;
                     let footer_tail = FooterTail::try_from(footer_bytes.as_ref())?;
 
                     #[cfg(not(feature = "encryption"))]
                     if footer_tail.is_encrypted_footer() {
+                        self.state = DecodeState::Finished;
                         return Err(general_err!(
                             "Parquet file has an encrypted footer but the encryption feature is disabled"
                         ));
@@ -330,7 +325,10 @@ impl ParquetMetaDataPushDecoder {
                     let metadata_end = metadata_start + metadata_len;
                     let metadata_range = metadata_start..metadata_end;
 
-                    ensure_range!(&self.buffers, metadata_range);
+                    if !self.buffers.has_range(&metadata_range) {
+                        self.state = DecodeState::ReadingMetadata(footer_tail);
+                        return Ok(needs_range(metadata_range));
+                    }
 
                     let metadata_bytes = self.get_bytes(&metadata_range)?;
                     let metadata = decode_metadata(&metadata_bytes)?;
@@ -344,12 +342,18 @@ impl ParquetMetaDataPushDecoder {
                         self.column_index_policy,
                         self.offset_index_policy,
                     );
+
                     let Some(page_index_range) = range else {
                         // no ranges means no page indexes are needed
                         self.state = DecodeState::Finished;
                         return Ok(DecodeResult::Data(metadata));
                     };
-                    ensure_range!(&self.buffers, page_index_range);
+
+                    if !self.buffers.has_range(&page_index_range) {
+                        self.state = DecodeState::ReadingPageIndex(metadata);
+                        return Ok(needs_range(page_index_range));
+                    }
+
                     let buffer = self.get_bytes(&page_index_range)?;
                     let offset = page_index_range.start;
                     parse_column_index(&mut metadata, self.column_index_policy, &buffer, offset)?;
@@ -368,6 +372,7 @@ impl ParquetMetaDataPushDecoder {
         }
     }
 
+    /// Returns the bytes for the given range from the internal buffer
     fn get_bytes(&self, range: &Range<u64>) -> Result<Bytes, ParquetError> {
         let start = range.start;
         let raw_len = range.end - range.start;
@@ -376,6 +381,12 @@ impl ParquetMetaDataPushDecoder {
         })?;
         self.buffers.get_bytes(start, len)
     }
+}
+
+/// returns a DecodeResults that describes needing the given range
+fn needs_range(range: Range<u64>) -> DecodeResult<ParquetMetaData> {
+    #[expect(clippy::single_range_in_vec_init)]
+    DecodeResult::NeedsData(vec![range])
 }
 
 /// Decoding state machine
