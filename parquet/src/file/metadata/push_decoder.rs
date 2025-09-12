@@ -29,7 +29,6 @@ use crate::schema::types::SchemaDescriptor;
 use crate::thrift::TCompactSliceInputProtocol;
 use crate::thrift::TSerializable;
 use crate::DecodeResult;
-use std::fs::metadata;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -303,7 +302,7 @@ impl ParquetMetaDataPushDecoder {
         let file_len = self.buffers.file_len();
         let footer_len = FOOTER_SIZE as u64;
         loop {
-            match self.state {
+            match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
                 DecodeState::ReadingFooter => {
                     // need to have the last 8 bytes of the file to decode the metadata
                     let footer_start = file_len.saturating_sub(footer_len);
@@ -350,9 +349,17 @@ impl ParquetMetaDataPushDecoder {
                         return Ok(DecodeResult::Data(metadata));
                     };
                     ensure_range!(&self.buffers, range);
+                    return Err(general_err!(
+                        "ParquetMetaDataPushDecoder: page index reading not yet implemented"
+                    ));
                 }
 
                 DecodeState::Finished => return Ok(DecodeResult::Finished),
+                DecodeState::Intermediate => {
+                    return Err(general_err!(
+                        "ParquetMetaDataPushDecoder: internal error, invalid state"
+                    ));
+                }
             }
         }
     }
@@ -435,6 +442,9 @@ enum DecodeState {
     ReadingPageIndex(ParquetMetaData),
     // todo read boom filters?
     Finished,
+    /// State left during decoding. This should never be observed outside
+    /// of the try_decode method
+    Intermediate,
 }
 
 /// Returns the byte range needed to read the offset/page indexes, based on the

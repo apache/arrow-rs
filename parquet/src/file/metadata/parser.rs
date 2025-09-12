@@ -20,18 +20,16 @@
 //! In general these functions parse thrift-encoded metadata from a byte slice
 //! into the corresponding Rust structures
 
-use std::sync::Arc;
-use bytes::Bytes;
 use crate::basic::ColumnOrder;
-use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, PageIndexPolicy, ParquetMetaData, RowGroupMetaData};
+use crate::errors::ParquetError;
+use crate::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, PageIndexPolicy, ParquetMetaData, RowGroupMetaData,
+};
 use crate::schema::types;
 use crate::schema::types::SchemaDescriptor;
 use crate::thrift::TCompactSliceInputProtocol;
 use crate::thrift::TSerializable;
-use crate::errors::{ParquetError, Result};
-use crate::file::page_index::index::Index;
-use crate::file::page_index::index_reader::{decode_column_index, decode_offset_index};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use std::sync::Arc;
 
 /// Decodes [`ParquetMetaData`] from the provided bytes.
 ///
@@ -53,8 +51,7 @@ pub(crate) fn decode_metadata(buf: &[u8]) -> crate::errors::Result<ParquetMetaDa
     for rg in t_file_metadata.row_groups {
         row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
     }
-    let column_orders =
-        parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
+    let column_orders = parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
 
     let file_metadata = FileMetaData::new(
         t_file_metadata.version,
@@ -70,7 +67,7 @@ pub(crate) fn decode_metadata(buf: &[u8]) -> crate::errors::Result<ParquetMetaDa
 
 /// Parses column orders from Thrift definition.
 /// If no column orders are defined, returns `None`.
-pub(crate)  fn parse_column_orders(
+pub(crate) fn parse_column_orders(
     t_column_orders: Option<Vec<crate::format::ColumnOrder>>,
     schema_descr: &SchemaDescriptor,
 ) -> crate::errors::Result<Option<Vec<ColumnOrder>>> {
@@ -101,11 +98,11 @@ pub(crate)  fn parse_column_orders(
 
 #[cfg(test)]
 mod test {
-    use crate::format::TypeDefinedOrder;
-use crate::basic::{SortOrder, Type};
-    use crate::format::ColumnOrder as TColumnOrder;
-use super::*;
+    use super::*;
+    use crate::basic::{SortOrder, Type};
     use crate::file::metadata::SchemaType;
+    use crate::format::ColumnOrder as TColumnOrder;
+    use crate::format::TypeDefinedOrder;
     #[test]
     fn test_metadata_column_orders_parse() {
         // Define simple schema, we do not need to provide logical types.
@@ -141,10 +138,7 @@ use super::*;
         );
 
         // Test when no column orders are defined.
-        assert_eq!(
-            parse_column_orders(None, &schema_descr).unwrap(),
-            None
-        );
+        assert_eq!(parse_column_orders(None, &schema_descr).unwrap(), None);
     }
 
     #[test]

@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{io::Read, ops::Range, sync::Arc};
+use std::{io::Read, ops::Range};
 
-use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::{FileDecryptionProperties, FileDecryptor},
@@ -26,20 +25,14 @@ use crate::encryption::{
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, ParquetMetaData, ParquetMetaDataPushDecoder,
-    RowGroupMetaData,
-};
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData, ParquetMetaDataPushDecoder};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
-use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
 #[cfg(feature = "encryption")]
 use crate::format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData};
-use crate::schema::types;
-use crate::schema::types::SchemaDescriptor;
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use crate::thrift::TSerializable;
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
