@@ -38,6 +38,7 @@ use crate::thrift::TSerializable;
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::CryptoContext;
+use crate::file::metadata::parser::{parse_column_index, parse_offset_index};
 use crate::file::metadata::push_decoder::range_for_page_index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
@@ -468,8 +469,11 @@ impl ParquetMetaDataReader {
         let bytes = reader.get_bytes(range.start - file_range.start, bytes_needed)?;
         let offset = range.start;
 
-        self.parse_column_index(&bytes, offset)?;
-        self.parse_offset_index(&bytes, offset)?;
+        // This should always be set
+        if let Some(metadata) = self.metadata.as_mut() {
+            parse_column_index(metadata, self.column_index, &bytes, offset)?;
+            parse_offset_index(metadata, self.offset_index, &bytes, offset)?;
+        }
 
         Ok(())
     }
@@ -590,162 +594,6 @@ impl ParquetMetaDataReader {
         self.parse_offset_index(&bytes, range.start)?;
 
         Ok(())
-    }
-
-    fn parse_column_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
-        let metadata = self.metadata.as_mut().unwrap();
-        if self.column_index != PageIndexPolicy::Skip {
-            let index = metadata
-                .row_groups()
-                .iter()
-                .enumerate()
-                .map(|(rg_idx, x)| {
-                    x.columns()
-                        .iter()
-                        .enumerate()
-                        .map(|(col_idx, c)| match c.column_index_range() {
-                            Some(r) => {
-                                let r_start = usize::try_from(r.start - start_offset)?;
-                                let r_end = usize::try_from(r.end - start_offset)?;
-                                Self::parse_single_column_index(
-                                    &bytes[r_start..r_end],
-                                    metadata,
-                                    c,
-                                    rg_idx,
-                                    col_idx,
-                                )
-                            }
-                            None => Ok(Index::NONE),
-                        })
-                        .collect::<Result<Vec<_>>>()
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            metadata.set_column_index(Some(index));
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "encryption")]
-    fn parse_single_column_index(
-        bytes: &[u8],
-        metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        row_group_index: usize,
-        col_index: usize,
-    ) -> Result<Index> {
-        match &column.column_crypto_metadata {
-            Some(crypto_metadata) => {
-                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
-                    general_err!("Cannot decrypt column index, no file decryptor set")
-                })?;
-                let crypto_context = CryptoContext::for_column(
-                    file_decryptor,
-                    crypto_metadata,
-                    row_group_index,
-                    col_index,
-                )?;
-                let column_decryptor = crypto_context.metadata_decryptor();
-                let aad = crypto_context.create_column_index_aad()?;
-                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-                decode_column_index(&plaintext, column.column_type())
-            }
-            None => decode_column_index(bytes, column.column_type()),
-        }
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    fn parse_single_column_index(
-        bytes: &[u8],
-        _metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        _row_group_index: usize,
-        _col_index: usize,
-    ) -> Result<Index> {
-        decode_column_index(bytes, column.column_type())
-    }
-
-    fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
-        let metadata = self.metadata.as_mut().unwrap();
-        if self.offset_index != PageIndexPolicy::Skip {
-            let row_groups = metadata.row_groups();
-            let mut all_indexes = Vec::with_capacity(row_groups.len());
-            for (rg_idx, x) in row_groups.iter().enumerate() {
-                let mut row_group_indexes = Vec::with_capacity(x.columns().len());
-                for (col_idx, c) in x.columns().iter().enumerate() {
-                    let result = match c.offset_index_range() {
-                        Some(r) => {
-                            let r_start = usize::try_from(r.start - start_offset)?;
-                            let r_end = usize::try_from(r.end - start_offset)?;
-                            Self::parse_single_offset_index(
-                                &bytes[r_start..r_end],
-                                metadata,
-                                c,
-                                rg_idx,
-                                col_idx,
-                            )
-                        }
-                        None => Err(general_err!("missing offset index")),
-                    };
-
-                    match result {
-                        Ok(index) => row_group_indexes.push(index),
-                        Err(e) => {
-                            if self.offset_index == PageIndexPolicy::Required {
-                                return Err(e);
-                            } else {
-                                // Invalidate and return
-                                metadata.set_column_index(None);
-                                metadata.set_offset_index(None);
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-                all_indexes.push(row_group_indexes);
-            }
-            metadata.set_offset_index(Some(all_indexes));
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "encryption")]
-    fn parse_single_offset_index(
-        bytes: &[u8],
-        metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        row_group_index: usize,
-        col_index: usize,
-    ) -> Result<OffsetIndexMetaData> {
-        match &column.column_crypto_metadata {
-            Some(crypto_metadata) => {
-                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
-                    general_err!("Cannot decrypt offset index, no file decryptor set")
-                })?;
-                let crypto_context = CryptoContext::for_column(
-                    file_decryptor,
-                    crypto_metadata,
-                    row_group_index,
-                    col_index,
-                )?;
-                let column_decryptor = crypto_context.metadata_decryptor();
-                let aad = crypto_context.create_offset_index_aad()?;
-                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-                decode_offset_index(&plaintext)
-            }
-            None => decode_offset_index(bytes),
-        }
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    fn parse_single_offset_index(
-        bytes: &[u8],
-        _metadata: &ParquetMetaData,
-        _column: &ColumnChunkMetaData,
-        _row_group_index: usize,
-        _col_index: usize,
-    ) -> Result<OffsetIndexMetaData> {
-        decode_offset_index(bytes)
     }
 
     fn range_for_page_index(&self) -> Option<Range<u64>> {
