@@ -26,7 +26,10 @@ use crate::encryption::{
 use bytes::Bytes;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, ParquetMetaData, ParquetMetaDataPushDecoder,
+    RowGroupMetaData,
+};
 use crate::file::page_index::index::Index;
 use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
 use crate::file::reader::ChunkReader;
@@ -103,15 +106,45 @@ impl From<bool> for PageIndexPolicy {
     }
 }
 
-/// Describes how the footer metadata is stored
+/// Describes Parquet footer metadata is stored
 ///
 /// This is parsed from the last 8 bytes of the Parquet file
+///
+/// There are 8 bytes at the end of the Parquet footer with the following layout:
+/// * 4 bytes for the metadata length
+/// * 4 bytes for the magic bytes 'PAR1' or 'PARE' (encrypted footer)
+///
+/// ```text
+/// +-----+------------------+
+/// | len | 'PAR1' or 'PARE' |
+/// +-----+------------------+
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FooterTail {
     metadata_length: usize,
     encrypted_footer: bool,
 }
 
 impl FooterTail {
+    /// Try to decode the footer tail from the given 8 bytes
+    fn try_new(slice: &[u8; FOOTER_SIZE]) -> Result<FooterTail> {
+        let magic = &slice[4..];
+        let encrypted_footer = if magic == PARQUET_MAGIC_ENCR_FOOTER {
+            true
+        } else if magic == PARQUET_MAGIC {
+            false
+        } else {
+            return Err(general_err!("Invalid Parquet file. Corrupt footer"));
+        };
+        // get the metadata length from the footer
+        let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
+        Ok(FooterTail {
+            // u32 won't be larger than usize in most cases
+            metadata_length: metadata_len as usize,
+            encrypted_footer,
+        })
+    }
+
     /// The length of the footer metadata in bytes
     pub fn metadata_length(&self) -> usize {
         self.metadata_length
@@ -120,6 +153,14 @@ impl FooterTail {
     /// Whether the footer metadata is encrypted
     pub fn is_encrypted_footer(&self) -> bool {
         self.encrypted_footer
+    }
+}
+
+impl TryFrom<[u8; FOOTER_SIZE]> for FooterTail {
+    type Error = ParquetError;
+
+    fn try_from(value: [u8; FOOTER_SIZE]) -> Result<Self> {
+        Self::try_new(&value)
     }
 }
 
@@ -873,33 +914,10 @@ impl ParquetMetaDataReader {
         }
     }
 
-    /// Decodes the end of the Parquet footer
-    ///
-    /// There are 8 bytes at the end of the Parquet footer with the following layout:
-    /// * 4 bytes for the metadata length
-    /// * 4 bytes for the magic bytes 'PAR1' or 'PARE' (encrypted footer)
-    ///
-    /// ```text
-    /// +-----+------------------+
-    /// | len | 'PAR1' or 'PARE' |
-    /// +-----+------------------+
-    /// ```
+    /// Decodes a [`FooterTail`] from the provided 8-byte slice.
+    // todo deprecate
     pub fn decode_footer_tail(slice: &[u8; FOOTER_SIZE]) -> Result<FooterTail> {
-        let magic = &slice[4..];
-        let encrypted_footer = if magic == PARQUET_MAGIC_ENCR_FOOTER {
-            true
-        } else if magic == PARQUET_MAGIC {
-            false
-        } else {
-            return Err(general_err!("Invalid Parquet file. Corrupt footer"));
-        };
-        // get the metadata length from the footer
-        let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
-        Ok(FooterTail {
-            // u32 won't be larger than usize in most cases
-            metadata_length: metadata_len as usize,
-            encrypted_footer,
-        })
+        FooterTail::try_new(slice)
     }
 
     /// Decodes the Parquet footer, returning the metadata length in bytes
@@ -1057,61 +1075,7 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        let mut prot = TCompactSliceInputProtocol::new(buf);
-
-        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
-            .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
-        let schema = types::from_thrift(&t_file_metadata.schema)?;
-        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
-
-        let mut row_groups = Vec::new();
-        for rg in t_file_metadata.row_groups {
-            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
-        }
-        let column_orders =
-            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
-
-        let file_metadata = FileMetaData::new(
-            t_file_metadata.version,
-            t_file_metadata.num_rows,
-            t_file_metadata.created_by,
-            t_file_metadata.key_value_metadata,
-            schema_descr,
-            column_orders,
-        );
-
-        Ok(ParquetMetaData::new(file_metadata, row_groups))
-    }
-
-    /// Parses column orders from Thrift definition.
-    /// If no column orders are defined, returns `None`.
-    fn parse_column_orders(
-        t_column_orders: Option<Vec<TColumnOrder>>,
-        schema_descr: &SchemaDescriptor,
-    ) -> Result<Option<Vec<ColumnOrder>>> {
-        match t_column_orders {
-            Some(orders) => {
-                // Should always be the case
-                if orders.len() != schema_descr.num_columns() {
-                    return Err(general_err!("Column order length mismatch"));
-                };
-                let mut res = Vec::new();
-                for (i, column) in schema_descr.columns().iter().enumerate() {
-                    match orders[i] {
-                        TColumnOrder::TYPEORDER(_) => {
-                            let sort_order = ColumnOrder::get_sort_order(
-                                column.logical_type(),
-                                column.converted_type(),
-                                column.physical_type(),
-                            );
-                            res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
-                        }
-                    }
-                }
-                Ok(Some(res))
-            }
-            None => Ok(None),
-        }
+        ParquetMetaDataPushDecoder::decode_metadata(buf)
     }
 }
 

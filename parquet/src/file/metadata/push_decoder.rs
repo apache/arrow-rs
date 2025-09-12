@@ -15,9 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::basic::ColumnOrder;
 use crate::errors::ParquetError;
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{
+    FileMetaData, FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
+    RowGroupMetaData,
+};
+use crate::file::reader::ChunkReader;
+use crate::file::FOOTER_SIZE;
+use crate::schema::types;
+use crate::schema::types::SchemaDescriptor;
+use crate::thrift::TCompactSliceInputProtocol;
 use crate::DecodeResult;
+use std::fs::metadata;
+use std::sync::Arc;
 
 /// A push decoder for [`ParquetMetaData`].
 ///
@@ -192,8 +203,8 @@ use crate::DecodeResult;
 /// [`AsyncRead`]: tokio::io::AsyncRead
 #[derive(Debug)]
 pub struct ParquetMetaDataPushDecoder {
-    done: bool,
-    metadata_reader: ParquetMetaDataReader,
+    state: DecodeState,
+    page_index_policy: PageIndexPolicy,
     buffers: crate::util::push_buffers::PushBuffers,
 }
 
@@ -211,12 +222,9 @@ impl ParquetMetaDataPushDecoder {
             )));
         };
 
-        let metadata_reader =
-            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Optional);
-
         Ok(Self {
-            done: false,
-            metadata_reader,
+            state: DecodeState::ReadingFooter,
+            page_index_policy: PageIndexPolicy::Optional,
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
         })
     }
@@ -232,9 +240,7 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
-        self.metadata_reader = self
-            .metadata_reader
-            .with_page_index_policy(page_index_policy);
+        self.page_index_policy = page_index_policy;
         self
     }
 
@@ -261,12 +267,11 @@ impl ParquetMetaDataPushDecoder {
         &mut self,
         ranges: Vec<std::ops::Range<u64>>,
         buffers: Vec<bytes::Bytes>,
-    ) -> Result<(), String> {
-        if self.done {
-            return Err(
+    ) -> Result<(), ParquetError> {
+        if matches!(&self.state, DecodeState::Finished) {
+            return Err(general_err!(
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
-                    .to_string(),
-            );
+            ));
         }
         self.buffers.push_ranges(ranges, buffers);
         Ok(())
@@ -274,53 +279,137 @@ impl ParquetMetaDataPushDecoder {
 
     /// Try to decode the metadata from the pushed data, returning the
     /// decoded metadata or an error if not enough data is available.
-    pub fn try_decode(
-        &mut self,
-    ) -> Result<DecodeResult<ParquetMetaData>, ParquetError> {
-        if self.done {
-            return Ok(DecodeResult::Finished);
-        }
-
-        // need to have the last 8 bytes of the file to decode the metadata
+    pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>, ParquetError> {
         let file_len = self.buffers.file_len();
-        if !self.buffers.has_range(&(file_len - 8..file_len)) {
-            #[expect(clippy::single_range_in_vec_init)]
-            return Ok(DecodeResult::NeedsData(vec![file_len - 8..file_len]));
+        let footer_len = FOOTER_SIZE as u64;
+        loop {
+            match self.state {
+                DecodeState::ReadingFooter => {
+                    // need to have the last 8 bytes of the file to decode the metadata
+                    let footer_start = file_len.saturating_sub(footer_len);
+
+                    let footer_range = footer_start..file_len;
+                    if !self.buffers.has_range(&footer_range) {
+                        #[expect(clippy::single_range_in_vec_init)]
+                        return Ok(DecodeResult::NeedsData(vec![footer_range]));
+                    }
+                    // decode footer (we just checked we have the bytes)
+                    let footer_bytes = self.buffers.get_bytes(footer_range.start, FOOTER_SIZE)?;
+                    let footer_bytes: [u8; FOOTER_SIZE] = footer_bytes
+                        .as_ref()
+                        .try_into()
+                        .expect("checked length above");
+                    let footer_tail = FooterTail::try_from(footer_bytes)?;
+
+                    #[cfg(not(feature = "encryption"))]
+                    if footer_tail.is_encrypted_footer() {
+                        return Err(general_err!(
+                            "Parquet file has an encrypted footer but the encryption feature is disabled"
+                        ));
+                    };
+
+                    self.state = DecodeState::ReadingMetadata(footer_tail);
+                    continue;
+                }
+
+                DecodeState::ReadingMetadata(footer_tail) => {
+                    let metadata_len: u64 = footer_tail.metadata_length() as u64;
+                    let metadata_start = self.buffers.file_len() - footer_len - metadata_len;
+
+                    let metadata_range = metadata_start..(metadata_start + metadata_len);
+                    // todo: refactor this range checking logic into a function
+                    if !self.buffers.has_range(&metadata_range) {
+                        #[expect(clippy::single_range_in_vec_init)]
+                        return Ok(DecodeResult::NeedsData(vec![metadata_range]));
+                    }
+
+                    let metadata_bytes = self
+                        .buffers
+                        .get_bytes(metadata_range.start, footer_tail.metadata_length())?;
+                    let metadata = Self::decode_metadata(&metadata_bytes)?;
+                    self.state = DecodeState::ReadingPageIndex(metadata);
+                    continue;
+                }
+
+                DecodeState::ReadingPageIndex(metadata) => {
+                    let index_required = match self.page_index_policy {
+                        PageIndexPolicy::Skip => {
+                            self.state = DecodeState::Finished(metadata);
+                            continue;
+                        }
+                        PageIndexPolicy::Optional => false,
+                        PageIndexPolicy::Required => true,
+                    };
+                }
+
+                DecodeState::Finished => return Ok(DecodeResult::Finished),
+            }
         }
+    }
 
-        // Try to parse the metadata from the buffers we have.
-        //
-        // If we don't have enough data, returns a `ParquetError::NeedMoreData`
-        // with the number of bytes needed to complete the metadata parsing.
-        //
-        // If we have enough data, returns `Ok(())` and we can complete
-        // the metadata parsing.
-        let maybe_metadata = self
-            .metadata_reader
-            .try_parse_sized(&self.buffers, self.buffers.file_len());
+    /// Decodes [`ParquetMetaData`] from the provided bytes.
+    ///
+    /// Typically this is used to decode the metadata from the end of a parquet
+    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
+    /// by the [Parquet Spec].
+    ///
+    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
+    pub fn decode_metadata(buf: &[u8]) -> crate::errors::Result<ParquetMetaData> {
+        let mut prot = TCompactSliceInputProtocol::new(buf);
 
-        match maybe_metadata {
-            Ok(()) => {
-                // Metadata successfully parsed, proceed to decode the row groups
-                let metadata = self.metadata_reader.finish()?;
-                self.done = true;
-                Ok(DecodeResult::Data(metadata))
-            }
+        let t_file_metadata: crate::format::FileMetaData =
+            crate::format::FileMetaData::read_from_in_protocol(&mut prot)
+                .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
+        let schema = types::from_thrift(&t_file_metadata.schema)?;
+        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
 
-            Err(ParquetError::NeedMoreData(needed)) => {
-                let needed = needed as u64;
-                let Some(start_offset) = file_len.checked_sub(needed) else {
-                    return Err(ParquetError::General(format!(
-                        "Parquet metadata reader needs at least {needed} bytes, but file length is only {file_len}"
-                    )));
+        let mut row_groups = Vec::new();
+        for rg in t_file_metadata.row_groups {
+            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
+        }
+        let column_orders =
+            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
+
+        let file_metadata = FileMetaData::new(
+            t_file_metadata.version,
+            t_file_metadata.num_rows,
+            t_file_metadata.created_by,
+            t_file_metadata.key_value_metadata,
+            schema_descr,
+            column_orders,
+        );
+
+        Ok(ParquetMetaData::new(file_metadata, row_groups))
+    }
+
+    /// Parses column orders from Thrift definition.
+    /// If no column orders are defined, returns `None`.
+    fn parse_column_orders(
+        t_column_orders: Option<Vec<crate::format::ColumnOrder>>,
+        schema_descr: &SchemaDescriptor,
+    ) -> crate::errors::Result<Option<Vec<ColumnOrder>>> {
+        match t_column_orders {
+            Some(orders) => {
+                // Should always be the case
+                if orders.len() != schema_descr.num_columns() {
+                    return Err(general_err!("Column order length mismatch"));
                 };
-                let needed_range = start_offset..start_offset + needed;
-                // needs `needed_range` bytes at the end of the file
-                Ok(DecodeResult::NeedsData(vec![needed_range]))
+                let mut res = Vec::new();
+                for (i, column) in schema_descr.columns().iter().enumerate() {
+                    match orders[i] {
+                        crate::format::ColumnOrder::TYPEORDER(_) => {
+                            let sort_order = ColumnOrder::get_sort_order(
+                                column.logical_type(),
+                                column.converted_type(),
+                                column.physical_type(),
+                            );
+                            res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
+                        }
+                    }
+                }
+                Ok(Some(res))
             }
-            Err(ParquetError::NeedMoreDataRange(range)) => Ok(DecodeResult::NeedsData(vec![range])),
-
-            Err(e) => Err(e), // some other error, pass back
+            None => Ok(None),
         }
     }
 }
@@ -328,12 +417,14 @@ impl ParquetMetaDataPushDecoder {
 /// Decoding state machine
 #[derive(Debug)]
 enum DecodeState {
-    Start,
-    NeedsFooter,
-    NeedsMetadata,
-    NeedsPageIndex,
+    /// Reading the last 8 bytes of the file
+    ReadingFooter,
+    /// Reading the metadata thrift structure
+    ReadingMetadata(FooterTail),
+    //
+    ReadingPageIndex(ParquetMetaData),
     // todo read boom filters?
-    Finished,
+    Finished(ParquetMetaData),
 }
 
 // These tests use the arrow writer to create a parquet file in memory
