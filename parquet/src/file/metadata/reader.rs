@@ -164,6 +164,22 @@ impl TryFrom<[u8; FOOTER_SIZE]> for FooterTail {
     }
 }
 
+impl TryFrom<&[u8]> for FooterTail {
+    type Error = ParquetError;
+
+    fn try_from(value: &[u8]) -> Result<Self> {
+        if value.len() != FOOTER_SIZE {
+            return Err(general_err!(
+                "Invalid footer length {}, expected {}",
+                value.len(),
+                FOOTER_SIZE
+            ));
+        }
+        let slice: &[u8; FOOTER_SIZE] = value.try_into().unwrap();
+        Self::try_new(slice)
+    }
+}
+
 impl ParquetMetaDataReader {
     /// Create a new [`ParquetMetaDataReader`]
     pub fn new() -> Self {
@@ -1147,59 +1163,6 @@ mod tests {
             .parse_metadata(&test_file)
             .unwrap_err();
         assert!(matches!(err, ParquetError::NeedMoreData(263)));
-    }
-
-    #[test]
-    fn test_metadata_column_orders_parse() {
-        // Define simple schema, we do not need to provide logical types.
-        let fields = vec![
-            Arc::new(
-                SchemaType::primitive_type_builder("col1", Type::INT32)
-                    .build()
-                    .unwrap(),
-            ),
-            Arc::new(
-                SchemaType::primitive_type_builder("col2", Type::FLOAT)
-                    .build()
-                    .unwrap(),
-            ),
-        ];
-        let schema = SchemaType::group_type_builder("schema")
-            .with_fields(fields)
-            .build()
-            .unwrap();
-        let schema_descr = SchemaDescriptor::new(Arc::new(schema));
-
-        let t_column_orders = Some(vec![
-            TColumnOrder::TYPEORDER(TypeDefinedOrder::new()),
-            TColumnOrder::TYPEORDER(TypeDefinedOrder::new()),
-        ]);
-
-        assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr).unwrap(),
-            Some(vec![
-                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
-                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
-            ])
-        );
-
-        // Test when no column orders are defined.
-        assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(None, &schema_descr).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn test_metadata_column_orders_len_mismatch() {
-        let schema = SchemaType::group_type_builder("schema").build().unwrap();
-        let schema_descr = SchemaDescriptor::new(Arc::new(schema));
-
-        let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
-
-        let res = ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
-        assert!(res.is_err());
-        assert!(format!("{:?}", res.unwrap_err()).contains("Column order length mismatch"));
     }
 
     #[test]

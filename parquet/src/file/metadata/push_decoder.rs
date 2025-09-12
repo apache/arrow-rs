@@ -21,13 +21,16 @@ use crate::file::metadata::{
     FileMetaData, FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
     RowGroupMetaData,
 };
+use crate::file::page_index::index_reader::acc_range;
 use crate::file::reader::ChunkReader;
 use crate::file::FOOTER_SIZE;
 use crate::schema::types;
 use crate::schema::types::SchemaDescriptor;
 use crate::thrift::TCompactSliceInputProtocol;
+use crate::thrift::TSerializable;
 use crate::DecodeResult;
 use std::fs::metadata;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// A push decoder for [`ParquetMetaData`].
@@ -203,9 +206,24 @@ use std::sync::Arc;
 /// [`AsyncRead`]: tokio::io::AsyncRead
 #[derive(Debug)]
 pub struct ParquetMetaDataPushDecoder {
+    /// Decoding state
     state: DecodeState,
-    page_index_policy: PageIndexPolicy,
+    /// policy for loading ColumnIndex (part of the PageIndex)
+    column_index_policy: PageIndexPolicy,
+    /// policy for loading OffsetIndex (part of the PageIndex)
+    offset_index_policy: PageIndexPolicy,
+    /// Underyling buffers
     buffers: crate::util::push_buffers::PushBuffers,
+}
+
+// Macro that checks if the ranges are in buffer, and if not returns NeedsData
+macro_rules! ensure_range {
+    ($buffers:expr, $range:expr) => {
+        if !$buffers.has_range(&$range) {
+            #[expect(clippy::single_range_in_vec_init)]
+            return Ok(DecodeResult::NeedsData(vec![$range]));
+        }
+    };
 }
 
 impl ParquetMetaDataPushDecoder {
@@ -224,7 +242,8 @@ impl ParquetMetaDataPushDecoder {
 
         Ok(Self {
             state: DecodeState::ReadingFooter,
-            page_index_policy: PageIndexPolicy::Optional,
+            column_index_policy: PageIndexPolicy::Optional,
+            offset_index_policy: PageIndexPolicy::Optional,
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
         })
     }
@@ -240,7 +259,8 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
-        self.page_index_policy = page_index_policy;
+        self.column_index_policy = page_index_policy;
+        self.offset_index_policy = page_index_policy;
         self
     }
 
@@ -288,18 +308,10 @@ impl ParquetMetaDataPushDecoder {
                     // need to have the last 8 bytes of the file to decode the metadata
                     let footer_start = file_len.saturating_sub(footer_len);
 
-                    let footer_range = footer_start..file_len;
-                    if !self.buffers.has_range(&footer_range) {
-                        #[expect(clippy::single_range_in_vec_init)]
-                        return Ok(DecodeResult::NeedsData(vec![footer_range]));
-                    }
+                    ensure_range!(&self.buffers, footer_start..file_len);
                     // decode footer (we just checked we have the bytes)
-                    let footer_bytes = self.buffers.get_bytes(footer_range.start, FOOTER_SIZE)?;
-                    let footer_bytes: [u8; FOOTER_SIZE] = footer_bytes
-                        .as_ref()
-                        .try_into()
-                        .expect("checked length above");
-                    let footer_tail = FooterTail::try_from(footer_bytes)?;
+                    let footer_bytes = self.buffers.get_bytes(footer_start, FOOTER_SIZE)?;
+                    let footer_tail = FooterTail::try_from(footer_bytes.as_ref())?;
 
                     #[cfg(not(feature = "encryption"))]
                     if footer_tail.is_encrypted_footer() {
@@ -316,30 +328,28 @@ impl ParquetMetaDataPushDecoder {
                     let metadata_len: u64 = footer_tail.metadata_length() as u64;
                     let metadata_start = self.buffers.file_len() - footer_len - metadata_len;
 
-                    let metadata_range = metadata_start..(metadata_start + metadata_len);
-                    // todo: refactor this range checking logic into a function
-                    if !self.buffers.has_range(&metadata_range) {
-                        #[expect(clippy::single_range_in_vec_init)]
-                        return Ok(DecodeResult::NeedsData(vec![metadata_range]));
-                    }
+                    ensure_range!(&self.buffers, metadata_start..metadata_len);
 
                     let metadata_bytes = self
                         .buffers
-                        .get_bytes(metadata_range.start, footer_tail.metadata_length())?;
+                        .get_bytes(metadata_start, footer_tail.metadata_length())?;
                     let metadata = Self::decode_metadata(&metadata_bytes)?;
                     self.state = DecodeState::ReadingPageIndex(metadata);
                     continue;
                 }
 
                 DecodeState::ReadingPageIndex(metadata) => {
-                    let index_required = match self.page_index_policy {
-                        PageIndexPolicy::Skip => {
-                            self.state = DecodeState::Finished(metadata);
-                            continue;
-                        }
-                        PageIndexPolicy::Optional => false,
-                        PageIndexPolicy::Required => true,
+                    let range = range_for_page_index(
+                        &metadata,
+                        &self.column_index_policy,
+                        &self.offset_index_policy,
+                    );
+                    let Some(range) = range else {
+                        // no ranges means no page indexes are needed
+                        self.state = DecodeState::Finished;
+                        return Ok(DecodeResult::Data(metadata));
                     };
+                    ensure_range!(&self.buffers, range);
                 }
 
                 DecodeState::Finished => return Ok(DecodeResult::Finished),
@@ -424,7 +434,29 @@ enum DecodeState {
     //
     ReadingPageIndex(ParquetMetaData),
     // todo read boom filters?
-    Finished(ParquetMetaData),
+    Finished,
+}
+
+/// Returns the byte range needed to read the offset/page indexes, based on the
+/// policies
+///
+/// Returns None if no page indexes are needed
+pub(crate) fn range_for_page_index(
+    metadata: &ParquetMetaData,
+    column_index_policy: &PageIndexPolicy,
+    offset_index_policy: &PageIndexPolicy,
+) -> Option<Range<u64>> {
+    // Get bounds needed for page indexes (if any are present in the file).
+    let mut range = None;
+    for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
+        if column_index_policy != &PageIndexPolicy::Skip {
+            range = acc_range(range, c.column_index_range());
+        }
+        if offset_index_policy != &PageIndexPolicy::Skip {
+            range = acc_range(range, c.offset_index_range());
+        }
+    }
+    range
 }
 
 // These tests use the arrow writer to create a parquet file in memory

@@ -91,6 +91,7 @@
 //!                         * Same name, different struct
 //! ```
 mod memory;
+mod parser;
 mod push_decoder;
 pub(crate) mod reader;
 mod writer;
