@@ -261,7 +261,7 @@ impl ParquetMetaDataPushDecoder {
         &mut self,
         ranges: Vec<std::ops::Range<u64>>,
         buffers: Vec<bytes::Bytes>,
-    ) -> std::result::Result<(), String> {
+    ) -> Result<(), String> {
         if self.done {
             return Err(
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
@@ -276,7 +276,7 @@ impl ParquetMetaDataPushDecoder {
     /// decoded metadata or an error if not enough data is available.
     pub fn try_decode(
         &mut self,
-    ) -> std::result::Result<DecodeResult<ParquetMetaData>, ParquetError> {
+    ) -> Result<DecodeResult<ParquetMetaData>, ParquetError> {
         if self.done {
             return Ok(DecodeResult::Finished);
         }
@@ -323,6 +323,17 @@ impl ParquetMetaDataPushDecoder {
             Err(e) => Err(e), // some other error, pass back
         }
     }
+}
+
+/// Decoding state machine
+#[derive(Debug)]
+enum DecodeState {
+    Start,
+    NeedsFooter,
+    NeedsMetadata,
+    NeedsPageIndex,
+    // todo read boom filters?
+    Finished,
 }
 
 // These tests use the arrow writer to create a parquet file in memory
