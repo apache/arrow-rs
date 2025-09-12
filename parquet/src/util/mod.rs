@@ -20,6 +20,7 @@ pub mod bit_util;
 mod bit_pack;
 pub(crate) mod interner;
 
+pub mod push_buffers;
 #[cfg(any(test, feature = "test_common"))]
 pub(crate) mod test_common;
 pub mod utf8;

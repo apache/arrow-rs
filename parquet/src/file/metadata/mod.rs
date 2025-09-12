@@ -40,11 +40,10 @@
 //! metadata into parquet files. To work with metadata directly,
 //! the following APIs are available:
 //!
-//! * [`ParquetMetaDataReader`] for reading
+//! * [`ParquetMetaDataReader`] for reading from a reader for I/O
+//! * [`ParquetMetaDataPushDecoder`] for decoding from bytes without I/O
 //! * [`ParquetMetaDataWriter`] for writing.
 //!
-//! [`ParquetMetaDataReader`]: https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html
-//! [`ParquetMetaDataWriter`]: https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataWriter.html
 //!
 //! # Examples
 //!
@@ -92,6 +91,7 @@
 //!                         * Same name, different struct
 //! ```
 mod memory;
+mod push_decoder;
 pub(crate) mod reader;
 pub(crate) mod thrift_gen;
 mod writer;
@@ -132,6 +132,8 @@ use crate::{
     file::page_index::index::{Index, NativeIndex},
     thrift_struct,
 };
+
+pub use push_decoder::ParquetMetaDataPushDecoder;
 pub use reader::{FooterTail, PageIndexPolicy, ParquetMetaDataReader};
 use std::io::Write;
 use std::ops::Range;
