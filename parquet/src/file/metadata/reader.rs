@@ -1084,7 +1084,7 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        ParquetMetaDataPushDecoder::decode_metadata(buf)
+        Self::decode_metadata(buf)
     }
 }
 
