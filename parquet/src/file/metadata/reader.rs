@@ -38,6 +38,7 @@ use crate::thrift::TSerializable;
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::CryptoContext;
+use crate::file::metadata::push_decoder::range_for_page_index;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
 /// Reads the [`ParquetMetaData`] from a byte stream.
@@ -749,20 +750,12 @@ impl ParquetMetaDataReader {
 
     fn range_for_page_index(&self) -> Option<Range<u64>> {
         // sanity check
-        self.metadata.as_ref()?;
-
-        // Get bounds needed for page indexes (if any are present in the file).
-        let mut range = None;
-        let metadata = self.metadata.as_ref().unwrap();
-        for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-            if self.column_index != PageIndexPolicy::Skip {
-                range = acc_range(range, c.column_index_range());
-            }
-            if self.offset_index != PageIndexPolicy::Skip {
-                range = acc_range(range, c.offset_index_range());
-            }
-        }
-        range
+        let metadata = self.metadata.as_ref()?;
+        range_for_page_index(
+            self.metadata.as_ref()?,
+            self.column_index,
+            self.offset_index,
+        )
     }
 
     // One-shot parse of footer.

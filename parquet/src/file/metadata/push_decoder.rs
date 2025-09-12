@@ -341,8 +341,8 @@ impl ParquetMetaDataPushDecoder {
                 DecodeState::ReadingPageIndex(metadata) => {
                     let range = range_for_page_index(
                         &metadata,
-                        &self.column_index_policy,
-                        &self.offset_index_policy,
+                        self.column_index_policy,
+                        self.offset_index_policy,
                     );
                     let Some(range) = range else {
                         // no ranges means no page indexes are needed
@@ -388,16 +388,16 @@ enum DecodeState {
 /// Returns None if no page indexes are needed
 pub(crate) fn range_for_page_index(
     metadata: &ParquetMetaData,
-    column_index_policy: &PageIndexPolicy,
-    offset_index_policy: &PageIndexPolicy,
+    column_index_policy: PageIndexPolicy,
+    offset_index_policy: PageIndexPolicy,
 ) -> Option<Range<u64>> {
     // Get bounds needed for page indexes (if any are present in the file).
     let mut range = None;
     for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-        if column_index_policy != &PageIndexPolicy::Skip {
+        if column_index_policy != PageIndexPolicy::Skip {
             range = acc_range(range, c.column_index_range());
         }
-        if offset_index_policy != &PageIndexPolicy::Skip {
+        if offset_index_policy != PageIndexPolicy::Skip {
             range = acc_range(range, c.offset_index_range());
         }
     }
