@@ -310,7 +310,11 @@ impl<'m> VariantMetadata<'m> {
         self.header.offset_size.unpack_u32(bytes, i)
     }
 
-    /// Returns the last byte offset of the metadata dictionary, which is also the total size of
+    /// Returns the total size, in bytes, of the metadata.
+    ///
+    /// Note this value may be smaller than what was passed to [`Self::new`] or
+    /// [`Self::try_new`] if the input was larger than necessary to encode the
+    /// metadata dictionary.
     pub fn size(&self) -> usize {
         self.bytes.len()
     }
