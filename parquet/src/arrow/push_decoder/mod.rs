@@ -642,7 +642,7 @@ mod test {
         .unwrap();
 
         // Values in column "a" range 0..399
-        // First filter: "a" > 250  (nothing in Row Group 0, last data page in Row Group 1)
+        // First filter: "a" > 250  (nothing in Row Group 0, both data pages in Row Group 1)
         let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
 
         // a > 250
@@ -665,7 +665,7 @@ mod test {
             .build()
             .unwrap();
 
-        // First row group, first filter (a > 175)
+        // First row group,
         let ranges = expect_needs_data(decoder.try_decode());
         // only provide half the ranges
         let (ranges1, ranges2) = ranges.split_at(ranges.len() / 2);
@@ -1009,9 +1009,10 @@ mod test {
         expect_finished(decoder.try_decode());
     }
 
+    /// Returns a batch with 400 rows, with 3 columns: "a", "b", "c"
+    ///
+    /// Note c is a different types (so the data page sizes will be different)
     static TEST_BATCH: LazyLock<RecordBatch> = LazyLock::new(|| {
-        // Input batch has 400 rows, with 3 columns: "a", "b", "c"
-        // Note c is a different types (so the data page sizes will be different)
         let a: ArrayRef = Arc::new(Int64Array::from_iter_values(0..400));
         let b: ArrayRef = Arc::new(Int64Array::from_iter_values(400..800));
         let c: ArrayRef = Arc::new(StringViewArray::from_iter_values((0..400).map(|i| {
@@ -1025,7 +1026,31 @@ mod test {
         RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)]).unwrap()
     });
 
-    /// Create a parquet file in memory for testing. See [`test_file_range`] for details.
+    /// Create a parquet file in memory for testing.
+    ///
+    /// See [`TEST_BATCH`] for the data in the file.
+    ///
+    /// Each column is written in 4 data pages, each with 100 rows, across 2
+    /// row groups. Each column in each row group has two data pages.
+    ///
+    /// The data is split across row groups like this
+    ///
+    /// Column |   Values                | Data Page | Row Group
+    /// -------|------------------------|-----------|-----------
+    /// a      | 0..99                  | 1         | 0
+    /// a      | 100..199               | 2         | 0
+    /// a      | 200..299               | 1         | 1
+    /// a      | 300..399               | 2         | 1
+    ///
+    /// b      | 400..499               | 1         | 0
+    /// b      | 500..599               | 2         | 0
+    /// b      | 600..699               | 1         | 1
+    /// b      | 700..799               | 2         | 1
+    ///
+    /// c      | "string_0".."string_99"        | 1         | 0
+    /// c      | "string_100".."string_199"     | 2         | 0
+    /// c      | "string_200".."string_299"     | 1         | 1
+    /// c      | "string_300".."string_399"     | 2         | 1
     static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
         let input_batch = &TEST_BATCH;
         let mut output = Vec::new();
@@ -1050,12 +1075,12 @@ mod test {
         Bytes::from(output)
     });
 
-    /// Return the length of the test file in bytes
+    /// Return the length of [`TEST_FILE_DATA`], in bytes
     fn test_file_len() -> u64 {
         TEST_FILE_DATA.len() as u64
     }
 
-    /// Return the range of the entire test file
+    /// Return a range that covers the entire [`TEST_FILE_DATA`]
     fn test_file_range() -> Range<u64> {
         0..test_file_len()
     }

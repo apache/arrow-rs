@@ -77,7 +77,7 @@ enum RowGroupDecoderState {
         row_group_info: RowGroupInfo,
         data_request: DataRequest,
     },
-    /// Finished (or not yet started) reading any row groups
+    /// Finished (or not yet started) reading this group
     Finished,
 }
 
@@ -232,7 +232,7 @@ impl RowGroupReaderBuilder {
                 "Internal Error: next_row_group called while still reading a row group. Expected Finished state, got {state:?}"
             )));
         }
-        let plan_builder = ReadPlanBuilder::new(self.batch_size).with_selection(selection.clone());
+        let plan_builder = ReadPlanBuilder::new(self.batch_size).with_selection(selection);
         let row_group_info = RowGroupInfo {
             row_group_idx,
             row_count,
