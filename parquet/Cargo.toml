@@ -171,6 +171,11 @@ name = "encryption"
 required-features = ["arrow"]
 path = "./tests/encryption/mod.rs"
 
+[[test]]
+name = "variant_integration"
+required-features = ["arrow", "variant_experimental", "serde"]
+path = "./tests/variant_integration.rs"
+
 [[bin]]
 name = "parquet-read"
 required-features = ["cli"]
