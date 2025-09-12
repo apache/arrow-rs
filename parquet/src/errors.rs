@@ -53,6 +53,9 @@ pub enum ParquetError {
     /// Returned when a function needs more data to complete properly. The `usize` field indicates
     /// the total number of bytes required, not the number of additional bytes.
     NeedMoreData(usize),
+    /// Returned when a function needs more data to complete properly.
+    /// The `Range<u64>` indicates the range of bytes that are needed.
+    NeedMoreDataRange(std::ops::Range<u64>),
 }
 
 impl std::fmt::Display for ParquetError {
@@ -70,6 +73,9 @@ impl std::fmt::Display for ParquetError {
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
             ParquetError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
+            ParquetError::NeedMoreDataRange(range) => {
+                write!(fmt, "NeedMoreDataRange: {}..{}", range.start, range.end)
+            }
         }
     }
 }
