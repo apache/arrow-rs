@@ -77,6 +77,7 @@ variant_test_case!(2, "Unsupported typed_value type: List(");
 // },
 // ```
 variant_test_case!(3, "parquet_file must be set");
+// https://github.com/apache/arrow-rs/issues/8329
 variant_test_case!(4, "Unsupported typed_value type: Boolean");
 variant_test_case!(5, "Unsupported typed_value type: Boolean");
 variant_test_case!(6);
@@ -91,8 +92,10 @@ variant_test_case!(14);
 variant_test_case!(15);
 variant_test_case!(16);
 variant_test_case!(17);
+// https://github.com/apache/arrow-rs/issues/8330
 variant_test_case!(18, "Unsupported typed_value type: Date32");
 variant_test_case!(19, "Unsupported typed_value type: Date32");
+// https://github.com/apache/arrow-rs/issues/8331
 variant_test_case!(
     20,
     "Unsupported typed_value type: Timestamp(Microsecond, Some(\"UTC\"))"
@@ -109,15 +112,19 @@ variant_test_case!(
     23,
     "Unsupported typed_value type: Timestamp(Microsecond, None)"
 );
+// https://github.com/apache/arrow-rs/issues/8332
 variant_test_case!(24, "Unsupported typed_value type: Decimal128(9, 4)");
 variant_test_case!(25, "Unsupported typed_value type: Decimal128(9, 4)");
 variant_test_case!(26, "Unsupported typed_value type: Decimal128(18, 9)");
 variant_test_case!(27, "Unsupported typed_value type: Decimal128(18, 9)");
 variant_test_case!(28, "Unsupported typed_value type: Decimal128(38, 9)");
 variant_test_case!(29, "Unsupported typed_value type: Decimal128(38, 9)");
+// https://github.com/apache/arrow-rs/issues/8333
 variant_test_case!(30, "Unsupported typed_value type: BinaryView");
 variant_test_case!(31, "Unsupported typed_value type: Utf8");
+// https://github.com/apache/arrow-rs/issues/8334
 variant_test_case!(32, "Unsupported typed_value type: Time64(Microsecond)");
+// https://github.com/apache/arrow-rs/issues/8331
 variant_test_case!(
     33,
     "Unsupported typed_value type: Timestamp(Nanosecond, Some(\"UTC\"))"
@@ -134,7 +141,9 @@ variant_test_case!(
     36,
     "Unsupported typed_value type: Timestamp(Nanosecond, None)"
 );
+// https://github.com/apache/arrow-rs/issues/8335
 variant_test_case!(37, "Unsupported typed_value type: FixedSizeBinary(16)");
+// https://github.com/apache/arrow-rs/issues/8336
 variant_test_case!(38, "Unsupported typed_value type: Struct(");
 variant_test_case!(39);
 // Is an error case (should be failing as the expected error message indicates)
@@ -145,8 +154,10 @@ variant_test_case!(
     42,
     "Expected an error 'Invalid variant, conflicting value and typed_value`, but got no error"
 );
+// https://github.com/apache/arrow-rs/issues/8336
 variant_test_case!(43, "Unsupported typed_value type: Struct([Field");
 variant_test_case!(44, "Unsupported typed_value type: Struct([Field");
+// https://github.com/apache/arrow-rs/issues/8337
 variant_test_case!(45, "Unsupported typed_value type: List(Field");
 variant_test_case!(46, "Unsupported typed_value type: Struct([Field");
 variant_test_case!(47);
@@ -185,8 +196,10 @@ variant_test_case!(79);
 variant_test_case!(80);
 variant_test_case!(81);
 variant_test_case!(82);
+// https://github.com/apache/arrow-rs/issues/8336
 variant_test_case!(83, "Unsupported typed_value type: Struct([Field");
 variant_test_case!(84, "Unsupported typed_value type: Struct([Field");
+// https://github.com/apache/arrow-rs/issues/8337
 variant_test_case!(85, "Unsupported typed_value type: List(Field");
 variant_test_case!(86, "Unsupported typed_value type: List(Field");
 // Is an error case (should be failing as the expected error message indicates)
