@@ -102,16 +102,6 @@ impl ColumnWriter<'_> {
     }
 }
 
-#[deprecated(
-    since = "54.0.0",
-    note = "Seems like a stray and nobody knows what's it for. Will be removed in the next release."
-)]
-#[allow(missing_docs)]
-pub enum Level {
-    Page,
-    Column,
-}
-
 /// Gets a specific column writer corresponding to column descriptor `descr`.
 pub fn get_column_writer<'a>(
     descr: ColumnDescPtr,
@@ -663,15 +653,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 )
             })?;
 
-            let mut values_to_write = 0;
-            for &level in levels {
-                if level == self.descr.max_def_level() {
-                    values_to_write += 1;
-                } else {
-                    // We must always compute this as it is used to populate v2 pages
-                    self.page_metrics.num_page_nulls += 1
-                }
-            }
+            let values_to_write = levels
+                .iter()
+                .map(|level| (*level == self.descr.max_def_level()) as usize)
+                .sum();
+            self.page_metrics.num_page_nulls += (levels.len() - values_to_write) as u64;
 
             // Update histogram
             self.page_metrics.update_definition_level_histogram(levels);
@@ -1048,8 +1034,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         self.column_metrics
             .update_variable_length_bytes(values_data.variable_length_bytes);
 
-        let page_statistics = page_statistics.map(Statistics::from);
-        let page_statistics = page_statistics.map(|stats| self.truncate_statistics(stats));
+        // From here on, we only need page statistics if they will be written to the page header.
+        let page_statistics = page_statistics
+            .filter(|_| self.props.write_page_header_statistics(self.descr.path()))
+            .map(|stats| self.truncate_statistics(Statistics::from(stats)));
 
         let compressed_page = match self.props.writer_version() {
             WriterVersion::PARQUET_1_0 => {
@@ -1116,12 +1104,23 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     rep_levels_byte_len + def_levels_byte_len + values_data.buf.len();
 
                 // Data Page v2 compresses values only.
-                match self.compressor {
+                let is_compressed = match self.compressor {
                     Some(ref mut cmpr) => {
+                        let buffer_len = buffer.len();
                         cmpr.compress(&values_data.buf, &mut buffer)?;
+                        if uncompressed_size <= buffer.len() - buffer_len {
+                            buffer.truncate(buffer_len);
+                            buffer.extend_from_slice(&values_data.buf);
+                            false
+                        } else {
+                            true
+                        }
                     }
-                    None => buffer.extend_from_slice(&values_data.buf),
-                }
+                    None => {
+                        buffer.extend_from_slice(&values_data.buf);
+                        false
+                    }
+                };
 
                 let data_page = Page::DataPageV2 {
                     buf: buffer.into(),
@@ -1131,7 +1130,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     num_rows: self.page_metrics.num_buffered_rows,
                     def_levels_byte_len: def_levels_byte_len as u32,
                     rep_levels_byte_len: rep_levels_byte_len as u32,
-                    is_compressed: self.compressor.is_some(),
+                    is_compressed,
                     statistics: page_statistics,
                 };
 
@@ -1400,56 +1399,49 @@ fn update_stat<T: ParquetValueType, F>(
         return;
     }
 
-    if cur.as_ref().map_or(true, should_update) {
+    if cur.as_ref().is_none_or(should_update) {
         *cur = Some(val.clone());
     }
 }
 
 /// Evaluate `a > b` according to underlying logical type.
 fn compare_greater<T: ParquetValueType>(descr: &ColumnDescriptor, a: &T, b: &T) -> bool {
-    if let Some(LogicalType::Integer { is_signed, .. }) = descr.logical_type() {
-        if !is_signed {
-            // need to compare unsigned
-            return a.as_u64().unwrap() > b.as_u64().unwrap();
-        }
-    }
+    match T::PHYSICAL_TYPE {
+        Type::INT32 | Type::INT64 => {
+            if let Some(LogicalType::Integer {
+                is_signed: false, ..
+            }) = descr.logical_type()
+            {
+                // need to compare unsigned
+                return compare_greater_unsigned_int(a, b);
+            }
 
-    match descr.converted_type() {
-        ConvertedType::UINT_8
-        | ConvertedType::UINT_16
-        | ConvertedType::UINT_32
-        | ConvertedType::UINT_64 => {
-            return a.as_u64().unwrap() > b.as_u64().unwrap();
+            match descr.converted_type() {
+                ConvertedType::UINT_8
+                | ConvertedType::UINT_16
+                | ConvertedType::UINT_32
+                | ConvertedType::UINT_64 => {
+                    return compare_greater_unsigned_int(a, b);
+                }
+                _ => {}
+            };
         }
+        Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+            if let Some(LogicalType::Decimal { .. }) = descr.logical_type() {
+                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+            }
+            if let ConvertedType::DECIMAL = descr.converted_type() {
+                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+            }
+            if let Some(LogicalType::Float16) = descr.logical_type() {
+                return compare_greater_f16(a.as_bytes(), b.as_bytes());
+            }
+        }
+
         _ => {}
-    };
-
-    if let Some(LogicalType::Decimal { .. }) = descr.logical_type() {
-        match T::PHYSICAL_TYPE {
-            Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            _ => {}
-        };
     }
 
-    if descr.converted_type() == ConvertedType::DECIMAL {
-        match T::PHYSICAL_TYPE {
-            Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-                return compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
-            }
-            _ => {}
-        };
-    };
-
-    if let Some(LogicalType::Float16) = descr.logical_type() {
-        let a = a.as_bytes();
-        let a = f16::from_le_bytes([a[0], a[1]]);
-        let b = b.as_bytes();
-        let b = f16::from_le_bytes([b[0], b[1]]);
-        return a > b;
-    }
-
+    // compare independent of logical / converted type
     a > b
 }
 
@@ -1481,6 +1473,18 @@ fn has_dictionary_support(kind: Type, props: &WriterProperties) -> bool {
         (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_2_0) => true,
         _ => true,
     }
+}
+
+#[inline]
+fn compare_greater_unsigned_int<T: ParquetValueType>(a: &T, b: &T) -> bool {
+    a.as_u64().unwrap() > b.as_u64().unwrap()
+}
+
+#[inline]
+fn compare_greater_f16(a: &[u8], b: &[u8]) -> bool {
+    let a = f16::from_le_bytes(a.try_into().unwrap());
+    let b = f16::from_le_bytes(b.try_into().unwrap());
+    a > b
 }
 
 /// Signed comparison of bytes arrays
@@ -2233,7 +2237,11 @@ mod tests {
         let mut buf = Vec::with_capacity(100);
         let mut write = TrackedWrite::new(&mut buf);
         let page_writer = Box::new(SerializedPageWriter::new(&mut write));
-        let props = Default::default();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_write_page_header_statistics(true)
+                .build(),
+        );
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
 
         writer.write_batch(&[1, 2, 3, 4], None, None).unwrap();
@@ -2531,8 +2539,8 @@ mod tests {
         let stats = statistics_roundtrip::<Int96Type>(&input);
         assert!(!stats.is_min_max_backwards_compatible());
         if let Statistics::Int96(stats) = stats {
-            assert_eq!(stats.min_opt().unwrap(), &Int96::from(vec![0, 20, 30]));
-            assert_eq!(stats.max_opt().unwrap(), &Int96::from(vec![3, 20, 10]));
+            assert_eq!(stats.min_opt().unwrap(), &Int96::from(vec![3, 20, 10]));
+            assert_eq!(stats.max_opt().unwrap(), &Int96::from(vec![2, 20, 30]));
         } else {
             panic!("expecting Statistics::Int96, got {stats:?}");
         }
@@ -3018,7 +3026,10 @@ mod tests {
         // write data
         // and check the offset index and column index
         let page_writer = get_test_page_writer();
-        let props = Default::default();
+        let props = WriterProperties::builder()
+            .set_statistics_truncate_length(None) // disable column index truncation
+            .build()
+            .into();
         let mut writer = get_test_column_writer::<FixedLenByteArrayType>(page_writer, 0, 0, props);
 
         let mut data = vec![FixedLenByteArray::default(); 3];
@@ -3211,6 +3222,49 @@ mod tests {
             assert_eq!(expected_value, stats_max_bytes);
         } else {
             panic!("expecting Statistics::FixedLenByteArray");
+        }
+    }
+
+    #[test]
+    fn test_statistics_truncating_byte_array_default() {
+        let page_writer = get_test_page_writer();
+
+        // The default truncate length is 64 bytes
+        let props = WriterProperties::builder().build().into();
+        let mut writer = get_test_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+
+        let mut data = vec![ByteArray::default(); 1];
+        data[0].set_data(Bytes::from(String::from(
+            "This string is longer than 64 bytes, so it will almost certainly be truncated.",
+        )));
+        writer.write_batch(&data, None, None).unwrap();
+        writer.flush_data_pages().unwrap();
+
+        let r = writer.close().unwrap();
+
+        assert_eq!(1, r.rows_written);
+
+        let stats = r.metadata.statistics().expect("statistics");
+        if let Statistics::ByteArray(_stats) = stats {
+            let min_value = _stats.min_opt().unwrap();
+            let max_value = _stats.max_opt().unwrap();
+
+            assert!(!_stats.min_is_exact());
+            assert!(!_stats.max_is_exact());
+
+            let expected_len = 64;
+            assert_eq!(min_value.len(), expected_len);
+            assert_eq!(max_value.len(), expected_len);
+
+            let expected_min =
+                "This string is longer than 64 bytes, so it will almost certainly".as_bytes();
+            assert_eq!(expected_min, min_value.as_bytes());
+            // note the max value is different from the min value: the last byte is incremented
+            let expected_max =
+                "This string is longer than 64 bytes, so it will almost certainlz".as_bytes();
+            assert_eq!(expected_max, max_value.as_bytes());
+        } else {
+            panic!("expecting Statistics::ByteArray");
         }
     }
 
@@ -4192,5 +4246,34 @@ mod tests {
             .build()
             .unwrap();
         ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+    }
+
+    #[test]
+    fn test_page_v2_snappy_compression_fallback() {
+        // Test that PageV2 sets is_compressed to false when Snappy compression increases data size
+        let page_writer = TestPageWriter {};
+
+        // Create WriterProperties with PageV2 and Snappy compression
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            // Disable dictionary to ensure data is written directly
+            .set_dictionary_enabled(false)
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let mut column_writer =
+            get_test_column_writer::<ByteArrayType>(Box::new(page_writer), 0, 0, Arc::new(props));
+
+        // Create small, simple data that Snappy compression will likely increase in size
+        // due to compression overhead for very small data
+        let values = vec![ByteArray::from("a")];
+
+        column_writer.write_batch(&values, None, None).unwrap();
+
+        let result = column_writer.close().unwrap();
+        assert_eq!(
+            result.metadata.uncompressed_size(),
+            result.metadata.compressed_size()
+        );
     }
 }

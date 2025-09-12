@@ -20,7 +20,9 @@ use arrow_cast::pretty::pretty_format_batches;
 use futures::TryStreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter};
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter,
+};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -111,7 +113,7 @@ async fn get_metadata_from_remote_parquet_file(
 
     // tell the reader to read the page index
     ParquetMetaDataReader::new()
-        .with_page_indexes(true)
+        .with_page_index_policy(PageIndexPolicy::Required)
         .load_and_finish(remote_file, file_size)
         .await
         .unwrap()
@@ -140,7 +142,7 @@ fn prepare_metadata(metadata: ParquetMetaData) -> ParquetMetaData {
     // verifiy that the size has indeed been reduced
     let new_size = metadata.memory_size();
     assert!(new_size < orig_size, "metadata size did not decrease");
-    println!("Reduced metadata size from {} to {}", orig_size, new_size);
+    println!("Reduced metadata size from {orig_size} to {new_size}");
     metadata
 }
 
@@ -160,7 +162,7 @@ fn write_metadata_to_local_file(metadata: ParquetMetaData, file: impl AsRef<Path
 fn read_metadata_from_local_file(file: impl AsRef<Path>) -> ParquetMetaData {
     let file = File::open(file).unwrap();
     ParquetMetaDataReader::new()
-        .with_page_indexes(true)
+        .with_page_index_policy(PageIndexPolicy::Required)
         .parse_and_finish(&file)
         .unwrap()
 }

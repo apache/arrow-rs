@@ -180,9 +180,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
 pub fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
-    #[allow(deprecated)]
-    let mut dictionary_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(true, options.preserve_dict_id());
+    let mut dictionary_tracker = writer::DictionaryTracker::new(true);
     let data_gen = writer::IpcDataGenerator::default();
     let mut serialized_schema =
         data_gen.schema_to_bytes_with_dictionary_tracker(schema, &mut dictionary_tracker, &options);
@@ -356,15 +354,6 @@ impl<'a> ArrowSchemaConverter<'a> {
             .build()?;
         Ok(SchemaDescriptor::new(Arc::new(group)))
     }
-}
-
-/// Convert arrow schema to parquet schema
-///
-/// The name of the root schema element defaults to `"arrow_schema"`, this can be
-/// overridden with [`ArrowSchemaConverter`]
-#[deprecated(since = "54.0.0", note = "Use `ArrowSchemaConverter` instead")]
-pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    ArrowSchemaConverter::new().convert(schema)
 }
 
 fn parse_key_value_metadata(
@@ -640,7 +629,10 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
             let (physical_type, length) = if *precision > 1 && *precision <= 9 {
@@ -2079,6 +2071,8 @@ mod tests {
                     false, // fails to roundtrip keys_sorted
                     false,
                 ),
+                Field::new("c42", DataType::Decimal32(5, 2), false),
+                Field::new("c43", DataType::Decimal64(18, 12), true),
             ],
             meta(&[("Key", "Value")]),
         );

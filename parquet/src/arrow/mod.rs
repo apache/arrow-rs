@@ -202,9 +202,6 @@ pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 pub use self::async_writer::AsyncArrowWriter;
 use crate::schema::types::{SchemaDescriptor, Type};
 use arrow_schema::{FieldRef, Schema};
-// continue to export deprecated methods until they are removed
-#[allow(deprecated)]
-pub use self::schema::arrow_to_parquet_schema;
 
 pub use self::schema::{
     add_encoded_arrow_schema_to_metadata, encode_arrow_schema, parquet_to_arrow_field_levels,
@@ -277,6 +274,13 @@ impl ProjectionMask {
     /// Create a [`ProjectionMask`] which selects all columns
     pub fn all() -> Self {
         Self { mask: None }
+    }
+
+    /// Create a [`ProjectionMask`] which selects no columns
+    pub fn none(len: usize) -> Self {
+        Self {
+            mask: Some(vec![false; len]),
+        }
     }
 
     /// Create a [`ProjectionMask`] which selects only the specified leaf columns
@@ -463,6 +467,7 @@ mod test {
     use super::ProjectionMask;
 
     #[test]
+    #[allow(deprecated)]
     // Reproducer for https://github.com/apache/arrow-rs/issues/6464
     fn test_metadata_read_write_partial_offset() {
         let parquet_bytes = create_parquet_file();
@@ -510,6 +515,7 @@ mod test {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_metadata_read_write_roundtrip_page_index() {
         let parquet_bytes = create_parquet_file();
 
@@ -569,6 +575,7 @@ mod test {
         let batch = RecordBatch::try_from_iter(vec![("id", array)]).unwrap();
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
+            .set_write_page_header_statistics(true)
             .build();
 
         let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();

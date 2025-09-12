@@ -547,7 +547,7 @@ impl Field {
     /// # Error
     ///
     /// Returns an error if
-    /// - this field does have a canonical extension type (mismatch or missing)
+    /// - this field does not have a canonical extension type (mismatch or missing)
     /// - the canonical extension is not supported
     /// - the construction of the extension type fails
     #[cfg(feature = "canonical_extension_types")]
@@ -695,13 +695,6 @@ impl Field {
     /// assert!(field.is_nullable());
     /// ```
     pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowError> {
-        #[allow(deprecated)]
-        if from.dict_id != self.dict_id {
-            return Err(ArrowError::SchemaError(format!(
-                "Fail to merge schema field '{}' because from dict_id = {} does not match {}",
-                self.name, from.dict_id, self.dict_id
-            )));
-        }
         if from.dict_is_ordered != self.dict_is_ordered {
             return Err(ArrowError::SchemaError(format!(
                 "Fail to merge schema field '{}' because from dict_is_ordered = {} does not match {}",
@@ -815,6 +808,8 @@ impl Field {
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => {
                 if from.data_type == DataType::Null {
@@ -838,11 +833,8 @@ impl Field {
     /// * self.metadata is a superset of other.metadata
     /// * all other fields are equal
     pub fn contains(&self, other: &Field) -> bool {
-        #[allow(deprecated)]
-        let matching_dict_id = self.dict_id == other.dict_id;
         self.name == other.name
         && self.data_type.contains(&other.data_type)
-        && matching_dict_id
         && self.dict_is_ordered == other.dict_is_ordered
         // self need to be nullable or both of them are not nullable
         && (self.nullable || !other.nullable)

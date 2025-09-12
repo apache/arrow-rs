@@ -61,7 +61,7 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::ArrowWriterOptions,
+    arrow::arrow_writer::{ArrowColumnChunk, ArrowColumnWriter, ArrowWriterOptions},
     arrow::ArrowWriter,
     errors::{ParquetError, Result},
     file::{metadata::RowGroupMetaData, properties::WriterProperties},
@@ -288,6 +288,22 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
 
         Ok(())
     }
+
+    /// Create a new row group writer and return its column writers.
+    pub async fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
+        let before = self.sync_writer.flushed_row_groups().len();
+        let writers = self.sync_writer.get_column_writers()?;
+        if before != self.sync_writer.flushed_row_groups().len() {
+            self.do_write().await?;
+        }
+        Ok(writers)
+    }
+
+    /// Append the given column chunks to the file as a new row group.
+    pub async fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
+        self.sync_writer.append_row_group(chunks)?;
+        self.do_write().await
+    }
 }
 
 #[cfg(test)]
@@ -296,16 +312,16 @@ mod tests {
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
     use std::sync::Arc;
-    use tokio::pin;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::arrow_writer::compute_leaves;
 
     use super::*;
 
     fn get_test_reader() -> ParquetRecordBatchReader {
         let testdata = arrow::util::test_util::parquet_test_data();
         // This test file is large enough to generate multiple row groups.
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let original_data = Bytes::from(std::fs::read(path).unwrap());
         ParquetRecordBatchReaderBuilder::try_new(original_data)
             .unwrap()
@@ -331,6 +347,51 @@ mod tests {
         let read = reader.next().unwrap().unwrap();
 
         assert_eq!(to_write, read);
+    }
+
+    #[tokio::test]
+    async fn test_async_arrow_group_writer() {
+        let col = Arc::new(Int64Array::from_iter_values([4, 5, 6])) as ArrayRef;
+        let to_write_record = RecordBatch::try_from_iter([("col", col)]).unwrap();
+
+        let mut buffer = Vec::new();
+        let mut writer =
+            AsyncArrowWriter::try_new(&mut buffer, to_write_record.schema(), None).unwrap();
+
+        // Use classic API
+        writer.write(&to_write_record).await.unwrap();
+
+        let mut writers = writer.get_column_writers().await.unwrap();
+        let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+        let to_write_arrow_group = RecordBatch::try_from_iter([("col", col)]).unwrap();
+
+        for (field, column) in to_write_arrow_group
+            .schema()
+            .fields()
+            .iter()
+            .zip(to_write_arrow_group.columns())
+        {
+            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
+                writers[0].write(&leaf).unwrap();
+            }
+        }
+
+        let columns: Vec<_> = writers.into_iter().map(|w| w.close().unwrap()).collect();
+        // Append the arrow group as a new row group. Flush in progress
+        writer.append_row_group(columns).await.unwrap();
+        writer.close().await.unwrap();
+
+        let buffer = Bytes::from(buffer);
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let col = Arc::new(Int64Array::from_iter_values([4, 5, 6, 1, 2, 3])) as ArrayRef;
+        let expected = RecordBatch::try_from_iter([("col", col)]).unwrap();
+
+        let read = reader.next().unwrap().unwrap();
+        assert_eq!(expected, read);
     }
 
     // Read the data from the test file and write it by the async writer and sync writer.
@@ -363,49 +424,6 @@ mod tests {
         async_writer.close().await.unwrap();
 
         assert_eq!(sync_buffer, async_buffer);
-    }
-
-    struct TestAsyncSink {
-        sink: Vec<u8>,
-        min_accept_bytes: usize,
-        expect_total_bytes: usize,
-    }
-
-    impl AsyncWrite for TestAsyncSink {
-        fn poll_write(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-            buf: &[u8],
-        ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
-            let written_bytes = self.sink.len();
-            if written_bytes + buf.len() < self.expect_total_bytes {
-                assert!(buf.len() >= self.min_accept_bytes);
-            } else {
-                assert_eq!(written_bytes + buf.len(), self.expect_total_bytes);
-            }
-
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_write(cx, buf)
-        }
-
-        fn poll_flush(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_flush(cx)
-        }
-
-        fn poll_shutdown(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_shutdown(cx)
-        }
     }
 
     #[tokio::test]

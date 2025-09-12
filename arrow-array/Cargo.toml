@@ -46,7 +46,7 @@ chrono = { workspace = true }
 chrono-tz = { version = "0.10", optional = true }
 num = { version = "0.4.1", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-hashbrown = { version = "0.15.1", default-features = false }
+hashbrown = { version = "0.16.0", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -64,7 +64,7 @@ name = "occupancy"
 harness = false
 
 [[bench]]
-name = "gc_view_types"
+name = "view_types"
 harness = false
 
 [[bench]]

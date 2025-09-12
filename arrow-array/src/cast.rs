@@ -365,6 +365,12 @@ macro_rules! downcast_primitive {
             $crate::repeat_pat!($crate::cast::__private::DataType::Float64, $($data_type),+) => {
                 $m!($crate::types::Float64Type $(, $args)*)
             }
+            $crate::repeat_pat!($crate::cast::__private::DataType::Decimal32(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal32Type $(, $args)*)
+            }
+            $crate::repeat_pat!($crate::cast::__private::DataType::Decimal64(_, _), $($data_type),+) => {
+                $m!($crate::types::Decimal64Type $(, $args)*)
+            }
             $crate::repeat_pat!($crate::cast::__private::DataType::Decimal128(_, _), $($data_type),+) => {
                 $m!($crate::types::Decimal128Type $(, $args)*)
             }
@@ -1124,6 +1130,18 @@ mod tests {
         // should also work when wrapped in an Arc
         let array: ArrayRef = Arc::new(array);
         assert!(!as_string_array(&array).is_empty())
+    }
+
+    #[test]
+    fn test_decimal32array() {
+        let a = Decimal32Array::from_iter_values([1, 2, 4, 5]);
+        assert!(!as_primitive_array::<Decimal32Type>(&a).is_empty());
+    }
+
+    #[test]
+    fn test_decimal64array() {
+        let a = Decimal64Array::from_iter_values([1, 2, 4, 5]);
+        assert!(!as_primitive_array::<Decimal64Type>(&a).is_empty());
     }
 
     #[test]

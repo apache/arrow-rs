@@ -70,7 +70,7 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::Compression;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::ops::Range;
@@ -341,7 +341,7 @@ impl std::fmt::Display for FilterType {
             FilterType::Composite => "float64 > 99.0 AND ts >= 9000",
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -550,7 +550,8 @@ struct InMemoryReader {
 
 impl InMemoryReader {
     fn try_new(inner: &Bytes) -> parquet::errors::Result<Self> {
-        let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(true);
+        let mut metadata_reader =
+            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
         metadata_reader.try_parse(inner)?;
         let metadata = metadata_reader.finish().map(Arc::new)?;
 

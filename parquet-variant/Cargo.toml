@@ -28,12 +28,39 @@ authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
 readme = "README.md"
 edition = { workspace = true }
-# needs a newer version than workspace due to
-# rror: `Option::<T>::unwrap` is not yet stable as a const fn
-rust-version = "1.83"
+rust-version = { workspace = true }
 
 [dependencies]
 arrow-schema = { workspace = true }
 chrono = { workspace = true }
+half = { version = "2.1", default-features = false }
+indexmap = "2.10.0"
+uuid = { version = "1.18.0", features = ["v4"]}
+
+simdutf8 = { workspace = true , optional = true }
 
 [lib]
+name = "parquet_variant"
+bench = false
+
+[dev-dependencies]
+paste = { version = "1.0" }
+criterion = { version = "0.6", default-features = false }
+rand = { version = "0.9", default-features = false, features = [
+    "std",
+    "std_rng",
+    "thread_rng",
+] }
+
+[features]
+default = ["simdutf8"]
+# Enable SIMD UTF-8 validation
+simdutf8 = ["dep:simdutf8"]
+
+[[bench]]
+name = "variant_builder"
+harness = false
+
+[[bench]]
+name = "variant_validation"
+harness = false

@@ -408,7 +408,17 @@ impl ImportedArrowArray<'_> {
             .map(|index| {
                 let len = self.buffer_len(index, variadic_buffer_lens, &self.data_type)?;
                 match unsafe { create_buffer(self.owner.clone(), self.array, index, len) } {
-                    Some(buf) => Ok(buf),
+                    Some(buf) => {
+                        // External libraries may use a dangling pointer for a buffer with length 0.
+                        // We respect the array length specified in the C Data Interface. Actually,
+                        // if the length is incorrect, we cannot create a correct buffer even if
+                        // the pointer is valid.
+                        if buf.is_empty() {
+                            Ok(MutableBuffer::new(0).into())
+                        } else {
+                            Ok(buf)
+                        }
+                    }
                     None if len == 0 => {
                         // Null data buffer, which Rust doesn't allow. So create
                         // an empty buffer.
@@ -515,7 +525,7 @@ impl ImportedArrowArray<'_> {
         unsafe { create_buffer(self.owner.clone(), self.array, 0, buffer_len) }
     }
 
-    fn dictionary(&self) -> Result<Option<ImportedArrowArray>> {
+    fn dictionary(&self) -> Result<Option<ImportedArrowArray<'_>>> {
         match (self.array.dictionary(), &self.data_type) {
             (Some(array), DataType::Dictionary(_, value_type)) => Ok(Some(ImportedArrowArray {
                 array,
@@ -1296,9 +1306,15 @@ mod tests_to_then_from_ffi {
 
 #[cfg(test)]
 mod tests_from_ffi {
+    #[cfg(not(feature = "force_validate"))]
+    use std::ptr::NonNull;
     use std::sync::Arc;
 
+    #[cfg(feature = "force_validate")]
     use arrow_buffer::{bit_util, buffer::Buffer};
+    #[cfg(not(feature = "force_validate"))]
+    use arrow_buffer::{bit_util, buffer::Buffer, ScalarBuffer};
+
     use arrow_data::transform::MutableArrayData;
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
@@ -1576,7 +1592,7 @@ mod tests_from_ffi {
         let mut strings = vec![];
 
         for i in 0..1000 {
-            strings.push(format!("string: {}", i));
+            strings.push(format!("string: {i}"));
         }
 
         let string_array = StringArray::from(strings);
@@ -1658,6 +1674,25 @@ mod tests_from_ffi {
         fn from_str(value: &str) -> &Self {
             value.as_bytes()
         }
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_utf8_view_ffi_from_dangling_pointer() {
+        let empty = GenericByteViewBuilder::<StringViewType>::new().finish();
+        let buffers = empty.data_buffers().to_vec();
+        let nulls = empty.nulls().cloned();
+
+        // Create a dangling pointer to a view buffer with zero length.
+        let alloc = Arc::new(1);
+        let buffer = unsafe { Buffer::from_custom_allocation(NonNull::<u8>::dangling(), 0, alloc) };
+        let views = unsafe { ScalarBuffer::new_unchecked(buffer) };
+
+        let str_view: GenericByteViewArray<StringViewType> =
+            unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) };
+        let imported = roundtrip_byte_view_array(str_view);
+        assert_eq!(imported.len(), 0);
+        assert_eq!(&imported, &empty);
     }
 
     #[test]

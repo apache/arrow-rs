@@ -75,10 +75,7 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
         DataType::Int16 => extend_nulls_impl!(i16),
         DataType::Int32 => extend_nulls_impl!(i32),
         DataType::Int64 => extend_nulls_impl!(i64),
-        _ => panic!(
-            "Invalid run end type for RunEndEncoded array: {:?}",
-            run_end_type
-        ),
+        _ => panic!("Invalid run end type for RunEndEncoded array: {run_end_type:?}"),
     };
 
     mutable.child_data[0].data.len += 1;
@@ -184,7 +181,7 @@ fn process_extends_batch<T: ArrowNativeType>(
 /// Returns a function that extends the run encoded array.
 ///
 /// It finds the physical indices in the source array that correspond to the logical range to copy, and adjusts the runs to the logical indices of the array to extend. The values are copied from the source array to the destination array verbatim.
-pub fn build_extend(array: &ArrayData) -> Extend {
+pub fn build_extend(array: &ArrayData) -> Extend<'_> {
     Box::new(
         move |mutable: &mut _MutableArrayData, array_idx: usize, start: usize, len: usize| {
             if len == 0 {
@@ -228,10 +225,7 @@ pub fn build_extend(array: &ArrayData) -> Extend {
                 DataType::Int16 => build_and_process_impl!(i16),
                 DataType::Int32 => build_and_process_impl!(i32),
                 DataType::Int64 => build_and_process_impl!(i64),
-                _ => panic!(
-                    "Invalid run end type for RunEndEncoded array: {:?}",
-                    dest_run_end_type
-                ),
+                _ => panic!("Invalid run end type for RunEndEncoded array: {dest_run_end_type:?}",),
             }
         },
     )

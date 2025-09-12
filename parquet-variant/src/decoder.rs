@@ -14,18 +14,22 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::utils::{array_from_slice, slice_from_slice_at_offset, string_from_slice};
+use crate::utils::{
+    array_from_slice, overflow_error, slice_from_slice_at_offset, string_from_slice,
+};
 use crate::ShortString;
 
 use arrow_schema::ArrowError;
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use uuid::Uuid;
 
-use std::array::TryFromSliceError;
-use std::num::TryFromIntError;
-
-// Makes the code a bit more readable
-pub(crate) const VARIANT_VALUE_HEADER_BYTES: usize = 1;
-
+/// The basic type of a [`Variant`] value, encoded in the first two bits of the
+/// header byte.
+///
+/// See the [Variant Encoding specification] for details
+///
+/// [`Variant`]: crate::Variant
+/// [Variant Encoding specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantBasicType {
     Primitive = 0,
@@ -34,6 +38,13 @@ pub enum VariantBasicType {
     Array = 3,
 }
 
+/// The type of [`VariantBasicType::Primitive`], for a primitive [`Variant`]
+/// value.
+///
+/// See the [Variant Encoding specification] for details
+///
+/// [`Variant`]: crate::Variant
+/// [Variant Encoding specification]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VariantPrimitiveType {
     Null = 0,
@@ -53,6 +64,10 @@ pub enum VariantPrimitiveType {
     Float = 14,
     Binary = 15,
     String = 16,
+    Time = 17,
+    TimestampNanos = 18,
+    TimestampNtzNanos = 19,
+    Uuid = 20,
 }
 
 /// Extracts the basic type from a header byte
@@ -94,9 +109,12 @@ impl TryFrom<u8> for VariantPrimitiveType {
             14 => Ok(VariantPrimitiveType::Float),
             15 => Ok(VariantPrimitiveType::Binary),
             16 => Ok(VariantPrimitiveType::String),
+            17 => Ok(VariantPrimitiveType::Time),
+            18 => Ok(VariantPrimitiveType::TimestampNanos),
+            19 => Ok(VariantPrimitiveType::TimestampNtzNanos),
+            20 => Ok(VariantPrimitiveType::Uuid),
             _ => Err(ArrowError::InvalidArgumentError(format!(
-                "unknown primitive type: {}",
-                value
+                "unknown primitive type: {value}",
             ))),
         }
     }
@@ -105,7 +123,7 @@ impl TryFrom<u8> for VariantPrimitiveType {
 /// Used to unpack offset array entries such as metadata dictionary offsets or object/array value
 /// offsets. Also used to unpack object field ids. These are always derived from a two-bit
 /// `XXX_size_minus_one` field in the corresponding header byte.
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum OffsetSizeBytes {
     One = 1,
     Two = 2,
@@ -133,24 +151,38 @@ impl OffsetSizeBytes {
 
     /// Return one unsigned little-endian value from `bytes`.
     ///
-    /// * `bytes` – the Variant-metadata buffer.
+    /// * `bytes` – the byte buffer to index
+    /// * `index` – 0-based index into the buffer
+    ///
+    /// Each value is `self as u32` bytes wide (1, 2, 3 or 4), zero-extended to 32 bits as needed.
+    pub(crate) fn unpack_u32(&self, bytes: &[u8], index: usize) -> Result<u32, ArrowError> {
+        self.unpack_u32_at_offset(bytes, 0, index)
+    }
+
+    /// Return one unsigned little-endian value from `bytes`.
+    ///
+    /// * `bytes` – the byte buffer to index
     /// * `byte_offset` – number of bytes to skip **before** reading the first
-    ///   value (usually `1` to move past the header byte).
-    /// * `offset_index` – 0-based index **after** the skip
+    ///   value (e.g. `1` to move past a header byte).
+    /// * `offset_index` – 0-based index **after** the skipped bytes
     ///   (`0` is the first value, `1` the next, …).
     ///
-    /// Each value is `self as usize` bytes wide (1, 2, 3 or 4).
-    /// Three-byte values are zero-extended to 32 bits before the final
-    /// fallible cast to `usize`.
-    pub(crate) fn unpack_usize(
+    /// Each value is `self as u32` bytes wide (1, 2, 3 or 4), zero-extended to 32 bits as needed.
+    pub(crate) fn unpack_u32_at_offset(
         &self,
         bytes: &[u8],
         byte_offset: usize,  // how many bytes to skip
         offset_index: usize, // which offset in an array of offsets
-    ) -> Result<usize, ArrowError> {
+    ) -> Result<u32, ArrowError> {
         use OffsetSizeBytes::*;
-        let offset = byte_offset + (*self as usize) * offset_index;
-        let result = match self {
+
+        // Index into the byte array:
+        // byte_offset + (*self as usize) * offset_index
+        let offset = offset_index
+            .checked_mul(*self as usize)
+            .and_then(|n| n.checked_add(byte_offset))
+            .ok_or_else(|| overflow_error("unpacking offset array value"))?;
+        let value = match self {
             One => u8::from_le_bytes(array_from_slice(bytes, offset)?).into(),
             Two => u16::from_le_bytes(array_from_slice(bytes, offset)?).into(),
             Three => {
@@ -160,26 +192,36 @@ impl OffsetSizeBytes {
                 let mut buf = [0u8; 4];
                 buf[..3].copy_from_slice(&b3_chunks);
                 u32::from_le_bytes(buf)
-                    .try_into()
-                    .map_err(|e: TryFromIntError| ArrowError::InvalidArgumentError(e.to_string()))?
             }
-            Four => u32::from_le_bytes(array_from_slice(bytes, offset)?)
-                .try_into()
-                .map_err(|e: TryFromIntError| ArrowError::InvalidArgumentError(e.to_string()))?,
+            Four => u32::from_le_bytes(array_from_slice(bytes, offset)?),
         };
-        Ok(result)
+        Ok(value)
     }
+}
+
+/// Converts a byte buffer to offset values based on the specific offset size
+pub(crate) fn map_bytes_to_offsets(
+    buffer: &[u8],
+    offset_size: OffsetSizeBytes,
+) -> impl Iterator<Item = usize> + use<'_> {
+    buffer
+        .chunks_exact(offset_size as usize)
+        .map(move |chunk| match offset_size {
+            OffsetSizeBytes::One => chunk[0] as usize,
+            OffsetSizeBytes::Two => u16::from_le_bytes([chunk[0], chunk[1]]) as usize,
+            OffsetSizeBytes::Three => {
+                u32::from_le_bytes([chunk[0], chunk[1], chunk[2], 0]) as usize
+            }
+            OffsetSizeBytes::Four => {
+                u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
+            }
+        })
 }
 
 /// Extract the primitive type from a Variant value-metadata byte
 pub(crate) fn get_primitive_type(metadata: u8) -> Result<VariantPrimitiveType, ArrowError> {
     // last 6 bits contain the primitive-type, see spec
     VariantPrimitiveType::try_from(metadata >> 2)
-}
-
-/// To be used in `map_err` when unpacking an integer from a slice of bytes.
-fn map_try_from_slice_error(e: TryFromSliceError) -> ArrowError {
-    ArrowError::InvalidArgumentError(e.to_string())
 }
 
 /// Decodes an Int8 from the value section of a variant.
@@ -262,6 +304,44 @@ pub(crate) fn decode_timestampntz_micros(data: &[u8]) -> Result<NaiveDateTime, A
         .map(|v| v.naive_utc())
 }
 
+pub(crate) fn decode_time_ntz(data: &[u8]) -> Result<NaiveTime, ArrowError> {
+    let micros_since_epoch = u64::from_le_bytes(array_from_slice(data, 0)?);
+
+    let case_error = ArrowError::CastError(format!(
+        "Could not cast {micros_since_epoch} microseconds into a NaiveTime"
+    ));
+
+    if micros_since_epoch >= 86_400_000_000 {
+        return Err(case_error);
+    }
+
+    let nanos_since_midnight = micros_since_epoch * 1_000;
+    NaiveTime::from_num_seconds_from_midnight_opt(
+        (nanos_since_midnight / 1_000_000_000) as u32,
+        (nanos_since_midnight % 1_000_000_000) as u32,
+    )
+    .ok_or(case_error)
+}
+
+/// Decodes a TimestampNanos from the value section of a variant.
+pub(crate) fn decode_timestamp_nanos(data: &[u8]) -> Result<DateTime<Utc>, ArrowError> {
+    let nanos_since_epoch = i64::from_le_bytes(array_from_slice(data, 0)?);
+
+    // DateTime::from_timestamp_nanos would never fail
+    Ok(DateTime::from_timestamp_nanos(nanos_since_epoch))
+}
+
+/// Decodes a TimestampNtzNanos from the value section of a variant.
+pub(crate) fn decode_timestampntz_nanos(data: &[u8]) -> Result<NaiveDateTime, ArrowError> {
+    decode_timestamp_nanos(data).map(|v| v.naive_utc())
+}
+
+/// Decodes a UUID from the value section of a variant.
+pub(crate) fn decode_uuid(data: &[u8]) -> Result<Uuid, ArrowError> {
+    Uuid::from_slice(&data[0..16])
+        .map_err(|_| ArrowError::CastError(format!("Cant decode uuid from {:?}", &data[0..16])))
+}
+
 /// Decodes a Binary from the value section of a variant.
 pub(crate) fn decode_binary(data: &[u8]) -> Result<&[u8], ArrowError> {
     let len = u32::from_le_bytes(array_from_slice(data, 0)?) as usize;
@@ -275,7 +355,10 @@ pub(crate) fn decode_long_string(data: &[u8]) -> Result<&str, ArrowError> {
 }
 
 /// Decodes a short string from the value section of a variant.
-pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<ShortString, ArrowError> {
+pub(crate) fn decode_short_string(
+    metadata: u8,
+    data: &[u8],
+) -> Result<ShortString<'_>, ArrowError> {
     let len = (metadata >> 2) as usize;
     let string = string_from_slice(data, 0, 0..len)?;
     ShortString::try_new(string)
@@ -284,157 +367,256 @@ pub(crate) fn decode_short_string(metadata: u8, data: &[u8]) -> Result<ShortStri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paste::paste;
 
-    #[test]
-    fn test_i8() -> Result<(), ArrowError> {
-        let data = [0x2a];
-        let result = decode_int8(&data)?;
-        assert_eq!(result, 42);
-        Ok(())
+    macro_rules! test_decoder_bounds {
+        ($test_name:ident, $data:expr, $decode_fn:ident, $expected:expr) => {
+            paste! {
+                #[test]
+                fn [<$test_name _exact_length>]() {
+                    let result = $decode_fn(&$data).unwrap();
+                    assert_eq!(result, $expected);
+                }
+
+                #[test]
+                fn [<$test_name _truncated_length>]() {
+                    // Remove the last byte of data so that there is not enough to decode
+                    let truncated_data = &$data[.. $data.len() - 1];
+                    let result = $decode_fn(truncated_data);
+                    assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+                }
+            }
+        };
     }
 
-    #[test]
-    fn test_i16() -> Result<(), ArrowError> {
-        let data = [0xd2, 0x04];
-        let result = decode_int16(&data)?;
-        assert_eq!(result, 1234);
-        Ok(())
+    mod integer {
+        use super::*;
+
+        test_decoder_bounds!(test_i8, [0x2a], decode_int8, 42);
+        test_decoder_bounds!(test_i16, [0xd2, 0x04], decode_int16, 1234);
+        test_decoder_bounds!(test_i32, [0x40, 0xe2, 0x01, 0x00], decode_int32, 123456);
+        test_decoder_bounds!(
+            test_i64,
+            [0x15, 0x81, 0xe9, 0x7d, 0xf4, 0x10, 0x22, 0x11],
+            decode_int64,
+            1234567890123456789
+        );
     }
 
-    #[test]
-    fn test_i32() -> Result<(), ArrowError> {
-        let data = [0x40, 0xe2, 0x01, 0x00];
-        let result = decode_int32(&data)?;
-        assert_eq!(result, 123456);
-        Ok(())
+    mod decimal {
+        use super::*;
+
+        test_decoder_bounds!(
+            test_decimal4,
+            [
+                0x02, // Scale
+                0xd2, 0x04, 0x00, 0x00, // Unscaled Value
+            ],
+            decode_decimal4,
+            (1234, 2)
+        );
+
+        test_decoder_bounds!(
+            test_decimal8,
+            [
+                0x02, // Scale
+                0xd2, 0x02, 0x96, 0x49, 0x00, 0x00, 0x00, 0x00, // Unscaled Value
+            ],
+            decode_decimal8,
+            (1234567890, 2)
+        );
+
+        test_decoder_bounds!(
+            test_decimal16,
+            [
+                0x02, // Scale
+                0xd2, 0xb6, 0x23, 0xc0, 0xf4, 0x10, 0x22, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, // Unscaled Value
+            ],
+            decode_decimal16,
+            (1234567891234567890, 2)
+        );
     }
 
-    #[test]
-    fn test_i64() -> Result<(), ArrowError> {
-        let data = [0x15, 0x81, 0xe9, 0x7d, 0xf4, 0x10, 0x22, 0x11];
-        let result = decode_int64(&data)?;
-        assert_eq!(result, 1234567890123456789);
-        Ok(())
+    mod float {
+        use super::*;
+
+        test_decoder_bounds!(
+            test_float,
+            [0x06, 0x2c, 0x93, 0x4e],
+            decode_float,
+            1234567890.1234
+        );
+
+        test_decoder_bounds!(
+            test_double,
+            [0xc9, 0xe5, 0x87, 0xb4, 0x80, 0x65, 0xd2, 0x41],
+            decode_double,
+            1234567890.1234
+        );
     }
 
-    #[test]
-    fn test_decimal4() -> Result<(), ArrowError> {
-        let data = [
-            0x02, // Scale
-            0xd2, 0x04, 0x00, 0x00, // Integer
-        ];
-        let result = decode_decimal4(&data)?;
-        assert_eq!(result, (1234, 2));
-        Ok(())
-    }
+    mod datetime {
+        use super::*;
 
-    #[test]
-    fn test_decimal8() -> Result<(), ArrowError> {
-        let data = [
-            0x02, // Scale
-            0xd2, 0x02, 0x96, 0x49, 0x00, 0x00, 0x00, 0x00, // Integer
-        ];
-        let result = decode_decimal8(&data)?;
-        assert_eq!(result, (1234567890, 2));
-        Ok(())
-    }
+        test_decoder_bounds!(
+            test_date,
+            [0xe2, 0x4e, 0x0, 0x0],
+            decode_date,
+            NaiveDate::from_ymd_opt(2025, 4, 16).unwrap()
+        );
 
-    #[test]
-    fn test_decimal16() -> Result<(), ArrowError> {
-        let data = [
-            0x02, // Scale
-            0xd2, 0xb6, 0x23, 0xc0, 0xf4, 0x10, 0x22, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, // Integer
-        ];
-        let result = decode_decimal16(&data)?;
-        assert_eq!(result, (1234567891234567890, 2));
-        Ok(())
-    }
-
-    #[test]
-    fn test_float() -> Result<(), ArrowError> {
-        let data = [0x06, 0x2c, 0x93, 0x4e];
-        let result = decode_float(&data)?;
-        assert_eq!(result, 1234567890.1234);
-        Ok(())
-    }
-
-    #[test]
-    fn test_double() -> Result<(), ArrowError> {
-        let data = [0xc9, 0xe5, 0x87, 0xb4, 0x80, 0x65, 0xd2, 0x41];
-        let result = decode_double(&data)?;
-        assert_eq!(result, 1234567890.1234);
-        Ok(())
-    }
-
-    #[test]
-    fn test_date() -> Result<(), ArrowError> {
-        let data = [0xe2, 0x4e, 0x0, 0x0];
-        let result = decode_date(&data)?;
-        assert_eq!(result, NaiveDate::from_ymd_opt(2025, 4, 16).unwrap());
-        Ok(())
-    }
-
-    #[test]
-    fn test_timestamp_micros() -> Result<(), ArrowError> {
-        let data = [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00];
-        let result = decode_timestamp_micros(&data)?;
-        assert_eq!(
-            result,
+        test_decoder_bounds!(
+            test_timestamp_micros,
+            [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00],
+            decode_timestamp_micros,
             NaiveDate::from_ymd_opt(2025, 4, 16)
                 .unwrap()
                 .and_hms_milli_opt(16, 34, 56, 780)
                 .unwrap()
                 .and_utc()
         );
-        Ok(())
-    }
 
-    #[test]
-    fn test_timestampntz_micros() -> Result<(), ArrowError> {
-        let data = [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00];
-        let result = decode_timestampntz_micros(&data)?;
-        assert_eq!(
-            result,
+        test_decoder_bounds!(
+            test_timestampntz_micros,
+            [0xe0, 0x52, 0x97, 0xdd, 0xe7, 0x32, 0x06, 0x00],
+            decode_timestampntz_micros,
             NaiveDate::from_ymd_opt(2025, 4, 16)
                 .unwrap()
                 .and_hms_milli_opt(16, 34, 56, 780)
                 .unwrap()
         );
-        Ok(())
+
+        test_decoder_bounds!(
+            test_timestamp_nanos,
+            [0x15, 0x41, 0xa2, 0x5a, 0x36, 0xa2, 0x5b, 0x18],
+            decode_timestamp_nanos,
+            NaiveDate::from_ymd_opt(2025, 8, 14)
+                .unwrap()
+                .and_hms_nano_opt(12, 33, 54, 123456789)
+                .unwrap()
+                .and_utc()
+        );
+
+        test_decoder_bounds!(
+            test_timestamp_nanos_before_epoch,
+            [0x15, 0x41, 0x52, 0xd4, 0x94, 0xe5, 0xad, 0xfa],
+            decode_timestamp_nanos,
+            NaiveDate::from_ymd_opt(1957, 11, 7)
+                .unwrap()
+                .and_hms_nano_opt(12, 33, 54, 123456789)
+                .unwrap()
+                .and_utc()
+        );
+
+        test_decoder_bounds!(
+            test_timestampntz_nanos,
+            [0x15, 0x41, 0xa2, 0x5a, 0x36, 0xa2, 0x5b, 0x18],
+            decode_timestampntz_nanos,
+            NaiveDate::from_ymd_opt(2025, 8, 14)
+                .unwrap()
+                .and_hms_nano_opt(12, 33, 54, 123456789)
+                .unwrap()
+        );
+
+        test_decoder_bounds!(
+            test_timestampntz_nanos_before_epoch,
+            [0x15, 0x41, 0x52, 0xd4, 0x94, 0xe5, 0xad, 0xfa],
+            decode_timestampntz_nanos,
+            NaiveDate::from_ymd_opt(1957, 11, 7)
+                .unwrap()
+                .and_hms_nano_opt(12, 33, 54, 123456789)
+                .unwrap()
+        );
     }
 
     #[test]
-    fn test_binary() -> Result<(), ArrowError> {
+    fn test_uuid() {
+        let data = [
+            0xf2, 0x4f, 0x9b, 0x64, 0x81, 0xfa, 0x49, 0xd1, 0xb7, 0x4e, 0x8c, 0x09, 0xa6, 0xe3,
+            0x1c, 0x56,
+        ];
+        let result = decode_uuid(&data).unwrap();
+        assert_eq!(
+            Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap(),
+            result
+        );
+    }
+
+    mod time {
+        use super::*;
+
+        test_decoder_bounds!(
+            test_timentz,
+            [0x53, 0x1f, 0x8e, 0xdf, 0x2, 0, 0, 0],
+            decode_time_ntz,
+            NaiveTime::from_num_seconds_from_midnight_opt(12340, 567_891_000).unwrap()
+        );
+
+        #[test]
+        fn test_decode_time_ntz_invalid() {
+            let invalid_second = u64::MAX;
+            let data = invalid_second.to_le_bytes();
+            let result = decode_time_ntz(&data);
+            assert!(matches!(result, Err(ArrowError::CastError(_))));
+        }
+    }
+
+    #[test]
+    fn test_binary_exact_length() {
         let data = [
             0x09, 0, 0, 0, // Length of binary data, 4-byte little-endian
             0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe,
         ];
-        let result = decode_binary(&data)?;
+        let result = decode_binary(&data).unwrap();
         assert_eq!(
             result,
             [0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe]
         );
-        Ok(())
     }
 
     #[test]
-    fn test_short_string() -> Result<(), ArrowError> {
+    fn test_binary_truncated_length() {
+        let data = [
+            0x09, 0, 0, 0, // Length of binary data, 4-byte little-endian
+            0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca,
+        ];
+        let result = decode_binary(&data);
+        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+    }
+
+    #[test]
+    fn test_short_string_exact_length() {
         let data = [b'H', b'e', b'l', b'l', b'o', b'o'];
-        let result = decode_short_string(1 | 5 << 2, &data)?;
+        let result = decode_short_string(1 | 5 << 2, &data).unwrap();
         assert_eq!(result.0, "Hello");
-        Ok(())
     }
 
     #[test]
-    fn test_string() -> Result<(), ArrowError> {
+    fn test_short_string_truncated_length() {
+        let data = [b'H', b'e', b'l'];
+        let result = decode_short_string(1 | 5 << 2, &data);
+        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
+    }
+
+    #[test]
+    fn test_string_exact_length() {
         let data = [
             0x05, 0, 0, 0, // Length of string, 4-byte little-endian
             b'H', b'e', b'l', b'l', b'o', b'o',
         ];
-        let result = decode_long_string(&data)?;
+        let result = decode_long_string(&data).unwrap();
         assert_eq!(result, "Hello");
-        Ok(())
+    }
+
+    #[test]
+    fn test_string_truncated_length() {
+        let data = [
+            0x05, 0, 0, 0, // Length of string, 4-byte little-endian
+            b'H', b'e', b'l',
+        ];
+        let result = decode_long_string(&data);
+        assert!(matches!(result, Err(ArrowError::InvalidArgumentError(_))));
     }
 
     #[test]
@@ -450,61 +632,51 @@ mod tests {
     }
 
     #[test]
-    fn unpack_usize_all_widths() {
+    fn unpack_u32_all_widths() {
         // One-byte offsets
         let buf_one = [0x01u8, 0xAB, 0xCD];
-        assert_eq!(
-            OffsetSizeBytes::One.unpack_usize(&buf_one, 0, 0).unwrap(),
-            0x01
-        );
-        assert_eq!(
-            OffsetSizeBytes::One.unpack_usize(&buf_one, 0, 2).unwrap(),
-            0xCD
-        );
+        assert_eq!(OffsetSizeBytes::One.unpack_u32(&buf_one, 0).unwrap(), 0x01);
+        assert_eq!(OffsetSizeBytes::One.unpack_u32(&buf_one, 2).unwrap(), 0xCD);
 
         // Two-byte offsets (little-endian 0x1234, 0x5678)
         let buf_two = [0x34, 0x12, 0x78, 0x56];
         assert_eq!(
-            OffsetSizeBytes::Two.unpack_usize(&buf_two, 0, 0).unwrap(),
+            OffsetSizeBytes::Two.unpack_u32(&buf_two, 0).unwrap(),
             0x1234
         );
         assert_eq!(
-            OffsetSizeBytes::Two.unpack_usize(&buf_two, 0, 1).unwrap(),
+            OffsetSizeBytes::Two.unpack_u32(&buf_two, 1).unwrap(),
             0x5678
         );
 
         // Three-byte offsets (0x030201 and 0x0000FF)
         let buf_three = [0x01, 0x02, 0x03, 0xFF, 0x00, 0x00];
         assert_eq!(
-            OffsetSizeBytes::Three
-                .unpack_usize(&buf_three, 0, 0)
-                .unwrap(),
+            OffsetSizeBytes::Three.unpack_u32(&buf_three, 0).unwrap(),
             0x030201
         );
         assert_eq!(
-            OffsetSizeBytes::Three
-                .unpack_usize(&buf_three, 0, 1)
-                .unwrap(),
+            OffsetSizeBytes::Three.unpack_u32(&buf_three, 1).unwrap(),
             0x0000FF
         );
 
         // Four-byte offsets (0x12345678, 0x90ABCDEF)
         let buf_four = [0x78, 0x56, 0x34, 0x12, 0xEF, 0xCD, 0xAB, 0x90];
         assert_eq!(
-            OffsetSizeBytes::Four.unpack_usize(&buf_four, 0, 0).unwrap(),
+            OffsetSizeBytes::Four.unpack_u32(&buf_four, 0).unwrap(),
             0x1234_5678
         );
         assert_eq!(
-            OffsetSizeBytes::Four.unpack_usize(&buf_four, 0, 1).unwrap(),
+            OffsetSizeBytes::Four.unpack_u32(&buf_four, 1).unwrap(),
             0x90AB_CDEF
         );
     }
 
     #[test]
-    fn unpack_usize_out_of_bounds() {
+    fn unpack_u32_out_of_bounds() {
         let tiny = [0x00u8]; // deliberately too short
-        assert!(OffsetSizeBytes::Two.unpack_usize(&tiny, 0, 0).is_err());
-        assert!(OffsetSizeBytes::Three.unpack_usize(&tiny, 0, 0).is_err());
+        assert!(OffsetSizeBytes::Two.unpack_u32(&tiny, 0).is_err());
+        assert!(OffsetSizeBytes::Three.unpack_u32(&tiny, 0).is_err());
     }
 
     #[test]
@@ -520,20 +692,20 @@ mod tests {
         let width = OffsetSizeBytes::Two;
 
         // dictionary_size starts immediately after the header byte
-        let dict_size = width.unpack_usize(&buf, 1, 0).unwrap();
+        let dict_size = width.unpack_u32_at_offset(&buf, 1, 0).unwrap();
         assert_eq!(dict_size, 2);
 
         // offset array immediately follows the dictionary size
-        let first = width.unpack_usize(&buf, 1, 1).unwrap();
+        let first = width.unpack_u32_at_offset(&buf, 1, 1).unwrap();
         assert_eq!(first, 0);
 
-        let second = width.unpack_usize(&buf, 1, 2).unwrap();
+        let second = width.unpack_u32_at_offset(&buf, 1, 2).unwrap();
         assert_eq!(second, 5);
 
-        let third = width.unpack_usize(&buf, 1, 3).unwrap();
+        let third = width.unpack_u32_at_offset(&buf, 1, 3).unwrap();
         assert_eq!(third, 9);
 
-        let err = width.unpack_usize(&buf, 1, 4);
+        let err = width.unpack_u32_at_offset(&buf, 1, 4);
         assert!(err.is_err())
     }
 }

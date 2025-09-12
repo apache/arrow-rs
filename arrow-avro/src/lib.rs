@@ -33,10 +33,15 @@
 /// Implements the primary reader interface and record decoding logic.
 pub mod reader;
 
-// Avro schema parsing and representation
-//
-// Provides types for parsing and representing Avro schema definitions.
-mod schema;
+/// Core functionality for writing Arrow arrays as Avro data
+///
+/// Implements the primary writer interface and record encoding logic.
+pub mod writer;
+
+/// Avro schema parsing and representation
+///
+/// Provides types for parsing and representing Avro schema definitions.
+pub mod schema;
 
 /// Compression codec implementations for Avro
 ///
@@ -49,8 +54,6 @@ pub mod compression;
 /// This module contains the necessary types and functions to convert between
 /// Avro data types and Arrow data types.
 pub mod codec;
-
-pub use reader::ReadOptions;
 
 /// Extension trait for AvroField to add Utf8View support
 ///

@@ -18,12 +18,13 @@
 use arrow_array::types::{Int32Type, Int8Type};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float16Array,
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-    LargeStringArray, RecordBatch, StringArray, StringViewArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray,
+    FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
+    StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
+    UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow_buffer::i256;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -40,6 +41,10 @@ use tempfile::NamedTempFile;
 mod bad_data;
 #[cfg(feature = "crc")]
 mod checksum;
+mod int96_stats_roundtrip;
+mod io;
+#[cfg(feature = "async")]
+mod predicate_cache;
 mod statistics;
 
 // returns a struct array with columns "int32_col", "float32_col" and "float64_col" with the specified values
@@ -86,7 +91,9 @@ enum Scenario {
     Float16,
     Float32,
     Float64,
-    Decimal,
+    Decimal32,
+    Decimal64,
+    Decimal128,
     Decimal256,
     ByteArray,
     Dictionary,
@@ -330,9 +337,9 @@ fn make_uint_batches(start: u8, end: u8) -> RecordBatch {
         Field::new("u64", DataType::UInt64, true),
     ]));
     let v8: Vec<u8> = (start..end).collect();
-    let v16: Vec<u16> = (start as _..end as _).collect();
-    let v32: Vec<u32> = (start as _..end as _).collect();
-    let v64: Vec<u64> = (start as _..end as _).collect();
+    let v16: Vec<u16> = (start as _..end as u16).collect();
+    let v32: Vec<u32> = (start as _..end as u32).collect();
+    let v64: Vec<u64> = (start as _..end as u64).collect();
     RecordBatch::try_new(
         schema,
         vec![
@@ -381,13 +388,49 @@ fn make_f16_batch(v: Vec<f16>) -> RecordBatch {
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
-/// Return record batch with decimal vector
+/// Return record batch with decimal32 vector
 ///
 /// Columns are named
-/// "decimal_col" -> DecimalArray
-fn make_decimal_batch(v: Vec<i128>, precision: u8, scale: i8) -> RecordBatch {
+/// "decimal32_col" -> Decimal32Array
+fn make_decimal32_batch(v: Vec<i32>, precision: u8, scale: i8) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new(
-        "decimal_col",
+        "decimal32_col",
+        DataType::Decimal32(precision, scale),
+        true,
+    )]));
+    let array = Arc::new(
+        Decimal32Array::from(v)
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    ) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
+/// Return record batch with decimal64 vector
+///
+/// Columns are named
+/// "decimal64_col" -> Decimal64Array
+fn make_decimal64_batch(v: Vec<i64>, precision: u8, scale: i8) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "decimal64_col",
+        DataType::Decimal64(precision, scale),
+        true,
+    )]));
+    let array = Arc::new(
+        Decimal64Array::from(v)
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    ) as ArrayRef;
+    RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
+}
+
+/// Return record batch with decimal128 vector
+///
+/// Columns are named
+/// "decimal128_col" -> Decimal128Array
+fn make_decimal128_batch(v: Vec<i128>, precision: u8, scale: i8) -> RecordBatch {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "decimal128_col",
         DataType::Decimal128(precision, scale),
         true,
     )]));
@@ -505,7 +548,7 @@ fn make_bytearray_batch(
     large_binary_values: Vec<&[u8]>,
 ) -> RecordBatch {
     let num_rows = string_values.len();
-    let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
+    let name: StringArray = std::iter::repeat_n(Some(name), num_rows).collect();
     let service_string: StringArray = string_values.iter().map(Some).collect();
     let service_binary: BinaryArray = binary_values.iter().map(Some).collect();
     let service_fixedsize: FixedSizeBinaryArray = fixedsize_values
@@ -552,7 +595,7 @@ fn make_bytearray_batch(
 /// name | service.name
 fn make_names_batch(name: &str, service_name_values: Vec<&str>) -> RecordBatch {
     let num_rows = service_name_values.len();
-    let name: StringArray = std::iter::repeat(Some(name)).take(num_rows).collect();
+    let name: StringArray = std::iter::repeat_n(Some(name), num_rows).collect();
     let service_name: StringArray = service_name_values.iter().map(Some).collect();
 
     let schema = Schema::new(vec![
@@ -744,12 +787,28 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
                 make_f64_batch(vec![5.0, 6.0, 7.0, 8.0, 9.0]),
             ]
         }
-        Scenario::Decimal => {
+        Scenario::Decimal32 => {
             // decimal record batch
             vec![
-                make_decimal_batch(vec![100, 200, 300, 400, 600], 9, 2),
-                make_decimal_batch(vec![-500, 100, 300, 400, 600], 9, 2),
-                make_decimal_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
+                make_decimal32_batch(vec![100, 200, 300, 400, 600], 9, 2),
+                make_decimal32_batch(vec![-500, 100, 300, 400, 600], 9, 2),
+                make_decimal32_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
+            ]
+        }
+        Scenario::Decimal64 => {
+            // decimal record batch
+            vec![
+                make_decimal64_batch(vec![100, 200, 300, 400, 600], 9, 2),
+                make_decimal64_batch(vec![-500, 100, 300, 400, 600], 9, 2),
+                make_decimal64_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
+            ]
+        }
+        Scenario::Decimal128 => {
+            // decimal record batch
+            vec![
+                make_decimal128_batch(vec![100, 200, 300, 400, 600], 9, 2),
+                make_decimal128_batch(vec![-500, 100, 300, 400, 600], 9, 2),
+                make_decimal128_batch(vec![2000, 3000, 3000, 4000, 6000], 9, 2),
             ]
         }
         Scenario::Decimal256 => {

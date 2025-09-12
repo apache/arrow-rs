@@ -19,7 +19,7 @@ use super::{Extend, _MutableArrayData, utils::resize_for_bits};
 use crate::bit_mask::set_bits;
 use crate::ArrayData;
 
-pub(super) fn build_extend(array: &ArrayData) -> Extend {
+pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
     let values = array.buffers()[0].as_slice();
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {

@@ -19,6 +19,7 @@
 
 use arrow_buffer::Buffer;
 use arrow_schema::*;
+use core::panic;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, Verifiable, Verifier,
     VerifierOptions, WIPOffset,
@@ -125,12 +126,6 @@ impl<'a> IpcSchemaEncoder<'a> {
         }
         builder.finish()
     }
-}
-
-/// Serialize a schema in IPC format
-#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
-pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder<'_> {
-    IpcSchemaEncoder::new().schema_to_fb(schema)
 }
 
 /// Push a key-value metadata into a FlatBufferBuilder and return [WIPOffset]
@@ -471,6 +466,8 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             let precision: u8 = fsb.precision().try_into().unwrap();
             let scale: i8 = fsb.scale().try_into().unwrap();
             match bit_width {
+                32 => DataType::Decimal32(precision, scale),
+                64 => DataType::Decimal64(precision, scale),
                 128 => DataType::Decimal128(precision, scale),
                 256 => DataType::Decimal256(precision, scale),
                 _ => panic!("Unexpected decimal bit width {bit_width}"),
@@ -528,24 +525,13 @@ pub(crate) fn build_field<'a>(
         match dictionary_tracker {
             Some(tracker) => Some(get_fb_dictionary(
                 index_type,
-                #[allow(deprecated)]
-                tracker.set_dict_id(field),
+                tracker.next_dict_id(),
                 field
                     .dict_is_ordered()
                     .expect("All Dictionary types have `dict_is_ordered`"),
                 fbb,
             )),
-            None => Some(get_fb_dictionary(
-                index_type,
-                #[allow(deprecated)]
-                field
-                    .dict_id()
-                    .expect("Dictionary type must have a dictionary id"),
-                field
-                    .dict_is_ordered()
-                    .expect("All Dictionary types have `dict_is_ordered`"),
-                fbb,
-            )),
+            None => panic!("IPC must no longer be used without dictionary tracker"),
         }
     } else {
         None
@@ -840,6 +826,28 @@ pub(crate) fn get_fb_field_type<'a>(
             // pass through to the value type, as we've already captured the index
             // type in the DictionaryEncoding metadata in the parent field
             get_fb_field_type(value_type, dictionary_tracker, fbb)
+        }
+        Decimal32(precision, scale) => {
+            let mut builder = crate::DecimalBuilder::new(fbb);
+            builder.add_precision(*precision as i32);
+            builder.add_scale(*scale as i32);
+            builder.add_bitWidth(32);
+            FBFieldType {
+                type_type: crate::Type::Decimal,
+                type_: builder.finish().as_union_value(),
+                children: Some(fbb.create_vector(&empty_fields[..])),
+            }
+        }
+        Decimal64(precision, scale) => {
+            let mut builder = crate::DecimalBuilder::new(fbb);
+            builder.add_precision(*precision as i32);
+            builder.add_scale(*scale as i32);
+            builder.add_bitWidth(64);
+            FBFieldType {
+                type_type: crate::Type::Decimal,
+                type_: builder.finish().as_union_value(),
+                children: Some(fbb.create_vector(&empty_fields[..])),
+            }
         }
         Decimal128(precision, scale) => {
             let mut builder = crate::DecimalBuilder::new(fbb);

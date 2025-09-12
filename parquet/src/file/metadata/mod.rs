@@ -40,11 +40,10 @@
 //! metadata into parquet files. To work with metadata directly,
 //! the following APIs are available:
 //!
-//! * [`ParquetMetaDataReader`] for reading
+//! * [`ParquetMetaDataReader`] for reading from a reader for I/O
+//! * [`ParquetMetaDataPushDecoder`] for decoding from bytes without I/O
 //! * [`ParquetMetaDataWriter`] for writing.
 //!
-//! [`ParquetMetaDataReader`]: https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html
-//! [`ParquetMetaDataWriter`]: https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataWriter.html
 //!
 //! # Examples
 //!
@@ -92,6 +91,7 @@
 //!                         * Same name, different struct
 //! ```
 mod memory;
+mod push_decoder;
 pub(crate) mod reader;
 mod writer;
 
@@ -120,7 +120,8 @@ use crate::schema::types::{
 };
 #[cfg(feature = "encryption")]
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
-pub use reader::{FooterTail, ParquetMetaDataReader};
+pub use push_decoder::ParquetMetaDataPushDecoder;
+pub use reader::{FooterTail, PageIndexPolicy, ParquetMetaDataReader};
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
@@ -206,22 +207,6 @@ impl ParquetMetaData {
     #[cfg(feature = "encryption")]
     pub(crate) fn with_file_decryptor(&mut self, file_decryptor: Option<FileDecryptor>) {
         self.file_decryptor = file_decryptor;
-    }
-
-    /// Creates Parquet metadata from file metadata, a list of row
-    /// group metadata, and the column index structures.
-    #[deprecated(since = "53.1.0", note = "Use ParquetMetaDataBuilder")]
-    pub fn new_with_page_index(
-        file_metadata: FileMetaData,
-        row_groups: Vec<RowGroupMetaData>,
-        column_index: Option<ParquetColumnIndex>,
-        offset_index: Option<ParquetOffsetIndex>,
-    ) -> Self {
-        ParquetMetaDataBuilder::new(file_metadata)
-            .set_row_groups(row_groups)
-            .set_column_index(column_index)
-            .set_offset_index(offset_index)
-            .build()
     }
 
     /// Convert this ParquetMetaData into a [`ParquetMetaDataBuilder`]
@@ -1310,6 +1295,7 @@ impl ColumnChunkMetaData {
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
             size_statistics,
+            geospatial_statistics: None,
         }
     }
 
@@ -1393,20 +1379,6 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets optional file path for this column chunk.
     pub fn set_file_path(mut self, value: String) -> Self {
         self.0.file_path = Some(value);
-        self
-    }
-
-    /// Sets file offset in bytes.
-    ///
-    /// This field was meant to provide an alternate to storing `ColumnMetadata` directly in
-    /// the `ColumnChunkMetadata`. However, most Parquet readers assume the `ColumnMetadata`
-    /// is stored inline and ignore this field.
-    #[deprecated(
-        since = "53.0.0",
-        note = "The Parquet specification requires this field to be 0"
-    )]
-    pub fn set_file_offset(mut self, value: i64) -> Self {
-        self.0.file_offset = value;
         self
     }
 

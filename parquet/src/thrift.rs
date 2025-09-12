@@ -33,6 +33,20 @@ pub trait TSerializable: Sized {
     fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()>;
 }
 
+// Public function to aid benchmarking. Reads Parquet `FileMetaData` encoded in `bytes`.
+#[doc(hidden)]
+pub fn bench_file_metadata(bytes: &bytes::Bytes) {
+    let mut input = TCompactSliceInputProtocol::new(bytes);
+    crate::format::FileMetaData::read_from_in_protocol(&mut input).unwrap();
+}
+
+// Public function to aid benchmarking. Reads Parquet `PageHeader` encoded in `bytes`.
+#[doc(hidden)]
+pub fn bench_page_header(bytes: &bytes::Bytes) {
+    let mut prot = TCompactSliceInputProtocol::new(bytes);
+    crate::format::PageHeader::read_from_in_protocol(&mut prot).unwrap();
+}
+
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
 ///
 /// [`TCompactInputProtocol`]: thrift::protocol::TCompactInputProtocol
@@ -202,7 +216,7 @@ impl TInputProtocol for TCompactSliceInputProtocol<'_> {
                     0x00 | 0x02 => Ok(false),
                     unkn => Err(thrift::Error::Protocol(thrift::ProtocolError {
                         kind: thrift::ProtocolErrorKind::InvalidData,
-                        message: format!("cannot convert {} into bool", unkn),
+                        message: format!("cannot convert {unkn} into bool"),
                     })),
                 }
             }
@@ -303,7 +317,7 @@ fn u8_to_type(b: u8) -> thrift::Result<TType> {
         0x0C => Ok(TType::Struct),
         unkn => Err(thrift::Error::Protocol(thrift::ProtocolError {
             kind: thrift::ProtocolErrorKind::InvalidData,
-            message: format!("cannot convert {} into TType", unkn),
+            message: format!("cannot convert {unkn} into TType"),
         })),
     }
 }

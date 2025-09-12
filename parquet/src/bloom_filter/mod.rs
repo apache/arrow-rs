@@ -101,6 +101,7 @@ const SALT: [u32; 8] = [
 /// Each block is 256 bits, broken up into eight contiguous "words", each consisting of 32 bits.
 /// Each word is thought of as an array of bits; each bit is either "set" or "not set".
 #[derive(Debug, Copy, Clone)]
+#[repr(transparent)]
 struct Block([u32; 8]);
 impl Block {
     const ZERO: Block = Block([0; 8]);
@@ -119,21 +120,16 @@ impl Block {
     }
 
     #[inline]
-    #[cfg(target_endian = "little")]
-    fn to_le_bytes(self) -> [u8; 32] {
-        self.to_ne_bytes()
+    #[cfg(not(target_endian = "little"))]
+    fn to_ne_bytes(self) -> [u8; 32] {
+        // SAFETY: [u32; 8] and [u8; 32] have the same size and neither has invalid bit patterns.
+        unsafe { std::mem::transmute(self.0) }
     }
 
     #[inline]
     #[cfg(not(target_endian = "little"))]
     fn to_le_bytes(self) -> [u8; 32] {
         self.swap_bytes().to_ne_bytes()
-    }
-
-    #[inline]
-    fn to_ne_bytes(self) -> [u8; 32] {
-        // SAFETY: [u32; 8] and [u8; 32] have the same size and neither has invalid bit patterns.
-        unsafe { std::mem::transmute(self.0) }
     }
 
     #[inline]
@@ -248,8 +244,10 @@ impl Sbbf {
     /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
     pub(crate) fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
-        let bitset = vec![0_u8; num_bytes];
-        Self::new(&bitset)
+        assert_eq!(num_bytes % size_of::<Block>(), 0);
+        let num_blocks = num_bytes / size_of::<Block>();
+        let bitset = vec![Block::ZERO; num_blocks];
+        Self(bitset)
     }
 
     pub(crate) fn new(bitset: &[u8]) -> Self {
@@ -281,6 +279,7 @@ impl Sbbf {
     }
 
     /// Write the bitset in serialized form to the writer.
+    #[cfg(not(target_endian = "little"))]
     fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         for block in &self.0 {
             writer
@@ -289,6 +288,22 @@ impl Sbbf {
                     ParquetError::General(format!("Could not write bloom filter bit set: {e}"))
                 })?;
         }
+        Ok(())
+    }
+
+    /// Write the bitset in serialized form to the writer.
+    #[cfg(target_endian = "little")]
+    fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+        // Safety: Block is repr(transparent) and [u32; 8] can be reinterpreted as [u8; 32].
+        let slice = unsafe {
+            std::slice::from_raw_parts(
+                self.0.as_ptr() as *const u8,
+                self.0.len() * size_of::<Block>(),
+            )
+        };
+        writer.write_all(slice).map_err(|e| {
+            ParquetError::General(format!("Could not write bloom filter bit set: {e}"))
+        })?;
         Ok(())
     }
 

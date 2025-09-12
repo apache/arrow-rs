@@ -29,8 +29,8 @@
 
 set -e
 
-SINCE_TAG="55.1.0"
-FUTURE_RELEASE="55.2.0"
+SINCE_TAG="56.0.0"
+FUTURE_RELEASE="56.1.0"
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"

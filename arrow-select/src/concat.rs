@@ -275,10 +275,11 @@ fn concat_structs(arrays: &[&dyn Array], fields: &Fields) -> Result<ArrayRef, Ar
         })
         .collect::<Result<Vec<_>, ArrowError>>()?;
 
-    Ok(Arc::new(StructArray::try_new(
+    Ok(Arc::new(StructArray::try_new_with_length(
         fields.clone(),
         column_concat_result,
         nulls,
+        len,
     )?))
 }
 
@@ -993,6 +994,23 @@ mod tests {
     }
 
     #[test]
+    fn test_concat_struct_no_fields() {
+        let input_1 = StructArray::new_empty_fields(10, None);
+        let input_2 = StructArray::new_empty_fields(10, None);
+        let arr = concat(&[&input_1, &input_2]).unwrap();
+
+        assert_eq!(arr.len(), 20);
+        assert_eq!(arr.null_count(), 0);
+
+        let input1_valid = StructArray::new_empty_fields(10, Some(NullBuffer::new_valid(10)));
+        let input2_null = StructArray::new_empty_fields(10, Some(NullBuffer::new_null(10)));
+        let arr = concat(&[&input1_valid, &input2_null]).unwrap();
+
+        assert_eq!(arr.len(), 20);
+        assert_eq!(arr.null_count(), 10);
+    }
+
+    #[test]
     fn test_string_array_slices() {
         let input_1 = StringArray::from(vec!["hello", "A", "B", "C"]);
         let input_2 = StringArray::from(vec!["world", "D", "E", "Z"]);
@@ -1171,11 +1189,9 @@ mod tests {
         // 3 * 3   = 9
         // ------------+
         // 909
-        // closest 64 byte aligned cap = 960
 
         let arr = concat(&[&a, &b, &c]).unwrap();
-        // this would have been 1280 if we did not precompute the value lengths.
-        assert_eq!(arr.to_data().buffers()[1].capacity(), 960);
+        assert_eq!(arr.to_data().buffers()[1].capacity(), 909);
     }
 
     #[test]
@@ -1310,58 +1326,58 @@ mod tests {
         let a = concat(&[&a, &b]).unwrap();
         let data = a.to_data();
         assert_eq!(data.buffers()[0].len(), 440);
-        assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64
+        assert_eq!(data.buffers()[0].capacity(), 440);
 
         let a = concat(&[&a.slice(10, 20), &b]).unwrap();
         let data = a.to_data();
         assert_eq!(data.buffers()[0].len(), 120);
-        assert_eq!(data.buffers()[0].capacity(), 128); // Nearest multiple of 64
+        assert_eq!(data.buffers()[0].capacity(), 120);
 
-        let a = StringArray::from_iter_values(std::iter::repeat("foo").take(100));
+        let a = StringArray::from_iter_values(std::iter::repeat_n("foo", 100));
         let b = StringArray::from(vec!["bingo", "bongo", "lorem", ""]);
 
         let a = concat(&[&a, &b]).unwrap();
         let data = a.to_data();
         // (100 + 4 + 1) * size_of<i32>()
         assert_eq!(data.buffers()[0].len(), 420);
-        assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64
+        assert_eq!(data.buffers()[0].capacity(), 420);
 
         // len("foo") * 100 + len("bingo") + len("bongo") + len("lorem")
         assert_eq!(data.buffers()[1].len(), 315);
-        assert_eq!(data.buffers()[1].capacity(), 320); // Nearest multiple of 64
+        assert_eq!(data.buffers()[1].capacity(), 315);
 
         let a = concat(&[&a.slice(10, 40), &b]).unwrap();
         let data = a.to_data();
         // (40 + 4 + 5) * size_of<i32>()
         assert_eq!(data.buffers()[0].len(), 180);
-        assert_eq!(data.buffers()[0].capacity(), 192); // Nearest multiple of 64
+        assert_eq!(data.buffers()[0].capacity(), 180);
 
         // len("foo") * 40 + len("bingo") + len("bongo") + len("lorem")
         assert_eq!(data.buffers()[1].len(), 135);
-        assert_eq!(data.buffers()[1].capacity(), 192); // Nearest multiple of 64
+        assert_eq!(data.buffers()[1].capacity(), 135);
 
-        let a = LargeBinaryArray::from_iter_values(std::iter::repeat(b"foo").take(100));
-        let b = LargeBinaryArray::from_iter_values(std::iter::repeat(b"cupcakes").take(10));
+        let a = LargeBinaryArray::from_iter_values(std::iter::repeat_n(b"foo", 100));
+        let b = LargeBinaryArray::from_iter_values(std::iter::repeat_n(b"cupcakes", 10));
 
         let a = concat(&[&a, &b]).unwrap();
         let data = a.to_data();
         // (100 + 10 + 1) * size_of<i64>()
         assert_eq!(data.buffers()[0].len(), 888);
-        assert_eq!(data.buffers()[0].capacity(), 896); // Nearest multiple of 64
+        assert_eq!(data.buffers()[0].capacity(), 888);
 
         // len("foo") * 100 + len("cupcakes") * 10
         assert_eq!(data.buffers()[1].len(), 380);
-        assert_eq!(data.buffers()[1].capacity(), 384); // Nearest multiple of 64
+        assert_eq!(data.buffers()[1].capacity(), 380);
 
         let a = concat(&[&a.slice(10, 40), &b]).unwrap();
         let data = a.to_data();
         // (40 + 10 + 1) * size_of<i64>()
         assert_eq!(data.buffers()[0].len(), 408);
-        assert_eq!(data.buffers()[0].capacity(), 448); // Nearest multiple of 64
+        assert_eq!(data.buffers()[0].capacity(), 408);
 
         // len("foo") * 40 + len("cupcakes") * 10
         assert_eq!(data.buffers()[1].len(), 200);
-        assert_eq!(data.buffers()[1].capacity(), 256); // Nearest multiple of 64
+        assert_eq!(data.buffers()[1].capacity(), 200);
     }
 
     #[test]

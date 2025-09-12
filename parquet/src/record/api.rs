@@ -98,7 +98,7 @@ impl Row {
     ///     println!("column index: {}, column name: {}, column value: {}", idx, name, field);
     /// }
     /// ```
-    pub fn get_column_iter(&self) -> RowColumnIter {
+    pub fn get_column_iter(&self) -> RowColumnIter<'_> {
         RowColumnIter {
             fields: &self.fields,
             curr: 0,
@@ -602,6 +602,12 @@ pub enum Field {
     /// Date without a time of day, stores the number of days from the
     /// Unix epoch, 1 January 1970.
     Date(i32),
+
+    /// The total number of milliseconds since midnight.
+    TimeMillis(i32),
+    /// The total number of microseconds since midnight.
+    TimeMicros(i64),
+
     /// Milliseconds from the Unix epoch, 1 January 1970.
     TimestampMillis(i64),
     /// Microseconds from the Unix epoch, 1 January 1970.
@@ -638,6 +644,8 @@ impl Field {
             Field::Date(_) => "Date",
             Field::Str(_) => "Str",
             Field::Bytes(_) => "Bytes",
+            Field::TimeMillis(_) => "TimeMillis",
+            Field::TimeMicros(_) => "TimeMicros",
             Field::TimestampMillis(_) => "TimestampMillis",
             Field::TimestampMicros(_) => "TimestampMicros",
             Field::Group(_) => "Group",
@@ -671,7 +679,7 @@ impl Field {
             ConvertedType::UINT_16 => Field::UShort(value as u16),
             ConvertedType::UINT_32 => Field::UInt(value as u32),
             ConvertedType::DATE => Field::Date(value),
-            ConvertedType::TIME_MILLIS => Field::TimestampMillis(value as i64),
+            ConvertedType::TIME_MILLIS => Field::TimeMillis(value),
             ConvertedType::DECIMAL => Field::Decimal(Decimal::from_i32(
                 value,
                 descr.type_precision(),
@@ -687,6 +695,7 @@ impl Field {
         match descr.converted_type() {
             ConvertedType::INT_64 | ConvertedType::NONE => Field::Long(value),
             ConvertedType::UINT_64 => Field::ULong(value as u64),
+            ConvertedType::TIME_MICROS => Field::TimeMicros(value),
             ConvertedType::TIMESTAMP_MILLIS => Field::TimestampMillis(value),
             ConvertedType::TIMESTAMP_MICROS => Field::TimestampMicros(value),
             ConvertedType::DECIMAL => Field::Decimal(Decimal::from_i64(
@@ -795,6 +804,8 @@ impl Field {
             Field::Str(s) => Value::String(s.to_owned()),
             Field::Bytes(b) => Value::String(BASE64_STANDARD.encode(b.data())),
             Field::Date(d) => Value::String(convert_date_to_string(*d)),
+            Field::TimeMillis(t) => Value::String(convert_time_millis_to_string(*t)),
+            Field::TimeMicros(t) => Value::String(convert_time_micros_to_string(*t)),
             Field::TimestampMillis(ts) => Value::String(convert_timestamp_millis_to_string(*ts)),
             Field::TimestampMicros(ts) => Value::String(convert_timestamp_micros_to_string(*ts)),
             Field::Group(row) => row.to_json_value(),
@@ -864,6 +875,12 @@ impl fmt::Display for Field {
             Field::Str(ref value) => write!(f, "\"{value}\""),
             Field::Bytes(ref value) => write!(f, "{:?}", value.data()),
             Field::Date(value) => write!(f, "{}", convert_date_to_string(value)),
+            Field::TimeMillis(value) => {
+                write!(f, "{}", convert_time_millis_to_string(value))
+            }
+            Field::TimeMicros(value) => {
+                write!(f, "{}", convert_time_micros_to_string(value))
+            }
             Field::TimestampMillis(value) => {
                 write!(f, "{}", convert_timestamp_millis_to_string(value))
             }
@@ -912,28 +929,47 @@ fn convert_date_to_string(value: i32) -> String {
 }
 
 /// Helper method to convert Parquet timestamp into a string.
-/// Input `value` is a number of seconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
-#[inline]
-fn convert_timestamp_secs_to_string(value: i64) -> String {
-    let dt = Utc.timestamp_opt(value, 0).unwrap();
-    format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"))
-}
-
-/// Helper method to convert Parquet timestamp into a string.
 /// Input `value` is a number of milliseconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
+/// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_millis_to_string(value: i64) -> String {
-    convert_timestamp_secs_to_string(value / 1000)
+    let dt = Utc.timestamp_millis_opt(value).unwrap();
+    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.3f %:z"))
 }
 
 /// Helper method to convert Parquet timestamp into a string.
 /// Input `value` is a number of microseconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
+/// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_micros_to_string(value: i64) -> String {
-    convert_timestamp_secs_to_string(value / 1000000)
+    let dt = Utc.timestamp_micros(value).unwrap();
+    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.6f %:z"))
+}
+
+/// Helper method to convert Parquet time (milliseconds since midnight) into a string.
+/// Input `value` is a number of milliseconds since midnight.
+/// Time is displayed in HH:MM:SS.sss format.
+#[inline]
+fn convert_time_millis_to_string(value: i32) -> String {
+    let total_ms = value as u64;
+    let hours = total_ms / (60 * 60 * 1000);
+    let minutes = (total_ms % (60 * 60 * 1000)) / (60 * 1000);
+    let seconds = (total_ms % (60 * 1000)) / 1000;
+    let millis = total_ms % 1000;
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
+}
+
+/// Helper method to convert Parquet time (microseconds since midnight) into a string.
+/// Input `value` is a number of microseconds since midnight.
+/// Time is displayed in HH:MM:SS.ssssss format.
+#[inline]
+fn convert_time_micros_to_string(value: i64) -> String {
+    let total_us = value as u64;
+    let hours = total_us / (60 * 60 * 1000 * 1000);
+    let minutes = (total_us % (60 * 60 * 1000 * 1000)) / (60 * 1000 * 1000);
+    let seconds = (total_us % (60 * 1000 * 1000)) / (1000 * 1000);
+    let micros = total_us % (1000 * 1000);
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{micros:06}")
 }
 
 /// Helper method to convert Parquet decimal into a string.
@@ -1057,7 +1093,7 @@ mod tests {
 
         let descr = make_column_descr![PhysicalType::INT32, ConvertedType::TIME_MILLIS];
         let row = Field::convert_int32(&descr, 14611);
-        assert_eq!(row, Field::TimestampMillis(14611));
+        assert_eq!(row, Field::TimeMillis(14611));
 
         let descr = make_column_descr![PhysicalType::INT32, ConvertedType::DECIMAL, 0, 8, 2];
         let row = Field::convert_int32(&descr, 444);
@@ -1081,6 +1117,10 @@ mod tests {
         let descr = make_column_descr![PhysicalType::INT64, ConvertedType::TIMESTAMP_MICROS];
         let row = Field::convert_int64(&descr, 1541186529153123);
         assert_eq!(row, Field::TimestampMicros(1541186529153123));
+
+        let descr = make_column_descr![PhysicalType::INT64, ConvertedType::TIME_MICROS];
+        let row = Field::convert_int64(&descr, 47445123456);
+        assert_eq!(row, Field::TimeMicros(47445123456));
 
         let descr = make_column_descr![PhysicalType::INT64, ConvertedType::NONE];
         let row = Field::convert_int64(&descr, 2222);
@@ -1231,44 +1271,75 @@ mod tests {
 
     #[test]
     fn test_convert_timestamp_millis_to_string() {
-        fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
+        fn check_datetime_conversion(
+            (y, m, d, h, mi, s, milli): (u32, u32, u32, u32, u32, u32, u32),
+            exp: &str,
+        ) {
             let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
                 .unwrap()
-                .and_hms_opt(h, mi, s)
+                .and_hms_milli_opt(h, mi, s, milli)
                 .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_timestamp_millis_to_string(dt.timestamp_millis());
-            let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
             assert_eq!(res, exp);
         }
 
-        check_datetime_conversion(1969, 9, 10, 1, 2, 3);
-        check_datetime_conversion(2010, 1, 2, 13, 12, 54);
-        check_datetime_conversion(2011, 1, 3, 8, 23, 1);
-        check_datetime_conversion(2012, 4, 5, 11, 6, 32);
-        check_datetime_conversion(2013, 5, 12, 16, 38, 0);
-        check_datetime_conversion(2014, 11, 28, 21, 15, 12);
+        check_datetime_conversion((1969, 9, 10, 1, 2, 3, 4), "1969-09-10 01:02:03.004 +00:00");
+        check_datetime_conversion(
+            (2010, 1, 2, 13, 12, 54, 42),
+            "2010-01-02 13:12:54.042 +00:00",
+        );
+        check_datetime_conversion((2011, 1, 3, 8, 23, 1, 27), "2011-01-03 08:23:01.027 +00:00");
+        check_datetime_conversion((2012, 4, 5, 11, 6, 32, 0), "2012-04-05 11:06:32.000 +00:00");
+        check_datetime_conversion(
+            (2013, 5, 12, 16, 38, 0, 15),
+            "2013-05-12 16:38:00.015 +00:00",
+        );
+        check_datetime_conversion(
+            (2014, 11, 28, 21, 15, 12, 59),
+            "2014-11-28 21:15:12.059 +00:00",
+        );
     }
 
     #[test]
     fn test_convert_timestamp_micros_to_string() {
-        fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
+        fn check_datetime_conversion(
+            (y, m, d, h, mi, s, micro): (u32, u32, u32, u32, u32, u32, u32),
+            exp: &str,
+        ) {
             let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
                 .unwrap()
-                .and_hms_opt(h, mi, s)
+                .and_hms_micro_opt(h, mi, s, micro)
                 .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_timestamp_micros_to_string(dt.timestamp_micros());
-            let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
             assert_eq!(res, exp);
         }
 
-        check_datetime_conversion(1969, 9, 10, 1, 2, 3);
-        check_datetime_conversion(2010, 1, 2, 13, 12, 54);
-        check_datetime_conversion(2011, 1, 3, 8, 23, 1);
-        check_datetime_conversion(2012, 4, 5, 11, 6, 32);
-        check_datetime_conversion(2013, 5, 12, 16, 38, 0);
-        check_datetime_conversion(2014, 11, 28, 21, 15, 12);
+        check_datetime_conversion(
+            (1969, 9, 10, 1, 2, 3, 4),
+            "1969-09-10 01:02:03.000004 +00:00",
+        );
+        check_datetime_conversion(
+            (2010, 1, 2, 13, 12, 54, 42),
+            "2010-01-02 13:12:54.000042 +00:00",
+        );
+        check_datetime_conversion(
+            (2011, 1, 3, 8, 23, 1, 27),
+            "2011-01-03 08:23:01.000027 +00:00",
+        );
+        check_datetime_conversion(
+            (2012, 4, 5, 11, 6, 32, 0),
+            "2012-04-05 11:06:32.000000 +00:00",
+        );
+        check_datetime_conversion(
+            (2013, 5, 12, 16, 38, 0, 15),
+            "2013-05-12 16:38:00.000015 +00:00",
+        );
+        check_datetime_conversion(
+            (2014, 11, 28, 21, 15, 12, 59),
+            "2014-11-28 21:15:12.000059 +00:00",
+        );
     }
 
     #[test]
@@ -1953,11 +2024,19 @@ mod tests {
         );
         assert_eq!(
             Field::TimestampMillis(12345678).to_json_value(),
-            Value::String("1970-01-01 03:25:45 +00:00".to_string())
+            Value::String("1970-01-01 03:25:45.678 +00:00".to_string())
         );
         assert_eq!(
             Field::TimestampMicros(12345678901).to_json_value(),
-            Value::String(convert_timestamp_micros_to_string(12345678901))
+            Value::String("1970-01-01 03:25:45.678901 +00:00".to_string())
+        );
+        assert_eq!(
+            Field::TimeMillis(47445123).to_json_value(),
+            Value::String(String::from("13:10:45.123"))
+        );
+        assert_eq!(
+            Field::TimeMicros(47445123456).to_json_value(),
+            Value::String(String::from("13:10:45.123456"))
         );
 
         let fields = vec![

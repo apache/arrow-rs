@@ -73,7 +73,7 @@ impl _MutableArrayData<'_> {
     }
 }
 
-fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits {
+fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits<'_> {
     if let Some(nulls) = array.nulls() {
         let bytes = nulls.validity();
         Box::new(move |mutable, start, len| {
@@ -190,7 +190,7 @@ impl std::fmt::Debug for MutableArrayData<'_> {
 /// Builds an extend that adds `offset` to the source primitive
 /// Additionally validates that `max` fits into the
 /// the underlying primitive returning None if not
-fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend> {
+fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Option<Extend<'_>> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
             let _: $dt = max.try_into().ok()?;
@@ -215,7 +215,7 @@ fn build_extend_dictionary(array: &ArrayData, offset: usize, max: usize) -> Opti
 }
 
 /// Builds an extend that adds `buffer_offset` to any buffer indices encountered
-fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
+fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend<'_> {
     let views = array.buffer::<u128>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
@@ -234,7 +234,7 @@ fn build_extend_view(array: &ArrayData, buffer_offset: u32) -> Extend {
     )
 }
 
-fn build_extend(array: &ArrayData) -> Extend {
+fn build_extend(array: &ArrayData) -> Extend<'_> {
     match array.data_type() {
         DataType::Null => null::build_extend(array),
         DataType::Boolean => boolean::build_extend(array),
@@ -257,6 +257,8 @@ fn build_extend(array: &ArrayData) -> Extend {
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::build_extend::<i64>(array),
         DataType::Interval(IntervalUnit::MonthDayNano) => primitive::build_extend::<i128>(array),
+        DataType::Decimal32(_, _) => primitive::build_extend::<i32>(array),
+        DataType::Decimal64(_, _) => primitive::build_extend::<i64>(array),
         DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
         DataType::Decimal256(_, _) => primitive::build_extend::<i256>(array),
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
@@ -303,6 +305,8 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
         DataType::Interval(IntervalUnit::MonthDayNano) => primitive::extend_nulls::<i128>,
+        DataType::Decimal32(_, _) => primitive::extend_nulls::<i32>,
+        DataType::Decimal64(_, _) => primitive::extend_nulls::<i64>,
         DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
         DataType::Decimal256(_, _) => primitive::extend_nulls::<i256>,
         DataType::Utf8 | DataType::Binary => variable_size::extend_nulls::<i32>,
@@ -456,7 +460,9 @@ impl<'a> MutableArrayData<'a> {
         };
 
         let child_data = match &data_type {
-            DataType::Decimal128(_, _)
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Null
             | DataType::Boolean
