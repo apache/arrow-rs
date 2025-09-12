@@ -69,7 +69,7 @@ use crate::file::page_index::offset_index::OffsetIndexMetaData;
 /// assert!(metadata.column_index().is_some());
 /// assert!(metadata.offset_index().is_some());
 /// ```
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
     column_index: PageIndexPolicy,
