@@ -958,7 +958,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
 
-        let page_header = page.to_thrift_header();
+        let page_header = page.to_thrift_header()?;
         let header_size = self.serialize_page_header(page_header)?;
 
         self.sink.write_all(page.data())?;
