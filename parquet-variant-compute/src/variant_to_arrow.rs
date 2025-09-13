@@ -27,39 +27,39 @@ use crate::VariantArrayBuilder;
 
 use std::sync::Arc;
 
-pub(crate) fn make_shredding_row_builder<'a>(
+pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     //metadata: &BinaryViewArray,
     path: VariantPath<'a>,
     data_type: Option<&'a datatypes::DataType>,
     cast_options: &'a CastOptions,
-) -> Result<Box<dyn VariantShreddingRowBuilder + 'a>> {
+) -> Result<Box<dyn VariantToArrowRowBuilder + 'a>> {
     use datatypes::{
         Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     };
 
     let builder = match data_type {
         // If no data type was requested, build an unshredded VariantArray.
-        None => VariantArrayShreddingRowBuilder::new(16).with_path(path),
+        None => VariantToBinaryVariantArrowRowBuilder::new(16).with_path(path),
         Some(datatypes::DataType::Int8) => {
-            PrimitiveVariantShreddingRowBuilder::<Int8Type>::new(cast_options).with_path(path)
+            VariantToPrimitiveArrowRowBuilder::<Int8Type>::new(cast_options).with_path(path)
         }
         Some(datatypes::DataType::Int16) => {
-            PrimitiveVariantShreddingRowBuilder::<Int16Type>::new(cast_options).with_path(path)
+            VariantToPrimitiveArrowRowBuilder::<Int16Type>::new(cast_options).with_path(path)
         }
         Some(datatypes::DataType::Int32) => {
-            PrimitiveVariantShreddingRowBuilder::<Int32Type>::new(cast_options).with_path(path)
+            VariantToPrimitiveArrowRowBuilder::<Int32Type>::new(cast_options).with_path(path)
         }
         Some(datatypes::DataType::Int64) => {
-            PrimitiveVariantShreddingRowBuilder::<Int64Type>::new(cast_options).with_path(path)
+            VariantToPrimitiveArrowRowBuilder::<Int64Type>::new(cast_options).with_path(path)
         }
         Some(datatypes::DataType::Float16) => {
-            PrimitiveVariantShreddingRowBuilder::<Float16Type>::new(cast_options).with_path(path)
+            VariantToPrimitiveArrowRowBuilder::<Float16Type>::new(cast_options).with_path(path)
         }
         Some(datatypes::DataType::Float32) => {
-            PrimitiveVariantShreddingRowBuilder::<Float32Type>::new(cast_options).with_path(path)
+            VariantToPrimitiveArrowRowBuilder::<Float32Type>::new(cast_options).with_path(path)
         }
         Some(datatypes::DataType::Float64) => {
-            PrimitiveVariantShreddingRowBuilder::<Float64Type>::new(cast_options).with_path(path)
+            VariantToPrimitiveArrowRowBuilder::<Float64Type>::new(cast_options).with_path(path)
         }
         _ => {
             return Err(ArrowError::NotYetImplemented(format!(
@@ -71,11 +71,11 @@ pub(crate) fn make_shredding_row_builder<'a>(
     Ok(builder)
 }
 
-/// Builder for shredding variant values into strongly typed Arrow arrays.
+/// Builder for converting variant values into strongly typed Arrow arrays.
 ///
 /// Useful for variant_get kernels that need to extract specific paths from variant values, possibly
 /// with casting of leaf values to specific types.
-pub(crate) trait VariantShreddingRowBuilder {
+pub(crate) trait VariantToArrowRowBuilder {
     fn append_null(&mut self) -> Result<()>;
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool>;
@@ -85,17 +85,17 @@ pub(crate) trait VariantShreddingRowBuilder {
 
 /// A thin wrapper whose only job is to extract a specific path from a variant value and pass the
 /// result to a nested builder.
-struct VariantPathRowBuilder<'a, T: VariantShreddingRowBuilder> {
+struct VariantPathRowBuilder<'a, T: VariantToArrowRowBuilder> {
     builder: T,
     path: VariantPath<'a>,
 }
 
-trait VariantShreddingRowBuilderWithPath<'a>: VariantShreddingRowBuilder {
-    fn with_path(self, path: VariantPath<'a>) -> Box<dyn VariantShreddingRowBuilder + 'a>;
+trait VariantToArrowRowBuilderWithPath<'a>: VariantToArrowRowBuilder {
+    fn with_path(self, path: VariantPath<'a>) -> Box<dyn VariantToArrowRowBuilder + 'a>;
 }
 
-impl<'a, T: VariantShreddingRowBuilder + 'a> VariantShreddingRowBuilderWithPath<'a> for T {
-    fn with_path(self, path: VariantPath<'a>) -> Box<dyn VariantShreddingRowBuilder + 'a> {
+impl<'a, T: VariantToArrowRowBuilder + 'a> VariantToArrowRowBuilderWithPath<'a> for T {
+    fn with_path(self, path: VariantPath<'a>) -> Box<dyn VariantToArrowRowBuilder + 'a> {
         if path.is_empty() {
             Box::new(self)
         } else {
@@ -107,7 +107,7 @@ impl<'a, T: VariantShreddingRowBuilder + 'a> VariantShreddingRowBuilderWithPath<
     }
 }
 
-impl<T: VariantShreddingRowBuilder> VariantShreddingRowBuilder for VariantPathRowBuilder<'_, T> {
+impl<T: VariantToArrowRowBuilder> VariantToArrowRowBuilder for VariantPathRowBuilder<'_, T> {
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null()
     }
@@ -143,13 +143,13 @@ fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
     }
 }
 
-/// Builder for shredding variant values to primitive values
-struct PrimitiveVariantShreddingRowBuilder<'a, T: ArrowPrimitiveType> {
+/// Builder for converting variant values to primitive values
+struct VariantToPrimitiveArrowRowBuilder<'a, T: ArrowPrimitiveType> {
     builder: arrow::array::PrimitiveBuilder<T>,
     cast_options: &'a CastOptions<'a>,
 }
 
-impl<'a, T: ArrowPrimitiveType> PrimitiveVariantShreddingRowBuilder<'a, T> {
+impl<'a, T: ArrowPrimitiveType> VariantToPrimitiveArrowRowBuilder<'a, T> {
     fn new(cast_options: &'a CastOptions<'a>) -> Self {
         Self {
             builder: PrimitiveBuilder::<T>::new(),
@@ -158,7 +158,7 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveVariantShreddingRowBuilder<'a, T> {
     }
 }
 
-impl<'a, T> VariantShreddingRowBuilder for PrimitiveVariantShreddingRowBuilder<'a, T>
+impl<'a, T> VariantToArrowRowBuilder for VariantToPrimitiveArrowRowBuilder<'a, T>
 where
     T: ArrowPrimitiveType,
     for<'m, 'v> Variant<'m, 'v>: VariantAsPrimitive<T>,
@@ -193,11 +193,11 @@ where
 }
 
 /// Builder for creating VariantArray output (for path extraction without type conversion)
-struct VariantArrayShreddingRowBuilder {
+struct VariantToBinaryVariantArrowRowBuilder {
     builder: VariantArrayBuilder,
 }
 
-impl VariantArrayShreddingRowBuilder {
+impl VariantToBinaryVariantArrowRowBuilder {
     fn new(capacity: usize) -> Self {
         Self {
             builder: VariantArrayBuilder::new(capacity),
@@ -205,13 +205,20 @@ impl VariantArrayShreddingRowBuilder {
     }
 }
 
-impl VariantShreddingRowBuilder for VariantArrayShreddingRowBuilder {
+impl VariantToArrowRowBuilder for VariantToBinaryVariantArrowRowBuilder {
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null();
         Ok(())
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        // TODO: We need a way to convert a Variant directly to bytes. In particular, we want to
+        // just copy across the underlying value byte slice of a `Variant::Object` or
+        // `Variant::List`, without any interaction with a `VariantMetadata` (because the shredding
+        // spec requires us to reuse the existing metadata when unshredding).
+        //
+        // One could _probably_ emulate this with parquet_variant::VariantBuilder, but it would do a
+        // lot of unnecessary work and would also create a new metadata column we don't need.
         self.builder.append_variant(value.clone());
         Ok(true)
     }
