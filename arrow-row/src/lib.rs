@@ -2292,7 +2292,7 @@ mod tests {
         let [s2] = back.try_into().unwrap();
 
         // RowConverter flattens Dictionary
-        // s.ty = Struct(foo Dictionary(Int32, Utf8)), s2.ty = Struct(foo Utf8)
+        // s.ty = Struct("foo": Dictionary(Int32, Utf8)), s2.ty = Struct("foo": Utf8)
         assert_ne!(&s.data_type(), &s2.data_type());
         s2.to_data().validate_full().unwrap();
 
@@ -2340,7 +2340,7 @@ mod tests {
         let [s2] = back.try_into().unwrap();
 
         // RowConverter flattens Dictionary
-        // s.ty = Struct(foo Dictionary(Int32, Int32)), s2.ty = Struct(foo Int32)
+        // s.ty = Struct("foo": Dictionary(Int32, Int32)), s2.ty = Struct("foo": Int32)
         assert_ne!(&s.data_type(), &s2.data_type());
         s2.to_data().validate_full().unwrap();
         assert_eq!(s.len(), 0);
