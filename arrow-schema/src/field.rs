@@ -44,7 +44,7 @@ pub type FieldRef = Arc<Field>;
 ///
 /// Arrow Extension types, are encoded in `Field`s metadata. See
 /// [`Self::try_extension_type`] to retrieve the [`ExtensionType`], if any.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
     name: String,
@@ -860,10 +860,61 @@ impl Field {
     }
 }
 
-// TODO: improve display with crate https://crates.io/crates/derive_more ?
 impl std::fmt::Display for Field {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        // NOTE: `Display` and `Debug` formatting are ALWAYS the same,
+        // because we want BOTH to be easy to read AND reversible!
+        //
+        // Many error messages in `datafusion`, `arrow`, and 3rd party crates mistakingly use the
+        // `Debug` formatting of `DataType` and/or `Field` instead of `Display`,
+        // which means we end up with huge difficult-to-read error messages.
+        //
+        // There are three solutions to this, afaict:
+        //
+        // A) Use `Display`=`Debug`, like we do here
+        //
+        // B) Replace all uses of `{:?}` with `{}` when printing datatypes and fields in datafusion, arrow, and other third party crates.
+        // This is VERY hard to do, as I know of no automated tool to find all these places.
+        //
+        // C) Improve `Debug` formatting by omitting empty/default fields.
+        // This will _help_ a lot.
+        // If you want to go down that route, consider omitting the field name if it is `item`,
+        // or special-case `Debug` formatting of `Datatype::List` some other way 🙏
         write!(f, "{self:?}")
+    }
+}
+
+impl std::fmt::Debug for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #![expect(deprecated)] // Must still print dict_id, if set
+        let Self {
+            name,
+            data_type,
+            nullable,
+            dict_id,
+            dict_is_ordered,
+            metadata,
+        } = self;
+        let maybe_nullable = if *nullable { "nullable " } else { "" };
+        let metadata_str = if metadata.is_empty() {
+            String::new()
+        } else {
+            format!(", metadata: {metadata:?}")
+        };
+        let dict_id_str = if dict_id == &0 {
+            String::new()
+        } else {
+            format!(", dict_id: {dict_id}")
+        };
+        let dict_is_ordered_str = if *dict_is_ordered {
+            ", dict_is_ordered"
+        } else {
+            ""
+        };
+        write!(
+            f,
+            "Field {{ {name:?}: {maybe_nullable}{data_type}{dict_id_str}{dict_is_ordered_str}{metadata_str} }}"
+        )
     }
 }
 

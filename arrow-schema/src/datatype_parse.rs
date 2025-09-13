@@ -38,14 +38,14 @@ fn make_error_expected(val: &str, expected: &Token, actual: &Token) -> ArrowErro
 /// Implementation of `parse_data_type`, modeled after <https://github.com/sqlparser-rs/sqlparser-rs>
 struct Parser<'a> {
     val: &'a str,
-    tokenizer: Tokenizer<'a>,
+    tokenizer: Peekable<Tokenizer<'a>>,
 }
 
 impl<'a> Parser<'a> {
     fn new(val: &'a str) -> Self {
         Self {
             val,
-            tokenizer: Tokenizer::new(val),
+            tokenizer: Tokenizer::new(val).peekable(),
         }
     }
 
@@ -345,8 +345,12 @@ impl<'a> Parser<'a> {
                     ))
                 }
             };
+            let nullable = self
+                .tokenizer
+                .next_if(|next| matches!(next, Ok(Token::Nullable)))
+                .is_some();
             let field_type = self.parse_next_type()?;
-            fields.push(Arc::new(Field::new(field_name, field_type, true)));
+            fields.push(Arc::new(Field::new(field_name, field_type, nullable)));
             match self.next_token()? {
                 Token::Comma => continue,
                 Token::RParen => break,
@@ -551,7 +555,10 @@ impl<'a> Tokenizer<'a> {
             "Some" => Token::Some,
             "None" => Token::None,
 
+            "nullable" => Token::Nullable,
+
             "Struct" => Token::Struct,
+
             // If we don't recognize the word, treat it as a field name
             word => Token::FieldName(word.to_string()),
         };
@@ -618,6 +625,7 @@ enum Token {
     LargeList,
     FixedSizeList,
     Struct,
+    Nullable,
     FieldName(String),
 }
 
@@ -649,6 +657,7 @@ impl Display for Token {
             Token::Integer(v) => write!(f, "Integer({v})"),
             Token::DoubleQuotedString(s) => write!(f, "DoubleQuotedString({s})"),
             Token::Struct => write!(f, "Struct"),
+            Token::Nullable => write!(f, "nullable"),
             Token::FieldName(s) => write!(f, "FieldName({s})"),
         }
     }

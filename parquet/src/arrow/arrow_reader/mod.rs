@@ -3677,8 +3677,8 @@ mod tests {
                 ),
             ])),
             "Arrow: Incompatible supplied Arrow schema: data type mismatch for field nested: \
-            requested Struct([Field { name: \"nested1_valid\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"nested1_invalid\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) \
-            but found Struct([Field { name: \"nested1_valid\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"nested1_invalid\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }])",
+            requested Struct(nested1_valid Utf8, nested1_invalid Int32) \
+            but found Struct(nested1_valid Utf8, nested1_invalid Int64)",
         );
     }
 
