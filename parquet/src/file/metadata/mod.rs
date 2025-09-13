@@ -114,6 +114,7 @@ use crate::format::{
     BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation, RowGroup,
     SizeStatistics, SortingColumn,
 };
+use crate::geospatial::statistics as geo_statistics;
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
@@ -124,7 +125,6 @@ pub use reader::{FooterTail, ParquetMetaDataReader};
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
-use crate::geospatial::statistics as geo_statistics;
 pub(crate) use writer::ThriftMetadataWriter;
 
 /// Page level statistics for each column chunk of each row group.
