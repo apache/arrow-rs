@@ -141,11 +141,8 @@ impl BoundingBox {
 /// ```
 /// use parquet::geospatial::statistics::{GeospatialStatistics, BoundingBox};
 /// 
-/// // Empty statistics
-/// let empty_stats = GeospatialStatistics::new_empty();
-/// 
 /// // Statistics with bounding box
-/// let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0, None, None, None, None);
+/// let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
 /// let stats = GeospatialStatistics::new(Some(bbox), Some(vec![1, 2, 3]));
 /// ```
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -153,7 +150,6 @@ pub struct GeospatialStatistics {
     /// Optional bounding box encompassing all geospatial data
     bbox: Option<BoundingBox>,
     /// Optional list of geospatial geometry type identifiers
-    /// as specified in https://github.com/apache/parquet-format/blob/ae39061f28d7c508a97af58a3c0a567352c8ea41/Geospatial.md#geospatial-types
     geospatial_types: Option<Vec<i32>>,
 }
 
@@ -269,15 +265,6 @@ impl From<BoundingBox> for parquet::BoundingBox {
 /// An `Option<TGeospatialStatistics>` containing:
 /// * `Some(...)` - Successfully converted Thrift statistics
 /// * `None` - No statistics provided
-/// 
-/// # Examples
-/// 
-/// ```
-/// use parquet::geospatial::statistics::{GeospatialStatistics, to_thrift};
-/// 
-/// let stats = GeospatialStatistics::new_empty();
-/// let thrift_stats = to_thrift(Some(&stats));
-/// ```
 pub fn to_thrift(geo_statistics: Option<&GeospatialStatistics>) -> Option<TGeospatialStatistics> {
     let geo_stats = geo_statistics?;
     let bbox = geo_stats.bbox.clone().map(|bbox| bbox.into());
