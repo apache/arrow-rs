@@ -309,7 +309,8 @@ mod test {
     use parquet_variant::{Variant, VariantPath};
 
     use crate::json_to_variant;
-    use crate::{variant_array::ShreddedVariantFieldArray, VariantArray};
+    use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+    use crate::VariantArray;
 
     use super::{variant_get, GetOptions};
 
@@ -677,8 +678,8 @@ mod test {
                 ]);
 
                 let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata))
-                    .with_field("typed_value", Arc::new(typed_value))
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(typed_value), true)
                     .build();
 
                 Arc::new(
@@ -806,9 +807,9 @@ mod test {
                 ]);
 
                 let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata))
-                    .with_field("typed_value", Arc::new(typed_value))
-                    .with_field("value", Arc::new(values))
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(typed_value), true)
+                    .with_field("value", Arc::new(values), true)
                     .with_nulls(nulls)
                     .build();
 
@@ -876,45 +877,6 @@ mod test {
         f64
     );
 
-    /// Builds struct arrays from component fields
-    ///
-    /// TODO: move to arrow crate
-    #[derive(Debug, Default, Clone)]
-    struct StructArrayBuilder {
-        fields: Vec<FieldRef>,
-        arrays: Vec<ArrayRef>,
-        nulls: Option<NullBuffer>,
-    }
-
-    impl StructArrayBuilder {
-        fn new() -> Self {
-            Default::default()
-        }
-
-        /// Add an array to this struct array as a field with the specified name.
-        fn with_field(mut self, field_name: &str, array: ArrayRef) -> Self {
-            let field = Field::new(field_name, array.data_type().clone(), true);
-            self.fields.push(Arc::new(field));
-            self.arrays.push(array);
-            self
-        }
-
-        /// Set the null buffer for this struct array.
-        fn with_nulls(mut self, nulls: NullBuffer) -> Self {
-            self.nulls = Some(nulls);
-            self
-        }
-
-        pub fn build(self) -> StructArray {
-            let Self {
-                fields,
-                arrays,
-                nulls,
-            } = self;
-            StructArray::new(Fields::from(fields), arrays, nulls)
-        }
-    }
-
     /// Return a VariantArray that represents an "all null" variant
     /// for the following example (3 null values):
     ///
@@ -944,7 +906,7 @@ mod test {
         let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
 
         let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata))
+            .with_field("metadata", Arc::new(metadata), false)
             .with_nulls(nulls)
             .build();
 
@@ -1035,8 +997,8 @@ mod test {
         let x_field_typed_value = Int32Array::from(vec![Some(1), Some(42)]);
 
         // For perfect shredding of the x field, no "value" column, only typed_value
-        let x_field_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("typed_value", Arc::new(x_field_typed_value))
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_field_typed_value), true)
             .build();
 
         // Wrap the x field struct in a ShreddedVariantFieldArray
@@ -1057,10 +1019,10 @@ mod test {
         .unwrap();
 
         // Create the main VariantArray
-        let main_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_struct))
+        let main_struct = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(main_struct)).expect("should create variant array"))
@@ -1415,8 +1377,8 @@ mod test {
         let x_field_typed_value = Int32Array::from(vec![Some(42), None]);
 
         // For the x field, only typed_value (perfect shredding when possible)
-        let x_field_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("typed_value", Arc::new(x_field_typed_value))
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_field_typed_value), true)
             .build();
 
         let x_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(x_field_struct))
@@ -1433,10 +1395,10 @@ mod test {
                 .unwrap();
 
         // Build final VariantArray
-        let struct_array = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_struct))
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
@@ -1494,8 +1456,8 @@ mod test {
         // Create the nested shredded structure
         // Level 2: x field (the deepest level)
         let x_typed_value = Int32Array::from(vec![Some(55), None]);
-        let x_field_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("typed_value", Arc::new(x_typed_value))
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_typed_value), true)
             .build();
         let x_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(x_field_struct))
             .expect("should create ShreddedVariantFieldArray for x");
@@ -1521,15 +1483,16 @@ mod test {
             x_field_shredded.data_type().clone(),
             true,
         )]);
-        let a_inner_struct = crate::variant_array::StructArrayBuilder::new()
+        let a_inner_struct = StructArrayBuilder::new()
             .with_field(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(a_inner_fields, vec![Arc::new(x_field_shredded)], None)
                         .unwrap(),
                 ),
+                true,
             )
-            .with_field("value", Arc::new(a_value_array))
+            .with_field("value", Arc::new(a_value_array), true)
             .build();
         let a_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(a_inner_struct))
             .expect("should create ShreddedVariantFieldArray for a");
@@ -1545,10 +1508,10 @@ mod test {
                 .unwrap();
 
         // Build final VariantArray
-        let struct_array = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_struct))
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
@@ -1599,8 +1562,8 @@ mod test {
 
         // Level 3: x field (deepest level)
         let x_typed_value = Int32Array::from(vec![Some(100), None, None]);
-        let x_field_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("typed_value", Arc::new(x_typed_value))
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_typed_value), true)
             .build();
         let x_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(x_field_struct))
             .expect("should create ShreddedVariantFieldArray for x");
@@ -1624,15 +1587,16 @@ mod test {
             x_field_shredded.data_type().clone(),
             true,
         )]);
-        let b_inner_struct = crate::variant_array::StructArrayBuilder::new()
+        let b_inner_struct = StructArrayBuilder::new()
             .with_field(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(b_inner_fields, vec![Arc::new(x_field_shredded)], None)
                         .unwrap(),
                 ),
+                true,
             )
-            .with_field("value", Arc::new(b_value_array))
+            .with_field("value", Arc::new(b_value_array), true)
             .build();
         let b_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(b_inner_struct))
             .expect("should create ShreddedVariantFieldArray for b");
@@ -1656,15 +1620,16 @@ mod test {
             b_field_shredded.data_type().clone(),
             true,
         )]);
-        let a_inner_struct = crate::variant_array::StructArrayBuilder::new()
+        let a_inner_struct = StructArrayBuilder::new()
             .with_field(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(a_inner_fields, vec![Arc::new(b_field_shredded)], None)
                         .unwrap(),
                 ),
+                true,
             )
-            .with_field("value", Arc::new(a_value_array))
+            .with_field("value", Arc::new(a_value_array), true)
             .build();
         let a_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(a_inner_struct))
             .expect("should create ShreddedVariantFieldArray for a");
@@ -1680,10 +1645,10 @@ mod test {
                 .unwrap();
 
         // Build final VariantArray
-        let struct_array = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_struct))
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
