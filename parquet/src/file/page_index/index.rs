@@ -36,6 +36,8 @@ pub struct PageIndex<T> {
     pub max: Option<T>,
     /// Null values in the page
     pub null_count: Option<i64>,
+    /// NaN values in the page (only for floating point types)
+    pub nan_count: Option<i64>,
     /// Repetition level histogram for the page
     ///
     /// `repetition_level_histogram[i]` is a count of how many values are at repetition level `i`.
@@ -67,6 +69,11 @@ impl<T> PageIndex<T> {
     /// Returns the number of null values in the page
     pub fn null_count(&self) -> Option<i64> {
         self.null_count
+    }
+
+    /// Returns the number of NaN values in the page
+    pub fn nan_count(&self) -> Option<i64> {
+        self.nan_count
     }
 
     /// Returns the repetition level histogram for the page
@@ -194,6 +201,11 @@ impl<T: ParquetValueType> NativeIndex<T> {
             .map(|x| x.into_iter().map(Some).collect::<Vec<_>>())
             .unwrap_or_else(|| vec![None; len]);
 
+        let nan_counts = index
+            .nan_counts
+            .map(|x| x.into_iter().map(Some).collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![None; len]);
+
         // histograms are a 1D array encoding a 2D num_pages X num_levels matrix.
         let to_page_histograms = |opt_hist: Option<Vec<i64>>| {
             if let Some(hist) = opt_hist {
@@ -222,11 +234,12 @@ impl<T: ParquetValueType> NativeIndex<T> {
             .zip(index.max_values.iter())
             .zip(index.null_pages.into_iter())
             .zip(null_counts.into_iter())
+            .zip(nan_counts.into_iter())
             .zip(rep_hists.into_iter())
             .zip(def_hists.into_iter())
             .map(
                 |(
-                    ((((min, max), is_null), null_count), repetition_level_histogram),
+                    (((((min, max), is_null), null_count), nan_count), repetition_level_histogram),
                     definition_level_histogram,
                 )| {
                     let (min, max) = if is_null {
@@ -241,6 +254,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
                         min,
                         max,
                         null_count,
+                        nan_count,
                         repetition_level_histogram,
                         definition_level_histogram,
                     })
@@ -273,6 +287,12 @@ impl<T: ParquetValueType> NativeIndex<T> {
             .map(|x| x.null_count())
             .collect::<Option<Vec<_>>>();
 
+        let nan_counts = self
+            .indexes
+            .iter()
+            .map(|x| x.nan_count())
+            .collect::<Option<Vec<_>>>();
+
         // Concatenate page histograms into a single Option<Vec>
         let repetition_level_histograms = self
             .indexes
@@ -296,6 +316,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
             null_counts,
             repetition_level_histograms,
             definition_level_histograms,
+            nan_counts,
         )
     }
 }
@@ -310,6 +331,7 @@ mod tests {
             min: Some(-123),
             max: Some(234),
             null_count: Some(0),
+            nan_count: None,
             repetition_level_histogram: Some(LevelHistogram::from(vec![1, 2])),
             definition_level_histogram: Some(LevelHistogram::from(vec![1, 2, 3])),
         };
@@ -335,6 +357,7 @@ mod tests {
             min: None,
             max: None,
             null_count: None,
+            nan_count: None,
             repetition_level_histogram: None,
             definition_level_histogram: None,
         };
@@ -363,6 +386,7 @@ mod tests {
             null_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
+            nan_counts: None,
             boundary_order: BoundaryOrder::UNORDERED,
         };
 

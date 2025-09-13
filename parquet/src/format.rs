@@ -1110,10 +1110,15 @@ pub struct Statistics {
   pub is_max_value_exact: Option<bool>,
   /// If true, min_value is the actual minimum value for a column
   pub is_min_value_exact: Option<bool>,
+  /// Count of NaN values in the column.
+  /// 
+  /// This field is only set for columns with floating point type
+  /// (float, double, or Float16). NaN values are not included in min/max statistics.
+  pub nan_count: Option<i64>,
 }
 
 impl Statistics {
-  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8>(max: F1, min: F2, null_count: F3, distinct_count: F4, max_value: F5, min_value: F6, is_max_value_exact: F7, is_min_value_exact: F8) -> Statistics where F1: Into<Option<Vec<u8>>>, F2: Into<Option<Vec<u8>>>, F3: Into<Option<i64>>, F4: Into<Option<i64>>, F5: Into<Option<Vec<u8>>>, F6: Into<Option<Vec<u8>>>, F7: Into<Option<bool>>, F8: Into<Option<bool>> {
+  pub fn new<F1, F2, F3, F4, F5, F6, F7, F8, F9>(max: F1, min: F2, null_count: F3, distinct_count: F4, max_value: F5, min_value: F6, is_max_value_exact: F7, is_min_value_exact: F8, nan_count: F9) -> Statistics where F1: Into<Option<Vec<u8>>>, F2: Into<Option<Vec<u8>>>, F3: Into<Option<i64>>, F4: Into<Option<i64>>, F5: Into<Option<Vec<u8>>>, F6: Into<Option<Vec<u8>>>, F7: Into<Option<bool>>, F8: Into<Option<bool>>, F9: Into<Option<i64>> {
     Statistics {
       max: max.into(),
       min: min.into(),
@@ -1123,6 +1128,7 @@ impl Statistics {
       min_value: min_value.into(),
       is_max_value_exact: is_max_value_exact.into(),
       is_min_value_exact: is_min_value_exact.into(),
+      nan_count: nan_count.into(),
     }
   }
 }
@@ -1138,6 +1144,7 @@ impl crate::thrift::TSerializable for Statistics {
     let mut f_6: Option<Vec<u8>> = None;
     let mut f_7: Option<bool> = None;
     let mut f_8: Option<bool> = None;
+    let mut f_9: Option<i64> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -1177,6 +1184,10 @@ impl crate::thrift::TSerializable for Statistics {
           let val = i_prot.read_bool()?;
           f_8 = Some(val);
         },
+        9 => {
+          let val = i_prot.read_i64()?;
+          f_9 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -1193,6 +1204,7 @@ impl crate::thrift::TSerializable for Statistics {
       min_value: f_6,
       is_max_value_exact: f_7,
       is_min_value_exact: f_8,
+      nan_count: f_9,
     };
     Ok(ret)
   }
@@ -1237,6 +1249,11 @@ impl crate::thrift::TSerializable for Statistics {
     if let Some(fld_var) = self.is_min_value_exact {
       o_prot.write_field_begin(&TFieldIdentifier::new("is_min_value_exact", TType::Bool, 8))?;
       o_prot.write_bool(fld_var)?;
+      o_prot.write_field_end()?
+    }
+    if let Some(fld_var) = self.nan_count {
+      o_prot.write_field_begin(&TFieldIdentifier::new("nan_count", TType::I64, 9))?;
+      o_prot.write_i64(fld_var)?;
       o_prot.write_field_end()?
     }
     o_prot.write_field_stop()?;
@@ -4981,12 +4998,50 @@ impl crate::thrift::TSerializable for TypeDefinedOrder {
 }
 
 //
+// IEEE754TotalOrder
+//
+
+/// IEEE 754 total order for floating point values
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct IEEE754TotalOrder {
+}
+
+impl IEEE754TotalOrder {
+  pub fn new() -> IEEE754TotalOrder {
+    IEEE754TotalOrder {}
+  }
+}
+
+impl crate::thrift::TSerializable for IEEE754TotalOrder {
+  fn read_from_in_protocol<T: TInputProtocol>(i_prot: &mut T) -> thrift::Result<IEEE754TotalOrder> {
+    i_prot.read_struct_begin()?;
+    loop {
+      let field_ident = i_prot.read_field_begin()?;
+      if field_ident.field_type == TType::Stop {
+        break;
+      }
+      i_prot.skip(field_ident.field_type)?;
+      i_prot.read_field_end()?;
+    }
+    i_prot.read_struct_end()?;
+    Ok(IEEE754TotalOrder {})
+  }
+  fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()> {
+    let struct_ident = TStructIdentifier::new("IEEE754TotalOrder");
+    o_prot.write_struct_begin(&struct_ident)?;
+    o_prot.write_field_stop()?;
+    o_prot.write_struct_end()
+  }
+}
+
+//
 // ColumnOrder
 //
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ColumnOrder {
   TYPEORDER(TypeDefinedOrder),
+  IEEE754TOTALORDER(IEEE754TotalOrder),
 }
 
 impl crate::thrift::TSerializable for ColumnOrder {
@@ -5005,6 +5060,13 @@ impl crate::thrift::TSerializable for ColumnOrder {
           let val = TypeDefinedOrder::read_from_in_protocol(i_prot)?;
           if ret.is_none() {
             ret = Some(ColumnOrder::TYPEORDER(val));
+          }
+          received_field_count += 1;
+        },
+        2 => {
+          let val = IEEE754TotalOrder::read_from_in_protocol(i_prot)?;
+          if ret.is_none() {
+            ret = Some(ColumnOrder::IEEE754TOTALORDER(val));
           }
           received_field_count += 1;
         },
@@ -5044,6 +5106,11 @@ impl crate::thrift::TSerializable for ColumnOrder {
     match *self {
       ColumnOrder::TYPEORDER(ref f) => {
         o_prot.write_field_begin(&TFieldIdentifier::new("TYPE_ORDER", TType::Struct, 1))?;
+        f.write_to_out_protocol(o_prot)?;
+        o_prot.write_field_end()?;
+      },
+      ColumnOrder::IEEE754TOTALORDER(ref f) => {
+        o_prot.write_field_begin(&TFieldIdentifier::new("IEEE_754_TOTAL_ORDER", TType::Struct, 2))?;
         f.write_to_out_protocol(o_prot)?;
         o_prot.write_field_end()?;
       },
@@ -5298,10 +5365,17 @@ pub struct ColumnIndex {
   /// Same as repetition_level_histograms except for definitions levels.
   /// 
   pub definition_level_histograms: Option<Vec<i64>>,
+  /// A list containing the number of NaN values for each page
+  /// Only present for columns of physical type FLOAT, DOUBLE, or logical type FLOAT16.
+  /// 
+  /// If nan_counts are not present, readers MUST NOT assume all
+  /// NaN counts are 0. Writers SHOULD write this field if the column
+  /// is of applicable type, even if no NaN values are present.
+  pub nan_counts: Option<Vec<i64>>,
 }
 
 impl ColumnIndex {
-  pub fn new<F5, F6, F7>(null_pages: Vec<bool>, min_values: Vec<Vec<u8>>, max_values: Vec<Vec<u8>>, boundary_order: BoundaryOrder, null_counts: F5, repetition_level_histograms: F6, definition_level_histograms: F7) -> ColumnIndex where F5: Into<Option<Vec<i64>>>, F6: Into<Option<Vec<i64>>>, F7: Into<Option<Vec<i64>>> {
+  pub fn new<F5, F6, F7, F8>(null_pages: Vec<bool>, min_values: Vec<Vec<u8>>, max_values: Vec<Vec<u8>>, boundary_order: BoundaryOrder, null_counts: F5, repetition_level_histograms: F6, definition_level_histograms: F7, nan_counts: F8) -> ColumnIndex where F5: Into<Option<Vec<i64>>>, F6: Into<Option<Vec<i64>>>, F7: Into<Option<Vec<i64>>>, F8: Into<Option<Vec<i64>>> {
     ColumnIndex {
       null_pages,
       min_values,
@@ -5310,6 +5384,7 @@ impl ColumnIndex {
       null_counts: null_counts.into(),
       repetition_level_histograms: repetition_level_histograms.into(),
       definition_level_histograms: definition_level_histograms.into(),
+      nan_counts: nan_counts.into(),
     }
   }
 }
@@ -5324,6 +5399,7 @@ impl crate::thrift::TSerializable for ColumnIndex {
     let mut f_5: Option<Vec<i64>> = None;
     let mut f_6: Option<Vec<i64>> = None;
     let mut f_7: Option<Vec<i64>> = None;
+    let mut f_8: Option<Vec<i64>> = None;
     loop {
       let field_ident = i_prot.read_field_begin()?;
       if field_ident.field_type == TType::Stop {
@@ -5395,6 +5471,16 @@ impl crate::thrift::TSerializable for ColumnIndex {
           i_prot.read_list_end()?;
           f_7 = Some(val);
         },
+        8 => {
+          let list_ident = i_prot.read_list_begin()?;
+          let mut val: Vec<i64> = Vec::with_capacity(list_ident.size as usize);
+          for _ in 0..list_ident.size {
+            let list_elem_18 = i_prot.read_i64()?;
+            val.push(list_elem_18);
+          }
+          i_prot.read_list_end()?;
+          f_8 = Some(val);
+        },
         _ => {
           i_prot.skip(field_ident.field_type)?;
         },
@@ -5414,6 +5500,7 @@ impl crate::thrift::TSerializable for ColumnIndex {
       null_counts: f_5,
       repetition_level_histograms: f_6,
       definition_level_histograms: f_7,
+      nan_counts: f_8,
     };
     Ok(ret)
   }
@@ -5464,6 +5551,15 @@ impl crate::thrift::TSerializable for ColumnIndex {
     }
     if let Some(ref fld_var) = self.definition_level_histograms {
       o_prot.write_field_begin(&TFieldIdentifier::new("definition_level_histograms", TType::List, 7))?;
+      o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
+      for e in fld_var {
+        o_prot.write_i64(*e)?;
+      }
+      o_prot.write_list_end()?;
+      o_prot.write_field_end()?
+    }
+    if let Some(ref fld_var) = self.nan_counts {
+      o_prot.write_field_begin(&TFieldIdentifier::new("nan_counts", TType::List, 8))?;
       o_prot.write_list_begin(&TListIdentifier::new(TType::I64, fld_var.len() as i32))?;
       for e in fld_var {
         o_prot.write_i64(*e)?;
