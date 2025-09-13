@@ -17,49 +17,86 @@
 
 //! Avro reader
 //!
-//! This module provides facilities to read Apache Avro-encoded files or streams
-//! into Arrow's `RecordBatch` format. In particular, it introduces:
+//! Facilities to read Apache Avro–encoded data into Arrow's `RecordBatch` format.
 //!
-//! * `ReaderBuilder`: Configures Avro reading, e.g., batch size
-//! * `Reader`: Yields `RecordBatch` values, implementing `Iterator`
-//! * `Decoder`: A low-level push-based decoder for Avro records
+//! This module exposes three layers of the API surface, from highest to lowest-level:
 //!
-//! # Basic Usage
+//! * `ReaderBuilder`: configures how Avro is read (batch size, strict union handling,
+//!   string representation, reader schema, etc.) and produces either:
+//!   * a `Reader` for **Avro Object Container Files (OCF)** read from any `BufRead`, or
+//!   * a low-level `Decoder` for **single‑object encoded** Avro bytes and Confluent
+//!     **Schema Registry** framed messages.
+//! * `Reader`: a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
+//!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
+//!   `RecordBatchReader`.
+//! * `Decoder`: a push‑based row decoder that consumes raw Avro bytes and yields ready
+//!   `RecordBatch` values when batches fill. This is suitable for integrating with async
+//!   byte streams, network protocols, or other custom data sources.
 //!
-//! `Reader` can be used directly with synchronous data sources, such as [`std::fs::File`].
+//! ## Encodings and when to use which type
 //!
-//! ## Reading a Single Batch
+//! * **Object Container File (OCF)**: A self‑describing file format with a header containing
+//!   the writer schema, optional compression codec, and a sync marker, followed by one or
+//!   more data blocks. Use `Reader` for this format. See the Avro specification for the
+//!   structure of OCF headers and blocks. <https://avro.apache.org/docs/1.11.1/specification/>
+//! * **Single‑Object Encoding**: A stream‑friendly framing that prefixes each record body with
+//!   the 2‑byte magic `0xC3 0x01` followed by a schema fingerprint. Use `Decoder` with a
+//!   populated `SchemaStore` to resolve fingerprints to full
+//!   schemas. <https://avro.apache.org/docs/1.11.1/specification/>
+//! * **Confluent Schema Registry wire format**: A 1‑byte magic `0x00`, a 4‑byte big‑endian
+//!   schema ID, then the Avro‑encoded body. Use `Decoder` with a
+//!   `SchemaStore` configured for `FingerprintAlgorithm::None`
+//!   and entries keyed by `Fingerprint::Id`. Confluent docs
+//!   describe this framing.
 //!
-//! ```
-//! # use std::fs::File;
-//! # use std::io::BufReader;
-//! # use arrow_avro::reader::ReaderBuilder;
-//! # let path = "avro/alltypes_plain.avro";
-//! # let path = match std::env::var("ARROW_TEST_DATA") {
-//! #   Ok(dir) => format!("{dir}/{path}"),
-//! #   Err(_) => format!("../testing/data/{path}")
-//! # };
+//! ## Basic file usage (OCF)
+//!
+//! Use `ReaderBuilder::build` to construct a `Reader` from any `BufRead`, such as a
+//! `BufReader<File>`. The reader yields `RecordBatch` values you can iterate over or collect.
+//!
+//! ```no_run
+//! use std::fs::File;
+//! use std::io::BufReader;
+//! use arrow_array::RecordBatch;
+//! use arrow_avro::reader::ReaderBuilder;
+//!
+//! // Locate a test file (mirrors Arrow's test data layout)
+//! let path = "avro/alltypes_plain.avro";
+//! let path = std::env::var("ARROW_TEST_DATA")
+//!     .map(|dir| format!("{dir}/{path}"))
+//!     .unwrap_or_else(|_| format!("../testing/data/{path}"));
+//!
 //! let file = File::open(path).unwrap();
-//! let mut avro = ReaderBuilder::new().build(BufReader::new(file)).unwrap();
-//! let batch = avro.next().unwrap();
+//! let mut reader = ReaderBuilder::new().build(BufReader::new(file)).unwrap();
+//!
+//! // Iterate batches
+//! let mut num_rows = 0usize;
+//! while let Some(batch) = reader.next() {
+//!     let batch: RecordBatch = batch.unwrap();
+//!     num_rows += batch.num_rows();
+//! }
+//! println!("decoded {num_rows} rows");
 //! ```
 //!
-//! # Async Usage
+//! ## Streaming usage (single‑object / Confluent)
 //!
-//! The lower-level `Decoder` can be integrated with various forms of async data streams,
-//! and is designed to be agnostic to different async IO primitives within
-//! the Rust ecosystem. It works by incrementally decoding Avro data from byte slices.
+//! The `Decoder` lets you integrate Avro decoding with **any** source of bytes by
+//! periodically calling `Decoder::decode` with new data and calling `Decoder::flush`
+//! to get a `RecordBatch` once at least one row is complete.
 //!
-//! For example, see below for how it could be used with an arbitrary `Stream` of `Bytes`:
+//! The example below shows how to decode from an arbitrary stream of `bytes::Bytes` using
+//! `futures` utilities. Note: this is illustrative and keeps a single in‑memory `Bytes`
+//! buffer for simplicity—real applications typically maintain a rolling buffer.
 //!
-//! ```
-//! # use std::task::{Poll, ready};
-//! # use bytes::{Buf, Bytes};
-//! # use arrow_schema::ArrowError;
-//! # use futures::stream::{Stream, StreamExt};
-//! # use arrow_array::RecordBatch;
-//! # use arrow_avro::reader::Decoder;
+//! ```no_run
+//! use bytes::{Buf, Bytes};
+//! use futures::{Stream, StreamExt};
+//! use std::task::{Poll, ready};
+//! use arrow_array::RecordBatch;
+//! use arrow_schema::ArrowError;
+//! use arrow_avro::reader::Decoder;
 //!
+//! /// Decode a stream of Avro-framed bytes into RecordBatch values.
 //! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
 //!     mut decoder: Decoder,
 //!     mut input: S,
@@ -70,25 +107,101 @@
 //!             if buffered.is_empty() {
 //!                 buffered = match ready!(input.poll_next_unpin(cx)) {
 //!                     Some(b) => b,
-//!                     None => break,
+//!                     None => break, // EOF
 //!                 };
 //!             }
+//!             // Feed as much as possible
 //!             let decoded = match decoder.decode(buffered.as_ref()) {
-//!                 Ok(decoded) => decoded,
+//!                 Ok(n) => n,
 //!                 Err(e) => return Poll::Ready(Some(Err(e))),
 //!             };
 //!             let read = buffered.len();
 //!             buffered.advance(decoded);
 //!             if decoded != read {
+//!                 // decoder made partial progress; request more bytes
 //!                 break
 //!             }
 //!         }
-//!         // Convert any fully-decoded rows to a RecordBatch, if available
+//!         // Return a batch if one or more rows are complete
 //!         Poll::Ready(decoder.flush().transpose())
 //!     })
 //! }
 //! ```
 //!
+//! ### Building a `Decoder` for **single‑object encoding** (Rabin fingerprints)
+//!
+//! ```no_run
+//! use arrow_avro::schema::{AvroSchema, SchemaStore};
+//! use arrow_avro::reader::ReaderBuilder;
+//!
+//! // Build a SchemaStore and register known writer schemas
+//! let mut store = SchemaStore::new(); // Rabin by default
+//! let user_schema = AvroSchema::new(r#"{"type":"record","name":"User","fields":[
+//!     {"name":"id","type":"long"},{"name":"name","type":"string"}]}"#.to_string());
+//! let _fp = store.register(user_schema).unwrap(); // computes Rabin CRC-64-AVRO
+//!
+//! // Build a Decoder that expects single-object encoding (0xC3 0x01 + fingerprint and body)
+//! let decoder = ReaderBuilder::new()
+//!     .with_writer_schema_store(store)
+//!     .with_batch_size(1024)
+//!     .build_decoder()
+//!     .unwrap();
+//! // Feed decoder with framed bytes (not shown; see `decode_stream` above).
+//! ```
+//!
+//! ### Building a `Decoder` for **Confluent Schema Registry** framed messages
+//!
+//! ```no_run
+//! use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm};
+//! use arrow_avro::reader::ReaderBuilder;
+//!
+//! // Confluent wire format uses a magic 0x00 byte + 4-byte schema id (big-endian).
+//! // Create a store keyed by `Fingerprint::Id` and pre-populate with known schemas.
+//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+//!
+//! // Suppose registry ID 42 corresponds to this Avro schema:
+//! let avro = AvroSchema::new(r#"{"type":"string"}"#.to_string());
+//! store.set(Fingerprint::Id(42), avro).unwrap();
+//!
+//! // Build a Decoder that understands Confluent framing
+//! let decoder = ReaderBuilder::new()
+//!     .with_writer_schema_store(store)
+//!     .build_decoder()
+//!     .unwrap();
+//! // Feed decoder with 0x00 + [id:4] + Avro body frames.
+//! ```
+//!
+//! ## Schema evolution and batch boundaries
+//!
+//! `Decoder` supports mid‑stream schema changes when the input framing carries a schema
+//! fingerprint (single‑object or Confluent). When a new fingerprint is observed:
+//!
+//! * If the current `RecordBatch` is **empty**, the decoder switches to the new schema
+//!   immediately.
+//! * If not, the decoder finishes the current batch first and only then switches.
+//!
+//! Consequently, the schema of batches produced by `Decoder::flush` may change over time,
+//! and `Decoder` intentionally does **not** implement `RecordBatchReader`. In contrast,
+//! `Reader` (OCF) has a single writer schema for the entire file and therefore implements
+//! `RecordBatchReader`.
+//!
+//! ## Performance & memory
+//!
+//! * `batch_size` controls the maximum number of rows per `RecordBatch`. Larger batches
+//!   amortize per‑batch overhead; smaller batches reduce peak memory usage and latency.
+//! * When `utf8_view` is enabled, string columns use Arrow’s `StringViewArray`, which can
+//!   reduce allocations for short strings.
+//! * For OCF, blocks may be compressed `Reader` will decompress using the codec specified
+//!   in the file header and feed uncompressed bytes to the row `Decoder`.
+//!
+//! ## Error handling
+//!
+//! * Incomplete inputs return parse errors with "Unexpected EOF"; callers typically provide
+//!   more bytes and try again.
+//! * If a fingerprint is unknown to the provided `SchemaStore`, decoding fails with a
+//!   descriptive error. Populate the store up front to avoid this.
+//!
+//! ---
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
     compare_schemas, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore,
@@ -138,7 +251,77 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
     )
 }
 
-/// A low-level interface for decoding Avro-encoded bytes into Arrow `RecordBatch`.
+/// A low‑level, push‑based decoder from Avro bytes to Arrow `RecordBatch`.
+///
+/// `Decoder` is designed for **streaming** scenarios:
+///
+/// * You *feed* freshly received bytes using `Self::decode`, potentially multiple times,
+///   until at least one row is complete.
+/// * You then *drain* completed rows with `Self::flush`, which yields a `RecordBatch`
+///   if any rows were finished since the last flush.
+///
+/// Unlike `Reader`, which is specialized for Avro **Object Container Files**, `Decoder`
+/// understands **framed single‑object** inputs and **Confluent Schema Registry** messages,
+/// switching schemas mid‑stream when the framing indicates a new fingerprint.
+///
+/// ### Supported prefixes
+///
+/// On each new row boundary, `Decoder` tries to match one of the following "prefixes":
+///
+/// * **Single‑Object encoding**: magic `0xC3 0x01` + schema fingerprint (length depends on
+///   the configured `FingerprintAlgorithm`); see `SINGLE_OBJECT_MAGIC`.
+/// * **Confluent wire format**: magic `0x00` + 4‑byte big‑endian schema id; see
+///   `CONFLUENT_MAGIC`.
+///
+/// The active fingerprint determines which cached row decoder is used to decode the following
+/// record body bytes.
+///
+/// ### Schema switching semantics
+///
+/// When a new fingerprint is observed:
+///
+/// * If the current batch is empty, the decoder switches immediately;
+/// * Otherwise, the current batch is finalized on the next `flush` and only then
+///   does the decoder switch to the new schema. This guarantees that a single `RecordBatch`
+///   never mixes rows with different schemas.
+///
+/// ### Examples
+///
+/// Build a `Decoder` for single‑object encoding using a `SchemaStore` with Rabin fingerprints:
+///
+/// ```no_run
+/// use arrow_avro::schema::{AvroSchema, SchemaStore};
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// let mut store = SchemaStore::new(); // Rabin by default
+/// let avro = AvroSchema::new(r#""string""#.to_string());
+/// let _fp = store.register(avro).unwrap();
+///
+/// let mut decoder = ReaderBuilder::new()
+///     .with_writer_schema_store(store)
+///     .with_batch_size(512)
+///     .build_decoder()
+///     .unwrap();
+///
+/// // Feed bytes (framed as 0xC3 0x01 + fingerprint and body)
+/// // decoder.decode(&bytes)?;
+/// // if let Some(batch) = decoder.flush()? { /* process */ }
+/// ```
+///
+/// Build a `Decoder` for Confluent Registry messages (magic 0x00 + 4‑byte id):
+///
+/// ```no_run
+/// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm};
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+/// store.set(Fingerprint::Id(7), AvroSchema::new(r#""long""#.to_string())).unwrap();
+///
+/// let mut decoder = ReaderBuilder::new()
+///     .with_writer_schema_store(store)
+///     .build_decoder()
+///     .unwrap();
+/// ```
 #[derive(Debug)]
 pub struct Decoder {
     active_decoder: RecordDecoder,
@@ -154,21 +337,39 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    /// Return the Arrow schema for the rows decoded by this decoder
+    /// Returns the Arrow schema for the rows decoded by this decoder.
+    ///
+    /// **Note:** With single‑object or Confluent framing, the schema may change
+    /// at a row boundary when the input indicates a new fingerprint.
     pub fn schema(&self) -> SchemaRef {
         self.active_decoder.schema().clone()
     }
 
-    /// Return the configured maximum number of rows per batch
+    /// Returns the configured maximum number of rows per batch.
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }
 
-    /// Feed `data` into the decoder row by row until we either:
-    /// - consume all bytes in `data`, or
-    /// - reach `batch_size` decoded rows.
+    /// Feed a chunk of bytes into the decoder.
     ///
-    /// Returns the number of bytes consumed.
+    /// This will:
+    ///
+    /// * Decode at most `Self::batch_size` rows;
+    /// * Return the number of input bytes **consumed** from `data` (which may be 0 if more
+    ///   bytes are required, or less than `data.len()` if a prefix/body straddles the
+    ///   chunk boundary);
+    /// * Defer producing a `RecordBatch` until you call `Self::flush`.
+    ///
+    /// # Returns
+    /// The number of bytes consumed from `data`.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    ///
+    /// * The input indicates an unknown fingerprint (not present in the provided
+    ///   `SchemaStore`;
+    /// * The Avro body is malformed;
+    /// * A strict‑mode union rule is violated (see `ReaderBuilder::with_strict_mode`).
     pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
         let mut total_consumed = 0usize;
         while total_consumed < data.len() && self.remaining_capacity > 0 {
@@ -234,7 +435,7 @@ impl Decoder {
 
     /// This method checks for the provided `magic` bytes at the start of `buf` and, if present,
     /// attempts to read the following fingerprint of `N` bytes, converting it to a
-    /// [`Fingerprint`] using `fingerprint_from`.
+    /// `Fingerprint` using `fingerprint_from`.
     fn handle_prefix_common<const MAGIC_LEN: usize, const N: usize>(
         &mut self,
         buf: &[u8],
@@ -318,6 +519,10 @@ impl Decoder {
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
     /// `Ok(None)` if no new rows are available.
+    ///
+    /// If a schema change was detected while decoding rows for the current batch, the
+    /// schema switch is applied **after** flushing this batch, so the **next** batch
+    /// (if any) may have a different schema.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         // We must flush the active decoder before switching to the pending one.
         let batch = self.flush_and_reset();
@@ -335,7 +540,7 @@ impl Decoder {
         self.remaining_capacity == 0
     }
 
-    /// Returns true if the decoder has not decoded any batches yet.
+    /// Returns true if the decoder has not decoded any batches yet (i.e., the current batch is empty).
     pub fn batch_is_empty(&self) -> bool {
         self.remaining_capacity == self.batch_size
     }
@@ -361,8 +566,57 @@ impl Decoder {
     }
 }
 
-/// A builder to create an [`Avro Reader`](Reader) that reads Avro data
-/// into Arrow `RecordBatch`.
+/// A builder that configures and constructs Avro readers and decoders.
+///
+/// `ReaderBuilder` is the primary entry point for this module. It supports:
+///
+/// * OCF reading via `Self::build`, returning a `Reader` over any `BufRead`;
+/// * streaming decoding via `Self::build_decoder`, returning a `Decoder`.
+///
+/// ### Options
+///
+/// * **`batch_size`**: Max rows per `RecordBatch` (default: `1024`). See `Self::with_batch_size`.
+/// * **`utf8_view`**: Use Arrow `StringViewArray` for string columns (default: `false`).
+///   See `Self::with_utf8_view`.
+/// * **`strict_mode`**: Opt‑in to stricter union handling (default: `false`).
+///   See `Self::with_strict_mode`.
+/// * **`reader_schema`**: Optional reader schema (projection / evolution) used when decoding
+///   values (default: `None`). See `Self::with_reader_schema`.
+/// * **`writer_schema_store`**: Required for building a `Decoder` for single‑object or
+///   Confluent framing. Maps fingerprints to Avro schemas. See `Self::with_writer_schema_store`.
+/// * **`active_fingerprint`**: Optional starting fingerprint for streaming decode when the
+///   first frame omits one (rare). See `Self::with_active_fingerprint`.
+///
+/// ### Examples
+///
+/// Read an OCF file in batches of 4096 rows:
+///
+/// ```no_run
+/// use std::fs::File;
+/// use std::io::BufReader;
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// let file = File::open("data.avro")?;
+/// let mut reader = ReaderBuilder::new()
+///     .with_batch_size(4096)
+///     .build(BufReader::new(file))?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// Build a `Decoder` for Confluent messages:
+///
+/// ```no_run
+/// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm};
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+/// store.set(Fingerprint::Id(1234), AvroSchema::new(r#"{"type":"record","name":"E","fields":[]}"#.to_string()))?;
+///
+/// let decoder = ReaderBuilder::new()
+///     .with_writer_schema_store(store)
+///     .build_decoder()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct ReaderBuilder {
     batch_size: usize,
@@ -387,13 +641,14 @@ impl Default for ReaderBuilder {
 }
 
 impl ReaderBuilder {
-    /// Creates a new [`ReaderBuilder`] with default settings:
-    /// - `batch_size` = 1024
-    /// - `strict_mode` = false
-    /// - `utf8_view` = false
-    /// - `reader_schema` = None
-    /// - `writer_schema_store` = None
-    /// - `active_fingerprint` = None
+    /// Creates a new `ReaderBuilder` with defaults:
+    ///
+    /// * `batch_size = 1024`
+    /// * `strict_mode = false`
+    /// * `utf8_view = false`
+    /// * `reader_schema = None`
+    /// * `writer_schema_store = None`
+    /// * `active_fingerprint = None`
     pub fn new() -> Self {
         Self::default()
     }
@@ -513,45 +768,56 @@ impl ReaderBuilder {
         ))
     }
 
-    /// Sets the row-based batch size
+    /// Sets the **row‑based batch size**.
+    ///
+    /// Each call to `Decoder::flush` or each iteration of `Reader` yields a batch with
+    /// *up to* this many rows. Larger batches can reduce overhead; smaller batches can
+    /// reduce peak memory usage and latency.
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self
     }
 
-    /// Set whether to use StringViewArray for string data
+    /// Choose Arrow's `StringViewArray` for UTF‑8 string data.
     ///
-    /// When enabled, string data from Avro files will be loaded into
-    /// Arrow's StringViewArray instead of the standard StringArray.
+    /// When enabled, textual Avro fields are loaded into Arrow’s **StringViewArray**
+    /// instead of the standard `StringArray`. This can improve performance for workloads
+    /// with many short strings by reducing allocations.
     pub fn with_utf8_view(mut self, utf8_view: bool) -> Self {
         self.utf8_view = utf8_view;
         self
     }
 
-    /// Get whether StringViewArray is enabled for string data
+    /// Returns whether `StringViewArray` is enabled for string data.
     pub fn use_utf8view(&self) -> bool {
         self.utf8_view
     }
 
-    /// Controls whether certain Avro unions of the form `[T, "null"]` should produce an error.
+    /// Enable stricter behavior for certain Avro unions (e.g., `[T, "null"]`).
+    ///
+    /// When `true`, ambiguous or lossy unions that would otherwise be coerced may instead
+    /// produce a descriptive error. Use this to catch schema issues early during ingestion.
     pub fn with_strict_mode(mut self, strict_mode: bool) -> Self {
         self.strict_mode = strict_mode;
         self
     }
 
-    /// Sets the Avro reader schema.
+    /// Sets the **reader schema** used during decoding.
     ///
-    /// If a schema is not provided, the schema will be read from the Avro file header.
+    /// If not provided, the writer schema from the OCF header (for `Reader`) or the
+    /// schema looked up from the fingerprint (for `Decoder`) is used directly.
+    ///
+    /// A reader schema can be used for **schema evolution** or **projection**.
     pub fn with_reader_schema(mut self, schema: AvroSchema) -> Self {
         self.reader_schema = Some(schema);
         self
     }
 
-    /// Sets the `SchemaStore` used for resolving writer schemas.
+    /// Sets the `SchemaStore` used to resolve writer schemas by fingerprint.
     ///
-    /// This is necessary when decoding single-object encoded data that identifies
-    /// schemas by a fingerprint. The store allows the decoder to look up the
-    /// full writer schema from a fingerprint embedded in the data.
+    /// This is required when building a `Decoder` for **single‑object encoding** or the
+    /// **Confluent** wire format. The store maps a fingerprint (Rabin / MD5 / SHA‑256 /
+    /// ID) to a full Avro schema.
     ///
     /// Defaults to `None`.
     pub fn with_writer_schema_store(mut self, store: SchemaStore) -> Self {
@@ -559,19 +825,20 @@ impl ReaderBuilder {
         self
     }
 
-    /// Sets the initial schema fingerprint for decoding single-object encoded data.
+    /// Sets the initial schema fingerprint for stream decoding.
     ///
-    /// This is useful when the data stream does not begin with a schema definition
-    /// or fingerprint, allowing the decoder to start with a known schema from the
-    /// `SchemaStore`.
-    ///
-    /// Defaults to `None`.
+    /// This can be useful for streams that **do not include** a fingerprint before the first
+    /// record body (uncommon). If not set, the first observed fingerprint is used.
     pub fn with_active_fingerprint(mut self, fp: Fingerprint) -> Self {
         self.active_fingerprint = Some(fp);
         self
     }
 
-    /// Create a [`Reader`] from this builder and a `BufRead`
+    /// Build a `Reader` (OCF) from this builder and a `BufRead`.
+    ///
+    /// This reads and validates the OCF header, initializes an internal row decoder from
+    /// the discovered writer (and optional reader) schema, and prepares to iterate blocks,
+    /// decompressing if necessary.
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
         let header = read_header(&mut reader)?;
         let decoder = self.make_decoder(Some(&header), self.reader_schema.as_ref())?;
@@ -587,7 +854,14 @@ impl ReaderBuilder {
         })
     }
 
-    /// Create a [`Decoder`] from this builder.
+    /// Build a streaming `Decoder` from this builder.
+    ///
+    /// # Requirements
+    /// * `SchemaStore` **must** be provided via `Self::with_writer_schema_store`.
+    /// * The store should contain **all** fingerprints that may appear on the stream.
+    ///
+    /// # Errors
+    /// * Returns [`ArrowError::InvalidArgumentError`] if the schema store is missing
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
         if self.writer_schema_store.is_none() {
             return Err(ArrowError::InvalidArgumentError(
@@ -598,8 +872,15 @@ impl ReaderBuilder {
     }
 }
 
-/// A high-level Avro `Reader` that reads container-file blocks
-/// and feeds them into a row-level [`Decoder`].
+/// A high‑level Avro **Object Container File** reader.
+///
+/// `Reader` pulls blocks from a `BufRead` source, handles optional block compression,
+/// and decodes them row‑by‑row into Arrow `RecordBatch` values using an internal
+/// `Decoder`. It implements both:
+///
+/// * [`Iterator<Item = Result<RecordBatch, ArrowError>>`], and
+/// * `RecordBatchReader`, guaranteeing a consistent schema across all produced batches.
+///
 #[derive(Debug)]
 pub struct Reader<R: BufRead> {
     reader: R,
@@ -613,17 +894,21 @@ pub struct Reader<R: BufRead> {
 }
 
 impl<R: BufRead> Reader<R> {
-    /// Return the Arrow schema discovered from the Avro file header
+    /// Returns the Arrow schema discovered from the Avro file header (or derived via
+    /// the optional reader schema).
     pub fn schema(&self) -> SchemaRef {
         self.decoder.schema()
     }
 
-    /// Return the Avro container-file header
+    /// Returns a reference to the parsed Avro container‑file header (magic, metadata, codec, sync).
     pub fn avro_header(&self) -> &Header {
         &self.header
     }
 
-    /// Reads the next [`RecordBatch`] from the Avro file or `Ok(None)` on EOF
+    /// Reads the next `RecordBatch` from the Avro file, or `Ok(None)` on EOF.
+    ///
+    /// Batches are bounded by `batch_size`; a single OCF block may yield multiple batches,
+    /// and a batch may also span multiple blocks.
     fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         'outer: while !self.finished && !self.decoder.batch_is_full() {
             while self.block_cursor == self.block_data.len() {
