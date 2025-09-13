@@ -70,7 +70,7 @@ tls-ring = ["tonic/tls-ring"]
 tls-webpki-roots = ["tonic/tls-webpki-roots"]
 
 # Enable CLI tools
-cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-roots", "dep:anyhow", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber", "dep:tokio"]
+cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-roots", "tonic/gzip", "tonic/deflate", "tonic/zstd", "dep:anyhow", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber", "dep:tokio"]
 
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }

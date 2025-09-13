@@ -27,58 +27,101 @@ extern crate uuid;
 
 use apache_avro::types::Value;
 use apache_avro::{to_avro_datum, Decimal, Schema as ApacheSchema};
-use arrow_avro::{reader::ReaderBuilder, schema::Schema as AvroSchema};
+use arrow_avro::schema::{Fingerprint, FingerprintAlgorithm, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC};
+use arrow_avro::{reader::ReaderBuilder, schema::AvroSchema};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use once_cell::sync::Lazy;
-use std::{hint::black_box, io, time::Duration};
+use std::{hint::black_box, time::Duration};
 use uuid::Uuid;
 
-fn encode_records(schema: &ApacheSchema, rows: impl Iterator<Item = Value>) -> Vec<u8> {
+fn make_prefix(fp: Fingerprint) -> Vec<u8> {
+    match fp {
+        Fingerprint::Rabin(val) => {
+            let mut buf = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + size_of::<u64>());
+            buf.extend_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
+            buf.extend_from_slice(&val.to_le_bytes()); // little-endian
+            buf
+        }
+        Fingerprint::Id(id) => {
+            let mut buf = Vec::with_capacity(CONFLUENT_MAGIC.len() + size_of::<u32>());
+            buf.extend_from_slice(&CONFLUENT_MAGIC); // 00
+            buf.extend_from_slice(&id.to_be_bytes()); // big-endian
+            buf
+        }
+        #[cfg(feature = "md5")]
+        Fingerprint::MD5(val) => {
+            let mut buf = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + size_of_val(&val));
+            buf.extend_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
+            buf.extend_from_slice(&val);
+            buf
+        }
+        #[cfg(feature = "sha256")]
+        Fingerprint::SHA256(val) => {
+            let mut buf = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + size_of_val(&val));
+            buf.extend_from_slice(&SINGLE_OBJECT_MAGIC); // C3 01
+            buf.extend_from_slice(&val);
+            buf
+        }
+    }
+}
+
+fn encode_records_with_prefix(
+    schema: &ApacheSchema,
+    prefix: &[u8],
+    rows: impl Iterator<Item = Value>,
+) -> Vec<u8> {
     let mut out = Vec::new();
     for v in rows {
+        out.extend_from_slice(prefix);
         out.extend_from_slice(&to_avro_datum(schema, v).expect("encode datum failed"));
     }
     out
 }
 
-fn gen_int(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_int(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| Value::Record(vec![("field1".into(), Value::Int(i as i32))])),
     )
 }
 
-fn gen_long(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_long(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| Value::Record(vec![("field1".into(), Value::Long(i as i64))])),
     )
 }
 
-fn gen_float(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_float(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| Value::Record(vec![("field1".into(), Value::Float(i as f32 + 0.5678))])),
     )
 }
 
-fn gen_bool(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_bool(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| Value::Record(vec![("field1".into(), Value::Boolean(i % 2 == 0))])),
     )
 }
 
-fn gen_double(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_double(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| Value::Record(vec![("field1".into(), Value::Double(i as f64 + 0.1234))])),
     )
 }
 
-fn gen_bytes(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_bytes(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let payload = vec![(i & 0xFF) as u8; 16];
             Value::Record(vec![("field1".into(), Value::Bytes(payload))])
@@ -86,9 +129,10 @@ fn gen_bytes(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_string(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_string(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let s = if i % 3 == 0 {
                 format!("value-{i}")
@@ -100,30 +144,34 @@ fn gen_string(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_date(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_date(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| Value::Record(vec![("field1".into(), Value::Int(i as i32))])),
     )
 }
 
-fn gen_timemillis(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_timemillis(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| Value::Record(vec![("field1".into(), Value::Int((i * 37) as i32))])),
     )
 }
 
-fn gen_timemicros(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_timemicros(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| Value::Record(vec![("field1".into(), Value::Long((i * 1_001) as i64))])),
     )
 }
 
-fn gen_ts_millis(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_ts_millis(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             Value::Record(vec![(
                 "field1".into(),
@@ -133,9 +181,10 @@ fn gen_ts_millis(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_ts_micros(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_ts_micros(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             Value::Record(vec![(
                 "field1".into(),
@@ -145,10 +194,11 @@ fn gen_ts_micros(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_map(sc: &ApacheSchema, n: usize) -> Vec<u8> {
+fn gen_map(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
     use std::collections::HashMap;
-    encode_records(
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let mut m = HashMap::new();
             let int_val = |v: i32| Value::Union(0, Box::new(Value::Int(v)));
@@ -165,9 +215,10 @@ fn gen_map(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_array(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_array(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let items = (0..5).map(|j| Value::Int(i as i32 + j)).collect();
             Value::Record(vec![("field1".into(), Value::Array(items))])
@@ -189,9 +240,10 @@ fn trim_i128_be(v: i128) -> Vec<u8> {
     full[first..].to_vec()
 }
 
-fn gen_decimal(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_decimal(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let unscaled = if i % 2 == 0 { i as i128 } else { -(i as i128) };
             Value::Record(vec![(
@@ -202,9 +254,10 @@ fn gen_decimal(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_uuid(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_uuid(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let mut raw = (i as u128).to_be_bytes();
             raw[6] = (raw[6] & 0x0F) | 0x40;
@@ -214,9 +267,10 @@ fn gen_uuid(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_fixed(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_fixed(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let mut buf = vec![0u8; 16];
             buf[..8].copy_from_slice(&(i as u64).to_be_bytes());
@@ -225,9 +279,10 @@ fn gen_fixed(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_interval(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_interval(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let months = (i % 24) as u32;
             let days = (i % 32) as u32;
@@ -241,10 +296,11 @@ fn gen_interval(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_enum(sc: &ApacheSchema, n: usize) -> Vec<u8> {
+fn gen_enum(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
     const SYMBOLS: [&str; 3] = ["A", "B", "C"];
-    encode_records(
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let idx = i % 3;
             Value::Record(vec![(
@@ -255,9 +311,10 @@ fn gen_enum(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_mixed(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_mixed(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             Value::Record(vec![
                 ("f1".into(), Value::Int(i as i32)),
@@ -269,9 +326,10 @@ fn gen_mixed(sc: &ApacheSchema, n: usize) -> Vec<u8> {
     )
 }
 
-fn gen_nested(sc: &ApacheSchema, n: usize) -> Vec<u8> {
-    encode_records(
+fn gen_nested(sc: &ApacheSchema, n: usize, prefix: &[u8]) -> Vec<u8> {
+    encode_records_with_prefix(
         sc,
+        prefix,
         (0..n).map(|i| {
             let sub = Value::Record(vec![
                 ("x".into(), Value::Int(i as i32)),
@@ -290,13 +348,36 @@ fn new_decoder(
     batch_size: usize,
     utf8view: bool,
 ) -> arrow_avro::reader::Decoder {
-    let schema: AvroSchema<'static> = serde_json::from_str(schema_json).unwrap();
+    let schema = AvroSchema::new(schema_json.parse().unwrap());
+    let mut store = arrow_avro::schema::SchemaStore::new();
+    store.register(schema.clone()).unwrap();
     ReaderBuilder::new()
-        .with_schema(schema)
+        .with_writer_schema_store(store)
         .with_batch_size(batch_size)
         .with_utf8_view(utf8view)
-        .build_decoder(io::empty())
+        .build_decoder()
         .expect("failed to build decoder")
+}
+
+fn new_decoder_id(
+    schema_json: &'static str,
+    batch_size: usize,
+    utf8view: bool,
+    id: u32,
+) -> arrow_avro::reader::Decoder {
+    let schema = AvroSchema::new(schema_json.parse().unwrap());
+    let mut store = arrow_avro::schema::SchemaStore::new_with_type(FingerprintAlgorithm::None);
+    // Register the schema with a provided Confluent-style ID
+    store
+        .set(Fingerprint::Id(id), schema.clone())
+        .expect("failed to set schema with id");
+    ReaderBuilder::new()
+        .with_writer_schema_store(store)
+        .with_active_fingerprint(Fingerprint::Id(id))
+        .with_batch_size(batch_size)
+        .with_utf8_view(utf8view)
+        .build_decoder()
+        .expect("failed to build decoder for id")
 }
 
 const SIZES: [usize; 3] = [100, 10_000, 1_000_000];
@@ -325,8 +406,8 @@ const ARRAY_SCHEMA: &str = r#"{"type":"record","name":"ArrRec","fields":[{"name"
 const DECIMAL_SCHEMA: &str = r#"{"type":"record","name":"DecRec","fields":[{"name":"field1","type":{"type":"bytes","logicalType":"decimal","precision":10,"scale":3}}]}"#;
 const UUID_SCHEMA: &str = r#"{"type":"record","name":"UuidRec","fields":[{"name":"field1","type":{"type":"string","logicalType":"uuid"}}]}"#;
 const FIXED_SCHEMA: &str = r#"{"type":"record","name":"FixRec","fields":[{"name":"field1","type":{"type":"fixed","name":"Fixed16","size":16}}]}"#;
-const INTERVAL_SCHEMA_ENCODE: &str = r#"{"type":"record","name":"DurRecEnc","fields":[{"name":"field1","type":{"type":"fixed","name":"Duration12","size":12}}]}"#;
 const INTERVAL_SCHEMA: &str = r#"{"type":"record","name":"DurRec","fields":[{"name":"field1","type":{"type":"fixed","name":"Duration12","size":12,"logicalType":"duration"}}]}"#;
+const INTERVAL_SCHEMA_ENCODE: &str = r#"{"type":"record","name":"DurRec","fields":[{"name":"field1","type":{"type":"fixed","name":"Duration12","size":12}}]}"#;
 const ENUM_SCHEMA: &str = r#"{"type":"record","name":"EnumRec","fields":[{"name":"field1","type":{"type":"enum","name":"MyEnum","symbols":["A","B","C"]}}]}"#;
 const MIX_SCHEMA: &str = r#"{"type":"record","name":"MixRec","fields":[{"name":"f1","type":"int"},{"name":"f2","type":"long"},{"name":"f3","type":"string"},{"name":"f4","type":"double"}]}"#;
 const NEST_SCHEMA: &str = r#"{"type":"record","name":"NestRec","fields":[{"name":"sub","type":{"type":"record","name":"Sub","fields":[{"name":"x","type":"int"},{"name":"y","type":"string"}]}}]}"#;
@@ -336,11 +417,35 @@ macro_rules! dataset {
         static $name: Lazy<Vec<Vec<u8>>> = Lazy::new(|| {
             let schema =
                 ApacheSchema::parse_str($schema_json).expect("invalid schema for generator");
-            SIZES.iter().map(|&n| $gen_fn(&schema, n)).collect()
+            let arrow_schema = AvroSchema::new($schema_json.parse().unwrap());
+            let fingerprint = arrow_schema.fingerprint().expect("fingerprint failed");
+            let prefix = make_prefix(fingerprint);
+            SIZES
+                .iter()
+                .map(|&n| $gen_fn(&schema, n, &prefix))
+                .collect()
         });
     };
 }
 
+/// Additional helper for Confluent's ID-based wire format (00 + BE u32).
+macro_rules! dataset_id {
+    ($name:ident, $schema_json:expr, $gen_fn:ident, $id:expr) => {
+        static $name: Lazy<Vec<Vec<u8>>> = Lazy::new(|| {
+            let schema =
+                ApacheSchema::parse_str($schema_json).expect("invalid schema for generator");
+            let prefix = make_prefix(Fingerprint::Id($id));
+            SIZES
+                .iter()
+                .map(|&n| $gen_fn(&schema, n, &prefix))
+                .collect()
+        });
+    };
+}
+
+const ID_BENCH_ID: u32 = 7;
+
+dataset_id!(INT_DATA_ID, INT_SCHEMA, gen_int, ID_BENCH_ID);
 dataset!(INT_DATA, INT_SCHEMA, gen_int);
 dataset!(LONG_DATA, LONG_SCHEMA, gen_long);
 dataset!(FLOAT_DATA, FLOAT_SCHEMA, gen_float);
@@ -363,19 +468,20 @@ dataset!(ENUM_DATA, ENUM_SCHEMA, gen_enum);
 dataset!(MIX_DATA, MIX_SCHEMA, gen_mixed);
 dataset!(NEST_DATA, NEST_SCHEMA, gen_nested);
 
-fn bench_scenario(
+fn bench_with_decoder<F>(
     c: &mut Criterion,
     name: &str,
-    schema_json: &'static str,
     data_sets: &[Vec<u8>],
-    utf8view: bool,
-    batch_size: usize,
-) {
+    rows: &[usize],
+    mut new_decoder: F,
+) where
+    F: FnMut() -> arrow_avro::reader::Decoder,
+{
     let mut group = c.benchmark_group(name);
-    for (idx, &rows) in SIZES.iter().enumerate() {
+    for (idx, &row_count) in rows.iter().enumerate() {
         let datum = &data_sets[idx];
         group.throughput(Throughput::Bytes(datum.len() as u64));
-        match rows {
+        match row_count {
             10_000 => {
                 group
                     .sample_size(25)
@@ -390,9 +496,9 @@ fn bench_scenario(
             }
             _ => {}
         }
-        group.bench_function(BenchmarkId::from_parameter(rows), |b| {
+        group.bench_function(BenchmarkId::from_parameter(row_count), |b| {
             b.iter_batched_ref(
-                || new_decoder(schema_json, batch_size, utf8view),
+                &mut new_decoder,
                 |decoder| {
                     black_box(decoder.decode(datum).unwrap());
                     black_box(decoder.flush().unwrap().unwrap());
@@ -406,105 +512,75 @@ fn bench_scenario(
 
 fn criterion_benches(c: &mut Criterion) {
     for &batch_size in &[SMALL_BATCH, LARGE_BATCH] {
-        bench_scenario(c, "Int32", INT_SCHEMA, &INT_DATA, false, batch_size);
-        bench_scenario(c, "Int64", LONG_SCHEMA, &LONG_DATA, false, batch_size);
-        bench_scenario(c, "Float32", FLOAT_SCHEMA, &FLOAT_DATA, false, batch_size);
-        bench_scenario(c, "Boolean", BOOL_SCHEMA, &BOOL_DATA, false, batch_size);
-        bench_scenario(c, "Float64", DOUBLE_SCHEMA, &DOUBLE_DATA, false, batch_size);
-        bench_scenario(
-            c,
-            "Binary(Bytes)",
-            BYTES_SCHEMA,
-            &BYTES_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(c, "String", STRING_SCHEMA, &STRING_DATA, false, batch_size);
-        bench_scenario(
-            c,
-            "StringView",
-            STRING_SCHEMA,
-            &STRING_DATA,
-            true,
-            batch_size,
-        );
-        bench_scenario(c, "Date32", DATE_SCHEMA, &DATE_DATA, false, batch_size);
-        bench_scenario(
-            c,
-            "TimeMillis",
-            TMILLIS_SCHEMA,
-            &TMILLIS_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(
-            c,
-            "TimeMicros",
-            TMICROS_SCHEMA,
-            &TMICROS_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(
-            c,
-            "TimestampMillis",
-            TSMILLIS_SCHEMA,
-            &TSMILLIS_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(
-            c,
-            "TimestampMicros",
-            TSMICROS_SCHEMA,
-            &TSMICROS_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(c, "Map", MAP_SCHEMA, &MAP_DATA, false, batch_size);
-        bench_scenario(c, "Array", ARRAY_SCHEMA, &ARRAY_DATA, false, batch_size);
-        bench_scenario(
-            c,
-            "Decimal128",
-            DECIMAL_SCHEMA,
-            &DECIMAL_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(c, "UUID", UUID_SCHEMA, &UUID_DATA, false, batch_size);
-        bench_scenario(
-            c,
-            "FixedSizeBinary",
-            FIXED_SCHEMA,
-            &FIXED_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(
-            c,
-            "Interval",
-            INTERVAL_SCHEMA,
-            &INTERVAL_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(
-            c,
-            "Enum(Dictionary)",
-            ENUM_SCHEMA,
-            &ENUM_DATA,
-            false,
-            batch_size,
-        );
-        bench_scenario(c, "Mixed", MIX_SCHEMA, &MIX_DATA, false, batch_size);
-        bench_scenario(
-            c,
-            "Nested(Struct)",
-            NEST_SCHEMA,
-            &NEST_DATA,
-            false,
-            batch_size,
-        );
+        bench_with_decoder(c, "Interval", &INTERVAL_DATA, &SIZES, || {
+            new_decoder(INTERVAL_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Int32", &INT_DATA, &SIZES, || {
+            new_decoder(INT_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Int32_Id", &INT_DATA_ID, &SIZES, || {
+            new_decoder_id(INT_SCHEMA, batch_size, false, ID_BENCH_ID)
+        });
+        bench_with_decoder(c, "Int64", &LONG_DATA, &SIZES, || {
+            new_decoder(LONG_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Float32", &FLOAT_DATA, &SIZES, || {
+            new_decoder(FLOAT_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Boolean", &BOOL_DATA, &SIZES, || {
+            new_decoder(BOOL_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Float64", &DOUBLE_DATA, &SIZES, || {
+            new_decoder(DOUBLE_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Binary(Bytes)", &BYTES_DATA, &SIZES, || {
+            new_decoder(BYTES_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "String", &STRING_DATA, &SIZES, || {
+            new_decoder(STRING_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "StringView", &STRING_DATA, &SIZES, || {
+            new_decoder(STRING_SCHEMA, batch_size, true)
+        });
+        bench_with_decoder(c, "Date32", &DATE_DATA, &SIZES, || {
+            new_decoder(DATE_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "TimeMillis", &TMILLIS_DATA, &SIZES, || {
+            new_decoder(TMILLIS_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "TimeMicros", &TMICROS_DATA, &SIZES, || {
+            new_decoder(TMICROS_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "TimestampMillis", &TSMILLIS_DATA, &SIZES, || {
+            new_decoder(TSMILLIS_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "TimestampMicros", &TSMICROS_DATA, &SIZES, || {
+            new_decoder(TSMICROS_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Map", &MAP_DATA, &SIZES, || {
+            new_decoder(MAP_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Array", &ARRAY_DATA, &SIZES, || {
+            new_decoder(ARRAY_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Decimal128", &DECIMAL_DATA, &SIZES, || {
+            new_decoder(DECIMAL_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "UUID", &UUID_DATA, &SIZES, || {
+            new_decoder(UUID_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "FixedSizeBinary", &FIXED_DATA, &SIZES, || {
+            new_decoder(FIXED_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Enum(Dictionary)", &ENUM_DATA, &SIZES, || {
+            new_decoder(ENUM_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Mixed", &MIX_DATA, &SIZES, || {
+            new_decoder(MIX_SCHEMA, batch_size, false)
+        });
+        bench_with_decoder(c, "Nested(Struct)", &NEST_DATA, &SIZES, || {
+            new_decoder(NEST_SCHEMA, batch_size, false)
+        });
     }
 }
 

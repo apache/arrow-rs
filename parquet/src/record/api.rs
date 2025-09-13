@@ -929,28 +929,21 @@ fn convert_date_to_string(value: i32) -> String {
 }
 
 /// Helper method to convert Parquet timestamp into a string.
-/// Input `value` is a number of seconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
-#[inline]
-fn convert_timestamp_secs_to_string(value: i64) -> String {
-    let dt = Utc.timestamp_opt(value, 0).unwrap();
-    format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"))
-}
-
-/// Helper method to convert Parquet timestamp into a string.
 /// Input `value` is a number of milliseconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
+/// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_millis_to_string(value: i64) -> String {
-    convert_timestamp_secs_to_string(value / 1000)
+    let dt = Utc.timestamp_millis_opt(value).unwrap();
+    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.3f %:z"))
 }
 
 /// Helper method to convert Parquet timestamp into a string.
 /// Input `value` is a number of microseconds since the epoch in UTC.
-/// Datetime is displayed in local timezone.
+/// Datetime is displayed in UTC timezone.
 #[inline]
 fn convert_timestamp_micros_to_string(value: i64) -> String {
-    convert_timestamp_secs_to_string(value / 1000000)
+    let dt = Utc.timestamp_micros(value).unwrap();
+    format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.6f %:z"))
 }
 
 /// Helper method to convert Parquet time (milliseconds since midnight) into a string.
@@ -1278,44 +1271,75 @@ mod tests {
 
     #[test]
     fn test_convert_timestamp_millis_to_string() {
-        fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
+        fn check_datetime_conversion(
+            (y, m, d, h, mi, s, milli): (u32, u32, u32, u32, u32, u32, u32),
+            exp: &str,
+        ) {
             let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
                 .unwrap()
-                .and_hms_opt(h, mi, s)
+                .and_hms_milli_opt(h, mi, s, milli)
                 .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_timestamp_millis_to_string(dt.timestamp_millis());
-            let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
             assert_eq!(res, exp);
         }
 
-        check_datetime_conversion(1969, 9, 10, 1, 2, 3);
-        check_datetime_conversion(2010, 1, 2, 13, 12, 54);
-        check_datetime_conversion(2011, 1, 3, 8, 23, 1);
-        check_datetime_conversion(2012, 4, 5, 11, 6, 32);
-        check_datetime_conversion(2013, 5, 12, 16, 38, 0);
-        check_datetime_conversion(2014, 11, 28, 21, 15, 12);
+        check_datetime_conversion((1969, 9, 10, 1, 2, 3, 4), "1969-09-10 01:02:03.004 +00:00");
+        check_datetime_conversion(
+            (2010, 1, 2, 13, 12, 54, 42),
+            "2010-01-02 13:12:54.042 +00:00",
+        );
+        check_datetime_conversion((2011, 1, 3, 8, 23, 1, 27), "2011-01-03 08:23:01.027 +00:00");
+        check_datetime_conversion((2012, 4, 5, 11, 6, 32, 0), "2012-04-05 11:06:32.000 +00:00");
+        check_datetime_conversion(
+            (2013, 5, 12, 16, 38, 0, 15),
+            "2013-05-12 16:38:00.015 +00:00",
+        );
+        check_datetime_conversion(
+            (2014, 11, 28, 21, 15, 12, 59),
+            "2014-11-28 21:15:12.059 +00:00",
+        );
     }
 
     #[test]
     fn test_convert_timestamp_micros_to_string() {
-        fn check_datetime_conversion(y: u32, m: u32, d: u32, h: u32, mi: u32, s: u32) {
+        fn check_datetime_conversion(
+            (y, m, d, h, mi, s, micro): (u32, u32, u32, u32, u32, u32, u32),
+            exp: &str,
+        ) {
             let datetime = chrono::NaiveDate::from_ymd_opt(y as i32, m, d)
                 .unwrap()
-                .and_hms_opt(h, mi, s)
+                .and_hms_micro_opt(h, mi, s, micro)
                 .unwrap();
             let dt = Utc.from_utc_datetime(&datetime);
             let res = convert_timestamp_micros_to_string(dt.timestamp_micros());
-            let exp = format!("{}", dt.format("%Y-%m-%d %H:%M:%S %:z"));
             assert_eq!(res, exp);
         }
 
-        check_datetime_conversion(1969, 9, 10, 1, 2, 3);
-        check_datetime_conversion(2010, 1, 2, 13, 12, 54);
-        check_datetime_conversion(2011, 1, 3, 8, 23, 1);
-        check_datetime_conversion(2012, 4, 5, 11, 6, 32);
-        check_datetime_conversion(2013, 5, 12, 16, 38, 0);
-        check_datetime_conversion(2014, 11, 28, 21, 15, 12);
+        check_datetime_conversion(
+            (1969, 9, 10, 1, 2, 3, 4),
+            "1969-09-10 01:02:03.000004 +00:00",
+        );
+        check_datetime_conversion(
+            (2010, 1, 2, 13, 12, 54, 42),
+            "2010-01-02 13:12:54.000042 +00:00",
+        );
+        check_datetime_conversion(
+            (2011, 1, 3, 8, 23, 1, 27),
+            "2011-01-03 08:23:01.000027 +00:00",
+        );
+        check_datetime_conversion(
+            (2012, 4, 5, 11, 6, 32, 0),
+            "2012-04-05 11:06:32.000000 +00:00",
+        );
+        check_datetime_conversion(
+            (2013, 5, 12, 16, 38, 0, 15),
+            "2013-05-12 16:38:00.000015 +00:00",
+        );
+        check_datetime_conversion(
+            (2014, 11, 28, 21, 15, 12, 59),
+            "2014-11-28 21:15:12.000059 +00:00",
+        );
     }
 
     #[test]
@@ -2000,11 +2024,11 @@ mod tests {
         );
         assert_eq!(
             Field::TimestampMillis(12345678).to_json_value(),
-            Value::String("1970-01-01 03:25:45 +00:00".to_string())
+            Value::String("1970-01-01 03:25:45.678 +00:00".to_string())
         );
         assert_eq!(
             Field::TimestampMicros(12345678901).to_json_value(),
-            Value::String(convert_timestamp_micros_to_string(12345678901))
+            Value::String("1970-01-01 03:25:45.678901 +00:00".to_string())
         );
         assert_eq!(
             Field::TimeMillis(47445123).to_json_value(),

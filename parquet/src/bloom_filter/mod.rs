@@ -121,6 +121,13 @@ impl Block {
 
     #[inline]
     #[cfg(not(target_endian = "little"))]
+    fn to_ne_bytes(self) -> [u8; 32] {
+        // SAFETY: [u32; 8] and [u8; 32] have the same size and neither has invalid bit patterns.
+        unsafe { std::mem::transmute(self.0) }
+    }
+
+    #[inline]
+    #[cfg(not(target_endian = "little"))]
     fn to_le_bytes(self) -> [u8; 32] {
         self.swap_bytes().to_ne_bytes()
     }

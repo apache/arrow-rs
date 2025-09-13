@@ -36,6 +36,7 @@ arrow-schema = { workspace = true }
 half = { version = "2.1", default-features = false }
 parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
+chrono = { workspace = true }
 
 [lib]
 name = "parquet_variant_compute"

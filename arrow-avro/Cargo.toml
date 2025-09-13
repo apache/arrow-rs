@@ -40,6 +40,9 @@ default = ["deflate", "snappy", "zstd", "bzip2", "xz"]
 deflate = ["flate2"]
 snappy = ["snap", "crc"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
+md5 = ["dep:md5"]
+sha256 = ["dep:sha2"]
+small_decimals = []
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -55,8 +58,12 @@ zstd = { version = "0.13", default-features = false, optional = true }
 bzip2 = { version = "0.6.0", optional = true }
 xz = { version = "0.1", default-features = false, optional = true }
 crc = { version = "3.0", optional = true }
-uuid = "1.17"
 strum_macros = "0.27"
+uuid = "1.17"
+indexmap = "2.10"
+rand = "0.9"
+md5 = { version = "0.8", optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 arrow-data = { workspace = true }
@@ -71,7 +78,7 @@ arrow = { workspace = true }
 futures = "0.3.31"
 bytes = "1.10.1"
 async-stream = "0.3.6"
-apache-avro = "0.14.0"
+apache-avro = "0.20.0"
 num-bigint = "0.4"
 once_cell = "1.21.3"
 
@@ -81,4 +88,8 @@ harness = false
 
 [[bench]]
 name = "decoder"
+harness = false
+
+[[bench]]
+name = "avro_writer"
 harness = false

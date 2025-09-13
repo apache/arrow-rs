@@ -21,13 +21,14 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, NaiveTime};
 use parquet_variant::{
     ShortString, Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use uuid::Uuid;
 
 /// Returns a directory path for the parquet variant test data.
 ///
@@ -112,9 +113,9 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
         ("primitive_boolean_false", Variant::BooleanFalse),
         ("primitive_boolean_true", Variant::BooleanTrue),
         ("primitive_date", Variant::Date(NaiveDate::from_ymd_opt(2025, 4 , 16).unwrap())),
-        ("primitive_decimal4", Variant::from(VariantDecimal4::try_new(1234i32, 2u8).unwrap())), 
+        ("primitive_decimal4", Variant::from(VariantDecimal4::try_new(1234i32, 2u8).unwrap())),
         // ("primitive_decimal8", Variant::Decimal8{integer: 1234567890, scale: 2}),
-        ("primitive_decimal8", Variant::Decimal8(VariantDecimal8::try_new(1234567890,2).unwrap())), 
+        ("primitive_decimal8", Variant::Decimal8(VariantDecimal8::try_new(1234567890,2).unwrap())),
         ("primitive_decimal16", Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2).unwrap())),
         ("primitive_float", Variant::Float(1234567890.1234)),
         ("primitive_double", Variant::Double(1234567890.1234)),
@@ -126,7 +127,11 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
         ("primitive_string", Variant::String("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
         ("primitive_timestamp", Variant::TimestampMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(16, 34, 56, 780).unwrap().and_utc())),
         ("primitive_timestampntz", Variant::TimestampNtzMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap())),
+        ("primitive_timestamp_nanos", Variant::TimestampNanos(NaiveDate::from_ymd_opt(2024, 11, 7).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap().and_utc())),
+        ("primitive_timestampntz_nanos", Variant::TimestampNtzNanos(NaiveDate::from_ymd_opt(2024, 11, 7).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap())),
+        ("primitive_uuid", Variant::Uuid(Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap())),
         ("short_string", Variant::ShortString(ShortString::try_new("Less than 64 bytes (❤\u{fe0f} with utf8)").unwrap())),
+        ("primitive_time", Variant::Time(NaiveTime::from_hms_micro_opt(12, 33, 54, 123456).unwrap())),
     ]
 }
 #[test]
@@ -267,7 +272,7 @@ fn variant_object_builder() {
     obj.insert("null_field", ());
     obj.insert("timestamp_field", "2025-04-16T12:34:56.78");
 
-    obj.finish().unwrap();
+    obj.finish();
 
     let (built_metadata, built_value) = builder.finish();
     let actual = Variant::try_new(&built_metadata, &built_value).unwrap();
@@ -318,7 +323,7 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
         return;
     }
 
-    match rng.random_range(0..15) {
+    match rng.random_range(0..18) {
         0 => builder.append_value(()),
         1 => builder.append_value(rng.random::<bool>()),
         2 => builder.append_value(rng.random::<i8>()),
@@ -328,11 +333,13 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
         6 => builder.append_value(rng.random::<f32>()),
         7 => builder.append_value(rng.random::<f64>()),
         8 => {
+            // String
             let len = rng.random_range(0..50);
             let s: String = (0..len).map(|_| rng.random::<char>()).collect();
             builder.append_value(s.as_str());
         }
         9 => {
+            // Binary
             let len = rng.random_range(0..50);
             let bytes: Vec<u8> = (0..len).map(|_| rng.random()).collect();
             builder.append_value(bytes.as_slice());
@@ -377,7 +384,35 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
                 let key = format!("field_{i}");
                 object_builder.insert(&key, rng.random::<i32>());
             }
-            object_builder.finish().unwrap();
+            object_builder.finish();
+        }
+        15 => {
+            // Time
+            builder.append_value(
+                NaiveTime::from_num_seconds_from_midnight_opt(
+                    // make the argument always valid
+                    rng.random_range(0..86_400),
+                    rng.random_range(0..1_000_000_000),
+                )
+                .unwrap(),
+            )
+        }
+        16 => {
+            let data_time = DateTime::from_timestamp(
+                // make the argument always valid
+                rng.random_range(0..86_400),
+                rng.random_range(0..1_000_000_000),
+            )
+            .unwrap();
+
+            // timestamp w/o timezone
+            builder.append_value(data_time.naive_local());
+
+            // timestamp with timezone
+            builder.append_value(data_time.naive_utc().and_utc());
+        }
+        17 => {
+            builder.append_value(Uuid::new_v4());
         }
         _ => unreachable!(),
     }

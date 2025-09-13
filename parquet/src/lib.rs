@@ -86,6 +86,14 @@
 //! [`ParquetRecordBatchStreamBuilder`]: arrow::async_reader::ParquetRecordBatchStreamBuilder
 //! [`ParquetObjectReader`]: arrow::async_reader::ParquetObjectReader
 //!
+//! ## Variant Logical Type (`variant_experimental` feature)
+//!
+//! The [`variant`] module supports reading and writing Parquet files
+//! with the [Variant Binary Encoding] logical type, which can represent
+//! semi-structured data such as JSON efficiently.
+//!
+//! [Variant Binary Encoding]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
+//!
 //! ## Read/Write Parquet Directly
 //!
 //! Workloads needing finer-grained control, or to avoid a dependence on arrow,
@@ -155,6 +163,8 @@ pub mod format;
 #[macro_use]
 pub mod data_type;
 
+use std::fmt::Debug;
+use std::ops::Range;
 // Exported for external use, such as benchmarks
 #[cfg(feature = "experimental")]
 #[doc(hidden)]
@@ -179,4 +189,21 @@ pub mod record;
 pub mod schema;
 
 pub mod thrift;
+/// What data is needed to read the next item from a decoder.
+///
+/// This is used to communicate between the decoder and the caller
+/// to indicate what data is needed next, or what the result of decoding is.
+#[derive(Debug)]
+pub enum DecodeResult<T: Debug> {
+    /// The ranges of data necessary to proceed
+    // TODO: distinguish between minimim needed to make progress and what could be used?
+    NeedsData(Vec<Range<u64>>),
+    /// The decoder produced an output item
+    Data(T),
+    /// The decoder finished processing
+    Finished,
+}
+
+#[cfg(feature = "variant_experimental")]
+pub mod variant;
 experimental!(pub mod geospatial);

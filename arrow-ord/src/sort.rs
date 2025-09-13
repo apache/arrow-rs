@@ -841,7 +841,7 @@ pub struct SortColumn {
 
 /// Sort a list of `ArrayRef` using `SortOptions` provided for each array.
 ///
-/// Performs a stable lexicographical sort on values and indices.
+/// Performs an unstable lexicographical sort on values and indices.
 ///
 /// Returns an `ArrowError::ComputeError(String)` if any of the array type is either unsupported by
 /// `lexsort_to_indices` or `take`.
@@ -2308,6 +2308,16 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_indices_decimal32() {
+        test_sort_indices_decimal::<Decimal32Type>(8, 3);
+    }
+
+    #[test]
+    fn test_sort_indices_decimal64() {
+        test_sort_indices_decimal::<Decimal64Type>(17, 5);
+    }
+
+    #[test]
     fn test_sort_indices_decimal128() {
         test_sort_indices_decimal::<Decimal128Type>(23, 6);
     }
@@ -2458,6 +2468,16 @@ mod tests {
             precision,
             scale,
         );
+    }
+
+    #[test]
+    fn test_sort_decimal32() {
+        test_sort_decimal::<Decimal32Type>(8, 3);
+    }
+
+    #[test]
+    fn test_sort_decimal64() {
+        test_sort_decimal::<Decimal64Type>(17, 5);
     }
 
     #[test]
