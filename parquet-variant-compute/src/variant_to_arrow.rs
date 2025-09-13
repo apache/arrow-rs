@@ -17,8 +17,7 @@
 
 use arrow::array::{ArrayRef, PrimitiveBuilder};
 use arrow::compute::CastOptions;
-use arrow::datatypes;
-use arrow::datatypes::ArrowPrimitiveType;
+use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
@@ -33,13 +32,13 @@ use std::sync::Arc;
 /// with casting of leaf values to specific types.
 pub(crate) enum VariantToArrowRowBuilder<'a> {
     // Direct builders (no path extraction)
-    PrimitiveInt8(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int8Type>),
-    PrimitiveInt16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int16Type>),
-    PrimitiveInt32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int32Type>),
-    PrimitiveInt64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int64Type>),
-    PrimitiveFloat16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
-    PrimitiveFloat32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
-    PrimitiveFloat64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
+    Int8(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int8Type>),
+    Int16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int16Type>),
+    Int32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int32Type>),
+    Int64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int64Type>),
+    Float16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
+    Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
+    Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
 
     // Path extraction wrapper - contains a boxed enum for any of the above
@@ -50,13 +49,13 @@ impl<'a> VariantToArrowRowBuilder<'a> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToArrowRowBuilder::*;
         match self {
-            PrimitiveInt8(b) => b.append_null(),
-            PrimitiveInt16(b) => b.append_null(),
-            PrimitiveInt32(b) => b.append_null(),
-            PrimitiveInt64(b) => b.append_null(),
-            PrimitiveFloat16(b) => b.append_null(),
-            PrimitiveFloat32(b) => b.append_null(),
-            PrimitiveFloat64(b) => b.append_null(),
+            Int8(b) => b.append_null(),
+            Int16(b) => b.append_null(),
+            Int32(b) => b.append_null(),
+            Int64(b) => b.append_null(),
+            Float16(b) => b.append_null(),
+            Float32(b) => b.append_null(),
+            Float64(b) => b.append_null(),
             BinaryVariant(b) => b.append_null(),
             WithPath(path_builder) => path_builder.append_null(),
         }
@@ -65,13 +64,13 @@ impl<'a> VariantToArrowRowBuilder<'a> {
     pub fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
         use VariantToArrowRowBuilder::*;
         match self {
-            PrimitiveInt8(b) => b.append_value(value),
-            PrimitiveInt16(b) => b.append_value(value),
-            PrimitiveInt32(b) => b.append_value(value),
-            PrimitiveInt64(b) => b.append_value(value),
-            PrimitiveFloat16(b) => b.append_value(value),
-            PrimitiveFloat32(b) => b.append_value(value),
-            PrimitiveFloat64(b) => b.append_value(value),
+            Int8(b) => b.append_value(value),
+            Int16(b) => b.append_value(value),
+            Int32(b) => b.append_value(value),
+            Int64(b) => b.append_value(value),
+            Float16(b) => b.append_value(value),
+            Float32(b) => b.append_value(value),
+            Float64(b) => b.append_value(value),
             BinaryVariant(b) => b.append_value(value),
             WithPath(path_builder) => path_builder.append_value(value),
         }
@@ -80,13 +79,13 @@ impl<'a> VariantToArrowRowBuilder<'a> {
     pub fn finish(&mut self) -> Result<ArrayRef> {
         use VariantToArrowRowBuilder::*;
         match self {
-            PrimitiveInt8(b) => b.finish(),
-            PrimitiveInt16(b) => b.finish(),
-            PrimitiveInt32(b) => b.finish(),
-            PrimitiveInt64(b) => b.finish(),
-            PrimitiveFloat16(b) => b.finish(),
-            PrimitiveFloat32(b) => b.finish(),
-            PrimitiveFloat64(b) => b.finish(),
+            Int8(b) => b.finish(),
+            Int16(b) => b.finish(),
+            Int32(b) => b.finish(),
+            Int64(b) => b.finish(),
+            Float16(b) => b.finish(),
+            Float32(b) => b.finish(),
+            Float64(b) => b.finish(),
             BinaryVariant(b) => b.finish(),
             WithPath(path_builder) => path_builder.finish(),
         }
@@ -96,7 +95,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
 pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     //metadata: &BinaryViewArray,
     path: VariantPath<'a>,
-    data_type: Option<&'a datatypes::DataType>,
+    data_type: Option<&'a DataType>,
     cast_options: &'a CastOptions,
 ) -> Result<VariantToArrowRowBuilder<'a>> {
     use VariantToArrowRowBuilder::*;
@@ -104,27 +103,13 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     let mut builder = match data_type {
         // If no data type was requested, build an unshredded VariantArray.
         None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(16)),
-        Some(datatypes::DataType::Int8) => {
-            PrimitiveInt8(VariantToPrimitiveArrowRowBuilder::new(cast_options))
-        }
-        Some(datatypes::DataType::Int16) => {
-            PrimitiveInt16(VariantToPrimitiveArrowRowBuilder::new(cast_options))
-        }
-        Some(datatypes::DataType::Int32) => {
-            PrimitiveInt32(VariantToPrimitiveArrowRowBuilder::new(cast_options))
-        }
-        Some(datatypes::DataType::Int64) => {
-            PrimitiveInt64(VariantToPrimitiveArrowRowBuilder::new(cast_options))
-        }
-        Some(datatypes::DataType::Float16) => {
-            PrimitiveFloat16(VariantToPrimitiveArrowRowBuilder::new(cast_options))
-        }
-        Some(datatypes::DataType::Float32) => {
-            PrimitiveFloat32(VariantToPrimitiveArrowRowBuilder::new(cast_options))
-        }
-        Some(datatypes::DataType::Float64) => {
-            PrimitiveFloat64(VariantToPrimitiveArrowRowBuilder::new(cast_options))
-        }
+        Some(DataType::Int8) => Int8(VariantToPrimitiveArrowRowBuilder::new(cast_options)),
+        Some(DataType::Int16) => Int16(VariantToPrimitiveArrowRowBuilder::new(cast_options)),
+        Some(DataType::Int32) => Int32(VariantToPrimitiveArrowRowBuilder::new(cast_options)),
+        Some(DataType::Int64) => Int64(VariantToPrimitiveArrowRowBuilder::new(cast_options)),
+        Some(DataType::Float16) => Float16(VariantToPrimitiveArrowRowBuilder::new(cast_options)),
+        Some(DataType::Float32) => Float32(VariantToPrimitiveArrowRowBuilder::new(cast_options)),
+        Some(DataType::Float64) => Float64(VariantToPrimitiveArrowRowBuilder::new(cast_options)),
         _ => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "variant_get with path={:?} and data_type={:?} not yet implemented",
