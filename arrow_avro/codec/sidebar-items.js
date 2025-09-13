@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["AvroLiteral","Codec","Promotion","ResolutionInfo"],"fn":["ensure_names_match","max_precision_for_fixed_bytes","names_match","nullable_union_variants","parse_decimal_attributes","primitive_of","with_extension_type"],"struct":["AvroDataType","AvroField","AvroFieldBuilder","EnumMapping","Maker","ResolvedRecord","Resolver"]};

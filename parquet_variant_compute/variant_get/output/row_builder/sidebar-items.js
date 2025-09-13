@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["get_type_name","make_shredding_row_builder"],"struct":["PrimitiveVariantShreddingRowBuilder","VariantArrayShreddingRowBuilder","VariantPathRowBuilder"],"trait":["VariantShreddingRowBuilder","VariantShreddingRowBuilderWithPath"]};

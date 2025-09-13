@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ShreddingState"],"fn":["typed_value_to_variant"],"struct":["ShreddedVariantFieldArray","StructArrayBuilder","VariantArray"]};
