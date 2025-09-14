@@ -43,6 +43,7 @@ mod type_conversion;
 mod variant_array;
 mod variant_array_builder;
 pub mod variant_get;
+mod variant_to_arrow;
 
 pub use variant_array::{ShreddingState, VariantArray};
 pub use variant_array_builder::VariantArrayBuilder;
