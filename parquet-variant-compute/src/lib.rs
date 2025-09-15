@@ -22,7 +22,7 @@
 //! - [`VariantArrayBuilder`]: For building [`VariantArray`]
 //! - [`json_to_variant`]: Function to convert a batch of JSON strings to a `VariantArray`.
 //! - [`variant_to_json`]: Function to convert a `VariantArray` to a batch of JSON strings.
-//! - [`cast_to_variant`]: Module to cast other Arrow arrays to `VariantArray`.
+//! - [`mod@cast_to_variant`]: Module to cast other Arrow arrays to `VariantArray`.
 //! - [`variant_get`]: Module to get values from a `VariantArray` using a specified [`VariantPath`]
 //!
 //! ## 🚧 Work In Progress
@@ -35,6 +35,7 @@
 //! [`VariantPath`]: parquet_variant::VariantPath
 //! [Variant issue]: https://github.com/apache/arrow-rs/issues/6736
 
+mod arrow_to_variant;
 pub mod cast_to_variant;
 mod from_json;
 mod to_json;
@@ -42,9 +43,12 @@ mod type_conversion;
 mod variant_array;
 mod variant_array_builder;
 pub mod variant_get;
+mod variant_to_arrow;
 
 pub use variant_array::{ShreddingState, VariantArray};
-pub use variant_array_builder::{VariantArrayBuilder, VariantArrayVariantBuilder};
+pub use variant_array_builder::VariantArrayBuilder;
 
+pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};
 pub use from_json::json_to_variant;
 pub use to_json::variant_to_json;
+pub use type_conversion::CastOptions;

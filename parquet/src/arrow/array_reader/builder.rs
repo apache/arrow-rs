@@ -44,12 +44,12 @@ pub struct CacheOptionsBuilder<'a> {
     /// Projection mask to apply to the cache
     pub projection_mask: &'a ProjectionMask,
     /// Cache to use for storing row groups
-    pub cache: Arc<Mutex<RowGroupCache>>,
+    pub cache: &'a Arc<Mutex<RowGroupCache>>,
 }
 
 impl<'a> CacheOptionsBuilder<'a> {
     /// create a new cache options builder
-    pub fn new(projection_mask: &'a ProjectionMask, cache: Arc<Mutex<RowGroupCache>>) -> Self {
+    pub fn new(projection_mask: &'a ProjectionMask, cache: &'a Arc<Mutex<RowGroupCache>>) -> Self {
         Self {
             projection_mask,
             cache,
@@ -79,7 +79,7 @@ impl<'a> CacheOptionsBuilder<'a> {
 #[derive(Clone)]
 pub struct CacheOptions<'a> {
     pub projection_mask: &'a ProjectionMask,
-    pub cache: Arc<Mutex<RowGroupCache>>,
+    pub cache: &'a Arc<Mutex<RowGroupCache>>,
     pub role: CacheRole,
 }
 
@@ -144,7 +144,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                 if cache_options.projection_mask.leaf_included(col_idx) {
                     Ok(Some(Box::new(CachedArrayReader::new(
                         reader,
-                        Arc::clone(&cache_options.cache),
+                        Arc::clone(cache_options.cache),
                         col_idx,
                         cache_options.role,
                         self.metrics.clone(), // cheap clone
