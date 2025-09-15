@@ -140,12 +140,12 @@ impl VariantArray {
         nulls: Option<NullBuffer>,
     ) -> Self {
         let mut builder =
-            StructArrayBuilder::new().with_field("metadata", Arc::new(metadata.clone()));
+            StructArrayBuilder::new().with_field("metadata", Arc::new(metadata.clone()), false);
         if let Some(value) = value.clone() {
-            builder = builder.with_field("value", Arc::new(value));
+            builder = builder.with_field("value", Arc::new(value), true);
         }
         if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value);
+            builder = builder.with_field("typed_value", typed_value, true);
         }
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
@@ -564,8 +564,8 @@ impl StructArrayBuilder {
     }
 
     /// Add an array to this struct array as a field with the specified name.
-    pub fn with_field(mut self, field_name: &str, array: ArrayRef) -> Self {
-        let field = Field::new(field_name, array.data_type().clone(), true);
+    pub fn with_field(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
+        let field = Field::new(field_name, array.data_type().clone(), nullable);
         self.fields.push(Arc::new(field));
         self.arrays.push(array);
         self
@@ -590,6 +590,11 @@ impl StructArrayBuilder {
 /// returns the non-null element at index as a Variant
 fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '_> {
     match typed_value.data_type() {
+        DataType::Boolean => {
+            let boolean_array = typed_value.as_boolean();
+            let value = boolean_array.value(index);
+            Variant::from(value)
+        }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
         }
