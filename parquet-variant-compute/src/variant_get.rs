@@ -146,7 +146,7 @@ fn shredded_get_path(
                 if target.is_null(i) {
                     builder.append_null()?;
                 } else {
-                    builder.append_value(&target.value(i))?;
+                    builder.append_value(target.value(i))?;
                 }
             }
             builder.finish()

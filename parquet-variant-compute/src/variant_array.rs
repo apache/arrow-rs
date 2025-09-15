@@ -351,6 +351,32 @@ impl ShreddedVariantFieldArray {
     pub fn inner(&self) -> &StructArray {
         &self.inner
     }
+
+    pub(crate) fn from_parts(
+        value: Option<BinaryViewArray>,
+        typed_value: Option<ArrayRef>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let mut builder = StructArrayBuilder::new();
+        if let Some(value) = value.clone() {
+            builder = builder.with_field("value", Arc::new(value), true);
+        }
+        if let Some(typed_value) = typed_value.clone() {
+            builder = builder.with_field("typed_value", typed_value, true);
+        }
+        if let Some(nulls) = nulls {
+            builder = builder.with_nulls(nulls);
+        }
+
+        // This would be a lot simpler if ShreddingState were just a pair of Option... we already
+        // have everything we need.
+        let inner = builder.build();
+        let shredding_state = ShreddingState::try_new(value, typed_value).unwrap(); // valid by construction
+        Self {
+            inner,
+            shredding_state,
+        }
+    }
 }
 
 impl Array for ShreddedVariantFieldArray {
