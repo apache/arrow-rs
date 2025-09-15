@@ -78,8 +78,8 @@ variant_test_case!(2, "Unsupported typed_value type: List(");
 // ```
 variant_test_case!(3, "parquet_file must be set");
 // https://github.com/apache/arrow-rs/issues/8329
-variant_test_case!(4, "Unsupported typed_value type: Boolean");
-variant_test_case!(5, "Unsupported typed_value type: Boolean");
+variant_test_case!(4);
+variant_test_case!(5);
 variant_test_case!(6);
 variant_test_case!(7);
 variant_test_case!(8);
