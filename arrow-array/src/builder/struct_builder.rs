@@ -267,7 +267,7 @@ impl StructBuilder {
                 let schema = builder.finish();
 
                 panic!("{}", format!(
-                    "StructBuilder ({:?}) and field_builder with index {} ({:?}) are of unequal lengths: ({} != {}).",
+                    "StructBuilder ({}) and field_builder with index {} ({}) are of unequal lengths: ({} != {}).",
                     schema,
                     idx,
                     self.fields[idx].data_type(),
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StructBuilder (Schema { fields: [Field { \"f1\": Int32 }, Field { \"f2\": Boolean }], metadata: {} }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
+        expected = "StructBuilder (Field { \"f1\": Int32 }, Field { \"f2\": Boolean }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
     )]
     fn test_struct_array_builder_unequal_field_builders_lengths() {
         let mut int_builder = Int32Builder::with_capacity(10);
