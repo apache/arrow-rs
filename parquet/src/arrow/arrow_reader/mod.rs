@@ -638,7 +638,7 @@ impl ArrowReaderMetadata {
         for (field1, field2) in field_iter {
             if field1.data_type() != field2.data_type() {
                 errors.push(format!(
-                    "data type mismatch for field {}: requested {:?} but found {:?}",
+                    "data type mismatch for field {}: requested {} but found {}",
                     field1.name(),
                     field1.data_type(),
                     field2.data_type()
