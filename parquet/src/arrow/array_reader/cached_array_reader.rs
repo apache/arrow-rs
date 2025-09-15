@@ -18,10 +18,10 @@
 //! [`CachedArrayReader`] wrapper around [`ArrayReader`]
 
 use crate::arrow::array_reader::row_group_cache::BatchID;
-use crate::arrow::array_reader::{ArrayReader, row_group_cache::RowGroupCache};
+use crate::arrow::array_reader::{row_group_cache::RowGroupCache, ArrayReader};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::errors::Result;
-use arrow_array::{ArrayRef, BooleanArray, new_empty_array};
+use arrow_array::{new_empty_array, ArrayRef, BooleanArray};
 use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
@@ -351,8 +351,8 @@ impl ArrayReader for CachedArrayReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array_reader::ArrayReader;
     use crate::arrow::array_reader::row_group_cache::RowGroupCache;
+    use crate::arrow::array_reader::ArrayReader;
     use arrow_array::{ArrayRef, Int32Array};
     use std::sync::{Arc, Mutex};
 

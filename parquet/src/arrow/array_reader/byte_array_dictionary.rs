@@ -19,13 +19,13 @@ use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait, new_empty_array};
+use arrow_array::{new_empty_array, Array, ArrayRef, OffsetSizeTrait};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
-use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
+use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;

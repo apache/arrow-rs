@@ -23,8 +23,8 @@ use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
+use crate::arrow::record_reader::GenericRecordReader;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::file::reader::{FilePageIterator, FileReader};

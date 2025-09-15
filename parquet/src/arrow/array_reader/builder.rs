@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 
 use arrow_schema::{DataType, Fields, SchemaBuilder};
 
-use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
 use crate::arrow::array_reader::cached_array_reader::CacheRole;
 use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
@@ -27,12 +26,13 @@ use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::row_group_cache::RowGroupCache;
 use crate::arrow::array_reader::{
-    ArrayReader, FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
-    PrimitiveArrayReader, RowGroups, StructArrayReader, make_byte_array_dictionary_reader,
-    make_byte_array_reader,
+    make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
+    FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
+    PrimitiveArrayReader, RowGroups, StructArrayReader,
 };
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::schema::{ParquetField, ParquetFieldType};
+use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};

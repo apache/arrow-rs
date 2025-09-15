@@ -123,12 +123,12 @@ impl ArrayReader for MapArrayReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::ArrowWriter;
     use crate::arrow::arrow_reader::ParquetRecordBatchReader;
+    use crate::arrow::ArrowWriter;
     use arrow::datatypes::{Field, Int32Type, Schema};
-    use arrow_array::RecordBatch;
     use arrow_array::builder::{MapBuilder, PrimitiveBuilder, StringBuilder};
     use arrow_array::cast::*;
+    use arrow_array::RecordBatch;
     use arrow_schema::Fields;
     use bytes::Bytes;
 

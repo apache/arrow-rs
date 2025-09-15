@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::arrow::schema::primitive::convert_primitive;
-use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
+use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;

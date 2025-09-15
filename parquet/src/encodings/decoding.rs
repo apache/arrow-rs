@@ -18,8 +18,8 @@
 //! Contains all supported decoders for Parquet.
 
 use bytes::Bytes;
-use num::FromPrimitive;
 use num::traits::WrappingAdd;
+use num::FromPrimitive;
 use std::{cmp, marker::PhantomData, mem};
 
 use super::rle::RleDecoder;

@@ -19,9 +19,8 @@ use crate::basic::Encoding;
 use crate::column::page::Page;
 use bytes::Bytes;
 use rand::{
-    Rng,
-    distr::{Distribution, StandardUniform, uniform::SampleUniform},
-    rng,
+    distr::{uniform::SampleUniform, Distribution, StandardUniform},
+    rng, Rng,
 };
 use std::collections::VecDeque;
 

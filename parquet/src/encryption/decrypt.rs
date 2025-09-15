@@ -18,7 +18,7 @@
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
 use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN};
-use crate::encryption::modules::{ModuleType, create_footer_aad, create_module_aad};
+use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 use std::borrow::Cow;

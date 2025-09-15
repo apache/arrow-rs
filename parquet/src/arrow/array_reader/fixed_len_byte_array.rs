@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
+use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::bit_util::{iter_set_bits_rev, sign_extend_be};
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
-use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
+use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{Encoding, Type};
 use crate::column::page::PageIterator;
@@ -27,10 +27,10 @@ use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    ArrayRef, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
     FixedSizeBinaryArray, Float16Array, IntervalDayTimeArray, IntervalYearMonthArray,
 };
-use arrow_buffer::{Buffer, IntervalDayTime, i256};
+use arrow_buffer::{i256, Buffer, IntervalDayTime};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, IntervalUnit};
 use bytes::Bytes;
@@ -518,8 +518,8 @@ enum Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::ArrowWriter;
     use crate::arrow::arrow_reader::ParquetRecordBatchReader;
+    use crate::arrow::ArrowWriter;
     use arrow::datatypes::Field;
     use arrow::error::Result as ArrowResult;
     use arrow_array::{Array, ListArray};

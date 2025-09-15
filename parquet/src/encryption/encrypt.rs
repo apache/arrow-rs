@@ -18,7 +18,7 @@
 //! Configuration and utilities for Parquet Modular Encryption
 
 use crate::encryption::ciphers::{
-    BlockEncryptor, NONCE_LEN, RingGcmBlockEncryptor, SIZE_LEN, TAG_LEN,
+    BlockEncryptor, RingGcmBlockEncryptor, NONCE_LEN, SIZE_LEN, TAG_LEN,
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
