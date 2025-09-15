@@ -679,7 +679,7 @@ mod test {
     /// verifying it is the same
     fn round_trip(data_type: DataType) {
         let data_type_string = data_type.to_string();
-        println!("Input '{data_type_string}' ({data_type:?})");
+        println!("Input '{data_type_string}' ({data_type})");
         let parsed_type = parse_data_type(&data_type_string).unwrap();
         assert_eq!(
             data_type, parsed_type,
@@ -826,7 +826,7 @@ mod test {
         ];
 
         for (data_type_string, expected_data_type) in cases {
-            println!("Parsing '{data_type_string}', expecting '{expected_data_type:?}'");
+            println!("Parsing '{data_type_string}', expecting '{expected_data_type}'");
             let parsed_data_type = parse_data_type(data_type_string).unwrap();
             assert_eq!(parsed_data_type, expected_data_type);
         }

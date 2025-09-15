@@ -3185,7 +3185,7 @@ mod tests {
                     "Parquet argument error: Parquet error: encountered non UTF-8 data";
                 assert!(
                     err.to_string().contains(expected_err),
-                    "data type: {data_type:?}, expected: {expected_err}, got: {err}"
+                    "data type: {data_type}, expected: {expected_err}, got: {err}"
                 );
             }
         }
@@ -3224,7 +3224,7 @@ mod tests {
                     "Parquet argument error: Parquet error: encountered non UTF-8 data";
                 assert!(
                     err.to_string().contains(expected_err),
-                    "data type: {data_type:?}, expected: {expected_err}, got: {err}"
+                    "data type: {data_type}, expected: {expected_err}, got: {err}"
                 );
             }
         }

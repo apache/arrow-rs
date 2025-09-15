@@ -604,7 +604,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                 DataType::Int32 => dict_builder!(Int32Type),
                 DataType::Int64 => dict_builder!(Int64Type),
                 _ => {
-                    panic!("Data type {t:?} with key type {key_type:?} is not currently supported")
+                    panic!("Data type {t:?} with key type {key_type} is not currently supported")
                 }
             }
         }

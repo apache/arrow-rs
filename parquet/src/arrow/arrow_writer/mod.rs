@@ -1080,7 +1080,7 @@ impl ArrowColumnWriterFactory {
             }
             _ => return Err(ParquetError::NYI(
                 format!(
-                    "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
+                    "Attempting to write an Arrow type {data_type} to parquet that is not yet implemented"
                 )
             ))
         }
