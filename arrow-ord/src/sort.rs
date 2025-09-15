@@ -304,7 +304,7 @@ pub fn sort_to_indices(
         },
         t => {
             return Err(ArrowError::ComputeError(format!(
-                "Sort not supported for data type {t:?}"
+                "Sort not supported for data type {t}"
             )));
         }
     })

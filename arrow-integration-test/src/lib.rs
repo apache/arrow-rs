@@ -946,7 +946,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(
-            "data type {t:?} not supported"
+            "data type {t} not supported"
         ))),
     }
 }
