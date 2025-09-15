@@ -67,8 +67,8 @@ impl fmt::Display for DataType {
             Self::Utf8 => write!(f, "Utf8"),
             Self::LargeUtf8 => write!(f, "LargeUtf8"),
             Self::Utf8View => write!(f, "Utf8View"),
-            Self::ListView(field) => write!(f, "ListView({field:?})"), // TODO: make more readable
-            Self::LargeListView(field) => write!(f, "LargeListView({field:?})"), // TODO: make more readable
+            Self::ListView(field) => write!(f, "ListView({field})"), // TODO: make more readable
+            Self::LargeListView(field) => write!(f, "LargeListView({field})"), // TODO: make more readable
             Self::List(field) | Self::LargeList(field) => {
                 let type_name = if matches!(self, Self::List(_)) {
                     "List"
@@ -131,15 +131,15 @@ impl fmt::Display for DataType {
                 write!(f, "Union({union_fields:?}, {union_mode:?})")
             }
             Self::Dictionary(data_type, data_type1) => {
-                write!(f, "Dictionary({data_type:?}, {data_type1:?})")
+                write!(f, "Dictionary({data_type}, {data_type1:?})")
             }
             Self::Decimal32(precision, scale) => write!(f, "Decimal32({precision:?}, {scale:?})"),
             Self::Decimal64(precision, scale) => write!(f, "Decimal64({precision:?}, {scale:?})"),
             Self::Decimal128(precision, scale) => write!(f, "Decimal128({precision:?}, {scale:?})"),
             Self::Decimal256(precision, scale) => write!(f, "Decimal256({precision:?}, {scale:?})"),
-            Self::Map(field, keys_are_sorted) => write!(f, "Map({field:?}, {keys_are_sorted:?})"),
+            Self::Map(field, keys_are_sorted) => write!(f, "Map({field}, {keys_are_sorted:?})"),
             Self::RunEndEncoded(run_ends_field, values_field) => {
-                write!(f, "RunEndEncoded({run_ends_field:?}, {values_field:?})")
+                write!(f, "RunEndEncoded({run_ends_field}, {values_field})")
             }
         }
     }
