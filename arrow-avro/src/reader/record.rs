@@ -454,6 +454,11 @@ impl Decoder {
                 )
             }
             (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (&Codec::Union(_, _, _), _) => {
+                return Err(ArrowError::NotYetImplemented(
+                    "Union type decoding is not yet supported".to_string(),
+                ))
+            }
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
