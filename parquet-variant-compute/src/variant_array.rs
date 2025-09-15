@@ -590,6 +590,11 @@ impl StructArrayBuilder {
 /// returns the non-null element at index as a Variant
 fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '_> {
     match typed_value.data_type() {
+        DataType::Boolean => {
+            let boolean_array = typed_value.as_boolean();
+            let value = boolean_array.value(index);
+            Variant::from(value)
+        }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
         }
