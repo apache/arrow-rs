@@ -985,7 +985,60 @@ mod test {
         let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(42)]));
         assert_eq!(&result, &expected);
     }
+    /// Helper function to create a shredded variant array representing lists
+    ///
+    /// This creates an array that represents:
+    /// Row 0: ["comedy", "drama"] ([0] is shredded, [1] is shredded - perfectly shredded)
+    /// Row 1: ["horror", null] ([0] is shredded, [1] is binary null - partially shredded)
+    /// Row 2: ["comedy", "drama", "romance"] (perfectly shredded)
+    ///
+    /// The physical layout follows the shredding spec where:
+    /// - metadata: contains list metadata
+    /// - typed_value: StructArray with 0 index value
+    /// - value: contains fallback for
+    fn shredded_list_variant_array() -> ArrayRef {
+        // Create the base metadata for lists
 
+        // Could add this as an api for VariantList, like VariantList::from()
+        fn build_list_metadata(vector: Vec<Variant>) -> (Vec<u8>, Vec<u8>) {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            let mut list = builder.new_list();
+            for value in vector {
+                list.append_value(value);
+            }
+            list.finish();
+            builder.finish()
+        }
+        let (metadata1, _) =
+            build_list_metadata(vec![Variant::String("comedy"), Variant::String("drama")]);
+
+        let (metadata2, _) = build_list_metadata(vec![Variant::String("horror"), Variant::Null]);
+
+        let (metadata3, _) = build_list_metadata(vec![
+            Variant::String("comedy"),
+            Variant::String("drama"),
+            Variant::String("romance"),
+        ]);
+
+        // Create metadata array
+        let metadata_array =
+            BinaryViewArray::from_iter_values(vec![metadata1, metadata2, metadata3]);
+
+        // Create the untyped value array
+        let value_array = BinaryViewArray::from(vec![Variant::Null.as_u8_slice()]);
+        // Maybe I should try with an actual primitive array
+        let typed_value_array = StringArray::from(vec![
+            "comedy", "drama", "horror", "comedy", "drama", "romance",
+        ]);
+        // Build the main VariantArray
+        let main_struct = crate::variant_array::StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array))
+            .with_field("value", Arc::new(value_array))
+            .with_field("typed_value", Arc::new(typed_value_array))
+            .build();
+
+        Arc::new(VariantArray::try_new(Arc::new(main_struct)).expect("should create variant array"))
+    }
     /// Helper function to create a shredded variant array representing objects
     ///
     /// This creates an array that represents:
