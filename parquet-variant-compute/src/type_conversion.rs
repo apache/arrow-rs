@@ -17,46 +17,62 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-/// Convert the input array to a `VariantArray` row by row, using `method`
-/// not requiring a generic type to downcast the generic array to a specific
-/// array type and `cast_fn` to transform each element to a type compatible with Variant
-/// If `strict` is true(default), return error on conversion failure. If false, insert null.
-macro_rules! non_generic_conversion_array {
-    ($array:expr, $cast_fn:expr, $builder:expr) => {{
-        let array = $array;
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            let cast_value = $cast_fn(array.value(i));
-            $builder.append_variant(Variant::from(cast_value));
-        }
-    }};
-    ($array:expr, $cast_fn:expr, $builder:expr, $strict:expr) => {{
-        let array = $array;
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                $builder.append_null();
-                continue;
-            }
-            match $cast_fn(array.value(i)) {
-                Some(cast_value) => {
-                    $builder.append_variant(Variant::from(cast_value));
-                }
-                None if $strict => {
-                    return Err(ArrowError::ComputeError(format!(
-                        "Failed to convert value at index {}: conversion failed",
-                        i
-                    )));
-                }
-                None => $builder.append_null(),
-            }
-        }
-        Ok::<(), ArrowError>(())
-    }};
+use arrow::datatypes::{self, ArrowPrimitiveType};
+use parquet_variant::Variant;
+
+/// Options for controlling the behavior of `cast_to_variant_with_options`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CastOptions {
+    /// If true, return error on conversion failure. If false, insert null for failed conversions.
+    pub strict: bool,
 }
-pub(crate) use non_generic_conversion_array;
+
+impl Default for CastOptions {
+    fn default() -> Self {
+        Self { strict: true }
+    }
+}
+
+/// Helper trait for converting `Variant` values to arrow primitive values.
+pub(crate) trait VariantAsPrimitive<T: ArrowPrimitiveType> {
+    fn as_primitive(&self) -> Option<T::Native>;
+}
+
+impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i32> {
+        self.as_int32()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i16> {
+        self.as_int16()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int8Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i8> {
+        self.as_int8()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i64> {
+        self.as_int64()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<half::f16> {
+        self.as_f16()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<f32> {
+        self.as_f32()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<f64> {
+        self.as_f64()
+    }
+}
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
@@ -72,29 +88,6 @@ macro_rules! non_generic_conversion_single_value {
 }
 pub(crate) use non_generic_conversion_single_value;
 
-/// Convert the input array to a `VariantArray` row by row, using `method`
-/// requiring a generic type to downcast the generic array to a specific
-/// array type and `cast_fn` to transform each element to a type compatible with Variant
-/// If `strict` is true(default), return error on conversion failure. If false, insert null.
-macro_rules! generic_conversion_array {
-    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr) => {{
-        $crate::type_conversion::non_generic_conversion_array!(
-            $input.$method::<$t>(),
-            $cast_fn,
-            $builder
-        )
-    }};
-    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $builder:expr, $strict:expr) => {{
-        $crate::type_conversion::non_generic_conversion_array!(
-            $input.$method::<$t>(),
-            $cast_fn,
-            $builder,
-            $strict
-        )
-    }};
-}
-pub(crate) use generic_conversion_array;
-
 /// Convert the value at a specific index in the given array into a `Variant`,
 /// using `method` requiring a generic type to downcast the generic array
 /// to a specific array type and `cast_fn` to transform the element.
@@ -108,21 +101,6 @@ macro_rules! generic_conversion_single_value {
     }};
 }
 pub(crate) use generic_conversion_single_value;
-
-/// Convert the input array of a specific primitive type to a `VariantArray`
-/// row by row
-macro_rules! primitive_conversion_array {
-    ($t:ty, $input:expr, $builder:expr) => {{
-        $crate::type_conversion::generic_conversion_array!(
-            $t,
-            as_primitive,
-            |v| v,
-            $input,
-            $builder
-        )
-    }};
-}
-pub(crate) use primitive_conversion_array;
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! primitive_conversion_single_value {
@@ -155,19 +133,3 @@ macro_rules! decimal_to_variant_decimal {
     }};
 }
 pub(crate) use decimal_to_variant_decimal;
-
-/// Convert a timestamp value to a `VariantTimestamp`
-macro_rules! timestamp_to_variant_timestamp {
-    ($ts_array:expr, $converter:expr, $unit_name:expr, $strict:expr) => {
-        if $strict {
-            let error =
-                || ArrowError::ComputeError(format!("Invalid timestamp {} value", $unit_name));
-            let converter = |x| $converter(x).ok_or_else(error);
-            let iter = $ts_array.iter().map(|x| x.map(converter).transpose());
-            iter.collect::<Result<Vec<_>, ArrowError>>()?
-        } else {
-            $ts_array.iter().map(|x| x.and_then($converter)).collect()
-        }
-    };
-}
-pub(crate) use timestamp_to_variant_timestamp;

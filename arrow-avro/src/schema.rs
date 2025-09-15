@@ -27,14 +27,14 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use strum_macros::AsRefStr;
 
-/// The metadata key used for storing the JSON encoded [`Schema`]
-pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
-
 /// The Avro single‑object encoding “magic” bytes (`0xC3 0x01`)
 pub const SINGLE_OBJECT_MAGIC: [u8; 2] = [0xC3, 0x01];
 
 /// The Confluent "magic" byte (`0x00`)
 pub const CONFLUENT_MAGIC: [u8; 1] = [0x00];
+
+/// The metadata key used for storing the JSON encoded [`Schema`]
+pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
 
 /// Metadata key used to represent Avro enum symbols in an Arrow schema.
 pub const AVRO_ENUM_SYMBOLS_METADATA_KEY: &str = "avro.enum.symbols";
@@ -50,6 +50,9 @@ pub const AVRO_NAMESPACE_METADATA_KEY: &str = "avro.namespace";
 
 /// Metadata key used to store the documentation for a type in an Avro schema.
 pub const AVRO_DOC_METADATA_KEY: &str = "avro.doc";
+
+/// Default name for the root record in an Avro schema.
+pub const AVRO_ROOT_RECORD_DEFAULT_NAME: &str = "topLevelRecord";
 
 /// Compare two Avro schemas for equality (identical schemas).
 /// Returns true if the schemas have the same parsing canonical form (i.e., logically identical).
@@ -451,7 +454,7 @@ impl AvroSchema {
         let record_name = schema
             .metadata
             .get(AVRO_NAME_METADATA_KEY)
-            .map_or("topLevelRecord", |s| s.as_str());
+            .map_or(AVRO_ROOT_RECORD_DEFAULT_NAME, |s| s.as_str());
         let mut record = JsonMap::with_capacity(schema.metadata.len() + 4);
         record.insert("type".into(), Value::String("record".into()));
         record.insert(
@@ -984,6 +987,36 @@ fn datatype_to_avro(
     null_order: Nullability,
 ) -> Result<(Value, JsonMap<String, Value>), ArrowError> {
     let mut extras = JsonMap::new();
+    let mut handle_decimal = |precision: &u8, scale: &i8| -> Result<Value, ArrowError> {
+        if *scale < 0 {
+            return Err(ArrowError::SchemaError(format!(
+                "Invalid Avro decimal for field '{field_name}': scale ({scale}) must be >= 0"
+            )));
+        }
+        if (*scale as usize) > (*precision as usize) {
+            return Err(ArrowError::SchemaError(format!(
+                "Invalid Avro decimal for field '{field_name}': scale ({scale}) \
+                 must be <= precision ({precision})"
+            )));
+        }
+
+        let mut meta = JsonMap::from_iter([
+            ("logicalType".into(), json!("decimal")),
+            ("precision".into(), json!(*precision)),
+            ("scale".into(), json!(*scale)),
+        ]);
+        if let Some(size) = metadata
+            .get("size")
+            .and_then(|val| val.parse::<usize>().ok())
+        {
+            meta.insert("type".into(), json!("fixed"));
+            meta.insert("size".into(), json!(size));
+            meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+        } else {
+            meta.insert("type".into(), json!("bytes"));
+        }
+        Ok(Value::Object(meta))
+    };
     let val = match dt {
         DataType::Null => Value::String("null".into()),
         DataType::Boolean => Value::String("boolean".into()),
@@ -1013,24 +1046,12 @@ fn datatype_to_avro(
                 })
             }
         }
+        #[cfg(feature = "small_decimals")]
+        DataType::Decimal32(precision, scale) | DataType::Decimal64(precision, scale) => {
+            handle_decimal(precision, scale)?
+        }
         DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
-            // Prefer fixed if original size info present
-            let mut meta = JsonMap::from_iter([
-                ("logicalType".into(), json!("decimal")),
-                ("precision".into(), json!(*precision)),
-                ("scale".into(), json!(*scale)),
-            ]);
-            if let Some(size) = metadata
-                .get("size")
-                .and_then(|val| val.parse::<usize>().ok())
-            {
-                meta.insert("type".into(), json!("fixed"));
-                meta.insert("size".into(), json!(size));
-                meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
-            } else {
-                meta.insert("type".into(), json!("bytes"));
-            }
-            Value::Object(meta)
+            handle_decimal(precision, scale)?
         }
         DataType::Date32 => json!({ "type": "int", "logicalType": "date" }),
         DataType::Date64 => json!({ "type": "long", "logicalType": "local-timestamp-millis" }),
