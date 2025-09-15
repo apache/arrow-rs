@@ -1297,11 +1297,9 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
         );
-        assert!(
-            props
-                .bloom_filter_properties(&ColumnPath::from("col"))
-                .is_none()
-        );
+        assert!(props
+            .bloom_filter_properties(&ColumnPath::from("col"))
+            .is_none());
     }
 
     #[test]

@@ -93,8 +93,8 @@ fn bytes_used(array: ArrayRef) -> usize {
 use std::{
     alloc::Layout,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering::Relaxed},
+        Arc,
     },
 };
 

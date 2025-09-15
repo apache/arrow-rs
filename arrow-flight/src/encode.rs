@@ -17,14 +17,14 @@
 
 use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 
-use crate::{FlightData, FlightDescriptor, SchemaAsIpc, error::Result};
+use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
 use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
-use futures::{Stream, StreamExt, ready, stream::BoxStream};
+use futures::{ready, stream::BoxStream, Stream, StreamExt};
 
 /// Creates a [`Stream`] of [`FlightData`]s from a
 /// `Stream` of [`Result`]<[`RecordBatch`], [`FlightError`]>.

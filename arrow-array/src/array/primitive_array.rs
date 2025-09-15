@@ -25,7 +25,7 @@ use crate::timezone::Tz;
 use crate::trusted_len::trusted_len_unzip;
 use crate::types::*;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer, i256};
+use arrow_buffer::{i256, ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::bit_iterator::try_for_each_valid_idx;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -1728,11 +1728,11 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BooleanArray;
     use crate::builder::{
-        Decimal32Builder, Decimal64Builder, Decimal128Builder, Decimal256Builder,
+        Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
     };
     use crate::cast::downcast_array;
+    use crate::BooleanArray;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::TimeUnit;
 

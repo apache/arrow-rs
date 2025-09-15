@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use rand::{
-    Rng,
     distr::uniform::{SampleRange, SampleUniform},
+    Rng,
 };
 
 use crate::array::*;

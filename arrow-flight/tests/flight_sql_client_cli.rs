@@ -22,19 +22,19 @@ use std::{pin::Pin, sync::Arc};
 use crate::common::fixture::TestFixture;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow_flight::{
-    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
     decode::FlightRecordBatchStream,
     encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService, FlightServiceServer},
     sql::{
+        server::{FlightSqlService, PeekableFlightDataStream},
         ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult, Any,
         CommandGetCatalogs, CommandGetDbSchemas, CommandGetTableTypes, CommandGetTables,
         CommandPreparedStatementQuery, CommandStatementQuery, DoPutPreparedStatementResult,
         ProstMessageExt, SqlInfo,
-        server::{FlightSqlService, PeekableFlightDataStream},
     },
     utils::batches_to_flight_data,
+    Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
+    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};

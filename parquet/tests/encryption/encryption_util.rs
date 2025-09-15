@@ -16,11 +16,11 @@
 // under the License.
 
 use arrow_array::cast::AsArray;
-use arrow_array::{RecordBatch, types};
-use parquet::arrow::ArrowWriter;
+use arrow_array::{types, RecordBatch};
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
+use parquet::arrow::ArrowWriter;
 use parquet::encryption::decrypt::{FileDecryptionProperties, KeyRetriever};
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
@@ -194,11 +194,9 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
         parquet::file::page_index::index::Index::FLOAT(float_index) => {
             assert_eq!(float_index.indexes.len(), 1);
             assert_eq!(float_index.indexes[0].min, Some(0.0f32));
-            assert!(
-                float_index.indexes[0]
-                    .max
-                    .is_some_and(|max| (max - 53.9).abs() < 1e-6)
-            );
+            assert!(float_index.indexes[0]
+                .max
+                .is_some_and(|max| (max - 53.9).abs() < 1e-6));
         }
         _ => {
             panic!("Expected a float column index for column {float_col_idx}");

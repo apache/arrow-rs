@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{ArrowNativeType, MutableBuffer, bit_util};
+use arrow_buffer::{bit_util, ArrowNativeType, MutableBuffer};
 use num::{CheckedAdd, Integer};
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.

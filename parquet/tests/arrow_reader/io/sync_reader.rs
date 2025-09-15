@@ -18,15 +18,15 @@
 //! Tests for the sync reader - [`ParquetRecordBatchReaderBuilder`]
 
 use crate::io::{
-    LogEntry, OperationLog, TestParquetFile, filter_a_175_b_625, filter_b_575_625, filter_b_false,
-    test_file, test_options,
+    filter_a_175_b_625, filter_b_575_625, filter_b_false, test_file, test_options, LogEntry,
+    OperationLog, TestParquetFile,
 };
 
 use bytes::Bytes;
-use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
 };
+use parquet::arrow::ProjectionMask;
 use parquet::file::reader::{ChunkReader, Length};
 use std::io::Read;
 use std::sync::Arc;

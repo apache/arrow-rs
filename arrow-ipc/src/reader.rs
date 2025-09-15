@@ -44,7 +44,7 @@ use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
 use crate::r#gen::Message::{self};
-use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
+use crate::{Block, FieldNode, MetadataVersion, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Read a buffer based on offset and length
@@ -1820,7 +1820,7 @@ mod tests {
 
     use crate::convert::fb_to_schema;
     use crate::writer::{
-        DictionaryTracker, IpcDataGenerator, IpcWriteOptions, unslice_run_array, write_message,
+        unslice_run_array, write_message, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
     };
 
     use super::*;

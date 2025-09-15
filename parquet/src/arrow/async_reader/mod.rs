@@ -38,7 +38,6 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
-use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{
     ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache, RowGroups,
 };
@@ -46,9 +45,10 @@ use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection,
 };
+use crate::arrow::ProjectionMask;
 
 use crate::bloom_filter::{
-    SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
+    chunk_read_bloom_filter_header_and_offset, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
 };
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
@@ -63,8 +63,8 @@ pub use metadata::*;
 #[cfg(feature = "object_store")]
 mod store;
 
-use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
@@ -1205,12 +1205,12 @@ impl PageIterator for ColumnChunkIterator {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::ArrowWriter;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
+    use crate::arrow::ArrowWriter;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
@@ -1219,12 +1219,12 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, Int8Array, Int32Array, RecordBatchReader, Scalar, StringArray,
+        Array, ArrayRef, Int32Array, Int8Array, RecordBatchReader, Scalar, StringArray,
         StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
-    use rand::{Rng, rng};
+    use rand::{rng, Rng};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;

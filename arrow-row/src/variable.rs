@@ -18,8 +18,8 @@
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
-use arrow_buffer::MutableBuffer;
 use arrow_buffer::bit_util::ceil;
+use arrow_buffer::MutableBuffer;
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;

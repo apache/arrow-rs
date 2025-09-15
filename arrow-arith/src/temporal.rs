@@ -24,10 +24,9 @@ use cast::as_primitive_array;
 use chrono::{Datelike, TimeZone, Timelike, Utc};
 
 use arrow_array::temporal_conversions::{
-    MICROSECONDS, MICROSECONDS_IN_DAY, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
-    NANOSECONDS_IN_DAY, SECONDS_IN_DAY, date32_to_datetime, date64_to_datetime,
-    timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
-    timestamp_us_to_datetime,
+    date32_to_datetime, date64_to_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
+    timestamp_s_to_datetime, timestamp_us_to_datetime, MICROSECONDS, MICROSECONDS_IN_DAY,
+    MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS, NANOSECONDS_IN_DAY, SECONDS_IN_DAY,
 };
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;

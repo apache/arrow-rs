@@ -24,8 +24,8 @@ use crate::{
     writer::FileWriter,
 };
 use arrow_array::{
-    Array, ArrayRef, DictionaryArray, RecordBatch, StringArray, builder::StringDictionaryBuilder,
-    types::Int32Type,
+    builder::StringDictionaryBuilder, types::Int32Type, Array, ArrayRef, DictionaryArray,
+    RecordBatch, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use std::io::Cursor;

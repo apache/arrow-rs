@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::buffer_builder::{Int8BufferBuilder, Int32BufferBuilder};
+use crate::builder::buffer_builder::{Int32BufferBuilder, Int8BufferBuilder};
 use crate::builder::{ArrayBuilder, BufferBuilder};
-use crate::{ArrayRef, ArrowPrimitiveType, UnionArray, make_array};
+use crate::{make_array, ArrayRef, ArrowPrimitiveType, UnionArray};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{ArrowNativeType, Buffer, ScalarBuffer};
 use arrow_data::ArrayDataBuilder;

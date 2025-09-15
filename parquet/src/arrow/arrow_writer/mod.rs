@@ -32,13 +32,13 @@ use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, S
 
 use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_precision};
 
-use crate::arrow::ArrowSchemaConverter;
 use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
+use crate::arrow::ArrowSchemaConverter;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
-    ColumnCloseResult, ColumnWriter, GenericColumnWriter, get_column_writer,
+    get_column_writer, ColumnCloseResult, ColumnWriter, GenericColumnWriter,
 };
 use crate::data_type::{ByteArray, FixedLenByteArray};
 #[cfg(feature = "encryption")]
@@ -50,7 +50,7 @@ use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use crate::thrift::TSerializable;
-use levels::{ArrayLevels, calculate_array_levels};
+use levels::{calculate_array_levels, ArrayLevels};
 
 mod byte_array;
 mod levels;
@@ -1479,8 +1479,8 @@ mod tests {
     use std::fs::File;
     use std::io::Seek;
 
-    use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::column::page::{Page, PageReader};
     use crate::file::page_encoding_stats::PageEncodingStats;
     use crate::file::reader::SerializedPageReader;
@@ -1493,7 +1493,7 @@ mod tests {
     use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, i256};
+    use arrow_buffer::{i256, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
     use half::f16;
     use num::{FromPrimitive, ToPrimitive};
@@ -4096,11 +4096,9 @@ mod tests {
             .file_metadata()
             .key_value_metadata()
         {
-            assert!(
-                !key_value_metadata
-                    .iter()
-                    .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY)
-            );
+            assert!(!key_value_metadata
+                .iter()
+                .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY));
         }
     }
 

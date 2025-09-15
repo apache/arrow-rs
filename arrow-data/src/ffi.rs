@@ -18,7 +18,7 @@
 //! Contains declarations to bind to the [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 
 use crate::bit_mask::set_bits;
-use crate::{ArrayData, layout};
+use crate::{layout, ArrayData};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{Buffer, MutableBuffer, ScalarBuffer};
 use arrow_schema::DataType;

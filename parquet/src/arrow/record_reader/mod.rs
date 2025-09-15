@@ -25,8 +25,8 @@ use crate::column::reader::decoder::RepetitionLevelDecoderImpl;
 use crate::column::{
     page::PageReader,
     reader::{
-        GenericColumnReader,
         decoder::{ColumnValueDecoder, ColumnValueDecoderImpl},
+        GenericColumnReader,
     },
 };
 use crate::data_type::DataType;

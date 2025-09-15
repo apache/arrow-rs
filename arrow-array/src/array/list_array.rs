@@ -18,8 +18,8 @@
 use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray,
-    iterator::GenericListArrayIter, new_empty_array,
+    iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
+    ArrowPrimitiveType, FixedSizeListArray,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -635,7 +635,7 @@ mod tests {
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Int32Array, Int64Array};
-    use arrow_buffer::{Buffer, ScalarBuffer, bit_util};
+    use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
     use arrow_schema::Field;
 
     fn create_from_buffers() -> ListArray {

@@ -38,12 +38,12 @@ use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, layout};
+use arrow_data::{layout, ArrayData, ArrayDataBuilder, BufferSpec};
 use arrow_schema::*;
 
-use crate::CONTINUATION_MARKER;
 use crate::compression::CompressionCodec;
 use crate::convert::IpcSchemaEncoder;
+use crate::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the [`IpcDataGenerator`]
 #[derive(Debug, Clone)]
@@ -888,7 +888,8 @@ impl DictionaryTracker {
             return Ok(DictionaryUpdate::None);
         }
 
-        const REPLACEMENT_ERROR: &str = "Dictionary replacement detected when writing IPC file format. \
+        const REPLACEMENT_ERROR: &str =
+            "Dictionary replacement detected when writing IPC file format. \
                  Arrow IPC files only support a single dictionary for a given field \
                  across all batches.";
 
@@ -1962,10 +1963,10 @@ mod tests {
     use arrow_array::types::*;
     use arrow_buffer::ScalarBuffer;
 
-    use crate::MetadataVersion;
     use crate::convert::fb_to_schema;
     use crate::reader::*;
     use crate::root_as_footer;
+    use crate::MetadataVersion;
 
     use super::*;
 
@@ -2609,9 +2610,13 @@ mod tests {
 
     #[test]
     fn test_large_slice_uint32() {
-        ensure_roundtrip(Arc::new(UInt32Array::from_iter(
-            (0..8000).map(|i| if i % 2 == 0 { Some(i) } else { None }),
-        )));
+        ensure_roundtrip(Arc::new(UInt32Array::from_iter((0..8000).map(|i| {
+            if i % 2 == 0 {
+                Some(i)
+            } else {
+                None
+            }
+        }))));
     }
 
     #[test]
@@ -3426,7 +3431,7 @@ mod tests {
             // Set metadata on both the schema and a field within it.
             let schema = Arc::new(
                 Schema::new(vec![
-                    Field::new("a", DataType::Int64, true).with_metadata(metadata.clone()),
+                    Field::new("a", DataType::Int64, true).with_metadata(metadata.clone())
                 ])
                 .with_metadata(metadata)
                 .clone(),

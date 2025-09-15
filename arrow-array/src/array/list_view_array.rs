@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::array::{make_array, print_long_array};
 use crate::iterator::GenericListViewArrayIter;
-use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray, OffsetSizeTrait, new_empty_array};
+use crate::{new_empty_array, Array, ArrayAccessor, ArrayRef, FixedSizeListArray, OffsetSizeTrait};
 
 /// A [`GenericListViewArray`] of variable size lists, storing offsets as `i32`.
 pub type ListViewArray = GenericListViewArray<i32>;
@@ -561,7 +561,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
 
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::{BooleanBuffer, Buffer, ScalarBuffer, bit_util};
+    use arrow_buffer::{bit_util, BooleanBuffer, Buffer, ScalarBuffer};
     use arrow_schema::Field;
 
     use crate::builder::{FixedSizeListBuilder, Int32Builder};

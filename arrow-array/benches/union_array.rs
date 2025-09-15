@@ -21,7 +21,7 @@ use arrow_array::{Array, ArrayRef, Int32Array, UnionArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field, UnionFields};
 use criterion::*;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 
 fn array_with_nulls() -> ArrayRef {
     let mut rng = rng();

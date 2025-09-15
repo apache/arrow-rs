@@ -1364,8 +1364,8 @@ mod async_tests {
     use arrow_array::RecordBatch;
     use arrow_schema::{Field, Schema};
     use bytes::Bytes;
-    use futures::FutureExt;
     use futures::future::BoxFuture;
+    use futures::FutureExt;
     use std::fs::File;
     use std::future::Future;
     use std::io::{Read, Seek, SeekFrom};

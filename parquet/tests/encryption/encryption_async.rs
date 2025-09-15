@@ -18,13 +18,13 @@
 //! This module contains tests for reading encrypted Parquet files with the async Arrow API
 
 use crate::encryption_util::{
-    TestKeyRetriever, read_encrypted_file, verify_column_indexes,
-    verify_encryption_double_test_data, verify_encryption_test_data,
+    read_encrypted_file, verify_column_indexes, verify_encryption_double_test_data,
+    verify_encryption_test_data, TestKeyRetriever,
 };
 use futures::TryStreamExt;
-use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-use parquet::arrow::arrow_writer::{ArrowLeafColumn, ArrowWriterOptions, compute_leaves};
+use parquet::arrow::arrow_writer::{compute_leaves, ArrowLeafColumn, ArrowWriterOptions};
+use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
@@ -285,9 +285,9 @@ async fn get_encrypted_meta_store() -> (
     object_store::ObjectMeta,
     std::sync::Arc<dyn object_store::ObjectStore>,
 ) {
-    use object_store::ObjectStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
+    use object_store::ObjectStore;
 
     use std::sync::Arc;
     let test_data = arrow::util::test_util::parquet_test_data();

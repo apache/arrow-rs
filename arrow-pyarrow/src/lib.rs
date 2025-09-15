@@ -64,8 +64,8 @@ use arrow_array::ffi;
 use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow_array::{
-    RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, StructArray,
-    make_array,
+    make_array, RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader,
+    StructArray,
 };
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, Schema};

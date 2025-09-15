@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano, i256};
+use arrow_buffer::{i256, ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::ArrowError;
 use half::f16;
 use num::complex::ComplexFloat;
@@ -454,7 +454,9 @@ mod tests {
     use super::*;
 
     macro_rules! assert_approx_eq {
-        ( $x: expr, $y: expr ) => {{ assert_approx_eq!($x, $y, 1.0e-4) }};
+        ( $x: expr, $y: expr ) => {{
+            assert_approx_eq!($x, $y, 1.0e-4)
+        }};
         ( $x: expr, $y: expr, $tol: expr ) => {{
             let x_val = $x;
             let y_val = $y;

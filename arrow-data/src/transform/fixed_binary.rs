@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{_MutableArrayData, Extend};
+use super::{Extend, _MutableArrayData};
 use crate::ArrayData;
 use arrow_schema::DataType;
 

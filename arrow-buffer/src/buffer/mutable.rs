@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::alloc::{Layout, handle_alloc_error};
+use std::alloc::{handle_alloc_error, Layout};
 use std::mem;
 use std::ptr::NonNull;
 
-use crate::alloc::{ALIGNMENT, Deallocation};
+use crate::alloc::{Deallocation, ALIGNMENT};
 use crate::{
     bytes::Bytes,
     native::{ArrowNativeType, ToByteSlice},

@@ -359,7 +359,7 @@ fn get_bytes(values: &FixedSizeBinaryBuilder, byte_width: i32, idx: usize) -> &[
 mod tests {
     use super::*;
 
-    use crate::types::{Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type};
+    use crate::types::{Int16Type, Int32Type, Int8Type, UInt16Type, UInt8Type};
     use crate::{ArrowPrimitiveType, FixedSizeBinaryArray, Int8Array};
 
     #[test]

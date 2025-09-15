@@ -42,7 +42,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::{
     collections::HashMap,
-    ffi::{CStr, CString, c_char, c_void},
+    ffi::{c_char, c_void, CStr, CString},
 };
 
 bitflags! {

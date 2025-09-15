@@ -1777,13 +1777,13 @@ unsafe fn decode_column(
 mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
-    use rand::{Rng, rng};
+    use rand::{rng, Rng};
 
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
+    use arrow_buffer::{i256, NullBuffer};
     use arrow_buffer::{Buffer, OffsetBuffer};
-    use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_ord::sort::{LexicographicalComparator, SortColumn};
 

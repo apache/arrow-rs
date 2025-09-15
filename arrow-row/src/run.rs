@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{RowConverter, Rows, SortField, variable};
+use crate::{variable, RowConverter, Rows, SortField};
 use arrow_array::types::RunEndIndexType;
 use arrow_array::{PrimitiveArray, RunArray};
 use arrow_buffer::{ArrowNativeType, ScalarBuffer};

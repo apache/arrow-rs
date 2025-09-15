@@ -423,7 +423,7 @@ pub fn make_comparator(
 mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
-    use arrow_buffer::{IntervalDayTime, OffsetBuffer, i256};
+    use arrow_buffer::{i256, IntervalDayTime, OffsetBuffer};
     use arrow_schema::{DataType, Field, Fields};
     use half::f16;
     use std::sync::Arc;

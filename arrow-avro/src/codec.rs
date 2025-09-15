@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::schema::{
-    AVRO_ENUM_SYMBOLS_METADATA_KEY, Attributes, AvroSchema, ComplexType, PrimitiveType, Record,
-    Schema, Type, TypeName,
+    Attributes, AvroSchema, ComplexType, PrimitiveType, Record, Schema, Type, TypeName,
+    AVRO_ENUM_SYMBOLS_METADATA_KEY,
 };
 use arrow_schema::{
-    ArrowError, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Fields,
-    IntervalUnit, TimeUnit,
+    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE,
 };
 use serde_json::Value;
 use std::borrow::Cow;

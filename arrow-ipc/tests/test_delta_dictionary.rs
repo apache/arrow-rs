@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow_array::{
-    Array, ArrayRef, DictionaryArray, ListArray, RecordBatch, StringArray,
     builder::{ListBuilder, PrimitiveDictionaryBuilder, StringDictionaryBuilder},
+    Array, ArrayRef, DictionaryArray, ListArray, RecordBatch, StringArray,
 };
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::{DictionaryHandling, IpcWriteOptions, StreamWriter};

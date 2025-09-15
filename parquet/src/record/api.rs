@@ -777,8 +777,8 @@ impl Field {
     /// Converts the Parquet field into a JSON [`Value`].
     #[cfg(any(feature = "json", test))]
     pub fn to_json_value(&self) -> Value {
-        use base64::Engine;
         use base64::prelude::BASE64_STANDARD;
+        use base64::Engine;
 
         match &self {
             Field::Null => Value::Null,
@@ -1482,34 +1482,28 @@ mod tests {
         assert!(Field::Decimal(Decimal::from_i32(4, 8, 2)).is_primitive());
 
         // complex types
-        assert!(
-            !Field::Group(Row::new(vec![
-                ("x".to_string(), Field::Null),
-                ("Y".to_string(), Field::Int(2)),
-                ("z".to_string(), Field::Float(3.1)),
-                ("a".to_string(), Field::Str("abc".to_string()))
-            ]))
-            .is_primitive()
-        );
+        assert!(!Field::Group(Row::new(vec![
+            ("x".to_string(), Field::Null),
+            ("Y".to_string(), Field::Int(2)),
+            ("z".to_string(), Field::Float(3.1)),
+            ("a".to_string(), Field::Str("abc".to_string()))
+        ]))
+        .is_primitive());
 
-        assert!(
-            !Field::ListInternal(make_list(vec![
-                Field::Int(2),
-                Field::Int(1),
-                Field::Null,
-                Field::Int(12)
-            ]))
-            .is_primitive()
-        );
+        assert!(!Field::ListInternal(make_list(vec![
+            Field::Int(2),
+            Field::Int(1),
+            Field::Null,
+            Field::Int(12)
+        ]))
+        .is_primitive());
 
-        assert!(
-            !Field::MapInternal(make_map(vec![
-                (Field::Int(1), Field::Float(1.2)),
-                (Field::Int(2), Field::Float(4.5)),
-                (Field::Int(3), Field::Float(2.3))
-            ]))
-            .is_primitive()
-        );
+        assert!(!Field::MapInternal(make_map(vec![
+            (Field::Int(1), Field::Float(1.2)),
+            (Field::Int(2), Field::Float(4.5)),
+            (Field::Int(3), Field::Float(2.3))
+        ]))
+        .is_primitive());
     }
 
     #[test]
@@ -2055,7 +2049,7 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::many_single_char_names)]
 mod api_tests {
-    use super::{Row, make_list, make_map};
+    use super::{make_list, make_map, Row};
     use crate::record::Field;
 
     #[test]

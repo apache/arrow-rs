@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{_MutableArrayData, ArrayData, Extend};
+use super::{ArrayData, Extend, _MutableArrayData};
 use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
 use arrow_schema::DataType;
 use num::CheckedAdd;

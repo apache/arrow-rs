@@ -18,9 +18,9 @@
 //! [`Parser`] implementations for converting strings to Arrow types
 //!
 //! Used by the CSV and JSON readers to convert strings to Arrow types
-use arrow_array::ArrowNativeTypeOp;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
+use arrow_array::ArrowNativeTypeOp;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;

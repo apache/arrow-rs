@@ -22,12 +22,12 @@ use bytes::Bytes;
 use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::{
-    decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder},
+    decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder},
     rle::RleDecoder,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{BitReader, num_required_bits};
+use crate::util::bit_util::{num_required_bits, BitReader};
 
 /// Decodes level data
 pub trait ColumnLevelDecoder {

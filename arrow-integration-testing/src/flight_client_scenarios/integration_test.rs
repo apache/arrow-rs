@@ -28,10 +28,10 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_flight::{
-    FlightData, FlightDescriptor, IpcMessage, Location, Ticket, flight_descriptor::DescriptorType,
-    flight_service_client::FlightServiceClient, utils::flight_data_to_arrow_batch,
+    flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
+    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, IpcMessage, Location, Ticket,
 };
-use futures::{StreamExt, channel::mpsc, sink::SinkExt, stream};
+use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
 use tonic::{Request, Streaming};
 
 use arrow::datatypes::Schema;

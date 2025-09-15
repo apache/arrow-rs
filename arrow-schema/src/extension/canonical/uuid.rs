@@ -19,7 +19,7 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid>
 
-use crate::{ArrowError, DataType, extension::ExtensionType};
+use crate::{extension::ExtensionType, ArrowError, DataType};
 
 /// The extension type for `UUID`.
 ///
@@ -80,8 +80,8 @@ mod tests {
     #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
-        Field,
         extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
+        Field,
     };
 
     use super::*;

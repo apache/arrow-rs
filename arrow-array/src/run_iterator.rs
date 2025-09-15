@@ -17,7 +17,7 @@
 
 //! Idiomatic iterator for [`RunArray`](crate::RunArray)
 
-use crate::{Array, TypedRunArray, array::ArrayAccessor, types::RunEndIndexType};
+use crate::{array::ArrayAccessor, types::RunEndIndexType, Array, TypedRunArray};
 use arrow_buffer::ArrowNativeType;
 
 /// The [`RunArrayIter`] provides an idiomatic way to iterate over the run array.
@@ -172,13 +172,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, rng, seq::SliceRandom};
+    use rand::{rng, seq::SliceRandom, Rng};
 
     use crate::{
-        Array, Int64RunArray, PrimitiveArray, RunArray,
         array::{Int32Array, StringArray},
         builder::PrimitiveRunBuilder,
         types::{Int16Type, Int32Type},
+        Array, Int64RunArray, PrimitiveArray, RunArray,
     };
 
     fn build_input_array(size: usize) -> Vec<Option<i32>> {

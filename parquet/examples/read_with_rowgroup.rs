@@ -19,7 +19,7 @@ use arrow::util::pretty::print_batches;
 use bytes::{Buf, Bytes};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, RowGroups, RowSelection};
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::{ProjectionMask, parquet_to_arrow_field_levels};
+use parquet::arrow::{parquet_to_arrow_field_levels, ProjectionMask};
 use parquet::column::page::{PageIterator, PageReader};
 use parquet::errors::{ParquetError, Result};
 use parquet::file::metadata::RowGroupMetaData;

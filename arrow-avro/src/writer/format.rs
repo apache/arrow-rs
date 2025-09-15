@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
+use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
 use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
-use crate::writer::encoder::{EncoderOptions, write_long};
+use crate::writer::encoder::{write_long, EncoderOptions};
 use arrow_schema::{ArrowError, Schema};
 use rand::RngCore;
 use serde_json::{Map as JsonMap, Value as JsonValue};

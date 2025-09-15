@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
-use arrow_array::{ArrayRef, builder::make_view, make_array};
+use arrow_array::{builder::make_view, make_array, ArrayRef};
 use arrow_buffer::Buffer;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;

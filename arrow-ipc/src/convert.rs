@@ -29,7 +29,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::writer::DictionaryTracker;
-use crate::{CONTINUATION_MARKER, KeyValue, Message};
+use crate::{KeyValue, Message, CONTINUATION_MARKER};
 use DataType::*;
 
 /// Low level Arrow [Schema] to IPC bytes converter

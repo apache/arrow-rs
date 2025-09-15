@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, BinaryViewArray, DictionaryArray, Float64Array, RecordBatch, StringViewArray,
-    UInt8Array, types::Int32Type,
+    types::Int32Type, ArrayRef, BinaryViewArray, DictionaryArray, Float64Array, RecordBatch,
+    StringViewArray, UInt8Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 

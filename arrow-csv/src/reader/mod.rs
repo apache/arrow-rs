@@ -128,7 +128,7 @@ mod records;
 use arrow_array::builder::{NullBuilder, PrimitiveBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::parse::{Parser, parse_decimal, string_to_datetime};
+use arrow_cast::parse::{parse_decimal, string_to_datetime, Parser};
 use arrow_schema::*;
 use chrono::{TimeZone, Utc};
 use csv::StringRecord;

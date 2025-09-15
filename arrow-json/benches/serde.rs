@@ -18,7 +18,7 @@
 use arrow_json::ReaderBuilder;
 use arrow_schema::{DataType, Field, Schema};
 use criterion::*;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 use serde::Serialize;
 use std::sync::Arc;
 

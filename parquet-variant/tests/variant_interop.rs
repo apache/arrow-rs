@@ -23,7 +23,7 @@ use std::{env, fs};
 
 use chrono::{DateTime, NaiveDate, NaiveTime};
 use parquet_variant::{
-    ShortString, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16,
+    ShortString, Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
 };
 
 use rand::rngs::StdRng;

@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array, StringArray,
-    StructBuilder, UInt64Array, make_array,
+    make_array, Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array,
+    StringArray, StructBuilder, UInt64Array,
 };
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};

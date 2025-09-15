@@ -18,7 +18,7 @@
 use arrow_array::{Array, FixedSizeListArray, Int32Array};
 use arrow_schema::Field;
 use criterion::*;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 use std::{hint, sync::Arc};
 
 fn gen_fsl(len: usize, value_len: usize) -> FixedSizeListArray {

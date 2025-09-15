@@ -38,8 +38,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
-use arrow_data::ArrayDataBuilder;
 use arrow_data::transform::{Capacities, MutableArrayData};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
 use std::{collections::HashSet, ops::Add, sync::Arc};
 
@@ -1166,14 +1166,12 @@ mod tests {
         // Verify pointer equality check succeeds, and therefore the
         // dictionaries are not merged. A single values buffer should be reused
         // in this case.
-        assert!(
-            dict.values().to_data().ptr_eq(
-                &result_same_dictionary
-                    .as_dictionary::<Int8Type>()
-                    .values()
-                    .to_data()
-            )
-        );
+        assert!(dict.values().to_data().ptr_eq(
+            &result_same_dictionary
+                .as_dictionary::<Int8Type>()
+                .values()
+                .to_data()
+        ));
         assert_eq!(
             result_same_dictionary
                 .as_dictionary::<Int8Type>()
@@ -1236,12 +1234,10 @@ mod tests {
         );
 
         // Should have reused the dictionary
-        assert!(
-            array
-                .values()
-                .to_data()
-                .ptr_eq(&combined.values().to_data())
-        );
+        assert!(array
+            .values()
+            .to_data()
+            .ptr_eq(&combined.values().to_data()));
         assert!(copy.values().to_data().ptr_eq(&combined.values().to_data()));
 
         let new: DictionaryArray<Int8Type> = vec!["d"].into_iter().collect();

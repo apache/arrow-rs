@@ -34,11 +34,11 @@ use super::{
     SqlInfo, TicketStatementQuery,
 };
 use crate::{
-    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
-    flight_service_server::FlightService, r#gen::PollInfo,
+    flight_service_server::FlightService, r#gen::PollInfo, Action, ActionType, Criteria, Empty,
+    FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult,
+    SchemaResult, Ticket,
 };
-use futures::{Stream, StreamExt, stream::Peekable};
+use futures::{stream::Peekable, Stream, StreamExt};
 use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 

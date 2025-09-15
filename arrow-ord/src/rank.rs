@@ -20,7 +20,7 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::{
-    Array, ArrowNativeTypeOp, BooleanArray, GenericByteArray, downcast_primitive_array,
+    downcast_primitive_array, Array, ArrowNativeTypeOp, BooleanArray, GenericByteArray,
 };
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, SortOptions};

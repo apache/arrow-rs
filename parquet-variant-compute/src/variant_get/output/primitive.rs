@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::VariantArray;
 use crate::variant_get::output::OutputBuilder;
+use crate::VariantArray;
 use arrow::error::Result;
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, BinaryViewArray, NullBufferBuilder,
-    PrimitiveArray, new_null_array,
+    new_null_array, Array, ArrayRef, ArrowPrimitiveType, AsArray, BinaryViewArray,
+    NullBufferBuilder, PrimitiveArray,
 };
-use arrow::compute::{CastOptions, cast_with_options};
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_schema::{ArrowError, FieldRef};
 use parquet_variant::{Variant, VariantPath};

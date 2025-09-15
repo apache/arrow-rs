@@ -284,7 +284,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{Int32Builder, StringBuilder, make_builder};
+    use crate::builder::{make_builder, Int32Builder, StringBuilder};
     use crate::{Int32Array, StringArray};
     use std::collections::HashMap;
 

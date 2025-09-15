@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow_array::builder::BooleanBufferBuilder;
-use arrow_buffer::Buffer;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
+use arrow_buffer::Buffer;
 use bytes::Bytes;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
@@ -351,7 +351,7 @@ mod tests {
     use super::*;
 
     use crate::encodings::rle::RleEncoder;
-    use rand::{Rng, rng};
+    use rand::{rng, Rng};
 
     #[test]
     fn test_packed_decoder() {

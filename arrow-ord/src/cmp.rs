@@ -26,8 +26,8 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::{
-    AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum, FixedSizeBinaryArray,
-    GenericByteArray, GenericByteViewArray, downcast_primitive_array,
+    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
+    FixedSizeBinaryArray, GenericByteArray, GenericByteViewArray,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};

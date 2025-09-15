@@ -418,7 +418,7 @@ mod tests {
 
     use crate::ReaderBuilder;
     use arrow_array::builder::{
-        BinaryBuilder, Decimal32Builder, Decimal64Builder, Decimal128Builder, Decimal256Builder,
+        BinaryBuilder, Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
         FixedSizeBinaryBuilder, LargeBinaryBuilder,
     };
     use arrow_array::types::*;

@@ -16,10 +16,10 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Decimal128Array, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
-    FixedSizeListBuilder, GenericBinaryArray, GenericStringArray, Int32Array, Int32Builder,
-    Int64Builder, ListArray, ListBuilder, NullArray, OffsetSizeTrait, StringArray,
-    StringDictionaryBuilder, StructArray, UnionBuilder, make_array,
+    make_array, Array, ArrayRef, BooleanArray, Decimal128Array, FixedSizeBinaryArray,
+    FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray, GenericStringArray,
+    Int32Array, Int32Builder, Int64Builder, ListArray, ListBuilder, NullArray, OffsetSizeTrait,
+    StringArray, StringDictionaryBuilder, StructArray, UnionBuilder,
 };
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow_array::builder::{StringBuilder, StringViewBuilder, StructBuilder};

@@ -72,7 +72,7 @@
 
 use std::{
     fmt::Display,
-    fs::{File, read_to_string},
+    fs::{read_to_string, File},
     io::Read,
     path::{Path, PathBuf},
     sync::Arc,
@@ -83,7 +83,7 @@ use arrow_schema::{ArrowError, Schema};
 use clap::{Parser, ValueEnum};
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::{
-    arrow::{ArrowWriter, parquet_to_arrow_schema},
+    arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
     errors::ParquetError,
     file::properties::{WriterProperties, WriterVersion},

@@ -285,24 +285,20 @@ mod tests {
             decimal4_too_large.is_err(),
             "Decimal4 precision overflow should fail"
         );
-        assert!(
-            decimal4_too_large
-                .unwrap_err()
-                .to_string()
-                .contains("wider than max precision")
-        );
+        assert!(decimal4_too_large
+            .unwrap_err()
+            .to_string()
+            .contains("wider than max precision"));
 
         let decimal4_too_small = VariantDecimal4::try_new(-1_000_000_000_i32, 2);
         assert!(
             decimal4_too_small.is_err(),
             "Decimal4 precision underflow should fail"
         );
-        assert!(
-            decimal4_too_small
-                .unwrap_err()
-                .to_string()
-                .contains("wider than max precision")
-        );
+        assert!(decimal4_too_small
+            .unwrap_err()
+            .to_string()
+            .contains("wider than max precision"));
 
         // Test valid edge cases for Decimal4
         let decimal4_max_valid = VariantDecimal4::try_new(999_999_999_i32, 2);
@@ -323,24 +319,20 @@ mod tests {
             decimal8_too_large.is_err(),
             "Decimal8 precision overflow should fail"
         );
-        assert!(
-            decimal8_too_large
-                .unwrap_err()
-                .to_string()
-                .contains("wider than max precision")
-        );
+        assert!(decimal8_too_large
+            .unwrap_err()
+            .to_string()
+            .contains("wider than max precision"));
 
         let decimal8_too_small = VariantDecimal8::try_new(-1_000_000_000_000_000_000_i64, 2);
         assert!(
             decimal8_too_small.is_err(),
             "Decimal8 precision underflow should fail"
         );
-        assert!(
-            decimal8_too_small
-                .unwrap_err()
-                .to_string()
-                .contains("wider than max precision")
-        );
+        assert!(decimal8_too_small
+            .unwrap_err()
+            .to_string()
+            .contains("wider than max precision"));
 
         // Test valid edge cases for Decimal8
         let decimal8_max_valid = VariantDecimal8::try_new(999_999_999_999_999_999_i64, 2);
@@ -362,12 +354,10 @@ mod tests {
             decimal16_too_large.is_err(),
             "Decimal16 precision overflow should fail"
         );
-        assert!(
-            decimal16_too_large
-                .unwrap_err()
-                .to_string()
-                .contains("wider than max precision")
-        );
+        assert!(decimal16_too_large
+            .unwrap_err()
+            .to_string()
+            .contains("wider than max precision"));
 
         let decimal16_too_small =
             VariantDecimal16::try_new(-100000000000000000000000000000000000000_i128, 2);
@@ -375,12 +365,10 @@ mod tests {
             decimal16_too_small.is_err(),
             "Decimal16 precision underflow should fail"
         );
-        assert!(
-            decimal16_too_small
-                .unwrap_err()
-                .to_string()
-                .contains("wider than max precision")
-        );
+        assert!(decimal16_too_small
+            .unwrap_err()
+            .to_string()
+            .contains("wider than max precision"));
 
         // Test valid edge cases for Decimal16
         let decimal16_max_valid =
@@ -406,12 +394,10 @@ mod tests {
             decimal4_invalid_scale.is_err(),
             "Decimal4 with scale > 9 should fail"
         );
-        assert!(
-            decimal4_invalid_scale
-                .unwrap_err()
-                .to_string()
-                .contains("larger than max precision")
-        );
+        assert!(decimal4_invalid_scale
+            .unwrap_err()
+            .to_string()
+            .contains("larger than max precision"));
 
         let decimal4_invalid_scale_large = VariantDecimal4::try_new(123_i32, 20);
         assert!(
@@ -432,12 +418,10 @@ mod tests {
             decimal8_invalid_scale.is_err(),
             "Decimal8 with scale > 18 should fail"
         );
-        assert!(
-            decimal8_invalid_scale
-                .unwrap_err()
-                .to_string()
-                .contains("larger than max precision")
-        );
+        assert!(decimal8_invalid_scale
+            .unwrap_err()
+            .to_string()
+            .contains("larger than max precision"));
 
         let decimal8_invalid_scale_large = VariantDecimal8::try_new(123_i64, 25);
         assert!(
@@ -458,12 +442,10 @@ mod tests {
             decimal16_invalid_scale.is_err(),
             "Decimal16 with scale > 38 should fail"
         );
-        assert!(
-            decimal16_invalid_scale
-                .unwrap_err()
-                .to_string()
-                .contains("larger than max precision")
-        );
+        assert!(decimal16_invalid_scale
+            .unwrap_err()
+            .to_string()
+            .contains("larger than max precision"));
 
         let decimal16_invalid_scale_large = VariantDecimal16::try_new(123_i128, 50);
         assert!(

@@ -18,7 +18,7 @@
 //! Defines windowing functions, like `shift`ing
 
 use crate::concat::concat;
-use arrow_array::{Array, ArrayRef, make_array, new_null_array};
+use arrow_array::{make_array, new_null_array, Array, ArrayRef};
 use arrow_schema::ArrowError;
 use num::abs;
 

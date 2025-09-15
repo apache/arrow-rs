@@ -18,7 +18,7 @@
 //! Scenario for testing middleware.
 
 use arrow_flight::{
-    FlightDescriptor, flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
+    flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient, FlightDescriptor,
 };
 use prost::bytes::Bytes;
 use tonic::{Request, Status};

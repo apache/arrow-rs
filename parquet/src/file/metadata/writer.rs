@@ -18,16 +18,16 @@
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     encrypt::{
-        FileEncryptor, encrypt_object, encrypt_object_to_vec, write_signed_plaintext_object,
+        encrypt_object, encrypt_object_to_vec, write_signed_plaintext_object, FileEncryptor,
     },
-    modules::{ModuleType, create_footer_aad, create_module_aad},
+    modules::{create_footer_aad, create_module_aad, ModuleType},
 };
 #[cfg(feature = "encryption")]
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::page_index::index::Index;
-use crate::file::writer::{TrackedWrite, get_file_magic};
+use crate::file::writer::{get_file_magic, TrackedWrite};
 use crate::format::EncryptionAlgorithm;
 #[cfg(feature = "encryption")]
 use crate::format::{AesGcmV1, ColumnCryptoMetaData};

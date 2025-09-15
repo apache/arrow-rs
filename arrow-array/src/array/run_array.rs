@@ -23,11 +23,11 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
-    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
     builder::StringRunBuilder,
     make_array,
     run_iterator::RunArrayIter,
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
+    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
 };
 
 /// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
@@ -666,9 +666,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
     use rand::rng;
     use rand::seq::SliceRandom;
+    use rand::Rng;
 
     use super::*;
     use crate::builder::PrimitiveRunBuilder;

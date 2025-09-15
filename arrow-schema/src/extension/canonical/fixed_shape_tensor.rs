@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ArrowError, DataType, extension::ExtensionType};
+use crate::{extension::ExtensionType, ArrowError, DataType};
 
 /// The extension type for fixed shape tensor.
 ///
@@ -297,8 +297,8 @@ mod tests {
     #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
-        Field,
         extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
+        Field,
     };
 
     use super::*;

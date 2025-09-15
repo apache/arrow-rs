@@ -46,9 +46,9 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
-use parquet::file::FOOTER_SIZE;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, ParquetOffsetIndex};
 use parquet::file::properties::WriterProperties;
+use parquet::file::FOOTER_SIZE;
 use parquet::format::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
 use std::collections::BTreeMap;

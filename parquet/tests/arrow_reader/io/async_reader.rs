@@ -18,8 +18,8 @@
 //! Tests for the async reader ([`ParquetRecordBatchStreamBuilder`])
 
 use crate::io::{
-    LogEntry, OperationLog, TestParquetFile, filter_a_175_b_625, filter_b_575_625, filter_b_false,
-    test_file, test_options,
+    filter_a_175_b_625, filter_b_575_625, filter_b_false, test_file, test_options, LogEntry,
+    OperationLog, TestParquetFile,
 };
 use bytes::Bytes;
 use futures::future::BoxFuture;

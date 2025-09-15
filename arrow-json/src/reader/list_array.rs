@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{ArrayDecoder, make_decoder};
-use arrow_array::OffsetSizeTrait;
+use crate::reader::{make_decoder, ArrayDecoder};
+use crate::StructMode;
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use arrow_array::OffsetSizeTrait;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};

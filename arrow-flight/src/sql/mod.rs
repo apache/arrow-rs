@@ -50,6 +50,11 @@ mod r#gen {
     include!("arrow.flight.protocol.sql.rs");
 }
 
+pub use r#gen::action_end_transaction_request::EndTransaction;
+pub use r#gen::command_statement_ingest::table_definition_options::{
+    TableExistsOption, TableNotExistOption,
+};
+pub use r#gen::command_statement_ingest::TableDefinitionOptions;
 pub use r#gen::ActionBeginSavepointRequest;
 pub use r#gen::ActionBeginSavepointResult;
 pub use r#gen::ActionBeginTransactionRequest;
@@ -103,11 +108,6 @@ pub use r#gen::TicketStatementQuery;
 pub use r#gen::UpdateDeleteRules;
 pub use r#gen::XdbcDataType;
 pub use r#gen::XdbcDatetimeSubcode;
-pub use r#gen::action_end_transaction_request::EndTransaction;
-pub use r#gen::command_statement_ingest::TableDefinitionOptions;
-pub use r#gen::command_statement_ingest::table_definition_options::{
-    TableExistsOption, TableNotExistOption,
-};
 
 pub mod client;
 pub mod metadata;

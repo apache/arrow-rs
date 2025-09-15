@@ -18,9 +18,9 @@
 use crate::array::print_long_array;
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
 use crate::iterator::FixedSizeListIter;
-use crate::{Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, make_array};
-use arrow_buffer::ArrowNativeType;
+use crate::{make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType};
 use arrow_buffer::buffer::NullBuffer;
+use arrow_buffer::ArrowNativeType;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use std::any::Any;
@@ -482,12 +482,12 @@ impl ArrayAccessor for &FixedSizeListArray {
 
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::{BooleanBuffer, Buffer, bit_util};
+    use arrow_buffer::{bit_util, BooleanBuffer, Buffer};
     use arrow_schema::Field;
 
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::{Int32Array, new_empty_array};
+    use crate::{new_empty_array, Int32Array};
 
     use super::*;
 

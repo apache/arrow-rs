@@ -363,10 +363,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Int32Array;
-    use crate::builder::{Int32Builder, ListBuilder, make_builder};
+    use crate::builder::{make_builder, Int32Builder, ListBuilder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
+    use crate::Int32Array;
     use arrow_schema::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {

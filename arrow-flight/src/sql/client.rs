@@ -17,8 +17,8 @@
 
 //! A FlightSQL Client [`FlightSqlServiceClient`]
 
-use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -52,9 +52,9 @@ use arrow_array::RecordBatch;
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
-use arrow_ipc::{MessageHeader, root_as_message};
+use arrow_ipc::{root_as_message, MessageHeader};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use futures::{Stream, TryStreamExt, stream};
+use futures::{stream, Stream, TryStreamExt};
 use prost::Message;
 use tonic::transport::Channel;
 use tonic::{IntoRequest, IntoStreamingRequest, Streaming};

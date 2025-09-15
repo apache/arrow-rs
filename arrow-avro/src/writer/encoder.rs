@@ -17,11 +17,11 @@
 
 //! Avro Encoder for Arrow types.
 
-use arrow_array::OffsetSizeTrait;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
+use arrow_array::OffsetSizeTrait;
 use arrow_array::{Array, GenericBinaryArray, PrimitiveArray, RecordBatch};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, FieldRef, TimeUnit};

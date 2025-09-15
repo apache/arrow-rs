@@ -18,10 +18,10 @@
 mod primitive;
 mod variant;
 
-use crate::VariantArray;
-use crate::variant_get::GetOptions;
 use crate::variant_get::output::primitive::PrimitiveOutputBuilder;
 use crate::variant_get::output::variant::VariantOutputBuilder;
+use crate::variant_get::GetOptions;
+use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray};
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow::error::Result;

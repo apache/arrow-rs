@@ -17,8 +17,8 @@
 
 use crate::column::page::CompressedPage;
 use crate::encryption::ciphers::BlockEncryptor;
-use crate::encryption::encrypt::{FileEncryptor, encrypt_object};
-use crate::encryption::modules::{ModuleType, create_module_aad};
+use crate::encryption::encrypt::{encrypt_object, FileEncryptor};
+use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::format::PageHeader;

@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use self::decimal::{VariantDecimal4, VariantDecimal8, VariantDecimal16};
+pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 pub use self::list::VariantList;
 pub use self::metadata::VariantMetadata;
 pub use self::object::VariantObject;
 use crate::decoder::{
-    self, VariantBasicType, VariantPrimitiveType, get_basic_type, get_primitive_type,
+    self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, slice_from_slice};

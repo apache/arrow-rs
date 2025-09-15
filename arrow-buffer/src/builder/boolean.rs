@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util};
+use crate::{bit_mask, bit_util, BooleanBuffer, Buffer, MutableBuffer};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
