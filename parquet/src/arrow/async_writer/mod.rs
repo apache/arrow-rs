@@ -292,7 +292,13 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Create a new row group writer and return its column writers.
     pub async fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         let before = self.sync_writer.flushed_row_groups().len();
+        // TODO: should use the new API
+        #[allow(deprecated)]
         let writers = self.sync_writer.get_column_writers()?;
+        // let (serialized_file_writer, arrow_row_group_writer_factory) =
+        //     self.sync_writer.into_serialized_writer().unwrap();
+        // let writers = row_group_writer_factory.create_column_writers(0).unwrap();
+        // let metadata = serialized_file_writer.close().unwrap();
         if before != self.sync_writer.flushed_row_groups().len() {
             self.do_write().await?;
         }
@@ -301,6 +307,8 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
 
     /// Append the given column chunks to the file as a new row group.
     pub async fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
+        // TODO: should use the new API
+        #[allow(deprecated)]
         self.sync_writer.append_row_group(chunks)?;
         self.do_write().await
     }
