@@ -595,6 +595,11 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             let value = boolean_array.value(index);
             Variant::from(value)
         }
+        DataType::FixedSizeBinary(_) => {
+            let array = typed_value.as_fixed_size_binary();
+            let value = array.value(index);
+            Variant::from(value)
+        }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
         }
