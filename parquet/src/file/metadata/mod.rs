@@ -93,12 +93,12 @@ pub(crate) mod reader;
 pub(crate) mod thrift_gen;
 mod writer;
 
+use crate::basic::PageType;
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
-use crate::file::metadata::thrift_gen::PageEncodingStats;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
 use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
@@ -420,7 +420,7 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     }
 }
 
-// TODO: should this move to thrift_gen?
+// TODO(ets): should this move to thrift_gen?
 thrift_struct!(
 /// A key-value pair for [`FileMetaData`].
 pub struct KeyValue {
@@ -441,6 +441,15 @@ impl KeyValue {
         }
     }
 }
+
+thrift_struct!(
+/// PageEncodingStats for a column chunk and data page.
+pub struct PageEncodingStats {
+  1: required PageType page_type;
+  2: required Encoding encoding;
+  3: required i32 count;
+}
+);
 
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;

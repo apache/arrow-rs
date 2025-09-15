@@ -21,7 +21,6 @@ use bytes::Bytes;
 use half::f16;
 
 use crate::bloom_filter::Sbbf;
-use crate::file::metadata::thrift_gen::PageEncodingStats;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use std::collections::{BTreeSet, VecDeque};
@@ -41,7 +40,7 @@ use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
     ColumnChunkMetaData, ColumnChunkMetaDataBuilder, ColumnIndexBuilder, LevelHistogram,
-    OffsetIndexBuilder,
+    OffsetIndexBuilder, PageEncodingStats,
 };
 use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,

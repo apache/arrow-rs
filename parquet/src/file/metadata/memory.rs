@@ -20,9 +20,8 @@
 //! [`ParquetMetadata::memory_size`]: crate::file::metadata::ParquetMetaData::memory_size
 use crate::basic::{BoundaryOrder, ColumnOrder, Compression, Encoding, PageType};
 use crate::data_type::private::ParquetValueType;
-use crate::file::metadata::thrift_gen::PageEncodingStats;
 use crate::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, KeyValue, RowGroupMetaData, SortingColumn,
+    ColumnChunkMetaData, FileMetaData, KeyValue, PageEncodingStats, RowGroupMetaData, SortingColumn,
 };
 use crate::file::page_index::column_index::{
     ByteArrayColumnIndex, ColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,

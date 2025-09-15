@@ -28,8 +28,8 @@ use crate::{
     errors::{ParquetError, Result},
     file::{
         metadata::{
-            ColumnChunkMetaData, KeyValue, LevelHistogram, ParquetMetaData, RowGroupMetaData,
-            SortingColumn,
+            ColumnChunkMetaData, KeyValue, LevelHistogram, PageEncodingStats, ParquetMetaData,
+            RowGroupMetaData, SortingColumn,
         },
         statistics::ValueStatistics,
     },
@@ -50,15 +50,6 @@ use crate::{
     parquet_thrift::ThriftSliceInputProtocol,
     schema::types::SchemaDescPtr,
 };
-
-thrift_struct!(
-/// PageEncodingStats for a column chunk and data page.
-pub struct PageEncodingStats {
-  1: required PageType page_type;
-  2: required Encoding encoding;
-  3: required i32 count;
-}
-);
 
 // this needs to be visible to the schema conversion code
 thrift_struct!(
