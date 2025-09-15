@@ -631,7 +631,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             // https://github.com/apache/arrow-rs/issues/8091
             debug_assert!(
                 false,
-                "Unsupported typed_value type: {:?}",
+                "Unsupported typed_value type: {}",
                 typed_value.data_type()
             );
             Variant::Null
