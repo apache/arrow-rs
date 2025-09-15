@@ -571,7 +571,7 @@ impl PageWriter for ArrowPageWriter {
             None => page,
         };
 
-        let page_header = page.to_thrift_header();
+        let page_header = page.to_thrift_header()?;
         let header = {
             let mut header = Vec::with_capacity(1024);
 
