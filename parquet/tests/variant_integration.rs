@@ -141,8 +141,7 @@ variant_test_case!(
     36,
     "Unsupported typed_value type: Timestamp(Nanosecond, None)"
 );
-// https://github.com/apache/arrow-rs/issues/8335
-variant_test_case!(37, "Unsupported typed_value type: FixedSizeBinary(16)");
+variant_test_case!(37);
 // https://github.com/apache/arrow-rs/issues/8336
 variant_test_case!(38, "Unsupported typed_value type: Struct(");
 variant_test_case!(39);
