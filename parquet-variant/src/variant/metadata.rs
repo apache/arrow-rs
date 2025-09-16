@@ -141,6 +141,39 @@ pub struct VariantMetadata<'m> {
 // could increase the size of Variant. All those size increases could hurt performance.
 const _: () = crate::utils::expect_size_of::<VariantMetadata>(32);
 
+/// The canonical byte slice corresponding to an empty metadata dictionary.
+///
+/// ```
+/// # use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantMetadata, WritableMetadataBuilder};
+/// let mut metadata_builder = WritableMetadataBuilder::default();
+/// metadata_builder.finish();
+/// let metadata_bytes = metadata_builder.into_inner();
+/// assert_eq!(&metadata_bytes, EMPTY_VARIANT_METADATA_BYTES);
+/// ```
+pub const EMPTY_VARIANT_METADATA_BYTES: &[u8] = &[1, 0, 0];
+
+/// The empty metadata dictionary.
+///
+/// ```
+/// # use parquet_variant::{EMPTY_VARIANT_METADATA, VariantMetadata, WritableMetadataBuilder};
+/// let mut metadata_builder = WritableMetadataBuilder::default();
+/// metadata_builder.finish();
+/// let metadata_bytes = metadata_builder.into_inner();
+/// let empty_metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+/// assert_eq!(empty_metadata, EMPTY_VARIANT_METADATA);
+/// ```
+pub static EMPTY_VARIANT_METADATA: VariantMetadata = VariantMetadata {
+    bytes: EMPTY_VARIANT_METADATA_BYTES,
+    header: VariantMetadataHeader {
+        version: CORRECT_VERSION_VALUE,
+        is_sorted: false,
+        offset_size: OffsetSizeBytes::One,
+    },
+    dictionary_size: 0,
+    first_value_byte: 3,
+    validated: true,
+};
+
 impl<'m> VariantMetadata<'m> {
     /// Attempts to interpret `bytes` as a variant metadata instance, with full [validation] of all
     /// dictionary entries.

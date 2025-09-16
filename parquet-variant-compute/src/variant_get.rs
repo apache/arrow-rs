@@ -304,7 +304,7 @@ mod test {
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow_schema::{DataType, Field, FieldRef, Fields};
-    use parquet_variant::{Variant, VariantPath};
+    use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
 
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
@@ -701,8 +701,10 @@ mod test {
             fn $func() -> ArrayRef {
                 // At the time of writing, the `VariantArrayBuilder` does not support shredding.
                 // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-                let (metadata, _value) = { parquet_variant::VariantBuilder::new().finish() };
-                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                    EMPTY_VARIANT_METADATA_BYTES,
+                    3,
+                ));
                 let typed_value = $array_type::from(vec![
                     Some(<$primitive_type>::try_from(1u8).unwrap()),
                     Some(<$primitive_type>::try_from(2u8).unwrap()),
@@ -1032,8 +1034,6 @@ mod test {
     /// }
     /// ```
     fn all_null_variant_array() -> ArrayRef {
-        let (metadata, _value) = { parquet_variant::VariantBuilder::new().finish() };
-
         let nulls = NullBuffer::from(vec![
             false, // row 0 is null
             false, // row 1 is null
@@ -1041,7 +1041,8 @@ mod test {
         ]);
 
         // metadata is the same for all rows (though they're all null)
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
 
         let struct_array = StructArrayBuilder::new()
             .with_field("metadata", Arc::new(metadata), false)
@@ -2502,8 +2503,8 @@ mod test {
             .build();
 
         // Build final VariantArray with top-level nulls
-        let (metadata, _) = parquet_variant::VariantBuilder::new().finish();
-        let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+        let metadata_array =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 4));
         let nulls = NullBuffer::from(vec![
             true,  // row 0: inner struct exists with typed_value=42
             true,  // row 1: inner field NULL
