@@ -23,7 +23,7 @@ use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
 use crate::path::{VariantPath, VariantPathElement};
-use crate::utils::{first_byte_from_slice, slice_from_slice};
+use crate::utils::{first_byte_from_slice, fits_precision, slice_from_slice};
 use std::ops::Deref;
 
 use arrow_schema::ArrowError;
@@ -1096,13 +1096,21 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f16(), Some(f16::from_f64(std::f64::consts::PI)));
     ///
+    /// // and from integers with no more than 11 bits of precision
+    /// let v3 = Variant::from(2047);
+    /// assert_eq!(v3.as_f16(), Some(f16::from_f32(2047.0)));
+    ///
     /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_f16(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f16(), None);
     pub fn as_f16(&self) -> Option<f16> {
         match *self {
             Variant::Float(i) => Some(f16::from_f32(i)),
             Variant::Double(i) => Some(f16::from_f64(i)),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
+            Variant::Int32(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
+            Variant::Int64(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
             _ => None,
         }
     }
@@ -1125,15 +1133,23 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f32(), Some(std::f32::consts::PI));
     ///
+    /// // and from integers with no more than 24 bits of precision
+    /// let v3 = Variant::from(16777215i64);
+    /// assert_eq!(v3.as_f32(), Some(16777215.0));
+    ///
     /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_f32(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f32(), None);
     /// ```
     #[allow(clippy::cast_possible_truncation)]
     pub fn as_f32(&self) -> Option<f32> {
         match *self {
             Variant::Float(i) => Some(i),
             Variant::Double(i) => Some(i as f32),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i.into()),
+            Variant::Int32(i) if fits_precision::<24>(i) => Some(i as _),
+            Variant::Int64(i) if fits_precision::<24>(i) => Some(i as _),
             _ => None,
         }
     }
@@ -1156,14 +1172,22 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f64(), Some(std::f64::consts::PI));
     ///
+    /// // and from integers with no more than 53 bits of precision
+    /// let v3 = Variant::from(9007199254740991i64);
+    /// assert_eq!(v3.as_f64(), Some(9007199254740991.0));
+    ///
     /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_f64(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f64(), None);
     /// ```
     pub fn as_f64(&self) -> Option<f64> {
         match *self {
             Variant::Float(i) => Some(i.into()),
             Variant::Double(i) => Some(i),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i.into()),
+            Variant::Int32(i) => Some(i.into()),
+            Variant::Int64(i) if fits_precision::<53>(i) => Some(i as _),
             _ => None,
         }
     }
