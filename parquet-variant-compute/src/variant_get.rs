@@ -307,7 +307,8 @@ mod test {
     use parquet_variant::{Variant, VariantPath};
 
     use crate::json_to_variant;
-    use crate::{variant_array::ShreddedVariantFieldArray, VariantArray};
+    use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+    use crate::VariantArray;
 
     use super::{variant_get, GetOptions};
 
@@ -470,6 +471,23 @@ mod test {
     #[test]
     fn get_variant_partially_shredded_float64_as_variant() {
         numeric_partially_shredded_test!(f64, partially_shredded_float64_variant_array);
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_bool_as_variant() {
+        let array = partially_shredded_bool_variant_array();
+        let options = GetOptions::new();
+        let result = variant_get(&array, options).unwrap();
+
+        // expect the result is a VariantArray
+        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result.len(), 4);
+
+        // Expect the values are the same as the original values
+        assert_eq!(result.value(0), Variant::from(true));
+        assert!(!result.is_valid(1));
+        assert_eq!(result.value(2), Variant::from("n/a"));
+        assert_eq!(result.value(3), Variant::from(false));
     }
 
     /// Shredding: extract a value as an Int32Array
@@ -675,8 +693,8 @@ mod test {
                 ]);
 
                 let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata))
-                    .with_field("typed_value", Arc::new(typed_value))
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(typed_value), true)
                     .build();
 
                 Arc::new(
@@ -804,9 +822,9 @@ mod test {
                 ]);
 
                 let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata))
-                    .with_field("typed_value", Arc::new(typed_value))
-                    .with_field("value", Arc::new(values))
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(typed_value), true)
+                    .with_field("value", Arc::new(values), true)
                     .with_nulls(nulls)
                     .build();
 
@@ -874,43 +892,50 @@ mod test {
         f64
     );
 
-    /// Builds struct arrays from component fields
-    ///
-    /// TODO: move to arrow crate
-    #[derive(Debug, Default, Clone)]
-    struct StructArrayBuilder {
-        fields: Vec<FieldRef>,
-        arrays: Vec<ArrayRef>,
-        nulls: Option<NullBuffer>,
-    }
+    /// Return a VariantArray that represents a partially "shredded" variant for bool
+    fn partially_shredded_bool_variant_array() -> ArrayRef {
+        let (metadata, string_value) = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            builder.append_value("n/a");
+            builder.finish()
+        };
 
-    impl StructArrayBuilder {
-        fn new() -> Self {
-            Default::default()
-        }
+        let nulls = NullBuffer::from(vec![
+            true,  // row 0 non null
+            false, // row 1 is null
+            true,  // row 2 non null
+            true,  // row 3 non null
+        ]);
 
-        /// Add an array to this struct array as a field with the specified name.
-        fn with_field(mut self, field_name: &str, array: ArrayRef) -> Self {
-            let field = Field::new(field_name, array.data_type().clone(), true);
-            self.fields.push(Arc::new(field));
-            self.arrays.push(array);
-            self
-        }
+        // metadata is the same for all rows
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
 
-        /// Set the null buffer for this struct array.
-        fn with_nulls(mut self, nulls: NullBuffer) -> Self {
-            self.nulls = Some(nulls);
-            self
-        }
+        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
+        // about why row1 is an empty but non null, value.
+        let values = BinaryViewArray::from(vec![
+            None,                // row 0 is shredded, so no value
+            Some(b"" as &[u8]),  // row 1 is null, so empty value (why?)
+            Some(&string_value), // copy the string value "N/A"
+            None,                // row 3 is shredded, so no value
+        ]);
 
-        pub fn build(self) -> StructArray {
-            let Self {
-                fields,
-                arrays,
-                nulls,
-            } = self;
-            StructArray::new(Fields::from(fields), arrays, nulls)
-        }
+        let typed_value = arrow::array::BooleanArray::from(vec![
+            Some(true),  // row 0 is shredded, so it has a value
+            None,        // row 1 is null, so no value
+            None,        // row 2 is a string, so no typed value
+            Some(false), // row 3 is shredded, so it has a value
+        ]);
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("typed_value", Arc::new(typed_value), true)
+            .with_field("value", Arc::new(values), true)
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(
+            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
+        )
     }
 
     /// Return a VariantArray that represents an "all null" variant
@@ -942,7 +967,7 @@ mod test {
         let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
 
         let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata))
+            .with_field("metadata", Arc::new(metadata), false)
             .with_nulls(nulls)
             .build();
 
@@ -1033,8 +1058,8 @@ mod test {
         let x_field_typed_value = Int32Array::from(vec![Some(1), Some(42)]);
 
         // For perfect shredding of the x field, no "value" column, only typed_value
-        let x_field_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("typed_value", Arc::new(x_field_typed_value))
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_field_typed_value), true)
             .build();
 
         // Wrap the x field struct in a ShreddedVariantFieldArray
@@ -1055,10 +1080,10 @@ mod test {
         .unwrap();
 
         // Create the main VariantArray
-        let main_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_struct))
+        let main_struct = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(main_struct)).expect("should create variant array"))
@@ -1413,8 +1438,8 @@ mod test {
         let x_field_typed_value = Int32Array::from(vec![Some(42), None]);
 
         // For the x field, only typed_value (perfect shredding when possible)
-        let x_field_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("typed_value", Arc::new(x_field_typed_value))
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_field_typed_value), true)
             .build();
 
         let x_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(x_field_struct))
@@ -1431,10 +1456,10 @@ mod test {
                 .unwrap();
 
         // Build final VariantArray
-        let struct_array = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_struct))
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
@@ -1492,8 +1517,8 @@ mod test {
         // Create the nested shredded structure
         // Level 2: x field (the deepest level)
         let x_typed_value = Int32Array::from(vec![Some(55), None]);
-        let x_field_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("typed_value", Arc::new(x_typed_value))
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_typed_value), true)
             .build();
         let x_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(x_field_struct))
             .expect("should create ShreddedVariantFieldArray for x");
@@ -1519,15 +1544,16 @@ mod test {
             x_field_shredded.data_type().clone(),
             true,
         )]);
-        let a_inner_struct = crate::variant_array::StructArrayBuilder::new()
+        let a_inner_struct = StructArrayBuilder::new()
             .with_field(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(a_inner_fields, vec![Arc::new(x_field_shredded)], None)
                         .unwrap(),
                 ),
+                true,
             )
-            .with_field("value", Arc::new(a_value_array))
+            .with_field("value", Arc::new(a_value_array), true)
             .build();
         let a_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(a_inner_struct))
             .expect("should create ShreddedVariantFieldArray for a");
@@ -1543,10 +1569,10 @@ mod test {
                 .unwrap();
 
         // Build final VariantArray
-        let struct_array = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_struct))
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
@@ -1597,8 +1623,8 @@ mod test {
 
         // Level 3: x field (deepest level)
         let x_typed_value = Int32Array::from(vec![Some(100), None, None]);
-        let x_field_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("typed_value", Arc::new(x_typed_value))
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_typed_value), true)
             .build();
         let x_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(x_field_struct))
             .expect("should create ShreddedVariantFieldArray for x");
@@ -1622,15 +1648,16 @@ mod test {
             x_field_shredded.data_type().clone(),
             true,
         )]);
-        let b_inner_struct = crate::variant_array::StructArrayBuilder::new()
+        let b_inner_struct = StructArrayBuilder::new()
             .with_field(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(b_inner_fields, vec![Arc::new(x_field_shredded)], None)
                         .unwrap(),
                 ),
+                true,
             )
-            .with_field("value", Arc::new(b_value_array))
+            .with_field("value", Arc::new(b_value_array), true)
             .build();
         let b_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(b_inner_struct))
             .expect("should create ShreddedVariantFieldArray for b");
@@ -1654,15 +1681,16 @@ mod test {
             b_field_shredded.data_type().clone(),
             true,
         )]);
-        let a_inner_struct = crate::variant_array::StructArrayBuilder::new()
+        let a_inner_struct = StructArrayBuilder::new()
             .with_field(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(a_inner_fields, vec![Arc::new(b_field_shredded)], None)
                         .unwrap(),
                 ),
+                true,
             )
-            .with_field("value", Arc::new(a_value_array))
+            .with_field("value", Arc::new(a_value_array), true)
             .build();
         let a_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(a_inner_struct))
             .expect("should create ShreddedVariantFieldArray for a");
@@ -1678,10 +1706,10 @@ mod test {
                 .unwrap();
 
         // Build final VariantArray
-        let struct_array = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_struct))
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
@@ -1988,5 +2016,500 @@ mod test {
 
         // Row 8: Large Int64 should fail conversion -> NULL
         assert!(int32_result_2.is_null(8)); // 9223372036854775807 (too large for Int32)
+    }
+
+    #[test]
+    fn test_struct_extraction_subset_superset_schema_perfectly_shredded() {
+        // Create variant with diverse null patterns and empty objects
+        let variant_array = create_comprehensive_shredded_variant();
+
+        // Request struct with fields "a", "b", "d" (skip existing "c", add missing "d")
+        let struct_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]);
+        let struct_type = DataType::Struct(struct_fields);
+
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", struct_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let result = variant_get(&variant_array, options).unwrap();
+
+        // Verify the result is a StructArray with 3 fields and 5 rows
+        let struct_result = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_result.len(), 5);
+        assert_eq!(struct_result.num_columns(), 3);
+
+        let field_a = struct_result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let field_b = struct_result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let field_d = struct_result
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        // Row 0: Normal values {"a": 1, "b": 2, "c": 3} → {a: 1, b: 2, d: NULL}
+        assert!(!struct_result.is_null(0));
+        assert_eq!(field_a.value(0), 1);
+        assert_eq!(field_b.value(0), 2);
+        assert!(field_d.is_null(0)); // Missing field "d"
+
+        // Row 1: Top-level NULL → struct-level NULL
+        assert!(struct_result.is_null(1));
+
+        // Row 2: Field "a" missing → {a: NULL, b: 2, d: NULL}
+        assert!(!struct_result.is_null(2));
+        assert!(field_a.is_null(2)); // Missing field "a"
+        assert_eq!(field_b.value(2), 2);
+        assert!(field_d.is_null(2)); // Missing field "d"
+
+        // Row 3: Field "b" missing → {a: 1, b: NULL, d: NULL}
+        assert!(!struct_result.is_null(3));
+        assert_eq!(field_a.value(3), 1);
+        assert!(field_b.is_null(3)); // Missing field "b"
+        assert!(field_d.is_null(3)); // Missing field "d"
+
+        // Row 4: Empty object {} → {a: NULL, b: NULL, d: NULL}
+        assert!(!struct_result.is_null(4));
+        assert!(field_a.is_null(4)); // Empty object
+        assert!(field_b.is_null(4)); // Empty object
+        assert!(field_d.is_null(4)); // Missing field "d"
+    }
+
+    #[test]
+    fn test_nested_struct_extraction_perfectly_shredded() {
+        // Create nested variant with diverse null patterns
+        let variant_array = create_comprehensive_nested_shredded_variant();
+        println!("variant_array: {variant_array:?}");
+
+        // Request 3-level nested struct type {"outer": {"inner": INT}}
+        let inner_field = Field::new("inner", DataType::Int32, true);
+        let inner_type = DataType::Struct(Fields::from(vec![inner_field]));
+        let outer_field = Field::new("outer", inner_type, true);
+        let result_type = DataType::Struct(Fields::from(vec![outer_field]));
+
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", result_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let result = variant_get(&variant_array, options).unwrap();
+        println!("result: {result:?}");
+
+        // Verify the result is a StructArray with "outer" field and 4 rows
+        let outer_struct = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(outer_struct.len(), 4);
+        assert_eq!(outer_struct.num_columns(), 1);
+
+        // Get the "inner" struct column
+        let inner_struct = outer_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(inner_struct.num_columns(), 1);
+
+        // Get the "leaf" field (Int32 values)
+        let leaf_field = inner_struct
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        // Row 0: Normal nested {"outer": {"inner": {"leaf": 42}}}
+        assert!(!outer_struct.is_null(0));
+        assert!(!inner_struct.is_null(0));
+        assert_eq!(leaf_field.value(0), 42);
+
+        // Row 1: "inner" field missing → {outer: {inner: NULL}}
+        assert!(!outer_struct.is_null(1));
+        assert!(!inner_struct.is_null(1)); // outer exists, inner exists but leaf is NULL
+        assert!(leaf_field.is_null(1)); // leaf field is NULL
+
+        // Row 2: "outer" field missing → {outer: NULL}
+        assert!(!outer_struct.is_null(2));
+        assert!(inner_struct.is_null(2)); // outer field is NULL
+
+        // Row 3: Top-level NULL → struct-level NULL
+        assert!(outer_struct.is_null(3));
+    }
+
+    #[test]
+    fn test_path_based_null_masks_one_step() {
+        // Create nested variant with diverse null patterns
+        let variant_array = create_comprehensive_nested_shredded_variant();
+
+        // Extract "outer" field using path-based variant_get
+        let path = VariantPath::from("outer");
+        let inner_field = Field::new("inner", DataType::Int32, true);
+        let result_type = DataType::Struct(Fields::from(vec![inner_field]));
+
+        let options = GetOptions {
+            path,
+            as_type: Some(Arc::new(Field::new("result", result_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let result = variant_get(&variant_array, options).unwrap();
+
+        // Verify the result is a StructArray with "inner" field and 4 rows
+        let outer_result = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(outer_result.len(), 4);
+        assert_eq!(outer_result.num_columns(), 1);
+
+        // Get the "inner" field (Int32 values)
+        let inner_field = outer_result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        // Row 0: Normal nested {"outer": {"inner": 42}} → {"inner": 42}
+        assert!(!outer_result.is_null(0));
+        assert_eq!(inner_field.value(0), 42);
+
+        // Row 1: Inner field null {"outer": {"inner": null}} → {"inner": null}
+        assert!(!outer_result.is_null(1));
+        assert!(inner_field.is_null(1));
+
+        // Row 2: Outer field null {"outer": null} → null (entire struct is null)
+        assert!(outer_result.is_null(2));
+
+        // Row 3: Top-level null → null (entire struct is null)
+        assert!(outer_result.is_null(3));
+    }
+
+    #[test]
+    fn test_path_based_null_masks_two_steps() {
+        // Create nested variant with diverse null patterns
+        let variant_array = create_comprehensive_nested_shredded_variant();
+
+        // Extract "outer.inner" field using path-based variant_get
+        let path = VariantPath::from("outer").join("inner");
+
+        let options = GetOptions {
+            path,
+            as_type: Some(Arc::new(Field::new("result", DataType::Int32, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let result = variant_get(&variant_array, options).unwrap();
+
+        // Verify the result is an Int32Array with 4 rows
+        let int_result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int_result.len(), 4);
+
+        // Row 0: Normal nested {"outer": {"inner": 42}} → 42
+        assert!(!int_result.is_null(0));
+        assert_eq!(int_result.value(0), 42);
+
+        // Row 1: Inner field null {"outer": {"inner": null}} → null
+        assert!(int_result.is_null(1));
+
+        // Row 2: Outer field null {"outer": null} → null (path traversal fails)
+        assert!(int_result.is_null(2));
+
+        // Row 3: Top-level null → null (path traversal fails)
+        assert!(int_result.is_null(3));
+    }
+
+    #[test]
+    fn test_struct_extraction_mixed_and_unshredded() {
+        // Create a partially shredded variant (x shredded, y not)
+        let variant_array = create_mixed_and_unshredded_variant();
+
+        // Request struct with both shredded and unshredded fields
+        let struct_fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("y", DataType::Int32, true),
+        ]);
+        let struct_type = DataType::Struct(struct_fields);
+
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", struct_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let result = variant_get(&variant_array, options).unwrap();
+
+        // Verify the mixed shredding works (should succeed with current implementation)
+        let struct_result = result.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(struct_result.len(), 4);
+        assert_eq!(struct_result.num_columns(), 2);
+
+        let field_x = struct_result
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let field_y = struct_result
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+
+        // Row 0: {"x": 1, "y": 42} - x from shredded, y from value field
+        assert_eq!(field_x.value(0), 1);
+        assert_eq!(field_y.value(0), 42);
+
+        // Row 1: {"x": 2} - x from shredded, y missing (perfect shredding)
+        assert_eq!(field_x.value(1), 2);
+        assert!(field_y.is_null(1));
+
+        // Row 2: {"x": 3, "y": null} - x from shredded, y explicitly null in value
+        assert_eq!(field_x.value(2), 3);
+        assert!(field_y.is_null(2));
+
+        // Row 3: top-level null - entire struct row should be null
+        assert!(struct_result.is_null(3));
+    }
+
+    /// Test that demonstrates the actual struct row builder gap
+    /// This test should fail because it hits unshredded nested structs
+    #[test]
+    fn test_struct_row_builder_gap_demonstration() {
+        // Create completely unshredded JSON variant (no typed_value at all)
+        let json_strings = vec![
+            r#"{"outer": {"inner": 42}}"#,
+            r#"{"outer": {"inner": 100}}"#,
+        ];
+        let string_array: Arc<dyn Array> = Arc::new(StringArray::from(json_strings));
+        let variant_array = json_to_variant(&string_array).unwrap();
+
+        // Request nested struct - this should fail at the row builder level
+        let inner_fields = Fields::from(vec![Field::new("inner", DataType::Int32, true)]);
+        let inner_struct_type = DataType::Struct(inner_fields);
+        let outer_fields = Fields::from(vec![Field::new("outer", inner_struct_type, true)]);
+        let outer_struct_type = DataType::Struct(outer_fields);
+
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", outer_struct_type, true))),
+            cast_options: CastOptions::default(),
+        };
+
+        let variant_array_ref: Arc<dyn Array> = Arc::new(variant_array);
+        let result = variant_get(&variant_array_ref, options);
+
+        // Should fail with NotYetImplemented when the row builder tries to handle struct type
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("not yet implemented"));
+    }
+
+    /// Create comprehensive shredded variant with diverse null patterns and empty objects
+    /// Rows: normal values, top-level null, missing field a, missing field b, empty object
+    fn create_comprehensive_shredded_variant() -> ArrayRef {
+        let (metadata, _) = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            let obj = builder.new_object();
+            obj.finish();
+            builder.finish()
+        };
+
+        // Create null buffer for top-level nulls
+        let nulls = NullBuffer::from(vec![
+            true,  // row 0: normal values
+            false, // row 1: top-level null
+            true,  // row 2: missing field a
+            true,  // row 3: missing field b
+            true,  // row 4: empty object
+        ]);
+
+        let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 5));
+
+        // Create shredded fields with different null patterns
+        // Field "a": present in rows 0,3 (missing in rows 1,2,4)
+        let a_field_typed_value = Int32Array::from(vec![Some(1), None, None, Some(1), None]);
+        let a_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(a_field_typed_value), true)
+            .build();
+        let a_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(a_field_struct))
+            .expect("should create ShreddedVariantFieldArray for a");
+
+        // Field "b": present in rows 0,2 (missing in rows 1,3,4)
+        let b_field_typed_value = Int32Array::from(vec![Some(2), None, Some(2), None, None]);
+        let b_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(b_field_typed_value), true)
+            .build();
+        let b_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(b_field_struct))
+            .expect("should create ShreddedVariantFieldArray for b");
+
+        // Field "c": present in row 0 only (missing in all other rows)
+        let c_field_typed_value = Int32Array::from(vec![Some(3), None, None, None, None]);
+        let c_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(c_field_typed_value), true)
+            .build();
+        let c_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(c_field_struct))
+            .expect("should create ShreddedVariantFieldArray for c");
+
+        // Create main typed_value struct
+        let typed_value_fields = Fields::from(vec![
+            Field::new("a", a_field_shredded.data_type().clone(), true),
+            Field::new("b", b_field_shredded.data_type().clone(), true),
+            Field::new("c", c_field_shredded.data_type().clone(), true),
+        ]);
+        let typed_value_struct = StructArray::try_new(
+            typed_value_fields,
+            vec![
+                Arc::new(a_field_shredded),
+                Arc::new(b_field_shredded),
+                Arc::new(c_field_shredded),
+            ],
+            None,
+        )
+        .unwrap();
+
+        // Build final VariantArray with top-level nulls
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
+    }
+
+    /// Create comprehensive nested shredded variant with diverse null patterns
+    /// Represents 3-level structure: variant -> outer -> inner (INT value)
+    /// The shredding schema is: {"metadata": BINARY, "typed_value": {"outer": {"typed_value": {"inner": {"typed_value": INT}}}}}
+    /// Rows: normal nested value, inner field null, outer field null, top-level null
+    fn create_comprehensive_nested_shredded_variant() -> ArrayRef {
+        // Create the inner level: contains typed_value with Int32 values
+        // Row 0: has value 42, Row 1: inner null, Row 2: outer null, Row 3: top-level null
+        let inner_typed_value = Int32Array::from(vec![Some(42), None, None, None]); // dummy value for row 2
+        let inner = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(inner_typed_value), true)
+            .build();
+        let inner = ShreddedVariantFieldArray::try_new(Arc::new(inner)).unwrap();
+
+        let outer_typed_value_nulls = NullBuffer::from(vec![
+            true,  // row 0: inner struct exists with typed_value=42
+            false, // row 1: inner field NULL
+            false, // row 2: outer field NULL
+            false, // row 3: top-level NULL
+        ]);
+        let outer_typed_value = StructArrayBuilder::new()
+            .with_field("inner", Arc::new(inner), false)
+            .with_nulls(outer_typed_value_nulls)
+            .build();
+
+        let outer = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(outer_typed_value), true)
+            .build();
+        let outer = ShreddedVariantFieldArray::try_new(Arc::new(outer)).unwrap();
+
+        let typed_value_nulls = NullBuffer::from(vec![
+            true,  // row 0: inner struct exists with typed_value=42
+            true,  // row 1: inner field NULL
+            false, // row 2: outer field NULL
+            false, // row 3: top-level NULL
+        ]);
+        let typed_value = StructArrayBuilder::new()
+            .with_field("outer", Arc::new(outer), false)
+            .with_nulls(typed_value_nulls)
+            .build();
+
+        // Build final VariantArray with top-level nulls
+        let (metadata, _) = parquet_variant::VariantBuilder::new().finish();
+        let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+        let nulls = NullBuffer::from(vec![
+            true,  // row 0: inner struct exists with typed_value=42
+            true,  // row 1: inner field NULL
+            true,  // row 2: outer field NULL
+            false, // row 3: top-level NULL
+        ]);
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("typed_value", Arc::new(typed_value), true)
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
+    }
+
+    /// Create variant with mixed shredding (spec-compliant) including null scenarios
+    /// Field "x" is globally shredded, field "y" is never shredded
+    fn create_mixed_and_unshredded_variant() -> ArrayRef {
+        // Create spec-compliant mixed shredding:
+        // - Field "x" is globally shredded (has typed_value column)
+        // - Field "y" is never shredded (only appears in value field when present)
+
+        let (metadata, y_field_value) = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            let mut obj = builder.new_object();
+            obj.insert("y", Variant::from(42));
+            obj.finish();
+            builder.finish()
+        };
+
+        let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+
+        // Value field contains objects with unshredded fields only (never contains "x")
+        // Row 0: {"y": "foo"} - x is shredded out, y remains in value
+        // Row 1: {} - both x and y are absent (perfect shredding for x, y missing)
+        // Row 2: {"y": null} - x is shredded out, y explicitly null
+        // Row 3: top-level null (encoded in VariantArray's null mask, but fields contain valid data)
+
+        let empty_object_value = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            builder.new_object().finish();
+            let (_, value) = builder.finish();
+            value
+        };
+
+        let y_null_value = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            builder.new_object().with_field("y", Variant::Null).finish();
+            let (_, value) = builder.finish();
+            value
+        };
+
+        let value_array = BinaryViewArray::from(vec![
+            Some(y_field_value.as_slice()),      // Row 0: {"y": 42}
+            Some(empty_object_value.as_slice()), // Row 1: {}
+            Some(y_null_value.as_slice()),       // Row 2: {"y": null}
+            Some(empty_object_value.as_slice()), // Row 3: top-level null (but value field contains valid data)
+        ]);
+
+        // Create shredded field "x" (globally shredded - never appears in value field)
+        // For top-level null row, the field still needs valid content (not null)
+        let x_field_typed_value = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(0)]);
+        let x_field_struct = StructArrayBuilder::new()
+            .with_field("typed_value", Arc::new(x_field_typed_value), true)
+            .build();
+        let x_field_shredded = ShreddedVariantFieldArray::try_new(Arc::new(x_field_struct))
+            .expect("should create ShreddedVariantFieldArray for x");
+
+        // Create main typed_value struct (only contains shredded fields)
+        let typed_value_struct = StructArrayBuilder::new()
+            .with_field("x", Arc::new(x_field_shredded), false)
+            .build();
+
+        // Build VariantArray with both value and typed_value (PartiallyShredded)
+        // Top-level null is encoded in the main StructArray's null mask
+        let variant_nulls = NullBuffer::from(vec![true, true, true, false]); // Row 3 is top-level null
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
+            .with_nulls(variant_nulls)
+            .build();
+
+        Arc::new(VariantArray::try_new(Arc::new(struct_array)).expect("should create VariantArray"))
     }
 }
