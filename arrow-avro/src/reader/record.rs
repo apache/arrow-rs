@@ -23,9 +23,10 @@ use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::schema::Nullability;
 use arrow_array::builder::{
-    Decimal128Builder, Decimal256Builder, Decimal32Builder, Decimal64Builder,
-    IntervalMonthDayNanoBuilder,
+    Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder, StringViewBuilder,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_array::builder::{Decimal32Builder, Decimal64Builder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
@@ -193,11 +194,9 @@ impl RecordDecoder {
                     encodings.push(Decoder::try_new(avro_field.data_type())?);
                 }
                 let projector = match data_type.resolution.as_ref() {
-                    Some(ResolutionInfo::Record(rec)) => Some(
-                        ProjectorBuilder::try_new(rec)
-                            .with_reader_fields(reader_fields)
-                            .build()?,
-                    ),
+                    Some(ResolutionInfo::Record(rec)) => {
+                        Some(ProjectorBuilder::try_new(rec, reader_fields).build()?)
+                    }
                     _ => None,
                 };
                 Ok(Self {
@@ -621,11 +620,7 @@ impl Decoder {
                 }
                 let projector =
                     if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
-                        Some(
-                            ProjectorBuilder::try_new(rec)
-                                .with_reader_fields(fields)
-                                .build()?,
-                        )
+                        Some(ProjectorBuilder::try_new(rec, fields).build()?)
                     } else {
                         None
                     };
@@ -1732,33 +1727,23 @@ struct Projector {
 #[derive(Debug)]
 struct ProjectorBuilder<'a> {
     rec: &'a ResolvedRecord,
-    reader_fields: Option<Arc<[AvroField]>>,
+    reader_fields: Arc<[AvroField]>,
 }
 
 impl<'a> ProjectorBuilder<'a> {
     #[inline]
-    fn try_new(rec: &'a ResolvedRecord) -> Self {
+    fn try_new(rec: &'a ResolvedRecord, reader_fields: &Arc<[AvroField]>) -> Self {
         Self {
             rec,
-            reader_fields: None,
+            reader_fields: reader_fields.clone(),
         }
     }
 
     #[inline]
-    fn with_reader_fields(mut self, reader_fields: &Arc<[AvroField]>) -> Self {
-        self.reader_fields = Some(reader_fields.clone());
-        self
-    }
-
-    #[inline]
     fn build(self) -> Result<Projector, ArrowError> {
-        let reader_fields = self.reader_fields.ok_or_else(|| {
-            ArrowError::InvalidArgumentError(
-                "ProjectorBuilder requires reader_fields to be provided".to_string(),
-            )
-        })?;
+        let reader_fields = self.reader_fields;
         let mut field_defaults: Vec<Option<AvroLiteral>> = Vec::with_capacity(reader_fields.len());
-        for avro_field in reader_fields.iter() {
+        for avro_field in reader_fields.as_ref() {
             if let Some(ResolutionInfo::DefaultValue(lit)) =
                 avro_field.data_type().resolution.as_ref()
             {
@@ -1769,7 +1754,7 @@ impl<'a> ProjectorBuilder<'a> {
         }
         let mut default_injections: Vec<(usize, AvroLiteral)> =
             Vec::with_capacity(self.rec.default_fields.len());
-        for &idx in self.rec.default_fields.iter() {
+        for &idx in self.rec.default_fields.as_ref() {
             let lit = field_defaults
                 .get(idx)
                 .and_then(|lit| lit.clone())
@@ -1778,7 +1763,7 @@ impl<'a> ProjectorBuilder<'a> {
         }
         let mut skip_decoders: Vec<Option<Skipper>> =
             Vec::with_capacity(self.rec.skip_fields.len());
-        for datatype in self.rec.skip_fields.iter() {
+        for datatype in self.rec.skip_fields.as_ref() {
             let skipper = match datatype {
                 Some(datatype) => Some(Skipper::from_avro(datatype)?),
                 None => None,
@@ -1797,6 +1782,12 @@ impl<'a> ProjectorBuilder<'a> {
 impl Projector {
     #[inline]
     fn project_default(&self, decoder: &mut Decoder, index: usize) -> Result<(), ArrowError> {
+        // SAFETY: `index` is obtained by listing the reader's record fields (i.e., from
+        // `decoders.iter_mut().enumerate()`), and `field_defaults` was built in
+        // `ProjectorBuilder::build` to have exactly one element per reader field.
+        // Therefore, `index < self.field_defaults.len()` always holds here, so
+        // `self.field_defaults[index]` cannot panic. We only take an immutable reference
+        // via `.as_ref()`, and `self` is borrowed immutably.
         if let Some(default_literal) = self.field_defaults[index].as_ref() {
             decoder.append_default(default_literal)
         } else {
@@ -1811,26 +1802,29 @@ impl Projector {
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
     ) -> Result<(), ArrowError> {
-        let n_writer = self.writer_to_reader.len();
-        let n_injections = self.default_injections.len();
-        for index in 0..(n_writer + n_injections) {
-            if index < n_writer {
-                match (
-                    self.writer_to_reader[index],
-                    self.skip_decoders[index].as_mut(),
-                ) {
-                    (Some(reader_index), _) => encodings[reader_index].decode(buf)?,
-                    (None, Some(skipper)) => skipper.skip(buf)?,
-                    (None, None) => {
-                        return Err(ArrowError::SchemaError(format!(
-                            "No skipper available for writer-only field at index {index}",
-                        )));
-                    }
+        debug_assert_eq!(
+            self.writer_to_reader.len(),
+            self.skip_decoders.len(),
+            "internal invariant: mapping and skipper lists must have equal length"
+        );
+        for (i, (mapping, skipper_opt)) in self
+            .writer_to_reader
+            .iter()
+            .zip(self.skip_decoders.iter_mut())
+            .enumerate()
+        {
+            match (mapping, skipper_opt.as_mut()) {
+                (Some(reader_index), _) => encodings[*reader_index].decode(buf)?,
+                (None, Some(skipper)) => skipper.skip(buf)?,
+                (None, None) => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "No skipper available for writer-only field at index {i}",
+                    )));
                 }
-            } else {
-                let (reader_index, ref lit) = self.default_injections[index - n_writer];
-                encodings[reader_index].append_default(lit)?;
             }
+        }
+        for (reader_index, lit) in self.default_injections.as_ref() {
+            encodings[*reader_index].append_default(lit)?;
         }
         Ok(())
     }
@@ -2021,6 +2015,7 @@ mod tests {
         FixedSizeBinaryArray, IntervalMonthDayNanoArray, ListArray, MapArray, StringArray,
         StructArray,
     };
+    use indexmap::IndexMap;
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -3455,5 +3450,446 @@ mod tests {
             msg.contains("Sparse Arrow unions are not yet supported"),
             "unexpected error message: {msg}"
         );
+    }
+
+    fn make_record_decoder_with_projector_defaults(
+        reader_fields: &[(&str, DataType, bool)],
+        field_defaults: Vec<Option<AvroLiteral>>,
+        default_injections: Vec<(usize, AvroLiteral)>,
+        writer_to_reader_len: usize,
+    ) -> Decoder {
+        assert_eq!(
+            field_defaults.len(),
+            reader_fields.len(),
+            "field_defaults must have one entry per reader field"
+        );
+        let mut field_refs: Vec<FieldRef> = Vec::with_capacity(reader_fields.len());
+        let mut encodings: Vec<Decoder> = Vec::with_capacity(reader_fields.len());
+        for (name, dt, nullable) in reader_fields {
+            field_refs.push(Arc::new(ArrowField::new(*name, dt.clone(), *nullable)));
+            let enc = match dt {
+                DataType::Int32 => Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
+                DataType::Int64 => Decoder::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
+                DataType::Utf8 => Decoder::String(
+                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                    Vec::with_capacity(DEFAULT_CAPACITY),
+                ),
+                other => panic!("Unsupported test field type in helper: {other:?}"),
+            };
+            encodings.push(enc);
+        }
+        let fields: Fields = field_refs.into();
+        let skip_decoders: Vec<Option<Skipper>> =
+            (0..writer_to_reader_len).map(|_| None::<Skipper>).collect();
+        let projector = Projector {
+            writer_to_reader: Arc::from(vec![None; writer_to_reader_len]),
+            skip_decoders,
+            field_defaults,
+            default_injections: Arc::from(default_injections),
+        };
+        Decoder::Record(fields, encodings, Some(projector))
+    }
+
+    #[test]
+    fn test_default_append_int32_and_int64_from_int_and_long() {
+        let mut d_i32 = Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_i32.append_default(&AvroLiteral::Int(42)).unwrap();
+        let arr = d_i32.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a.value(0), 42);
+        let mut d_i64 = Decoder::Int64(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_i64.append_default(&AvroLiteral::Int(5)).unwrap();
+        d_i64.append_default(&AvroLiteral::Long(7)).unwrap();
+        let arr64 = d_i64.flush(None).unwrap();
+        let a64 = arr64.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(a64.len(), 2);
+        assert_eq!(a64.value(0), 5);
+        assert_eq!(a64.value(1), 7);
+    }
+
+    #[test]
+    fn test_default_append_floats_and_doubles() {
+        let mut d_f32 = Decoder::Float32(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_f32.append_default(&AvroLiteral::Float(1.5)).unwrap();
+        let arr32 = d_f32.flush(None).unwrap();
+        let a = arr32.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(a.value(0), 1.5);
+        let mut d_f64 = Decoder::Float64(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_f64.append_default(&AvroLiteral::Double(2.25)).unwrap();
+        let arr64 = d_f64.flush(None).unwrap();
+        let b = arr64.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(b.value(0), 2.25);
+    }
+
+    #[test]
+    fn test_default_append_string_and_bytes() {
+        let mut d_str = Decoder::String(
+            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+            Vec::with_capacity(DEFAULT_CAPACITY),
+        );
+        d_str
+            .append_default(&AvroLiteral::String("hi".into()))
+            .unwrap();
+        let s_arr = d_str.flush(None).unwrap();
+        let arr = s_arr.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(arr.value(0), "hi");
+        let mut d_bytes = Decoder::Binary(
+            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+            Vec::with_capacity(DEFAULT_CAPACITY),
+        );
+        d_bytes
+            .append_default(&AvroLiteral::Bytes(vec![1, 2, 3]))
+            .unwrap();
+        let b_arr = d_bytes.flush(None).unwrap();
+        let barr = b_arr.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(barr.value(0), &[1, 2, 3]);
+        let mut d_str_err = Decoder::String(
+            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+            Vec::with_capacity(DEFAULT_CAPACITY),
+        );
+        let err = d_str_err
+            .append_default(&AvroLiteral::Bytes(vec![0x61, 0x62]))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Default for string must be string"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_default_append_nullable_int32_null_and_value() {
+        let inner = Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY));
+        let mut dec = Decoder::Nullable(
+            Nullability::NullFirst,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(inner),
+        );
+        dec.append_default(&AvroLiteral::Null).unwrap();
+        dec.append_default(&AvroLiteral::Int(11)).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(a.len(), 2);
+        assert!(a.is_null(0));
+        assert_eq!(a.value(1), 11);
+    }
+
+    #[test]
+    fn test_default_append_array_of_ints() {
+        let list_dt = avro_from_codec(Codec::List(Arc::new(avro_from_codec(Codec::Int32))));
+        let mut d = Decoder::try_new(&list_dt).unwrap();
+        let items = vec![
+            AvroLiteral::Int(1),
+            AvroLiteral::Int(2),
+            AvroLiteral::Int(3),
+        ];
+        d.append_default(&AvroLiteral::Array(items)).unwrap();
+        let arr = d.flush(None).unwrap();
+        let list = arr.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.value_length(0), 3);
+        let vals = list.values().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(vals.values(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_default_append_map_string_to_int() {
+        let map_dt = avro_from_codec(Codec::Map(Arc::new(avro_from_codec(Codec::Int32))));
+        let mut d = Decoder::try_new(&map_dt).unwrap();
+        let mut m: IndexMap<String, AvroLiteral> = IndexMap::new();
+        m.insert("k1".to_string(), AvroLiteral::Int(10));
+        m.insert("k2".to_string(), AvroLiteral::Int(20));
+        d.append_default(&AvroLiteral::Map(m)).unwrap();
+        let arr = d.flush(None).unwrap();
+        let map = arr.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.value_length(0), 2);
+        let binding = map.value(0);
+        let entries = binding.as_any().downcast_ref::<StructArray>().unwrap();
+        let k = entries
+            .column_by_name("key")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let v = entries
+            .column_by_name("value")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let keys: std::collections::HashSet<&str> = (0..k.len()).map(|i| k.value(i)).collect();
+        assert_eq!(keys, ["k1", "k2"].into_iter().collect());
+        let vals: std::collections::HashSet<i32> = (0..v.len()).map(|i| v.value(i)).collect();
+        assert_eq!(vals, [10, 20].into_iter().collect());
+    }
+
+    #[test]
+    fn test_default_append_enum_by_symbol() {
+        let symbols: Arc<[String]> = vec!["A".into(), "B".into(), "C".into()].into();
+        let mut d = Decoder::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone(), None);
+        d.append_default(&AvroLiteral::Enum("B".into())).unwrap();
+        let arr = d.flush(None).unwrap();
+        let dict = arr
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(dict.len(), 1);
+        let expected = Int32Array::from(vec![1]);
+        assert_eq!(dict.keys(), &expected);
+        let values = dict
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(1), "B");
+    }
+
+    #[test]
+    fn test_default_append_uuid_and_type_error() {
+        let mut d = Decoder::Uuid(Vec::with_capacity(DEFAULT_CAPACITY));
+        let uuid_str = "123e4567-e89b-12d3-a456-426614174000";
+        d.append_default(&AvroLiteral::String(uuid_str.into()))
+            .unwrap();
+        let arr_ref = d.flush(None).unwrap();
+        let arr = arr_ref
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(arr.value_length(), 16);
+        assert_eq!(arr.len(), 1);
+        let mut d2 = Decoder::Uuid(Vec::with_capacity(DEFAULT_CAPACITY));
+        let err = d2
+            .append_default(&AvroLiteral::Bytes(vec![0u8; 16]))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Default for uuid must be string"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_default_append_fixed_and_length_mismatch() {
+        let mut d = Decoder::Fixed(4, Vec::with_capacity(DEFAULT_CAPACITY));
+        d.append_default(&AvroLiteral::Bytes(vec![1, 2, 3, 4]))
+            .unwrap();
+        let arr_ref = d.flush(None).unwrap();
+        let arr = arr_ref
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(arr.value_length(), 4);
+        assert_eq!(arr.value(0), &[1, 2, 3, 4]);
+        let mut d_err = Decoder::Fixed(4, Vec::with_capacity(DEFAULT_CAPACITY));
+        let err = d_err
+            .append_default(&AvroLiteral::Bytes(vec![1, 2, 3]))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Fixed default length"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_default_append_duration_and_length_validation() {
+        let dt = avro_from_codec(Codec::Interval);
+        let mut d = Decoder::try_new(&dt).unwrap();
+        let mut bytes = Vec::with_capacity(12);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        d.append_default(&AvroLiteral::Bytes(bytes)).unwrap();
+        let arr_ref = d.flush(None).unwrap();
+        let arr = arr_ref
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+        assert_eq!(arr.len(), 1);
+        let v = arr.value(0);
+        assert_eq!(v.months, 1);
+        assert_eq!(v.days, 2);
+        assert_eq!(v.nanoseconds, 3_000_000);
+        let mut d_err = Decoder::try_new(&avro_from_codec(Codec::Interval)).unwrap();
+        let err = d_err
+            .append_default(&AvroLiteral::Bytes(vec![0u8; 11]))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Duration default must be exactly 12 bytes"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_default_append_decimal256_from_bytes() {
+        let dt = avro_from_codec(Codec::Decimal(50, Some(2), Some(32)));
+        let mut d = Decoder::try_new(&dt).unwrap();
+        let pos: [u8; 32] = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x30, 0x39,
+        ];
+        d.append_default(&AvroLiteral::Bytes(pos.to_vec())).unwrap();
+        let neg: [u8; 32] = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0x85,
+        ];
+        d.append_default(&AvroLiteral::Bytes(neg.to_vec())).unwrap();
+        let arr = d.flush(None).unwrap();
+        let dec = arr.as_any().downcast_ref::<Decimal256Array>().unwrap();
+        assert_eq!(dec.len(), 2);
+        assert_eq!(dec.value_as_string(0), "123.45");
+        assert_eq!(dec.value_as_string(1), "-1.23");
+    }
+
+    #[test]
+    fn test_record_append_default_map_missing_fields_uses_projector_field_defaults() {
+        let field_defaults = vec![None, Some(AvroLiteral::String("hi".into()))];
+        let mut rec = make_record_decoder_with_projector_defaults(
+            &[("a", DataType::Int32, false), ("b", DataType::Utf8, false)],
+            field_defaults,
+            vec![],
+            0,
+        );
+        let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
+        map.insert("a".to_string(), AvroLiteral::Int(7));
+        rec.append_default(&AvroLiteral::Map(map)).unwrap();
+        let arr = rec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let a = s
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let b = s
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(a.value(0), 7);
+        assert_eq!(b.value(0), "hi");
+    }
+
+    #[test]
+    fn test_record_append_default_null_uses_projector_field_defaults() {
+        let field_defaults = vec![
+            Some(AvroLiteral::Int(5)),
+            Some(AvroLiteral::String("x".into())),
+        ];
+        let mut rec = make_record_decoder_with_projector_defaults(
+            &[("a", DataType::Int32, false), ("b", DataType::Utf8, false)],
+            field_defaults,
+            vec![],
+            0,
+        );
+        rec.append_default(&AvroLiteral::Null).unwrap();
+        let arr = rec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let a = s
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let b = s
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(a.value(0), 5);
+        assert_eq!(b.value(0), "x");
+    }
+
+    #[test]
+    fn test_record_append_default_missing_fields_without_projector_defaults_yields_type_nulls_or_empties(
+    ) {
+        let fields = vec![("a", DataType::Int32, true), ("b", DataType::Utf8, true)];
+        let mut field_refs: Vec<FieldRef> = Vec::new();
+        let mut encoders: Vec<Decoder> = Vec::new();
+        for (name, dt, nullable) in &fields {
+            field_refs.push(Arc::new(ArrowField::new(*name, dt.clone(), *nullable)));
+        }
+        let enc_a = Decoder::Nullable(
+            Nullability::NullSecond,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY))),
+        );
+        let enc_b = Decoder::Nullable(
+            Nullability::NullSecond,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(Decoder::String(
+                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                Vec::with_capacity(DEFAULT_CAPACITY),
+            )),
+        );
+        encoders.push(enc_a);
+        encoders.push(enc_b);
+        let projector = Projector {
+            writer_to_reader: Arc::from(vec![]),
+            skip_decoders: vec![],
+            field_defaults: vec![None, None], // no defaults -> append_null
+            default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
+        };
+        let mut rec = Decoder::Record(field_refs.into(), encoders, Some(projector));
+        let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
+        map.insert("a".to_string(), AvroLiteral::Int(9));
+        rec.append_default(&AvroLiteral::Map(map)).unwrap();
+        let arr = rec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let a = s
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let b = s
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(a.is_valid(0));
+        assert_eq!(a.value(0), 9);
+        assert!(b.is_null(0));
+    }
+
+    #[test]
+    fn test_projector_default_injection_when_writer_lacks_fields() {
+        let defaults = vec![None, None];
+        let injections = vec![
+            (0, AvroLiteral::Int(99)),
+            (1, AvroLiteral::String("alice".into())),
+        ];
+        let mut rec = make_record_decoder_with_projector_defaults(
+            &[
+                ("id", DataType::Int32, false),
+                ("name", DataType::Utf8, false),
+            ],
+            defaults,
+            injections,
+            0,
+        );
+        rec.decode(&mut AvroCursor::new(&[])).unwrap();
+        let arr = rec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let id = s
+            .column_by_name("id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let name = s
+            .column_by_name("name")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(id.value(0), 99);
+        assert_eq!(name.value(0), "alice");
     }
 }
