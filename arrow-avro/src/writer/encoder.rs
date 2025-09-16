@@ -1029,8 +1029,7 @@ struct EnumEncoder<'a> {
 }
 impl EnumEncoder<'_> {
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, row: usize) -> Result<(), ArrowError> {
-        let idx = self.keys.value(row);
-        write_int(out, idx)
+        write_int(out, self.keys.value(row))
     }
 }
 
