@@ -302,7 +302,30 @@ impl VariantValueArrayBuilder {
         ValueBuilder::append_variant_bytes(self.parent_state(&mut metadata_builder), value);
     }
 
-    /// Creates a builder-specific parent state
+    /// Creates a builder-specific parent state.
+    ///
+    /// For example, this can be useful for code that wants to copy a subset of fields from an
+    /// object `value` as a new row of `value_array_builder`:
+    ///
+    /// ```no_run
+    /// # use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant};
+    /// # use parquet_variant_compute::VariantValueArrayBuilder;
+    /// # let value = Variant::Null;
+    /// # let mut value_array_builder = VariantValueArrayBuilder::new(0);
+    /// # fn should_keep(field_name: &str) -> bool { todo!() };
+    /// let Variant::Object(obj) = value else {
+    ///     panic!("Not a variant object");
+    /// };
+    /// let mut metadata_builder = ReadOnlyMetadataBuilder::new(obj.metadata.clone());
+    /// let state = value_array_builder.parent_state(&mut metadata_builder);
+    /// let mut object_builder = ObjectBuilder::new(state, false);
+    /// for (field_name, field_value) in obj.iter() {
+    ///     if should_keep(field_name) {
+    ///         object_builder.insert_bytes(field_name, field_value);
+    ///     }
+    /// }
+    ///  object_builder.finish(); // appends the new object
+    /// ```
     pub fn parent_state<'a>(
         &'a mut self,
         metadata_builder: &'a mut dyn MetadataBuilder,
