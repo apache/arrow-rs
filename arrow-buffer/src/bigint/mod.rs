@@ -589,7 +589,7 @@ impl i256 {
 
     fn leading_zeros(&self) -> u32 {
         match self.high {
-            0 => 128 + self.low.leading_zeros(),
+            0 => u128::BITS + self.low.leading_zeros(),
             _ => self.high.leading_zeros(),
         }
     }
