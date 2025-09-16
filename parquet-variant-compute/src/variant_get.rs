@@ -985,6 +985,42 @@ mod test {
         let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(42)]));
         assert_eq!(&result, &expected);
     }
+    /// This test manually constructs a shredded variant array representing lists
+    /// like ["comedy", "drama"], ["horror", null] and ["comedy", "drama", "romance"]
+    /// as VariantArray using variant_get.
+    #[test]
+    fn test_shredded_list_field_access() {
+        let array = shredded_list_variant_array();
+
+        // Test: Extract the 0 index field as VariantArray first
+        let options = GetOptions::new_with_path(VariantPath::from(0));
+        let result = variant_get(&array, options).unwrap();
+
+        let result_variant: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result_variant.len(), 3);
+    
+        // Row 0: expect 0 index = "comedy"
+        assert_eq!(result_variant.value(0), Variant::String("comedy"));
+        // Row 1: expect 0 index = "horror"
+        assert_eq!(result_variant.value(1), Variant::String("horror"));
+        // Row 2: expect 0 index = "comedy"
+        assert_eq!(result_variant.value(2), Variant::String("comedy"));
+    }
+    /// Test extracting shredded list field with type conversion
+    #[test]
+    fn test_shredded_list_as_string() {
+        let array = shredded_list_variant_array();
+
+        // Test: Extract the 0 index values as StringArray (type conversion)
+        let field = Field::new("typed_value", DataType::Utf8, false);
+        let options = GetOptions::new_with_path(VariantPath::from(0))
+            .with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&array, options).unwrap();
+
+        // Should get StringArray
+        let expected: ArrayRef = Arc::new(StringArray::from(vec![Some("comedy"), Some("drama")]));
+        assert_eq!(&result, &expected);
+    }
     /// Helper function to create a shredded variant array representing lists
     ///
     /// This creates an array that represents:
@@ -1028,7 +1064,12 @@ mod test {
         let value_array = BinaryViewArray::from(vec![Variant::Null.as_u8_slice()]);
         // Maybe I should try with an actual primitive array
         let typed_value_array = StringArray::from(vec![
-            "comedy", "drama", "horror", "comedy", "drama", "romance",
+            Some("comedy"),
+            Some("drama"),
+            Some("horror"),
+            Some("comedy"),
+            Some("drama"),
+            Some("romance"),
         ]);
         // Build the main VariantArray
         let main_struct = crate::variant_array::StructArrayBuilder::new()
