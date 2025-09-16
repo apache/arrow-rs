@@ -46,7 +46,7 @@ use crate::arrow::arrow_reader::{
     RowFilter, RowSelection,
 };
 use crate::arrow::ProjectionMask;
-use crate::file::page_cache::{PageCacheType, ParquetContext};
+use crate::file::page_cache::{PageCacheStrategy, ParquetContext};
 
 use crate::bloom_filter::{
     chunk_read_bloom_filter_header_and_offset, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
@@ -419,7 +419,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
 
         // Enable default page caching for async readers (using shared default ParquetContext)
         if builder.page_cache.is_none() {
-            builder.page_cache = ParquetContext::shared_default().page_cache.clone();
+            builder.page_cache = ParquetContext::get_cache().page_cache.clone();
         }
 
         builder
@@ -584,7 +584,7 @@ struct ReaderFactory<T> {
     max_predicate_cache_size: usize,
 
     /// Page cache for caching decoded pages
-    page_cache: Option<Arc<PageCacheType>>,
+    page_cache: Option<Arc<dyn PageCacheStrategy>>,
 }
 
 impl<T> ReaderFactory<T>
@@ -985,7 +985,7 @@ struct InMemoryRowGroup<'a> {
     row_count: usize,
     row_group_idx: usize,
     metadata: &'a ParquetMetaData,
-    page_cache: Option<Arc<PageCacheType>>,
+    page_cache: Option<Arc<dyn PageCacheStrategy>>,
 }
 
 impl InMemoryRowGroup<'_> {

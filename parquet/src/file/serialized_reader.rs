@@ -342,7 +342,7 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
     }
 }
 
-use crate::file::page_cache::{PageCacheKey, PageCacheType};
+use crate::file::page_cache::{PageCacheKey, PageCacheStrategy};
 
 /// Cache-aware version of decode_page that checks/stores in page cache
 /// Returns a cached page if available, otherwise decompresses and caches result
@@ -352,7 +352,7 @@ pub(crate) fn decode_page_cached(
     physical_type: Type,
     decompressor: Option<&mut Box<dyn Codec>>,
     cache_key: Option<PageCacheKey>,
-    page_cache: Option<&Arc<PageCacheType>>,
+    page_cache: Option<&Arc<dyn PageCacheStrategy>>,
 ) -> Result<Page> {
     // Try cache first if cache key and cache are provided
     if let (Some(key), Some(cache)) = (cache_key.as_ref(), page_cache) {
@@ -564,7 +564,7 @@ pub struct SerializedPageReader<R: ChunkReader> {
     column_idx: usize,
 
     /// Page cache reference for caching resolved pages
-    page_cache: Option<Arc<PageCacheType>>,
+    page_cache: Option<Arc<dyn PageCacheStrategy>>,
 }
 
 impl<R: ChunkReader> SerializedPageReader<R> {
@@ -682,7 +682,7 @@ impl<R: ChunkReader> SerializedPageReader<R> {
         total_rows: usize,
         page_locations: Option<Vec<PageLocation>>,
         props: ReaderPropertiesPtr,
-        page_cache: Option<Arc<PageCacheType>>,
+        page_cache: Option<Arc<dyn PageCacheStrategy>>,
     ) -> Result<Self> {
         let decompressor = create_codec(meta.compression(), props.codec_options())?;
         let (start, len) = meta.byte_range();

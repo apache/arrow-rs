@@ -18,8 +18,6 @@
 //! Page-level cache for storing decompressed pages to avoid redundant I/O and decompression
 
 use crate::column::page::Page;
-use moka::sync::Cache;
-use std::fmt;
 use std::sync::{Arc, OnceLock};
 
 /// Cache key that uniquely identifies a page within a file
@@ -47,15 +45,6 @@ impl PageCacheKey {
     }
 }
 
-/// Configuration options for the page cache
-pub enum PageCacheConfig {
-    /// Moka-based caching with specified max size
-    Moka {
-        /// Maximum number of pages to cache
-        max_pages: u64,
-    },
-}
-
 /// Trait defining the interface for page cache strategies
 pub trait PageCacheStrategy: Send + Sync {
     /// Get a page from the cache
@@ -65,111 +54,92 @@ pub trait PageCacheStrategy: Send + Sync {
     fn put(&self, key: PageCacheKey, page: Arc<Page>);
 }
 
-/// Moka-based page cache implementation (thread-safe, production-ready)
-pub struct MokaPageCache {
-    cache: Cache<PageCacheKey, Arc<Page>>,
-}
-
-impl MokaPageCache {
-    /// Create a new MokaPageCache with specified max number of pages
-    pub fn new(max_pages: u64) -> Self {
-        // MokaPageCache created with capacity: {} pages
-        Self {
-            cache: Cache::builder().max_capacity(max_pages).build(),
-        }
-    }
-}
-
-impl PageCacheStrategy for MokaPageCache {
-    fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>> {
-        self.cache.get(key)
-    }
-
-    fn put(&self, key: PageCacheKey, page: Arc<Page>) {
-        self.cache.insert(key, page);
-    }
-}
-
-impl fmt::Debug for MokaPageCache {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MokaPageCache")
-            .field("cached_pages", &self.cache.entry_count())
-            .field("weighted_size", &self.cache.weighted_size())
-            .finish()
-    }
-}
-
-/// Enum to hold different page cache strategies and do static dispatch
-#[derive(Debug)]
-pub enum PageCacheType {
-    /// Moka-based caching (recommended for production)
-    Moka(MokaPageCache),
-}
-
-/// Dispatch methods to the underlying cache strategy
-impl PageCacheType {
-    /// Get a page from the cache
-    pub fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>> {
-        match self {
-            PageCacheType::Moka(c) => c.get(key),
-        }
-    }
-
-    /// Put a page into the cache
-    pub fn put(&self, key: PageCacheKey, page: Arc<Page>) {
-        match self {
-            PageCacheType::Moka(c) => c.put(key, page),
-        }
-    }
-}
-
 /// High-level context struct that holds shared resources for Parquet operations
 /// This allows cache sharing across different files, threads, and readers
-#[derive(Debug, Clone)]
+#[derive(Clone, Default)]
 pub struct ParquetContext {
     /// Page cache shared across all readers using this context
     /// None for zero overhead when caching is disabled
-    pub page_cache: Option<Arc<PageCacheType>>,
-}
-
-impl Default for ParquetContext {
-    fn default() -> Self {
-        Self {
-            page_cache: Some(Arc::new(PageCacheType::Moka(MokaPageCache::new(100)))),
-        }
-    }
+    pub page_cache: Option<Arc<dyn PageCacheStrategy>>,
 }
 
 /// Shared default ParquetContext instance to ensure cache sharing across all readers
 static DEFAULT_PARQUET_CONTEXT: OnceLock<ParquetContext> = OnceLock::new();
 
 impl ParquetContext {
-    /// Create a new ParquetContext with default configuration (100-page Moka cache)
+    /// Create a new ParquetContext with no caching
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create a new ParquetContext with no caching (zero overhead)
-    pub fn new_no_cache() -> Self {
-        Self { page_cache: None }
-    }
-
-    /// Create a new ParquetContext with a specific page cache
-    pub fn with_page_cache(page_cache: Option<Arc<PageCacheType>>) -> Self {
-        Self { page_cache }
-    }
-
-    /// Set the global shared default ParquetContext
+    /// Set the global shared default page cache strategy
     ///
     /// This must be called before any readers are created to take effect.
     /// Returns `Ok(())` if successful, `Err(context)` if already initialized.
-    pub fn set_shared_default(context: ParquetContext) -> Result<(), ParquetContext> {
-        DEFAULT_PARQUET_CONTEXT.set(context)
+    pub fn set_cache(page_cache: Option<Arc<dyn PageCacheStrategy>>) -> Result<(), ParquetContext> {
+        DEFAULT_PARQUET_CONTEXT.set(Self { page_cache })
     }
 
-    /// Get the shared default ParquetContext instance
-    /// This ensures all readers share the same cache when no explicit context is provided
-    pub fn shared_default() -> &'static ParquetContext {
+    /// Get the shared ParquetContext instance
+    pub fn get_cache() -> &'static ParquetContext {
         DEFAULT_PARQUET_CONTEXT.get_or_init(ParquetContext::default)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::column::page::Page;
+    use std::collections::HashMap;
+
+    /// Mock page cache for testing
+    struct MockPageCache {
+        storage: HashMap<PageCacheKey, Arc<Page>>,
+    }
+
+    impl MockPageCache {
+        fn new() -> Self {
+            Self {
+                storage: HashMap::new(),
+            }
+        }
+    }
+
+    impl PageCacheStrategy for MockPageCache {
+        fn get(&self, key: &PageCacheKey) -> Option<Arc<Page>> {
+            self.storage.get(key).cloned()
+        }
+
+        fn put(&self, _key: PageCacheKey, _page: Arc<Page>) {
+            // For testing purposes, we don't actually store anything
+        }
+    }
+
+    #[test]
+    fn test_pluggable_cache_interface() {
+        let mock_cache = Arc::new(MockPageCache::new());
+        let key = PageCacheKey::new(456, 1, 2, 2000);
+
+        // Test that we can use the cache through the trait interface
+        assert!(mock_cache.get(&key).is_none());
+
+        let test_page = Arc::new(Page::DataPage {
+            buf: bytes::Bytes::new(),
+            num_values: 0,
+            encoding: crate::basic::Encoding::PLAIN,
+            def_level_encoding: crate::basic::Encoding::PLAIN,
+            rep_level_encoding: crate::basic::Encoding::PLAIN,
+            statistics: None,
+        });
+
+        mock_cache.put(key, test_page);
+    }
+
+    #[test]
+    fn test_default_context_has_no_cache() {
+        let default_context = ParquetContext::default();
+
+        // Default context should have no cache (true zero overhead)
+        assert!(default_context.page_cache.is_none());
     }
 }
