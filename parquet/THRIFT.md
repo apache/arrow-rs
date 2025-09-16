@@ -406,3 +406,41 @@ optional fields it is. A typical `write_thrift` implementation will look like:
 ```
 
 ### Handling for lists
+
+Lists of serialized objects can usually be read using `parquet_thrift::read_thrift_vec` and written
+using the `WriteThrift::write_thrift` implementation for vectors of objects that implement
+`WriteThrift`.
+
+When reading a list, one first reads the list header which will provide the number of elements
+that have been encoded, and then read elements one at a time.
+
+```rust
+    // read the list header
+    let list_ident = prot.read_list_begin()?;
+    // allocate vector with enough capacity
+    let mut page_locations = Vec::with_capacity(list_ident.size as usize);
+    // read elements
+    for _ in 0..list_ident.size {
+        page_locations.push(read_page_location(prot)?);
+    }
+```
+
+Writing is simply the reverse...write the list header, and then serialize the elements:
+
+```rust
+    // write the list header
+    writer.write_list_begin(ElementType::Struct, page_locations.len)?;
+    // write the elements
+    for i in 0..len {
+        page_locations[i].write_thrift(writer)?;
+    }
+```
+
+## More examples
+
+For more examples, the easiest thing to do is to [expand](https://github.com/dtolnay/cargo-expand)
+the thrift macros. For instance, to see the implementations generated in the `basic` module, type:
+
+```sh
+% cargo expand -p parquet --lib --all-features basic
+```
