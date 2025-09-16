@@ -561,7 +561,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             // Try to treat 16 byte FixedSizeBinary as UUID
             let value = array.value(index);
             if *binary_len == 16 {
-                if let Ok(uuid) = Uuid::from_slice(&value) {
+                if let Ok(uuid) = Uuid::from_slice(value) {
                     return Variant::from(uuid);
                 }
             }
