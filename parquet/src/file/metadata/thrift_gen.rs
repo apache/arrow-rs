@@ -846,8 +846,8 @@ pub(crate) struct DictionaryPageHeader {
 );
 
 // Statistics for the page header. This is separate because of the differing lifetime requirements
-// for page handling vs column chunk. Once we start writing column chunks this might need to be
-// revisited.
+// for page handling vs column chunk. In particular, the `ThriftReadInputProtocol` used for page
+// header reading cannot return `binary` data as slices.
 thrift_struct!(
 pub(crate) struct PageStatistics {
    1: optional binary max;
