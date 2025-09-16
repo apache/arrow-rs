@@ -154,11 +154,9 @@ impl RecordDecoder {
                     encodings.push(Decoder::try_new(avro_field.data_type())?);
                 }
                 let projector = match data_type.resolution.as_ref() {
-                    Some(ResolutionInfo::Record(rec)) => Some(
-                        ProjectorBuilder::try_new(rec)
-                            .with_reader_fields(reader_fields)
-                            .build()?,
-                    ),
+                    Some(ResolutionInfo::Record(rec)) => {
+                        Some(ProjectorBuilder::try_new(rec, reader_fields).build()?)
+                    }
                     _ => None,
                 };
                 Ok(Self {
@@ -402,11 +400,7 @@ impl Decoder {
                 }
                 let projector =
                     if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
-                        Some(
-                            ProjectorBuilder::try_new(rec)
-                                .with_reader_fields(fields)
-                                .build()?,
-                        )
+                        Some(ProjectorBuilder::try_new(rec, fields).build()?)
                     } else {
                         None
                     };
@@ -1183,33 +1177,23 @@ struct Projector {
 #[derive(Debug)]
 struct ProjectorBuilder<'a> {
     rec: &'a ResolvedRecord,
-    reader_fields: Option<Arc<[AvroField]>>,
+    reader_fields: Arc<[AvroField]>,
 }
 
 impl<'a> ProjectorBuilder<'a> {
     #[inline]
-    fn try_new(rec: &'a ResolvedRecord) -> Self {
+    fn try_new(rec: &'a ResolvedRecord, reader_fields: &Arc<[AvroField]>) -> Self {
         Self {
             rec,
-            reader_fields: None,
+            reader_fields: reader_fields.clone(),
         }
     }
 
     #[inline]
-    fn with_reader_fields(mut self, reader_fields: &Arc<[AvroField]>) -> Self {
-        self.reader_fields = Some(reader_fields.clone());
-        self
-    }
-
-    #[inline]
     fn build(self) -> Result<Projector, ArrowError> {
-        let reader_fields = self.reader_fields.ok_or_else(|| {
-            ArrowError::InvalidArgumentError(
-                "ProjectorBuilder requires reader_fields to be provided".to_string(),
-            )
-        })?;
+        let reader_fields = self.reader_fields;
         let mut field_defaults: Vec<Option<AvroLiteral>> = Vec::with_capacity(reader_fields.len());
-        for avro_field in reader_fields.iter() {
+        for avro_field in reader_fields.as_ref() {
             if let Some(ResolutionInfo::DefaultValue(lit)) =
                 avro_field.data_type().resolution.as_ref()
             {
@@ -1220,7 +1204,7 @@ impl<'a> ProjectorBuilder<'a> {
         }
         let mut default_injections: Vec<(usize, AvroLiteral)> =
             Vec::with_capacity(self.rec.default_fields.len());
-        for &idx in self.rec.default_fields.iter() {
+        for &idx in self.rec.default_fields.as_ref() {
             let lit = field_defaults
                 .get(idx)
                 .and_then(|lit| lit.clone())
@@ -1229,7 +1213,7 @@ impl<'a> ProjectorBuilder<'a> {
         }
         let mut skip_decoders: Vec<Option<Skipper>> =
             Vec::with_capacity(self.rec.skip_fields.len());
-        for datatype in self.rec.skip_fields.iter() {
+        for datatype in self.rec.skip_fields.as_ref() {
             let skipper = match datatype {
                 Some(datatype) => Some(Skipper::from_avro(datatype)?),
                 None => None,
@@ -1268,26 +1252,29 @@ impl Projector {
         buf: &mut AvroCursor<'_>,
         encodings: &mut [Decoder],
     ) -> Result<(), ArrowError> {
-        let n_writer = self.writer_to_reader.len();
-        let n_injections = self.default_injections.len();
-        for index in 0..(n_writer + n_injections) {
-            if index < n_writer {
-                match (
-                    self.writer_to_reader[index],
-                    self.skip_decoders[index].as_mut(),
-                ) {
-                    (Some(reader_index), _) => encodings[reader_index].decode(buf)?,
-                    (None, Some(skipper)) => skipper.skip(buf)?,
-                    (None, None) => {
-                        return Err(ArrowError::SchemaError(format!(
-                            "No skipper available for writer-only field at index {index}",
-                        )));
-                    }
+        debug_assert_eq!(
+            self.writer_to_reader.len(),
+            self.skip_decoders.len(),
+            "internal invariant: mapping and skipper lists must have equal length"
+        );
+        for (i, (mapping, skipper_opt)) in self
+            .writer_to_reader
+            .iter()
+            .zip(self.skip_decoders.iter_mut())
+            .enumerate()
+        {
+            match (mapping, skipper_opt.as_mut()) {
+                (Some(reader_index), _) => encodings[*reader_index].decode(buf)?,
+                (None, Some(skipper)) => skipper.skip(buf)?,
+                (None, None) => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "No skipper available for writer-only field at index {i}",
+                    )));
                 }
-            } else {
-                let (reader_index, ref lit) = self.default_injections[index - n_writer];
-                encodings[reader_index].append_default(lit)?;
             }
+        }
+        for (reader_index, lit) in self.default_injections.as_ref() {
+            encodings[*reader_index].append_default(lit)?;
         }
         Ok(())
     }
