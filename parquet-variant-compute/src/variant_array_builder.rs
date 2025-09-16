@@ -236,14 +236,12 @@ impl VariantBuilderExt for VariantArrayBuilder {
 /// assert_eq!(value_array.len(), 3);
 /// ```
 #[derive(Debug)]
-#[allow(unused)]
 pub struct VariantValueArrayBuilder {
     value_builder: ValueBuilder,
     value_offsets: Vec<usize>,
     nulls: NullBufferBuilder,
 }
 
-#[allow(unused)]
 impl VariantValueArrayBuilder {
     /// Create a new `VariantValueArrayBuilder` with the specified row capacity
     pub fn new(row_capacity: usize) -> Self {
