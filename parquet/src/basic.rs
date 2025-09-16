@@ -280,6 +280,9 @@ struct GeographyType<'a> {
 }
 );
 
+// TODO(ets): should we switch to tuple variants so we can use
+// the thrift macros?
+
 /// Logical types used by version 2.4.0+ of the Parquet format.
 ///
 /// This is an *entirely new* struct as of version
@@ -586,7 +589,6 @@ impl WriteThriftField for LogicalType {
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `FieldRepetitionType`
 //
-// Cannot use macro since the name is changed
 
 thrift_enum!(
 /// Representation of field types in schema.
