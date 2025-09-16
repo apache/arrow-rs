@@ -22,7 +22,7 @@
 
 use crate::format as parquet;
 use crate::format::GeospatialStatistics as TGeospatialStatistics;
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 
 // ----------------------------------------------------------------------
 // Bounding Box
@@ -49,7 +49,7 @@ use crate::errors::{ParquetError, Result};
 ///
 /// Special cases:
 /// - For X values only, xmin may exceed xmax. In this case, a point matches if x >= xmin OR x <= xmax
-/// - This wraparound occurs when the bounding box crosses the antimeridian line
+/// - This wraparound can occur when the bounding box crosses the antimeridian line
 /// - In geographic terms: xmin=westernmost, xmax=easternmost, ymin=southernmost, ymax=northernmost
 ///
 /// For GEOGRAPHY types:
@@ -180,9 +180,9 @@ impl BoundingBox {
 /// ```
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct GeospatialStatistics {
-    /// Optional bounding box encompassing all geospatial data
+    /// Optional bounding defining the spatial extent, where None represents a lack of information.
     bbox: Option<BoundingBox>,
-    /// Optional list of geospatial geometry type identifiers
+    /// Optional list of geometry type identifiers, where None represents lack of information
     geospatial_types: Option<Vec<i32>>,
 }
 
@@ -207,21 +207,23 @@ pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Opti
 
                 new_bbox = match (bbox.zmin, bbox.zmax) {
                     (Some(zmin), Some(zmax)) => new_bbox.with_zrange(zmin.into(), zmax.into()),
-                    (None, None) => new_bbox,
-                    _ => return Err(ParquetError::General("Z-coordinate values mismatch".to_string())),
+                    // If both None or mismatch, set it to None and don't error
+                    _ => new_bbox
                 };
 
                 new_bbox = match (bbox.mmin, bbox.mmax) {
                     (Some(mmin), Some(mmax)) => new_bbox.with_mrange(mmin.into(), mmax.into()),
-                    (None, None) => new_bbox,
-                    _ => return Err(ParquetError::General("M-coordinate values mismatch".to_string())),
+                    // If both None or mismatch, set it to None and don't error
+                    _ => new_bbox
                 };
 
                 Some(new_bbox)
             } else {
                 None    
             };
-            let geospatial_types = geo_stats.geospatial_types;
+
+            // If vector is empty, then set it to None 
+            let geospatial_types: Option<Vec<i32>> = geo_stats.geospatial_types.filter(|v| !v.is_empty());
             Some(GeospatialStatistics::new(bbox, geospatial_types))
         }
         None => None,
