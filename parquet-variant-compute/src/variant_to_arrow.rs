@@ -97,26 +97,41 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     path: VariantPath<'a>,
     data_type: Option<&'a DataType>,
     cast_options: &'a CastOptions,
-    len: usize,
+    capacity: usize,
 ) -> Result<VariantToArrowRowBuilder<'a>> {
     use VariantToArrowRowBuilder::*;
 
     let mut builder = match data_type {
         // If no data type was requested, build an unshredded VariantArray.
-        None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(len)),
-        Some(DataType::Int8) => Int8(VariantToPrimitiveArrowRowBuilder::new(cast_options, len)),
-        Some(DataType::Int16) => Int16(VariantToPrimitiveArrowRowBuilder::new(cast_options, len)),
-        Some(DataType::Int32) => Int32(VariantToPrimitiveArrowRowBuilder::new(cast_options, len)),
-        Some(DataType::Int64) => Int64(VariantToPrimitiveArrowRowBuilder::new(cast_options, len)),
-        Some(DataType::Float16) => {
-            Float16(VariantToPrimitiveArrowRowBuilder::new(cast_options, len))
-        }
-        Some(DataType::Float32) => {
-            Float32(VariantToPrimitiveArrowRowBuilder::new(cast_options, len))
-        }
-        Some(DataType::Float64) => {
-            Float64(VariantToPrimitiveArrowRowBuilder::new(cast_options, len))
-        }
+        None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(capacity)),
+        Some(DataType::Int8) => Int8(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::Int16) => Int16(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::Int32) => Int32(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::Int64) => Int64(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::Float16) => Float16(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::Float32) => Float32(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::Float64) => Float64(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
         _ => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "variant_get with path={:?} and data_type={:?} not yet implemented",
@@ -187,9 +202,9 @@ pub(crate) struct VariantToPrimitiveArrowRowBuilder<'a, T: ArrowPrimitiveType> {
 }
 
 impl<'a, T: ArrowPrimitiveType> VariantToPrimitiveArrowRowBuilder<'a, T> {
-    fn new(cast_options: &'a CastOptions<'a>, len: usize) -> Self {
+    fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
         Self {
-            builder: PrimitiveBuilder::<T>::with_capacity(len),
+            builder: PrimitiveBuilder::<T>::with_capacity(capacity),
             cast_options,
         }
     }
