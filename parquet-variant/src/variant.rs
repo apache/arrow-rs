@@ -17,8 +17,13 @@
 
 pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 pub use self::list::VariantList;
-pub use self::metadata::VariantMetadata;
+pub use self::metadata::{VariantMetadata, EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES};
 pub use self::object::VariantObject;
+
+// Publically export types used in the API
+pub use half::f16;
+pub use uuid::Uuid;
+
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
@@ -28,8 +33,6 @@ use std::ops::Deref;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use half::f16;
-use uuid::Uuid;
 
 mod decimal;
 mod list;
