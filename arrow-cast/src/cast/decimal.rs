@@ -81,7 +81,7 @@ impl DecimalCast for i64 {
     }
 
     fn from_f64(n: f64) -> Option<Self> {
-        // Call implementation explicitly otherwise this resolves to `to_i64` 
+        // Call implementation explicitly otherwise this resolves to `to_i64`
         // in arrow-buffer that behaves differently.
         num::traits::ToPrimitive::to_i64(&n)
     }
