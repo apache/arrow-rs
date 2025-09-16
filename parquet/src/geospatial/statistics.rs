@@ -91,39 +91,72 @@ pub struct BoundingBox {
 
 impl BoundingBox {
     /// Creates a new bounding box with the specified coordinates.
-    /// 
-    /// # Arguments
-    /// 
-    /// * `xmin` - Minimum X coordinate
-    /// * `ymin` - Minimum Y coordinate  
-    /// * `xmax` - Maximum X coordinate
-    /// * `ymax` - Maximum Y coordinate
-    /// 
-    /// # Returns
-    /// 
-    /// A new `BoundingBox` instance with the specified coordinates.
     pub fn new(xmin: f64, ymin: f64, xmax: f64, ymax: f64) -> Self {
         Self { xmin, ymin, xmax, ymax, zmin: None, zmax: None, mmin: None, mmax: None }
     }
 
     /// Creates a new bounding box with the specified Z-coordinate range.
-    /// 
-    /// # Arguments
-    /// 
-    /// * `zmin` - Minimum Z coordinate
-    /// * `zmax` - Maximum Z coordinate
-    pub fn with_zrange(self, zmin: f64, zmax: f64) -> Self {
-        Self { zmin: Some(zmin), zmax: Some(zmax), ..self }
+    pub fn with_zrange(mut self, zmin: f64, zmax: f64) -> Self {
+        self.zmin = Some(zmin);
+        self.zmax = Some(zmax);
+        self
     }
 
     /// Creates a new bounding box with the specified M-coordinate range.
-    /// 
-    /// # Arguments
-    /// 
-    /// * `mmin` - Minimum M coordinate
-    /// * `mmax` - Maximum M coordinate
-    pub fn with_mrange(self, mmin: f64, mmax: f64) -> Self {
-        Self { mmin: Some(mmin), mmax: Some(mmax), ..self }
+    pub fn with_mrange(mut self, mmin: f64, mmax: f64) -> Self {
+        self.mmin = Some(mmin);
+        self.mmax = Some(mmax);
+        self
+    }
+
+    /// Returns the minimum x-coordinate.
+    pub fn get_xmin(self) -> f64 {
+        self.xmin
+    }
+
+    /// Returns the maximum x-coordinate.
+    pub fn get_xmax(self) -> f64 {
+        self.xmax
+    }
+
+    /// Returns the minimum y-coordinate.
+    pub fn get_ymin(self) -> f64 {
+        self.ymin
+    }
+
+    /// Returns the maximum y-coordinate.
+    pub fn get_ymax(self) -> f64 {
+        self.ymax
+    }
+
+    /// Returns the minimum z-coordinate, if present.
+    pub fn get_zmin(self) -> Option<f64> {
+        self.zmin
+    }
+
+    /// Returns the maximum z-coordinate, if present.
+    pub fn get_zmax(self) -> Option<f64> {
+        self.zmax
+    }
+
+    /// Returns the minimum m-value (measure), if present.
+    pub fn get_mmin(self) -> Option<f64> {
+        self.mmin
+    }
+
+    /// Returns the maximum m-value (measure), if present.
+    pub fn get_mmax(self) -> Option<f64> {
+        self.mmax
+    }
+
+    /// Returns `true` if both zmin and zmax are present.
+    pub fn is_z_valid(self) -> bool {
+        self.zmin.is_some() && self.zmax.is_some()
+    }
+
+    /// Returns `true` if both mmin and mmax are present.
+    pub fn is_m_valid(self) -> bool {
+        self.mmin.is_some() && self.mmax.is_some()
     }
 }
 
@@ -155,40 +188,12 @@ pub struct GeospatialStatistics {
 
 impl GeospatialStatistics {
     /// Creates a new geospatial statistics instance with the specified data.
-    /// 
-    /// # Arguments
-    /// 
-    /// * `bbox` - Optional bounding box defining the spatial extent
-    /// * `geospatial_types` - Optional list of geometry type identifiers
-    /// 
-    /// # Returns
-    /// 
-    /// A new `GeospatialStatistics` instance with the specified data.
     pub fn new(bbox: Option<BoundingBox>, geospatial_types: Option<Vec<i32>>) -> Self {
         Self { bbox, geospatial_types }
     }
 }
 
-/// Converts a Thrift-generated geospatial statistics object to our internal representation.
-/// 
-/// This function handles the conversion from the auto-generated Thrift types to our
-/// more ergonomic Rust structs. It safely handles optional fields and type conversions.
-/// 
-/// # Arguments
-/// 
-/// * `geo_statistics` - Optional Thrift-generated geospatial statistics
-/// 
-/// # Returns
-/// 
-/// A `Result` containing either:
-/// * `Ok(Some(GeospatialStatistics))` - Successfully converted statistics
-/// * `Ok(None)` - No statistics provided
-/// * `Err(...)` - Error during conversion
-/// 
-/// # Errors
-/// 
-/// This function may return an error if there are issues with the input data
-/// or type conversions.
+/// Converts a Thrift-generated geospatial statistics object to the internal representation.
 pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Option<GeospatialStatistics>> {
     Ok(match geo_statistics {
         Some(geo_stats) => {
@@ -225,17 +230,6 @@ pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Opti
 
 impl From<BoundingBox> for parquet::BoundingBox {
     /// Converts our internal `BoundingBox` to the Thrift-generated format.
-    /// 
-    /// This implementation allows seamless conversion between our ergonomic
-    /// Rust structs and the auto-generated Thrift types used for serialization.
-    /// 
-    /// # Arguments
-    /// 
-    /// * `b` - The internal `BoundingBox` to convert
-    /// 
-    /// # Returns
-    /// 
-    /// A Thrift-generated `BoundingBox` with the same coordinate values.
     fn from(b: BoundingBox) -> parquet::BoundingBox {
         parquet::BoundingBox {
             xmin: b.xmin.into(),
@@ -251,20 +245,6 @@ impl From<BoundingBox> for parquet::BoundingBox {
 }
 
 /// Converts our internal geospatial statistics to the Thrift-generated format.
-/// 
-/// This function is the inverse of `from_thrift` and is used when serializing
-/// geospatial statistics to Parquet format. It handles the conversion from our
-/// ergonomic Rust structs back to the auto-generated Thrift types.
-/// 
-/// # Arguments
-/// 
-/// * `geo_statistics` - Optional reference to our internal geospatial statistics
-/// 
-/// # Returns
-/// 
-/// An `Option<TGeospatialStatistics>` containing:
-/// * `Some(...)` - Successfully converted Thrift statistics
-/// * `None` - No statistics provided
 pub fn to_thrift(geo_statistics: Option<&GeospatialStatistics>) -> Option<TGeospatialStatistics> {
     let geo_stats = geo_statistics?;
     let bbox = geo_stats.bbox.clone().map(|bbox| bbox.into());
