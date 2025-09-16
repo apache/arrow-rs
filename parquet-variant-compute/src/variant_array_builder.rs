@@ -220,19 +220,19 @@ impl VariantBuilderExt for VariantArrayBuilder {
 /// # Example:
 /// ```
 /// # use arrow::array::Array;
-/// # use parquet_variant::{Variant, EMPTY_VARIANT_METADATA};
+/// # use parquet_variant::{Variant};
 /// # use parquet_variant_compute::VariantValueArrayBuilder;
 /// // Create a variant value builder for 10 rows
 /// let mut builder = VariantValueArrayBuilder::new(10);
 ///
 /// // Append some values with their corresponding metadata
-/// // In practice, you should use the existing metadata you have access to.
-/// builder.append_value(Variant::from(42), EMPTY_VARIANT_METADATA).unwrap();
+/// // In practice, some of the variant values would be objects with internal metadata.
+/// builder.append_value(Variant::from(42));
 /// builder.append_null();
-/// builder.append_value(Variant::from("hello"), EMPTY_VARIANT_METADATA).unwrap();
+/// builder.append_value(Variant::from("hello"));
 ///
 /// // Build the final value array
-/// let value_array = builder.build();
+/// let value_array = builder.build().unwrap();
 /// assert_eq!(value_array.len(), 3);
 /// ```
 #[derive(Debug)]
@@ -289,10 +289,10 @@ impl VariantValueArrayBuilder {
     ///
     /// # Example
     /// ```
-    /// # use parquet_variant::{Variant, EMPTY_VARIANT_METADATA};
+    /// # use parquet_variant::Variant;
     /// # use parquet_variant_compute::VariantValueArrayBuilder;
     /// let mut builder = VariantValueArrayBuilder::new(10);
-    /// builder.append_value(Variant::from(42), EMPTY_VARIANT_METADATA).unwrap();
+    /// builder.append_value(Variant::from(42));
     /// ```
     pub fn append_value(&mut self, value: Variant<'_, '_>) {
         let metadata = value.metadata().cloned().unwrap_or(EMPTY_VARIANT_METADATA);
