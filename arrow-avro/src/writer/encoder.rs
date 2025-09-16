@@ -387,7 +387,8 @@ impl<'a> FieldEncoder<'a> {
 
                     let values = dict
                         .values()
-                        .as_string_opt()
+                        .as_any()
+                        .downcast_ref::<StringArray>()
                         .ok_or_else(|| {
                             ArrowError::SchemaError("Dictionary values must be Utf8".into())
                         })?;
