@@ -162,7 +162,7 @@ pub const EMPTY_VARIANT_METADATA_BYTES: &[u8] = &[1, 0, 0];
 /// let empty_metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
 /// assert_eq!(empty_metadata, EMPTY_VARIANT_METADATA);
 /// ```
-pub static EMPTY_VARIANT_METADATA: VariantMetadata = VariantMetadata {
+pub const EMPTY_VARIANT_METADATA: VariantMetadata = VariantMetadata {
     bytes: EMPTY_VARIANT_METADATA_BYTES,
     header: VariantMetadataHeader {
         version: CORRECT_VERSION_VALUE,
