@@ -134,18 +134,18 @@ pub(crate) use writer::ThriftMetadataWriter;
 ///
 /// This structure is an in-memory representation of multiple [`ColumnIndex`]
 /// structures in a parquet file footer, as described in the Parquet [PageIndex
-/// documentation]. Each [`Index`] holds statistics about all the pages in a
+/// documentation]. Each [`ColumnIndex`] holds statistics about all the pages in a
 /// particular column chunk.
 ///
 /// `column_index[row_group_number][column_number]` holds the
-/// [`Index`] corresponding to column `column_number` of row group
+/// [`ColumnIndex`] corresponding to column `column_number` of row group
 /// `row_group_number`.
 ///
-/// For example `column_index[2][3]` holds the [`Index`] for the fourth
+/// For example `column_index[2][3]` holds the [`ColumnIndex`] for the fourth
 /// column in the third row group of the parquet file.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+/// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
 
 /// [`OffsetIndexMetaData`] for each data page of each row group of each column

@@ -261,7 +261,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Skip 1100      (skip the remaining 900 rows in row group 2 and the first 200 rows in row group 3)
     /// ```
     ///
-    /// [`Index`]: crate::file::page_index::index::Index
+    /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
