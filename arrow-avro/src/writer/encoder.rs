@@ -924,25 +924,6 @@ struct MapEncoder<'a> {
     values_offset: usize,
 }
 
-fn encode_map_entries<W, O>(
-    out: &mut W,
-    keys: &GenericStringArray<O>,
-    keys_offset: usize,
-    start: usize,
-    end: usize,
-    mut write_item: impl FnMut(&mut W, usize) -> Result<(), ArrowError>,
-) -> Result<(), ArrowError>
-where
-    W: Write + ?Sized,
-    O: OffsetSizeTrait,
-{
-    encode_blocked_range(out, start, end, |out, j| {
-        let j_key = j.saturating_sub(keys_offset);
-        write_len_prefixed(out, keys.value(j_key).as_bytes())?;
-        write_item(out, j)
-    })
-}
-
 impl<'a> MapEncoder<'a> {
     fn try_new(
         map: &'a MapArray,
@@ -997,6 +978,25 @@ impl<'a> MapEncoder<'a> {
         })
     }
 
+    fn encode_map_entries<W, O>(
+        out: &mut W,
+        keys: &GenericStringArray<O>,
+        keys_offset: usize,
+        start: usize,
+        end: usize,
+        mut write_item: impl FnMut(&mut W, usize) -> Result<(), ArrowError>,
+    ) -> Result<(), ArrowError>
+    where
+        W: Write + ?Sized,
+        O: OffsetSizeTrait,
+    {
+        encode_blocked_range(out, start, end, |out, j| {
+            let j_key = j.saturating_sub(keys_offset);
+            write_len_prefixed(out, keys.value(j_key).as_bytes())?;
+            write_item(out, j)
+        })
+    }
+
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
         let offsets = self.map.offsets();
         let start = offsets[idx] as usize;
@@ -1008,12 +1008,22 @@ impl<'a> MapEncoder<'a> {
         };
 
         match self.keys {
-            KeyKind::Utf8(arr) => {
-                encode_map_entries(out, arr, self.keys_offset, start, end, write_item)
-            }
-            KeyKind::LargeUtf8(arr) => {
-                encode_map_entries(out, arr, self.keys_offset, start, end, write_item)
-            }
+            KeyKind::Utf8(arr) => MapEncoder::<'a>::encode_map_entries(
+                out,
+                arr,
+                self.keys_offset,
+                start,
+                end,
+                write_item,
+            ),
+            KeyKind::LargeUtf8(arr) => MapEncoder::<'a>::encode_map_entries(
+                out,
+                arr,
+                self.keys_offset,
+                start,
+                end,
+                write_item,
+            ),
         }
     }
 }
