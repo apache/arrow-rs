@@ -323,6 +323,66 @@ macro_rules! thrift_struct {
     }
 }
 
+/// only implements ReadThrift for the give IDL struct definition
+#[macro_export]
+macro_rules! thrift_struct_read_impl {
+    ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
+        $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
+        impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
+            fn read_thrift(prot: &mut R) -> Result<Self> {
+                $(let mut $field_name: Option<$crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?)> = None;)*
+                let mut last_field_id = 0i16;
+                loop {
+                    let field_ident = prot.read_field_begin(last_field_id)?;
+                    if field_ident.field_type == FieldType::Stop {
+                        break;
+                    }
+                    match field_ident.id {
+                        $($field_id => {
+                            let val = $crate::__thrift_read_field!(prot, field_ident, $field_type $($field_lt)? $($element_type)?);
+                            $field_name = Some(val);
+                        })*
+                        _ => {
+                            prot.skip(field_ident.field_type)?;
+                        }
+                    };
+                    last_field_id = field_ident.id;
+                }
+                $($crate::__thrift_result_required_or_optional!($required_or_optional $field_name);)*
+                Ok(Self {
+                    $($field_name),*
+                })
+            }
+        }
+    }
+}
+
+/// only implements WriteThrift for the give IDL struct definition
+#[macro_export]
+macro_rules! thrift_struct_write_impl {
+    ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
+        impl $(<$lt>)? WriteThrift for $identifier $(<$lt>)? {
+            const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+            #[allow(unused_assignments)]
+            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+                #[allow(unused_mut, unused_variables)]
+                let mut last_field_id = 0i16;
+                $($crate::__thrift_write_required_or_optional_field!($required_or_optional $field_name, $field_id, $field_type, self, writer, last_field_id);)*
+                writer.write_struct_end()
+            }
+        }
+
+        impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
+    }
+}
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_write_required_or_optional_field {
@@ -391,15 +451,19 @@ macro_rules! __thrift_required_or_optional {
     (optional $field_type:ty) => { Option<$field_type> };
 }
 
+// Performance note: using `expect` here is about 4% faster on the page index bench,
+// but we want to propagate errors. Using `ok_or` is *much* slower.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __thrift_result_required_or_optional {
     (required $field_name:ident) => {
-        let $field_name = $field_name.expect(concat!(
-            "Required field ",
-            stringify!($field_name),
-            " is missing",
-        ));
+        let Some($field_name) = $field_name else {
+            return Err(general_err!(concat!(
+                "Required field ",
+                stringify!($field_name),
+                " is missing",
+            )));
+        };
     };
     (optional $field_name:ident) => {};
 }
@@ -433,7 +497,7 @@ macro_rules! __thrift_read_field {
     };
     ($prot:tt, $field_ident:tt, binary) => {
         // this one needs to not conflict with `list<i8>`
-        $prot.read_bytes()?.to_vec()
+        $prot.read_bytes_owned()?
     };
     ($prot:tt, $field_ident:tt, double) => {
         $crate::parquet_thrift::OrderedF64::read_thrift(&mut *$prot)?

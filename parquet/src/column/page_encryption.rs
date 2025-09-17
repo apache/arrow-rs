@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::basic::PageType;
 use crate::column::page::CompressedPage;
 use crate::encryption::ciphers::BlockEncryptor;
-use crate::encryption::encrypt::{encrypt_object, FileEncryptor};
+use crate::encryption::encrypt::{encrypt_thrift_object, FileEncryptor};
 use crate::encryption::modules::{create_module_aad, ModuleType};
 use crate::errors::ParquetError;
 use crate::errors::Result;
-use crate::format::PageHeader;
-use crate::format::PageType;
+use crate::file::metadata::thrift_gen::PageHeader;
 use bytes::Bytes;
 use std::io::Write;
 use std::sync::Arc;
@@ -114,6 +114,6 @@ impl PageEncryptor {
             Some(self.page_index),
         )?;
 
-        encrypt_object(page_header, &mut self.block_encryptor, sink, &aad)
+        encrypt_thrift_object(page_header, &mut self.block_encryptor, sink, &aad)
     }
 }

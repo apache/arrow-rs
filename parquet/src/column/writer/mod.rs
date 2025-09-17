@@ -2264,6 +2264,7 @@ mod tests {
 
         let props = ReaderProperties::builder()
             .set_backward_compatible_lz4(false)
+            .set_read_page_statistics(true)
             .build();
         let reader = SerializedPageReader::new_with_properties(
             Arc::new(Bytes::from(buf)),
