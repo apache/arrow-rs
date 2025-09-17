@@ -26,8 +26,8 @@ use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
 use crate::parquet_thrift::{
-    ElementType, FieldType, ThriftCompactInputProtocol, ThriftCompactOutputProtocol, WriteThrift,
-    WriteThriftField,
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    WriteThrift, WriteThriftField,
 };
 use crate::{thrift_enum, thrift_struct, thrift_union_all_empty};
 
@@ -165,9 +165,8 @@ pub enum ConvertedType {
     INTERVAL,
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ConvertedType {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ConvertedType {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         let val = prot.read_i32()?;
         Ok(match val {
             0 => Self::UTF8,
@@ -361,12 +360,9 @@ pub enum LogicalType {
     },
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        prot.read_struct_begin()?;
-
-        let field_ident = prot.read_field_begin()?;
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let field_ident = prot.read_field_begin(0)?;
         if field_ident.field_type == FieldType::Stop {
             return Err(general_err!("received empty union from remote LogicalType"));
         }
@@ -388,7 +384,7 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
                 Self::Enum
             }
             5 => {
-                let val = DecimalType::try_from(&mut *prot)?;
+                let val = DecimalType::read_thrift(&mut *prot)?;
                 Self::Decimal {
                     scale: val.scale,
                     precision: val.precision,
@@ -399,21 +395,21 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
                 Self::Date
             }
             7 => {
-                let val = TimeType::try_from(&mut *prot)?;
+                let val = TimeType::read_thrift(&mut *prot)?;
                 Self::Time {
                     is_adjusted_to_u_t_c: val.is_adjusted_to_u_t_c,
                     unit: val.unit,
                 }
             }
             8 => {
-                let val = TimestampType::try_from(&mut *prot)?;
+                let val = TimestampType::read_thrift(&mut *prot)?;
                 Self::Timestamp {
                     is_adjusted_to_u_t_c: val.is_adjusted_to_u_t_c,
                     unit: val.unit,
                 }
             }
             10 => {
-                let val = IntType::try_from(&mut *prot)?;
+                let val = IntType::read_thrift(&mut *prot)?;
                 Self::Integer {
                     is_signed: val.is_signed,
                     bit_width: val.bit_width,
@@ -440,19 +436,19 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
                 Self::Float16
             }
             16 => {
-                let val = VariantType::try_from(&mut *prot)?;
+                let val = VariantType::read_thrift(&mut *prot)?;
                 Self::Variant {
                     specification_version: val.specification_version,
                 }
             }
             17 => {
-                let val = GeometryType::try_from(&mut *prot)?;
+                let val = GeometryType::read_thrift(&mut *prot)?;
                 Self::Geometry {
                     crs: val.crs.map(|s| s.to_owned()),
                 }
             }
             18 => {
-                let val = GeographyType::try_from(&mut *prot)?;
+                let val = GeographyType::read_thrift(&mut *prot)?;
                 Self::Geography {
                     crs: val.crs.map(|s| s.to_owned()),
                     algorithm: val.algorithm,
@@ -465,13 +461,12 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for LogicalType {
                 }
             }
         };
-        let field_ident = prot.read_field_begin()?;
+        let field_ident = prot.read_field_begin(field_ident.id)?;
         if field_ident.field_type != FieldType::Stop {
             return Err(general_err!(
                 "Received multiple fields for union from remote LogicalType"
             ));
         }
-        prot.read_struct_end()?;
         Ok(ret)
     }
 }
@@ -756,9 +751,8 @@ pub enum Compression {
     LZ4_RAW,
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for Compression {
-    type Error = ParquetError;
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for Compression {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
         let val = prot.read_i32()?;
         Ok(match val {
             0 => Self::UNCOMPRESSED,
@@ -1124,12 +1118,9 @@ impl ColumnOrder {
     }
 }
 
-impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
-    type Error = ParquetError;
-
-    fn try_from(prot: &mut ThriftCompactInputProtocol<'a>) -> Result<Self> {
-        prot.read_struct_begin()?;
-        let field_ident = prot.read_field_begin()?;
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ColumnOrder {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let field_ident = prot.read_field_begin(0)?;
         if field_ident.field_type == FieldType::Stop {
             return Err(general_err!("Received empty union from remote ColumnOrder"));
         }
@@ -1144,13 +1135,12 @@ impl<'a> TryFrom<&mut ThriftCompactInputProtocol<'a>> for ColumnOrder {
                 Self::UNKNOWN
             }
         };
-        let field_ident = prot.read_field_begin()?;
+        let field_ident = prot.read_field_begin(field_ident.id)?;
         if field_ident.field_type != FieldType::Stop {
             return Err(general_err!(
                 "Received multiple fields for union from remote ColumnOrder"
             ));
         }
-        prot.read_struct_end()?;
         Ok(ret)
     }
 }
