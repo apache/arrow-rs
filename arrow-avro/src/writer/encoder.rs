@@ -18,7 +18,7 @@
 //! Avro Encoder for Arrow types.
 
 use crate::codec::{AvroDataType, AvroField, Codec};
-use crate::schema::Nullability;
+use crate::schema::{Fingerprint, Nullability};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalDayTimeType,
@@ -33,6 +33,7 @@ use arrow_array::{
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit};
+use serde::Serialize;
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -600,9 +601,22 @@ impl RecordEncoder {
     /// Encode a `RecordBatch` using this encoder plan.
     ///
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
-    pub fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<(), ArrowError> {
+    pub fn encode<W: Write>(
+        &self,
+        out: &mut W,
+        batch: &RecordBatch,
+        prefix: Option<&[u8]>,
+    ) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         for row in 0..batch.num_rows() {
+            if let Some(prefix) = prefix {
+                if !prefix.is_empty() {
+                    out.write_all(prefix).map_err(|e| {
+                        ArrowError::IoError(format!("write single-object prefix: {e}"), e)
+                    })?;
+                }
+            }
+
             for encoder in column_encoders.iter_mut() {
                 encoder.encode(out, row)?;
             }
