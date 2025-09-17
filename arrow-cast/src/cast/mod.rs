@@ -268,8 +268,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Utf8 | LargeUtf8, Utf8View) => true,
         (BinaryView, Binary | LargeBinary | Utf8 | LargeUtf8 | Utf8View) => true,
         (Utf8View | Utf8 | LargeUtf8, _) => to_type.is_numeric() && to_type != &Float16,
-        (_, Utf8 | LargeUtf8) => from_type.is_primitive(),
-        (_, Utf8View) => from_type.is_numeric(),
+        (_, Utf8 | Utf8View | LargeUtf8) => from_type.is_primitive(),
 
         (_, Binary | LargeBinary) => from_type.is_integer(),
 
@@ -3103,6 +3102,35 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_floating_to_decimals() {
+        for output_type in [
+            DataType::Decimal32(9, 3),
+            DataType::Decimal64(9, 3),
+            DataType::Decimal128(9, 3),
+            DataType::Decimal256(9, 3),
+        ] {
+            let input_type = DataType::Float64;
+            assert!(can_cast_types(&input_type, &output_type));
+
+            let array = vec![Some(1.1_f64)];
+            let array = PrimitiveArray::<Float64Type>::from_iter(array);
+            let result = cast_with_options(
+                &array,
+                &output_type,
+                &CastOptions {
+                    safe: false,
+                    format_options: FormatOptions::default(),
+                },
+            );
+            assert!(
+                result.is_ok(),
+                "Failed to cast to {output_type} with: {}",
+                result.unwrap_err()
+            );
+        }
+    }
+
+    #[test]
     fn test_cast_decimal128_to_decimal128_overflow() {
         let input_type = DataType::Decimal128(38, 3);
         let output_type = DataType::Decimal128(38, 38);
@@ -5775,28 +5803,9 @@ mod tests {
         assert!(c.is_null(2));
     }
 
-    #[test]
-    fn test_cast_date32_to_string() {
-        let array = Date32Array::from(vec![10000, 17890]);
-        let b = cast(&array, &DataType::Utf8).unwrap();
-        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(&DataType::Utf8, c.data_type());
-        assert_eq!("1997-05-19", c.value(0));
-        assert_eq!("2018-12-25", c.value(1));
-    }
-
-    #[test]
-    fn test_cast_date64_to_string() {
-        let array = Date64Array::from(vec![10000 * 86400000, 17890 * 86400000]);
-        let b = cast(&array, &DataType::Utf8).unwrap();
-        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(&DataType::Utf8, c.data_type());
-        assert_eq!("1997-05-19T00:00:00", c.value(0));
-        assert_eq!("2018-12-25T00:00:00", c.value(1));
-    }
-
-    macro_rules! assert_cast_timestamp_to_string {
+    macro_rules! assert_cast {
         ($array:expr, $datatype:expr, $output_array_type: ty, $expected:expr) => {{
+            assert!(can_cast_types($array.data_type(), &$datatype));
             let out = cast(&$array, &$datatype).unwrap();
             let actual = out
                 .as_any()
@@ -5807,6 +5816,7 @@ mod tests {
             assert_eq!(actual, $expected);
         }};
         ($array:expr, $datatype:expr, $output_array_type: ty, $options:expr, $expected:expr) => {{
+            assert!(can_cast_types($array.data_type(), &$datatype));
             let out = cast_with_options(&$array, &$datatype, &$options).unwrap();
             let actual = out
                 .as_any()
@@ -5816,6 +5826,44 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(actual, $expected);
         }};
+    }
+
+    #[test]
+    fn test_cast_date32_to_string() {
+        let array = Date32Array::from(vec![Some(0), Some(10000), Some(13036), Some(17890), None]);
+        let expected = vec![
+            Some("1970-01-01"),
+            Some("1997-05-19"),
+            Some("2005-09-10"),
+            Some("2018-12-25"),
+            None,
+        ];
+
+        assert_cast!(array, DataType::Utf8View, StringViewArray, expected);
+        assert_cast!(array, DataType::Utf8, StringArray, expected);
+        assert_cast!(array, DataType::LargeUtf8, LargeStringArray, expected);
+    }
+
+    #[test]
+    fn test_cast_date64_to_string() {
+        let array = Date64Array::from(vec![
+            Some(0),
+            Some(10000 * 86400000),
+            Some(13036 * 86400000),
+            Some(17890 * 86400000),
+            None,
+        ]);
+        let expected = vec![
+            Some("1970-01-01T00:00:00"),
+            Some("1997-05-19T00:00:00"),
+            Some("2005-09-10T00:00:00"),
+            Some("2018-12-25T00:00:00"),
+            None,
+        ];
+
+        assert_cast!(array, DataType::Utf8View, StringViewArray, expected);
+        assert_cast!(array, DataType::Utf8, StringArray, expected);
+        assert_cast!(array, DataType::LargeUtf8, LargeStringArray, expected);
     }
 
     #[test]
@@ -6020,9 +6068,9 @@ mod tests {
             None,
         ];
 
-        assert_cast_timestamp_to_string!(array, DataType::Utf8View, StringViewArray, expected);
-        assert_cast_timestamp_to_string!(array, DataType::Utf8, StringArray, expected);
-        assert_cast_timestamp_to_string!(array, DataType::LargeUtf8, LargeStringArray, expected);
+        assert_cast!(array, DataType::Utf8View, StringViewArray, expected);
+        assert_cast!(array, DataType::Utf8, StringArray, expected);
+        assert_cast!(array, DataType::LargeUtf8, LargeStringArray, expected);
     }
 
     #[test]
@@ -6044,21 +6092,21 @@ mod tests {
             Some("2018-12-25 00:00:02.001000"),
             None,
         ];
-        assert_cast_timestamp_to_string!(
+        assert_cast!(
             array_without_tz,
             DataType::Utf8View,
             StringViewArray,
             cast_options,
             expected
         );
-        assert_cast_timestamp_to_string!(
+        assert_cast!(
             array_without_tz,
             DataType::Utf8,
             StringArray,
             cast_options,
             expected
         );
-        assert_cast_timestamp_to_string!(
+        assert_cast!(
             array_without_tz,
             DataType::LargeUtf8,
             LargeStringArray,
@@ -6074,21 +6122,21 @@ mod tests {
             Some("2018-12-25 05:45:02.001000"),
             None,
         ];
-        assert_cast_timestamp_to_string!(
+        assert_cast!(
             array_with_tz,
             DataType::Utf8View,
             StringViewArray,
             cast_options,
             expected
         );
-        assert_cast_timestamp_to_string!(
+        assert_cast!(
             array_with_tz,
             DataType::Utf8,
             StringArray,
             cast_options,
             expected
         );
-        assert_cast_timestamp_to_string!(
+        assert_cast!(
             array_with_tz,
             DataType::LargeUtf8,
             LargeStringArray,
