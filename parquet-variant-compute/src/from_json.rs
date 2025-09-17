@@ -30,9 +30,7 @@ macro_rules! string_array_to_variant {
             if $input.is_null(i) {
                 $builder.append_null();
             } else {
-                let mut vb = $builder.variant_builder();
-                vb.append_json($array.value(i))?;
-                vb.finish()
+                $builder.append_json($array.value(i))?;
             }
         }
     }};
