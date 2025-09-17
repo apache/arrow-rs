@@ -298,14 +298,15 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, BinaryViewArray, Float16Array, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, StringArray, StructArray, UInt16Array, UInt32Array,
+        make_builder, Array, ArrayRef, BinaryBuilder, BinaryViewArray, Float16Array, Float32Array,
+        Float64Array, GenericListBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        StringArray, StringBuilder, StructArray, StructBuilder, UInt16Array, UInt32Array,
         UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow_schema::{DataType, Field, FieldRef, Fields};
-    use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
+    use parquet_variant::{Variant, VariantBuilder, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
 
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
@@ -1090,7 +1091,7 @@ mod test {
         assert_eq!(&result, &expected);
     }
     /// This test manually constructs a shredded variant array representing lists
-    /// like ["comedy", "drama"], ["horror", null] and ["comedy", "drama", "romance"]
+    /// like ["comedy", "drama"] and ["horror", 123]
     /// as VariantArray using variant_get.
     #[test]
     fn test_shredded_list_field_access() {
@@ -1102,13 +1103,11 @@ mod test {
 
         let result_variant: &VariantArray = result.as_any().downcast_ref().unwrap();
         assert_eq!(result_variant.len(), 3);
-    
+
         // Row 0: expect 0 index = "comedy"
-        assert_eq!(result_variant.value(0), Variant::String("comedy"));
+        assert_eq!(result_variant.value(0), Variant::from("comedy"));
         // Row 1: expect 0 index = "horror"
-        assert_eq!(result_variant.value(1), Variant::String("horror"));
-        // Row 2: expect 0 index = "comedy"
-        assert_eq!(result_variant.value(2), Variant::String("comedy"));
+        assert_eq!(result_variant.value(1), Variant::from("horror"));
     }
     /// Test extracting shredded list field with type conversion
     #[test]
@@ -1122,64 +1121,109 @@ mod test {
         let result = variant_get(&array, options).unwrap();
 
         // Should get StringArray
-        let expected: ArrayRef = Arc::new(StringArray::from(vec![Some("comedy"), Some("drama")]));
+        let expected: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("comedy"), None, Some("drama")]));
         assert_eq!(&result, &expected);
     }
     /// Helper function to create a shredded variant array representing lists
     ///
     /// This creates an array that represents:
     /// Row 0: ["comedy", "drama"] ([0] is shredded, [1] is shredded - perfectly shredded)
-    /// Row 1: ["horror", null] ([0] is shredded, [1] is binary null - partially shredded)
-    /// Row 2: ["comedy", "drama", "romance"] (perfectly shredded)
+    /// Row 1: ["horror", 123] ([0] is shredded, [1] is int - partially shredded)
     ///
     /// The physical layout follows the shredding spec where:
     /// - metadata: contains list metadata
     /// - typed_value: StructArray with 0 index value
     /// - value: contains fallback for
     fn shredded_list_variant_array() -> ArrayRef {
-        // Create the base metadata for lists
-
-        // Could add this as an api for VariantList, like VariantList::from()
-        fn build_list_metadata(vector: Vec<Variant>) -> (Vec<u8>, Vec<u8>) {
-            let mut builder = parquet_variant::VariantBuilder::new();
-            let mut list = builder.new_list();
-            for value in vector {
-                list.append_value(value);
-            }
-            list.finish();
-            builder.finish()
-        }
-        let (metadata1, _) =
-            build_list_metadata(vec![Variant::String("comedy"), Variant::String("drama")]);
-
-        let (metadata2, _) = build_list_metadata(vec![Variant::String("horror"), Variant::Null]);
-
-        let (metadata3, _) = build_list_metadata(vec![
-            Variant::String("comedy"),
-            Variant::String("drama"),
-            Variant::String("romance"),
-        ]);
-
         // Create metadata array
         let metadata_array =
-            BinaryViewArray::from_iter_values(vec![metadata1, metadata2, metadata3]);
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 2));
 
-        // Create the untyped value array
-        let value_array = BinaryViewArray::from(vec![Variant::Null.as_u8_slice()]);
-        // Maybe I should try with an actual primitive array
-        let typed_value_array = StringArray::from(vec![
-            Some("comedy"),
-            Some("drama"),
-            Some("horror"),
-            Some("comedy"),
-            Some("drama"),
-            Some("romance"),
+        // Building the typed_value ListArray
+
+        // Need a StructBuilder to create a ListBuilder
+        let fields = Fields::from(vec![
+            Field::new("value", DataType::Binary, true),
+            Field::new("typed_value", DataType::Utf8, true),
         ]);
+        let field_builders = vec![
+            make_builder(&DataType::Binary, 4),
+            make_builder(&DataType::Utf8, 4),
+        ];
+        let struct_builder = StructBuilder::new(fields, field_builders);
+
+        let mut builder = GenericListBuilder::<i32, StructBuilder>::new(struct_builder);
+
+        // Row 0 index 0
+        builder
+            .values()
+            .field_builder::<BinaryBuilder>(0)
+            .unwrap()
+            .append_null();
+        builder
+            .values()
+            .field_builder::<StringBuilder>(1)
+            .unwrap()
+            .append_value("comedy");
+        builder.values().append(true);
+
+        // Row 0 index 1
+        builder
+            .values()
+            .field_builder::<BinaryBuilder>(0)
+            .unwrap()
+            .append_null();
+        builder
+            .values()
+            .field_builder::<StringBuilder>(1)
+            .unwrap()
+            .append_value("drama");
+        builder.values().append(true);
+
+        // Next row
+        builder.append(true);
+
+        // Row 1 index 0
+        builder
+            .values()
+            .field_builder::<BinaryBuilder>(0)
+            .unwrap()
+            .append_null();
+        builder
+            .values()
+            .field_builder::<StringBuilder>(1)
+            .unwrap()
+            .append_value("horror");
+        builder.values().append(true);
+
+        // Row 1 index 1
+        let mut variant_builder = VariantBuilder::new();
+        variant_builder.append_value(123i32); // <------ couldn't find the right way to do it, used this as placeholder for binary
+        let (_, value) = variant_builder.finish();
+
+        builder
+            .values()
+            .field_builder::<BinaryBuilder>(0)
+            .unwrap()
+            .append_value(value);
+        builder
+            .values()
+            .field_builder::<StringBuilder>(1)
+            .unwrap()
+            .append_null();
+        builder.values().append(true);
+
+        // Next row
+        builder.append(true);
+
+        let typed_value_array = builder.finish();
+
         // Build the main VariantArray
         let main_struct = crate::variant_array::StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata_array))
-            .with_field("value", Arc::new(value_array))
-            .with_field("typed_value", Arc::new(typed_value_array))
+            .with_field("metadata", Arc::new(metadata_array), false)
+            // .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_array), true)
             .build();
 
         Arc::new(VariantArray::try_new(Arc::new(main_struct)).expect("should create variant array"))
