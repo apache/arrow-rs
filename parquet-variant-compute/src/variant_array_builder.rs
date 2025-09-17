@@ -225,8 +225,9 @@ impl VariantBuilderExt for VariantArrayBuilder {
 /// // Create a variant value builder for 10 rows
 /// let mut builder = VariantValueArrayBuilder::new(10);
 ///
-/// // Append some values with their corresponding metadata
-/// // In practice, some of the variant values would be objects with internal metadata.
+/// // Append some values with their corresponding metadata. In practice, some of the variant
+/// // values would be objects with internal references to pre-existing metadata, which the
+/// // builder takes advantage of to avoid creating new metadata.
 /// builder.append_value(Variant::from(42));
 /// builder.append_null();
 /// builder.append_value(Variant::from("hello"));
@@ -268,7 +269,7 @@ impl VariantValueArrayBuilder {
 
     /// Append a null row to the builder
     ///
-    /// WARNING: It is only safe to call this method when building the `value` field of a shredded
+    /// WARNING: It is only valid to call this method when building the `value` field of a shredded
     /// variant column (which is nullable). The `value` field of a binary (unshredded) variant
     /// column is non-nullable, and callers should instead invoke [`Self::append_value`] with
     /// `Variant::Null`, passing the appropriate metadata value.
@@ -322,7 +323,7 @@ impl VariantValueArrayBuilder {
     ///         object_builder.insert_bytes(field_name, field_value);
     ///     }
     /// }
-    ///  object_builder.finish(); // appends the new object
+    ///  object_builder.finish(); // appends the filtered object
     /// ```
     pub fn parent_state<'a>(
         &'a mut self,
@@ -380,7 +381,7 @@ fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> Binar
 mod test {
     use super::*;
     use arrow::array::Array;
-    use parquet_variant::{Variant, VariantBuilder, VariantMetadata};
+    use parquet_variant::Variant;
 
     /// Test that both the metadata and value buffers are non nullable
     #[test]
@@ -457,30 +458,76 @@ mod test {
 
     #[test]
     fn test_variant_value_array_builder_with_objects() {
-        // Create metadata with field names
-        let mut metadata_builder = WritableMetadataBuilder::default();
-        metadata_builder.upsert_field_name("name");
-        metadata_builder.upsert_field_name("age");
-        metadata_builder.finish();
-        let metadata_bytes = metadata_builder.into_inner();
-        let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
-
-        // Create a variant with an object using the same metadata
-        let mut variant_builder = VariantBuilder::new().with_metadata(metadata);
-        variant_builder
+        // Populate a variant array with objects
+        let mut builder = VariantArrayBuilder::new(3);
+        builder
             .new_object()
             .with_field("name", "Alice")
             .with_field("age", 30i32)
             .finish();
-        let (_, value_bytes) = variant_builder.finish();
-        let variant = Variant::try_new(&metadata_bytes, &value_bytes).unwrap();
 
-        // Now use the value array builder
-        let mut builder = VariantValueArrayBuilder::new(10);
-        builder.append_value(variant);
-        builder.append_null();
+        builder
+            .new_object()
+            .with_field("name", "Bob")
+            .with_field("age", 42i32)
+            .with_field("city", "Wonderland")
+            .finish();
 
-        let value_array = builder.build().unwrap();
-        assert_eq!(value_array.len(), 2);
+        builder
+            .new_object()
+            .with_field("name", "Charlie")
+            .with_field("age", 1i32)
+            .finish();
+
+        let array = builder.build();
+
+        // Copy (some of) the objects over to the value array builder
+        //
+        // NOTE: Because we will reuse the metadata column, we cannot reorder rows. We can only
+        // filter or manipulate values within a row.
+        let mut builder = VariantValueArrayBuilder::new(3);
+
+        // straight copy
+        builder.append_value(array.value(0));
+
+        // filtering fields takes more work because we need to manually create an object builder
+        let value = array.value(1);
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().unwrap().clone());
+        let state = builder.parent_state(&mut metadata_builder);
+        ObjectBuilder::new(state, false)
+            .with_field("name", value.get_object_field("name").unwrap())
+            .with_field("age", value.get_object_field("age").unwrap())
+            .finish();
+
+        // same bytes, but now nested and duplicated inside a list
+        let value = array.value(2);
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().unwrap().clone());
+        let state = builder.parent_state(&mut metadata_builder);
+        ListBuilder::new(state, false)
+            .with_value(value.clone())
+            .with_value(value.clone())
+            .finish();
+
+        let array2 = VariantArray::from_parts(
+            array.metadata_field().clone(),
+            Some(builder.build().unwrap()),
+            None,
+            None,
+        );
+
+        assert_eq!(array2.len(), 3);
+        assert_eq!(array.value(0), array2.value(0));
+
+        assert_eq!(
+            array.value(1).get_object_field("name"),
+            array2.value(1).get_object_field("name")
+        );
+        assert_eq!(
+            array.value(1).get_object_field("age"),
+            array2.value(1).get_object_field("age")
+        );
+
+        assert_eq!(array.value(2), array2.value(2).get_list_element(0).unwrap());
+        assert_eq!(array.value(2), array2.value(2).get_list_element(1).unwrap());
     }
 }
