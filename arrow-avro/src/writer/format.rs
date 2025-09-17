@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
-use crate::schema::{AvroSchema, Fingerprint, SCHEMA_METADATA_KEY, SINGLE_OBJECT_MAGIC};
+use crate::schema::{
+    AvroSchema, Fingerprint, FingerprintStrategy, CONFLUENT_MAGIC, SCHEMA_METADATA_KEY,
+    SINGLE_OBJECT_MAGIC,
+};
 use crate::writer::encoder::write_long;
 use arrow_schema::{ArrowError, Schema};
 use rand::RngCore;
@@ -33,6 +36,7 @@ pub trait AvroFormat: Debug + Default {
         writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
+        fingerprint_strategy: FingerprintStrategy,
     ) -> Result<(), ArrowError>;
 
     /// Return the 16‑byte sync marker (OCF) or `None` (binary stream).
@@ -62,6 +66,7 @@ impl AvroFormat for AvroOcfFormat {
         writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
+        _fingerprint_strategy: FingerprintStrategy,
     ) -> Result<(), ArrowError> {
         let mut rng = rand::rng();
         rng.fill_bytes(&mut self.sync_marker);
@@ -120,48 +125,51 @@ impl AvroFormat for AvroBinaryFormat {
         _writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
+        fingerprint_strategy: FingerprintStrategy,
     ) -> Result<(), ArrowError> {
         if compression.is_some() {
             return Err(ArrowError::InvalidArgumentError(
-                "Compression not supported for Avro binary streaming (single-object encoding)"
-                    .to_string(),
+                "Compression not supported for Avro binary streaming".to_string(),
             ));
         }
 
-        if let Some(id_str) = schema.metadata().get("confluent.schema.id") {
-            let id: u32 = id_str.parse().map_err(|_| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Invalid Confluent schema ID in metadata: {id_str}"
-                ))
-            })?;
-            self.prefix.clear();
-            self.prefix.push(0x00);
-            self.prefix.extend_from_slice(&id.to_be_bytes());
-            return Ok(());
-        }
-
-        let avro_schema = AvroSchema::try_from(schema)?;
         self.prefix.clear();
 
-        match avro_schema.fingerprint()? {
-            // Case 1: Confluent Schema Registry ID format.
-            // 1 magic byte (0x00) + 4-byte schema ID (Big Endian).
-            Fingerprint::Id(id) => {
-                self.prefix.push(0x00);
+        match fingerprint_strategy {
+            FingerprintStrategy::ConfluentSchemaId(id) => {
+                self.prefix.push(CONFLUENT_MAGIC[0]);
                 self.prefix.extend_from_slice(&id.to_be_bytes());
             }
-
-            // Case 2: Standard single-object encoding with hash-based fingerprints.
-            // 2 magic bytes + N-byte fingerprint.
-            fp => {
+            strategy => {
+                // All other strategies use the single-object encoding format
                 self.prefix.extend_from_slice(&SINGLE_OBJECT_MAGIC);
+
+                let avro_schema = AvroSchema::try_from(schema)?;
+                let fp = match strategy {
+                    FingerprintStrategy::Rabin => avro_schema.fingerprint()?,
+                    #[cfg(feature = "md5")]
+                    FingerprintStrategy::MD5 => AvroSchema::generate_fingerprint(
+                        &avro_schema.schema()?,
+                        crate::schema::FingerprintAlgorithm::MD5,
+                    )?,
+                    #[cfg(feature = "sha256")]
+                    FingerprintStrategy::SHA256 => AvroSchema::generate_fingerprint(
+                        &avro_schema.schema()?,
+                        crate::schema::FingerprintAlgorithm::SHA256,
+                    )?,
+                    FingerprintStrategy::ConfluentSchemaId(_) => unreachable!(),
+                };
+
                 match fp {
                     Fingerprint::Rabin(val) => self.prefix.extend_from_slice(&val.to_le_bytes()),
                     #[cfg(feature = "md5")]
                     Fingerprint::MD5(val) => self.prefix.extend_from_slice(val.as_ref()),
                     #[cfg(feature = "sha256")]
                     Fingerprint::SHA256(val) => self.prefix.extend_from_slice(val.as_ref()),
-                    Fingerprint::Id(_) => unreachable!(),
+                    Fingerprint::Id(_) => return Err(ArrowError::InvalidArgumentError(
+                        "ConfluentSchemaId strategy cannot be used with a hash-based fingerprint."
+                            .to_string(),
+                    )),
                 }
             }
         }

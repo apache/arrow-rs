@@ -34,7 +34,7 @@ pub mod format;
 
 use crate::codec::AvroFieldBuilder;
 use crate::compression::CompressionCodec;
-use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+use crate::schema::{AvroSchema, FingerprintStrategy, SCHEMA_METADATA_KEY};
 use crate::writer::encoder::{write_long, RecordEncoder, RecordEncoderBuilder};
 use crate::writer::format::{AvroBinaryFormat, AvroFormat, AvroOcfFormat};
 use arrow_array::RecordBatch;
@@ -48,6 +48,7 @@ pub struct WriterBuilder {
     schema: Schema,
     codec: Option<CompressionCodec>,
     capacity: usize,
+    fingerprint_strategy: FingerprintStrategy,
 }
 
 impl WriterBuilder {
@@ -57,7 +58,15 @@ impl WriterBuilder {
             schema,
             codec: None,
             capacity: 1024,
+            fingerprint_strategy: FingerprintStrategy::default(),
         }
+    }
+
+    /// Set the fingerprinting strategy for the stream writer.
+    /// This determines the per-record prefix format.
+    pub fn with_fingerprint_strategy(mut self, strategy: FingerprintStrategy) -> Self {
+        self.fingerprint_strategy = strategy;
+        self
     }
 
     /// Change the compression codec.
@@ -90,7 +99,7 @@ impl WriterBuilder {
             avro_schema.clone().json_string,
         );
         let schema = Arc::new(Schema::new_with_metadata(self.schema.fields().clone(), md));
-        format.start_stream(&mut writer, &schema, self.codec)?;
+        format.start_stream(&mut writer, &schema, self.codec, self.fingerprint_strategy)?;
         let avro_root = AvroFieldBuilder::new(&avro_schema.schema()?).build()?;
         let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref()).build()?;
         Ok(Writer {
@@ -206,7 +215,7 @@ mod tests {
     use super::*;
     use crate::compression::CompressionCodec;
     use crate::reader::ReaderBuilder;
-    use crate::schema::{AvroSchema, SchemaStore};
+    use crate::schema::{AvroSchema, SchemaStore, CONFLUENT_MAGIC};
     use crate::test_util::arrow_test_data;
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, IntervalUnit, Schema};
@@ -272,30 +281,24 @@ mod tests {
 
     #[test]
     fn test_stream_writer_with_id_fingerprint() -> Result<(), ArrowError> {
-        // 1. Schema with Confluent ID in metadata
         let schema_id = 42u32;
-        let mut metadata = std::collections::HashMap::new();
-        // Assume "confluent.schema.id" is the metadata key the implementation looks for
-        metadata.insert("confluent.schema.id".to_string(), schema_id.to_string());
-        let schema =
-            Schema::new(vec![Field::new("value", DataType::Int64, false)]).with_metadata(metadata);
+        let schema = Schema::new(vec![Field::new("value", DataType::Int64, false)]);
 
-        // 2. Batch with two rows
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![Arc::new(Int64Array::from(vec![100, 200])) as ArrayRef],
         )?;
 
-        // 3. Write the batch using the stream writer
         let buffer: Vec<u8> = Vec::new();
-        let mut writer = AvroStreamWriter::new(buffer, schema)?;
+        let mut writer = WriterBuilder::new(schema)
+            .with_fingerprint_strategy(FingerprintStrategy::ConfluentSchemaId(schema_id))
+            .build::<_, AvroBinaryFormat>(buffer)?;
         writer.write(&batch)?;
         let actual_bytes = writer.into_inner();
 
-        // 4. Construct expected output manually for Confluent wire format
         let mut expected_bytes: Vec<u8> = Vec::new();
         let prefix = {
-            let mut p = vec![0x00]; // Confluent magic byte
+            let mut p = vec![CONFLUENT_MAGIC[0]];
             p.extend(&schema_id.to_be_bytes());
             p
         };
@@ -313,33 +316,6 @@ mod tests {
             "Stream writer output for Confluent ID did not match expected format"
         );
         Ok(())
-    }
-
-    #[test]
-    fn test_stream_writer_invalid_id_fingerprint_errors() {
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert(
-            "confluent.schema.id".to_string(),
-            "not-a-valid-id".to_string(),
-        );
-        let schema =
-            Schema::new(vec![Field::new("value", DataType::Int64, false)]).with_metadata(metadata);
-
-        let buffer: Vec<u8> = Vec::new();
-        let result = AvroStreamWriter::new(buffer, schema);
-
-        let err = result.expect_err("Writer creation should fail for invalid schema ID");
-        assert!(
-            matches!(err, ArrowError::InvalidArgumentError(_)),
-            "Expected InvalidArgumentError, but got {:?}",
-            err
-        );
-        assert!(
-            err.to_string()
-                .contains("Invalid Confluent schema ID in metadata"),
-            "Error message did not match expectation. Got: {}",
-            err
-        );
     }
 
     #[test]

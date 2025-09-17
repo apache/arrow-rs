@@ -316,6 +316,22 @@ pub struct Fixed<'a> {
     pub attributes: Attributes<'a>,
 }
 
+/// Defines the strategy for generating the per-record prefix for an Avro binary stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FingerprintStrategy {
+    /// Use the 64-bit Rabin fingerprint (default for single-object encoding).
+    #[default]
+    Rabin,
+    /// Use a Confluent Schema Registry 32-bit ID.
+    ConfluentSchemaId(u32),
+    #[cfg(feature = "md5")]
+    /// Use the 128-bit MD5 fingerprint.
+    MD5,
+    #[cfg(feature = "sha256")]
+    /// Use the 256-bit SHA-256 fingerprint.
+    SHA256,
+}
+
 /// A wrapper for an Avro schema in its JSON string representation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AvroSchema {
