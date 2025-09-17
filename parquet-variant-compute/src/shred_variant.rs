@@ -22,8 +22,7 @@ use crate::variant_to_arrow::{
     make_primitive_variant_to_arrow_row_builder, PrimitiveVariantToArrowRowBuilder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::Array as _;
-use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
+use arrow::array::{Array as _, ArrayRef, BinaryViewArray, NullBufferBuilder};
 use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Fields};
@@ -33,6 +32,37 @@ use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, EMPTY_VAR
 use indexmap::IndexMap;
 use std::sync::Arc;
 
+/// Shreds the input binary variant using a target shredding schema derived from the requested data type.
+///
+/// For example, requesting `DataType::Int64` would produce an output variant array with the schema:
+///
+/// ```
+/// {
+///    metadata: BINARY,
+///    value: BINARY,
+///    typed_value: LONG,
+/// }
+/// ```
+///
+/// Similarly, requesting `DataType::Struct` with two integer fields `a` and `b` would produce an
+/// output variant array with the schema:
+///
+/// ```
+/// {
+///   metadata: BINARY,
+///   value: BINARY,
+///   typed_value: {
+///     a: {
+///       value: BINARY,
+///       typed_value: INT,
+///     },
+///     b: {
+///       value: BINARY,
+///       typed_value: INT,
+///     },
+///   }
+/// }
+/// ```
 pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<VariantArray> {
     if array.typed_value_field().is_some() {
         return Err(ArrowError::InvalidArgumentError(
@@ -76,7 +106,7 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
 pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     data_type: &'a DataType,
     cast_options: &'a CastOptions,
-    len: usize,
+    capacity: usize,
     top_level: bool,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
@@ -84,7 +114,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             let typed_value_builder = VariantToShreddedObjectVariantRowBuilder::try_new(
                 fields,
                 cast_options,
-                len,
+                capacity,
                 top_level,
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
@@ -101,9 +131,9 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         }
         _ => {
             let builder =
-                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, len)?;
+                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
             let typed_value_builder =
-                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, len, top_level);
+                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, top_level);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
         }
     };
@@ -115,11 +145,37 @@ pub(crate) enum VariantToShreddedVariantRowBuilder<'a> {
     Object(VariantToShreddedObjectVariantRowBuilder<'a>),
 }
 impl<'a> VariantToShreddedVariantRowBuilder<'a> {
+    fn start_append_null(&mut self) {
+        use VariantToShreddedVariantRowBuilder::*;
+
+        let (top_level, nulls, value_builder) = match self {
+            Primitive(VariantToShreddedPrimitiveVariantRowBuilder {
+                top_level,
+                nulls,
+                value_builder,
+                ..
+            })
+            | Object(VariantToShreddedObjectVariantRowBuilder {
+                top_level,
+                nulls,
+                value_builder,
+                ..
+            }) => (top_level, nulls, value_builder),
+        };
+        if *top_level {
+            nulls.append_null();
+            value_builder.append_null();
+        } else {
+            nulls.append_non_null();
+            value_builder.append_value(Variant::Null);
+        }
+    }
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToShreddedVariantRowBuilder::*;
+        self.start_append_null();
         match self {
-            Primitive(b) => b.append_null(),
-            Object(b) => b.append_null(),
+            Primitive(b) => b.finish_append_null(),
+            Object(b) => b.finish_append_null(),
         }
     }
 
@@ -151,24 +207,17 @@ pub(crate) struct VariantToShreddedPrimitiveVariantRowBuilder<'a> {
 impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     pub(crate) fn new(
         typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
-        len: usize,
+        capacity: usize,
         top_level: bool,
     ) -> Self {
         Self {
-            value_builder: VariantValueArrayBuilder::new(len),
+            value_builder: VariantValueArrayBuilder::new(capacity),
             typed_value_builder,
-            nulls: NullBufferBuilder::new(len),
+            nulls: NullBufferBuilder::new(capacity),
             top_level,
         }
     }
-    fn append_null(&mut self) -> Result<()> {
-        if self.top_level {
-            self.nulls.append_null();
-            self.value_builder.append_null();
-        } else {
-            self.nulls.append_non_null();
-            self.value_builder.append_value(Variant::Null);
-        }
+    fn finish_append_null(&mut self) -> Result<()> {
         self.typed_value_builder.append_null()
     }
     fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
@@ -201,35 +250,28 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
     fn try_new(
         fields: &'a Fields,
         cast_options: &'a CastOptions,
-        len: usize,
+        capacity: usize,
         top_level: bool,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
                 field.data_type(),
                 cast_options,
-                len,
+                capacity,
                 top_level,
             )?;
             Ok((field.name().as_str(), builder))
         });
         Ok(Self {
-            value_builder: VariantValueArrayBuilder::new(len),
+            value_builder: VariantValueArrayBuilder::new(capacity),
             typed_value_builders: typed_value_builders.collect::<Result<_>>()?,
-            typed_value_nulls: NullBufferBuilder::new(len),
-            nulls: NullBufferBuilder::new(len),
+            typed_value_nulls: NullBufferBuilder::new(capacity),
+            nulls: NullBufferBuilder::new(capacity),
             top_level,
         })
     }
 
-    fn append_null(&mut self) -> Result<()> {
-        if self.top_level {
-            self.nulls.append_null();
-            self.value_builder.append_null();
-        } else {
-            self.nulls.append_non_null();
-            self.value_builder.append_value(Variant::Null);
-        }
+    fn finish_append_null(&mut self) -> Result<()> {
         self.typed_value_nulls.append_null();
         for (_, typed_value_builder) in &mut self.typed_value_builders {
             typed_value_builder.append_null()?;
@@ -326,8 +368,6 @@ mod tests {
         builder.build()
     }
 
-    // Input Validation Tests (3 tests - cannot consolidate)
-
     #[test]
     fn test_already_shredded_input_error() {
         // Create a VariantArray that already has typed_value_field
@@ -365,8 +405,6 @@ mod tests {
         let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         shred_variant(&input, &list_schema).expect_err("unsupported");
     }
-
-    // Primitive Shredding Tests (2 consolidated tests)
 
     #[test]
     fn test_primitive_shredding_comprehensive() {
@@ -458,8 +496,6 @@ mod tests {
         assert_eq!(typed_value_float64.value(1), 3.15);
         assert!(typed_value_float64.is_null(2)); // string doesn't convert
     }
-
-    // Object Shredding Tests (2 consolidated tests)
 
     #[test]
     fn test_object_shredding_comprehensive() {
@@ -628,8 +664,6 @@ mod tests {
         let value_field3 = result3.value_field().unwrap();
         assert!(value_field3.is_null(0)); // fully shredded, no remaining fields
     }
-
-    // Specification Compliance Test (1 consolidated test)
 
     #[test]
     fn test_spec_compliance() {
