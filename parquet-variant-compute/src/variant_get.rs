@@ -305,7 +305,7 @@ mod test {
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow_schema::{DataType, Field, FieldRef, Fields};
-    use parquet_variant::{Variant, VariantPath};
+    use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
 
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
@@ -494,6 +494,40 @@ mod test {
     #[test]
     fn get_variant_partially_shredded_fixed_size_binary_as_variant() {
         let array = partially_shredded_fixed_size_binary_variant_array();
+        let options = GetOptions::new();
+        let result = variant_get(&array, options).unwrap();
+
+        // expect the result is a VariantArray
+        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result.len(), 4);
+
+        // Expect the values are the same as the original values
+        assert_eq!(result.value(0), Variant::from(&[1u8, 2u8, 3u8][..]));
+        assert!(!result.is_valid(1));
+        assert_eq!(result.value(2), Variant::from("n/a"));
+        assert_eq!(result.value(3), Variant::from(&[4u8, 5u8, 6u8][..]));
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_utf8_as_variant() {
+        let array = partially_shredded_utf8_variant_array();
+        let options = GetOptions::new();
+        let result = variant_get(&array, options).unwrap();
+
+        // expect the result is a VariantArray
+        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result.len(), 4);
+
+        // Expect the values are the same as the original values
+        assert_eq!(result.value(0), Variant::from("hello"));
+        assert!(!result.is_valid(1));
+        assert_eq!(result.value(2), Variant::from("n/a"));
+        assert_eq!(result.value(3), Variant::from("world"));
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_binary_view_as_variant() {
+        let array = partially_shredded_binary_view_variant_array();
         let options = GetOptions::new();
         let result = variant_get(&array, options).unwrap();
 
@@ -702,8 +736,10 @@ mod test {
             fn $func() -> ArrayRef {
                 // At the time of writing, the `VariantArrayBuilder` does not support shredding.
                 // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-                let (metadata, _value) = { parquet_variant::VariantBuilder::new().finish() };
-                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                    EMPTY_VARIANT_METADATA_BYTES,
+                    3,
+                ));
                 let typed_value = $array_type::from(vec![
                     Some(<$primitive_type>::try_from(1u8).unwrap()),
                     Some(<$primitive_type>::try_from(2u8).unwrap()),
@@ -1016,6 +1052,100 @@ mod test {
         )
     }
 
+    /// Return a VariantArray that represents a partially "shredded" variant for UTF8
+    fn partially_shredded_utf8_variant_array() -> ArrayRef {
+        let (metadata, string_value) = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            builder.append_value("n/a");
+            builder.finish()
+        };
+
+        // Create the null buffer for the overall array
+        let nulls = NullBuffer::from(vec![
+            true,  // row 0 non null
+            false, // row 1 is null
+            true,  // row 2 non null
+            true,  // row 3 non null
+        ]);
+
+        // metadata is the same for all rows
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+
+        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
+        // about why row1 is an empty but non null, value.
+        let values = BinaryViewArray::from(vec![
+            None,                // row 0 is shredded, so no value
+            Some(b"" as &[u8]),  // row 1 is null, so empty value
+            Some(&string_value), // copy the string value "N/A"
+            None,                // row 3 is shredded, so no value
+        ]);
+
+        let typed_value = StringArray::from(vec![
+            Some("hello"), // row 0 is shredded
+            None,          // row 1 is null
+            None,          // row 2 is a string
+            Some("world"), // row 3 is shredded
+        ]);
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("typed_value", Arc::new(typed_value), true)
+            .with_field("value", Arc::new(values), true)
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(
+            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
+        )
+    }
+
+    /// Return a VariantArray that represents a partially "shredded" variant for BinaryView
+    fn partially_shredded_binary_view_variant_array() -> ArrayRef {
+        let (metadata, string_value) = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            builder.append_value("n/a");
+            builder.finish()
+        };
+
+        // Create the null buffer for the overall array
+        let nulls = NullBuffer::from(vec![
+            true,  // row 0 non null
+            false, // row 1 is null
+            true,  // row 2 non null
+            true,  // row 3 non null
+        ]);
+
+        // metadata is the same for all rows
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+
+        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
+        // about why row1 is an empty but non null, value.
+        let values = BinaryViewArray::from(vec![
+            None,                // row 0 is shredded, so no value
+            Some(b"" as &[u8]),  // row 1 is null, so empty value
+            Some(&string_value), // copy the string value "N/A"
+            None,                // row 3 is shredded, so no value
+        ]);
+
+        let typed_value = BinaryViewArray::from(vec![
+            Some(&[1u8, 2u8, 3u8][..]), // row 0 is shredded
+            None,                       // row 1 is null
+            None,                       // row 2 is a string
+            Some(&[4u8, 5u8, 6u8][..]), // row 3 is shredded
+        ]);
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("typed_value", Arc::new(typed_value), true)
+            .with_field("value", Arc::new(values), true)
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(
+            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
+        )
+    }
+
     /// Return a VariantArray that represents an "all null" variant
     /// for the following example (3 null values):
     ///
@@ -1033,8 +1163,6 @@ mod test {
     /// }
     /// ```
     fn all_null_variant_array() -> ArrayRef {
-        let (metadata, _value) = { parquet_variant::VariantBuilder::new().finish() };
-
         let nulls = NullBuffer::from(vec![
             false, // row 0 is null
             false, // row 1 is null
@@ -1042,7 +1170,8 @@ mod test {
         ]);
 
         // metadata is the same for all rows (though they're all null)
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 3));
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
 
         let struct_array = StructArrayBuilder::new()
             .with_field("metadata", Arc::new(metadata), false)
@@ -2503,8 +2632,8 @@ mod test {
             .build();
 
         // Build final VariantArray with top-level nulls
-        let (metadata, _) = parquet_variant::VariantBuilder::new().finish();
-        let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+        let metadata_array =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 4));
         let nulls = NullBuffer::from(vec![
             true,  // row 0: inner struct exists with typed_value=42
             true,  // row 1: inner field NULL

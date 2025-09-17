@@ -3102,6 +3102,35 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_floating_to_decimals() {
+        for output_type in [
+            DataType::Decimal32(9, 3),
+            DataType::Decimal64(9, 3),
+            DataType::Decimal128(9, 3),
+            DataType::Decimal256(9, 3),
+        ] {
+            let input_type = DataType::Float64;
+            assert!(can_cast_types(&input_type, &output_type));
+
+            let array = vec![Some(1.1_f64)];
+            let array = PrimitiveArray::<Float64Type>::from_iter(array);
+            let result = cast_with_options(
+                &array,
+                &output_type,
+                &CastOptions {
+                    safe: false,
+                    format_options: FormatOptions::default(),
+                },
+            );
+            assert!(
+                result.is_ok(),
+                "Failed to cast to {output_type} with: {}",
+                result.unwrap_err()
+            );
+        }
+    }
+
+    #[test]
     fn test_cast_decimal128_to_decimal128_overflow() {
         let input_type = DataType::Decimal128(38, 3);
         let output_type = DataType::Decimal128(38, 38);

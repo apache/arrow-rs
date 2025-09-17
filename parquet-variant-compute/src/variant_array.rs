@@ -17,6 +17,7 @@
 
 //! [`VariantArray`] implementation
 
+use crate::type_conversion::primitive_conversion_single_value;
 use arrow::array::{Array, ArrayData, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -24,11 +25,10 @@ use arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
+use parquet_variant::Uuid;
 use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
-
-use crate::type_conversion::primitive_conversion_single_value;
 
 /// An array of Parquet [`Variant`] values
 ///
@@ -556,8 +556,25 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             let value = boolean_array.value(index);
             Variant::from(value)
         }
-        DataType::FixedSizeBinary(_) => {
+        DataType::FixedSizeBinary(binary_len) => {
             let array = typed_value.as_fixed_size_binary();
+            // Try to treat 16 byte FixedSizeBinary as UUID
+            let value = array.value(index);
+            if *binary_len == 16 {
+                if let Ok(uuid) = Uuid::from_slice(value) {
+                    return Variant::from(uuid);
+                }
+            }
+            let value = array.value(index);
+            Variant::from(value)
+        }
+        DataType::BinaryView => {
+            let array = typed_value.as_binary_view();
+            let value = array.value(index);
+            Variant::from(value)
+        }
+        DataType::Utf8 => {
+            let array = typed_value.as_string::<i32>();
             let value = array.value(index);
             Variant::from(value)
         }
