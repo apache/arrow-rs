@@ -930,14 +930,10 @@ impl From<&Codec> for UnionFieldKind {
     }
 }
 
-#[inline]
 fn build_union_fields(encodings: &[AvroDataType]) -> UnionFields {
     let arrow_fields: Vec<Field> = encodings
         .iter()
-        .map(|encoding| {
-            let name = encoding.codec().union_field_name();
-            encoding.field_with_name(&name)
-        })
+        .map(|encoding| encoding.field_with_name(&encoding.codec().union_field_name()))
         .collect();
     let type_ids: Vec<i8> = (0..arrow_fields.len()).map(|i| i as i8).collect();
     UnionFields::new(type_ids, arrow_fields)
