@@ -119,9 +119,8 @@ variant_test_case!(26, "Unsupported typed_value type: Decimal128(18, 9)");
 variant_test_case!(27, "Unsupported typed_value type: Decimal128(18, 9)");
 variant_test_case!(28, "Unsupported typed_value type: Decimal128(38, 9)");
 variant_test_case!(29, "Unsupported typed_value type: Decimal128(38, 9)");
-// https://github.com/apache/arrow-rs/issues/8333
-variant_test_case!(30, "Unsupported typed_value type: BinaryView");
-variant_test_case!(31, "Unsupported typed_value type: Utf8");
+variant_test_case!(30);
+variant_test_case!(31);
 // https://github.com/apache/arrow-rs/issues/8334
 variant_test_case!(32, "Unsupported typed_value type: Time64(Microsecond)");
 // https://github.com/apache/arrow-rs/issues/8331
