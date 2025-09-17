@@ -1150,7 +1150,7 @@ fn datatype_to_avro(
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Map 'entries' field must be Struct(key,value)".into(),
-                    ))
+                    ));
                 }
             };
             let values_schema = process_datatype(
@@ -1208,12 +1208,12 @@ fn datatype_to_avro(
         DataType::Union(_, _) => {
             return Err(ArrowError::NotYetImplemented(
                 "Arrow Union to Avro Union not yet supported".into(),
-            ))
+            ));
         }
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Arrow type {other:?} has no Avro representation"
-            )))
+            )));
         }
     };
     Ok((val, extras))

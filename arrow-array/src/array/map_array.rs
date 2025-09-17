@@ -191,10 +191,12 @@ impl MapArray {
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> StructArray {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
-        self.entries
-            .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
+        unsafe {
+            let end = *self.value_offsets().get_unchecked(i + 1);
+            let start = *self.value_offsets().get_unchecked(i);
+            self.entries
+                .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
+        }
     }
 
     /// Returns ith value of this map array.

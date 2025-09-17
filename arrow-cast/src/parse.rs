@@ -794,7 +794,7 @@ fn parse_e_notation<T: DecimalType>(
                 None => {
                     return Err(ArrowError::ParseError(format!(
                         "can't parse the string value {s} to decimal"
-                    )))
+                    )));
                 }
             };
 
@@ -2689,26 +2689,10 @@ mod tests {
                 0i128,
                 15,
             ),
-            (
-                "1.016744e-320",
-                0i128,
-                15,
-            ),
-            (
-                "-1e3",
-                -1000000000i128,
-                6,
-            ),
-            (
-                "+1e3",
-                1000000000i128,
-                6,
-            ),
-            (
-                "-1e31",
-                -10000000000000000000000000000000000000i128,
-                6,
-            ),
+            ("1.016744e-320", 0i128, 15),
+            ("-1e3", -1000000000i128, 6),
+            ("+1e3", 1000000000i128, 6),
+            ("-1e31", -10000000000000000000000000000000000000i128, 6),
         ];
         for (s, i, scale) in edge_tests_128 {
             let result_128 = parse_decimal::<Decimal128Type>(s, 38, scale);

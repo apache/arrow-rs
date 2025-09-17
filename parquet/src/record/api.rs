@@ -397,8 +397,8 @@ macro_rules! list_primitive_accessor {
 macro_rules! list_complex_accessor {
     ($METHOD:ident, $VARIANT:ident, $TY:ty) => {
         fn $METHOD(&self, i: usize) -> Result<&$TY> {
-            match self.elements[i] {
-                Field::$VARIANT(ref v) => Ok(v),
+            match &self.elements[i] {
+                Field::$VARIANT(v) => Ok(&v),
                 _ => Err(general_err!(
                     "Cannot access {} as {}",
                     self.elements[i].get_type_name(),

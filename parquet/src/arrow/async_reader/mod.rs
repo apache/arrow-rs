@@ -859,7 +859,7 @@ where
                 StreamState::Decoding(_) | StreamState::Reading(_) => {
                     return Err(ParquetError::General(
                         "Cannot combine the use of next_row_group with the Stream API".to_string(),
-                    ))
+                    ));
                 }
                 StreamState::Init => {
                     let row_group_idx = match self.row_groups.pop_front() {

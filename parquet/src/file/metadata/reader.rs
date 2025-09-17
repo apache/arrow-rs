@@ -408,7 +408,7 @@ impl ParquetMetaDataReader {
             let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
             if range.end > metadata_range.start {
                 return Err(eof_err!(
-                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}" ,
+                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}",
                 ));
             }
         }
@@ -997,7 +997,9 @@ impl ParquetMetaDataReader {
 
                 file_decryptor = Some(decryptor);
             } else {
-                return Err(general_err!("Parquet file has an encrypted footer but decryption properties were not provided"));
+                return Err(general_err!(
+                    "Parquet file has an encrypted footer but decryption properties were not provided"
+                ));
             }
         }
 

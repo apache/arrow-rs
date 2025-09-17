@@ -224,9 +224,9 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
         "BROTLI" => Ok(Compression::BROTLI(Default::default())),
         "LZ4" => Ok(Compression::LZ4),
         "ZSTD" => Ok(Compression::ZSTD(Default::default())),
-        v => Err(
-            format!("Unknown compression {v} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help")
-        )
+        v => Err(format!(
+            "Unknown compression {v} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help"
+        )),
     }
 }
 

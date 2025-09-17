@@ -420,7 +420,7 @@ impl Parser<'_> {
                                             return Err(general_err!(
                                                 "Incorrect bit width {} for INT32",
                                                 bit_width
-                                            ))
+                                            ));
                                         }
                                     },
                                     PhysicalType::INT64 => {
@@ -435,7 +435,7 @@ impl Parser<'_> {
                                         return Err(general_err!(
                                         "Logical type Integer cannot be used with physical type {}",
                                         physical_type
-                                    ))
+                                    ));
                                     }
                                 }
                                 if let Some(",") = self.tokenizer.next() {

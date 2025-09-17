@@ -188,7 +188,7 @@ impl Visitor {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected struct got {}",
                     d
-                ))
+                ));
             }
             None => None,
         };
@@ -325,7 +325,7 @@ impl Visitor {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected map got {}",
                     d
-                ))
+                ));
             }
             None => (None, None, None, false),
         };
@@ -425,7 +425,7 @@ impl Visitor {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected list got {}",
                     d
-                ))
+                ));
             }
             None => None,
         };

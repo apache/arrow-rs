@@ -580,7 +580,7 @@ where
         other => {
             return Err(ArrowError::ComputeError(format!(
                 "Cannot cast {other:?} to decimal",
-            )))
+            )));
         }
     };
 

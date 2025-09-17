@@ -152,23 +152,25 @@ impl UnionArray {
         offsets: Option<ScalarBuffer<i32>>,
         children: Vec<ArrayRef>,
     ) -> Self {
-        let mode = if offsets.is_some() {
-            UnionMode::Dense
-        } else {
-            UnionMode::Sparse
-        };
+        unsafe {
+            let mode = if offsets.is_some() {
+                UnionMode::Dense
+            } else {
+                UnionMode::Sparse
+            };
 
-        let len = type_ids.len();
-        let builder = ArrayData::builder(DataType::Union(fields, mode))
-            .add_buffer(type_ids.into_inner())
-            .child_data(children.into_iter().map(Array::into_data).collect())
-            .len(len);
+            let len = type_ids.len();
+            let builder = ArrayData::builder(DataType::Union(fields, mode))
+                .add_buffer(type_ids.into_inner())
+                .child_data(children.into_iter().map(Array::into_data).collect())
+                .len(len);
 
-        let data = match offsets {
-            Some(offsets) => builder.add_buffer(offsets.into_inner()).build_unchecked(),
-            None => builder.build_unchecked(),
-        };
-        Self::from(data)
+            let data = match offsets {
+                Some(offsets) => builder.add_buffer(offsets.into_inner()).build_unchecked(),
+                None => builder.build_unchecked(),
+            };
+            Self::from(data)
+        }
     }
 
     /// Attempts to create a new `UnionArray`, validating the inputs provided.
@@ -219,7 +221,7 @@ impl UnionArray {
                 _ => {
                     return Err(ArrowError::InvalidArgumentError(
                         "Type Ids values must match one of the field type ids".to_owned(),
-                    ))
+                    ));
                 }
             }
         }

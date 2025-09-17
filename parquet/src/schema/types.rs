@@ -406,15 +406,14 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     return Err(general_err!(
                         "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
                         self.name
-                    ))
+                    ));
                 }
-                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    if self.length == 2 => {}
+                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 2 => {}
                 (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
                     return Err(general_err!(
                         "FLOAT16 cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(2) field",
                         self.name
-                    ))
+                    ));
                 }
                 (a, b) => {
                     return Err(general_err!(
@@ -422,7 +421,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         a,
                         b,
                         self.name
-                    ))
+                    ));
                 }
             }
         }
@@ -1145,7 +1144,7 @@ fn build_tree<'a>(
             )));
             leaf_to_base.push(root_idx);
         }
-        Type::GroupType { ref fields, .. } => {
+        Type::GroupType { fields, .. } => {
             for f in fields {
                 build_tree(
                     f,

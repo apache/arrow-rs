@@ -179,7 +179,11 @@ fn row_bench(c: &mut Criterion) {
         Arc::new(create_string_dict_array::<Int32Type>(4096, 0., 100)) as ArrayRef,
         Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef,
     ];
-    do_bench(c, "4096 4096 string_dictionary(20, 0.5), string_dictionary(30, 0), string_dictionary(100, 0), i64(0)", cols);
+    do_bench(
+        c,
+        "4096 4096 string_dictionary(20, 0.5), string_dictionary(30, 0), string_dictionary(100, 0), i64(0)",
+        cols,
+    );
 
     // List
 

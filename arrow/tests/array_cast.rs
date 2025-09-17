@@ -164,13 +164,22 @@ fn test_can_cast_types() {
             // check for mismatch
             match (cast_result, reported_cast_ability) {
                 (Ok(_), false) => {
-                    panic!("Was able to cast array {:?} from {:?} to {:?} but can_cast_types reported false",
-                           array, array.data_type(), to_type)
+                    panic!(
+                        "Was able to cast array {:?} from {:?} to {:?} but can_cast_types reported false",
+                        array,
+                        array.data_type(),
+                        to_type
+                    )
                 }
                 (Err(e), true) => {
-                    panic!("Was not able to cast array {:?} from {:?} to {:?} but can_cast_types reported true. \
+                    panic!(
+                        "Was not able to cast array {:?} from {:?} to {:?} but can_cast_types reported true. \
                                 Error was {:?}",
-                           array, array.data_type(), to_type, e)
+                        array,
+                        array.data_type(),
+                        to_type,
+                        e
+                    )
                 }
                 // otherwise it was a match
                 _ => {}

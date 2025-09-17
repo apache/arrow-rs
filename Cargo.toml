@@ -80,8 +80,8 @@ include = [
     "LICENSE.txt",
     "NOTICE.txt",
 ]
-edition = "2021"
-rust-version = "1.84"
+edition = "2024"
+rust-version = "1.85"
 
 [workspace.dependencies]
 arrow = { version = "56.1.0", path = "./arrow", default-features = false }
