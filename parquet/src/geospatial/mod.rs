@@ -46,3 +46,4 @@
 //! [geo-types]: https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types
 
 pub mod statistics;
+pub mod bounding_box;
