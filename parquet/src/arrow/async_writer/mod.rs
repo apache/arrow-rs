@@ -61,7 +61,7 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::{ArrowColumnChunk, ArrowColumnWriter, ArrowWriterOptions},
+    arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
     errors::{ParquetError, Result},
     file::{metadata::RowGroupMetaData, properties::WriterProperties},
@@ -288,41 +288,16 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
 
         Ok(())
     }
-
-    /// Create a new row group writer and return its column writers.
-    pub async fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
-        let before = self.sync_writer.flushed_row_groups().len();
-        // TODO: should use the new API
-        #[allow(deprecated)]
-        let writers = self.sync_writer.get_column_writers()?;
-        // let (serialized_file_writer, arrow_row_group_writer_factory) =
-        //     self.sync_writer.into_serialized_writer().unwrap();
-        // let writers = row_group_writer_factory.create_column_writers(0).unwrap();
-        // let metadata = serialized_file_writer.close().unwrap();
-        if before != self.sync_writer.flushed_row_groups().len() {
-            self.do_write().await?;
-        }
-        Ok(writers)
-    }
-
-    /// Append the given column chunks to the file as a new row group.
-    pub async fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
-        // TODO: should use the new API
-        #[allow(deprecated)]
-        self.sync_writer.append_row_group(chunks)?;
-        self.do_write().await
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::arrow_writer::compute_leaves;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
     use std::sync::Arc;
-
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
-    use crate::arrow::arrow_writer::compute_leaves;
 
     use super::*;
 
@@ -369,7 +344,13 @@ mod tests {
         // Use classic API
         writer.write(&to_write_record).await.unwrap();
 
-        let mut writers = writer.get_column_writers().await.unwrap();
+        // Use low-level API to write an Arrow group
+        let arrow_writer = writer.sync_writer;
+        let (mut serialized_file_writer, row_group_writer_factory) =
+            arrow_writer.into_serialized_writer().unwrap();
+
+        // Get column writers
+        let mut writers = row_group_writer_factory.create_column_writers(0).unwrap();
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let to_write_arrow_group = RecordBatch::try_from_iter([("col", col)]).unwrap();
 
@@ -384,10 +365,13 @@ mod tests {
             }
         }
 
-        let columns: Vec<_> = writers.into_iter().map(|w| w.close().unwrap()).collect();
+        let mut columns: Vec<_> = writers.into_iter().map(|w| w.close().unwrap()).collect();
         // Append the arrow group as a new row group. Flush in progress
-        writer.append_row_group(columns).await.unwrap();
-        writer.close().await.unwrap();
+        let mut row_group_writer = serialized_file_writer.next_row_group().unwrap();
+        let chunk = columns.remove(0);
+        chunk.append_to_row_group(&mut row_group_writer).unwrap();
+        row_group_writer.close().unwrap();
+        let _metadata = serialized_file_writer.close().unwrap();
 
         let buffer = Bytes::from(buffer);
         let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer)
