@@ -1082,8 +1082,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `f16` if possible.
     ///
-    /// Returns `Some(f16)` for float and double variants,
-    /// `None` for non-floating-point variants.
+    /// Returns `Some(f16)` for floating point values, and integers with up to 11 bits of
+    /// precision. `None` otherwise.
     ///
     /// # Example
     ///
@@ -1120,8 +1120,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `f32` if possible.
     ///
-    /// Returns `Some(f32)` for float and double variants,
-    /// `None` for non-floating-point variants.
+    /// Returns `Some(f32)` for floating point values, and integer values with up to 24 bits of
+    /// precision.  `None` otherwise.
     ///
     /// # Examples
     ///
@@ -1159,8 +1159,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `f64` if possible.
     ///
-    /// Returns `Some(f64)` for float and double variants,
-    /// `None` for non-floating-point variants.
+    /// Returns `Some(f64)` for floating point values, and integer values with up to 53 bits of
+    /// precision.  `None` otherwise.
     ///
     /// # Examples
     ///
