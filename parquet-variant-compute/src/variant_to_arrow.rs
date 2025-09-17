@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, PrimitiveBuilder};
+use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder};
 use arrow::compute::CastOptions;
 use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
 use crate::type_conversion::VariantAsPrimitive;
-use crate::VariantArrayBuilder;
+use crate::{VariantArray, VariantValueArrayBuilder};
 
 use std::sync::Arc;
 
@@ -93,7 +93,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
 }
 
 pub(crate) fn make_variant_to_arrow_row_builder<'a>(
-    //metadata: &BinaryViewArray,
+    metadata: &BinaryViewArray,
     path: VariantPath<'a>,
     data_type: Option<&'a DataType>,
     cast_options: &'a CastOptions,
@@ -103,7 +103,10 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
 
     let mut builder = match data_type {
         // If no data type was requested, build an unshredded VariantArray.
-        None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(capacity)),
+        None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(
+            metadata.clone(),
+            capacity,
+        )),
         Some(DataType::Int8) => Int8(VariantToPrimitiveArrowRowBuilder::new(
             cast_options,
             capacity,
@@ -246,13 +249,17 @@ where
 
 /// Builder for creating VariantArray output (for path extraction without type conversion)
 pub(crate) struct VariantToBinaryVariantArrowRowBuilder {
-    builder: VariantArrayBuilder,
+    metadata: BinaryViewArray,
+    builder: VariantValueArrayBuilder,
+    nulls: NullBufferBuilder,
 }
 
 impl VariantToBinaryVariantArrowRowBuilder {
-    fn new(capacity: usize) -> Self {
+    fn new(metadata: BinaryViewArray, capacity: usize) -> Self {
         Self {
-            builder: VariantArrayBuilder::new(capacity),
+            metadata,
+            builder: VariantValueArrayBuilder::new(capacity),
+            nulls: NullBufferBuilder::new(capacity),
         }
     }
 }
@@ -260,22 +267,22 @@ impl VariantToBinaryVariantArrowRowBuilder {
 impl VariantToBinaryVariantArrowRowBuilder {
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null();
+        self.nulls.append_null();
         Ok(())
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        // TODO: We need a way to convert a Variant directly to bytes. In particular, we want to
-        // just copy across the underlying value byte slice of a `Variant::Object` or
-        // `Variant::List`, without any interaction with a `VariantMetadata` (because the shredding
-        // spec requires us to reuse the existing metadata when unshredding).
-        //
-        // One could _probably_ emulate this with parquet_variant::VariantBuilder, but it would do a
-        // lot of unnecessary work and would also create a new metadata column we don't need.
-        self.builder.append_variant(value.clone());
+        self.builder.append_value(value.clone());
+        self.nulls.append_non_null();
         Ok(true)
     }
 
-    fn finish(self) -> Result<ArrayRef> {
-        Ok(Arc::new(self.builder.build()))
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(Arc::new(VariantArray::from_parts(
+            self.metadata,
+            Some(self.builder.build()?),
+            None, // no typed_value column
+            self.nulls.finish(),
+        )))
     }
 }
