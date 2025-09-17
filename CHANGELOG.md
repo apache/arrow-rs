@@ -23,10 +23,6 @@
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/56.1.0...56.2.0)
 
-**Breaking changes:**
-
-- \[avro\] Support all default types for avro schema's record field [\#8210](https://github.com/apache/arrow-rs/pull/8210) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([yongkyunlee](https://github.com/yongkyunlee))
-
 **Implemented enhancements:**
 
 - \[Variant\] \[Shredding\] Support typed\_access for `FixedSizeBinary` [\#8335](https://github.com/apache/arrow-rs/issues/8335)
@@ -40,12 +36,12 @@
 - Add a way to modify WriterProperties [\#8273](https://github.com/apache/arrow-rs/issues/8273)
 - Dont truncate timestamps on display for Row [\#8265](https://github.com/apache/arrow-rs/issues/8265)
 - \[Parquet\] Add row group write with AsyncArrowWriter [\#8261](https://github.com/apache/arrow-rs/issues/8261)
-- Parquet: Do not compress v2 data page when compress is bad quality [\#8256](https://github.com/apache/arrow-rs/issues/8256) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Parquet\] Do not compress v2 data page when compress is bad quality [\#8256](https://github.com/apache/arrow-rs/issues/8256) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Variant\] Refactor `cast_to_variant` [\#8234](https://github.com/apache/arrow-rs/issues/8234)
 - \[Variant\]: Implement `DataType::Union` support for `cast_to_variant` kernel [\#8195](https://github.com/apache/arrow-rs/issues/8195)
 - \[Variant\]: Implement `DataType::Duration` support for `cast_to_variant` kernel [\#8194](https://github.com/apache/arrow-rs/issues/8194)
 - \[Variant\] Support typed access for numeric types in variant\_get [\#8178](https://github.com/apache/arrow-rs/issues/8178)
-- Implement a "push style" API for decoding Parquet Metadata [\#8164](https://github.com/apache/arrow-rs/issues/8164)
+- \[Parquet\] Implement a "push style" API for decoding Parquet Metadata [\#8164](https://github.com/apache/arrow-rs/issues/8164)
 - \[Variant\] Support creating Variants with pre-existing Metadata [\#8152](https://github.com/apache/arrow-rs/issues/8152)
 - \[Variant\] Support Shredded Objects in `variant_get`: typed path access \(STEP 1\) [\#8150](https://github.com/apache/arrow-rs/issues/8150)
 - \[Variant\] Add `variant` feature to `parquet` crate [\#8132](https://github.com/apache/arrow-rs/issues/8132)
@@ -143,6 +139,7 @@
 - \[Variant\] feat: remove unnecessary unwraps in `Object::finish` [\#8214](https://github.com/apache/arrow-rs/pull/8214) ([Weijun-H](https://github.com/Weijun-H))
 - \[avro\] Fix Avro decoder bitmap corruption when nullable field decoding fails [\#8213](https://github.com/apache/arrow-rs/pull/8213) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([yongkyunlee](https://github.com/yongkyunlee))
 - Restore accidentally removed method Block::to\_ne\_bytes [\#8211](https://github.com/apache/arrow-rs/pull/8211) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([jhorstmann](https://github.com/jhorstmann))
+- \[avro\] Support all default types for avro schema's record field [\#8210](https://github.com/apache/arrow-rs/pull/8210) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([yongkyunlee](https://github.com/yongkyunlee))
 - \[Variant\] Support read-only metadata builders [\#8208](https://github.com/apache/arrow-rs/pull/8208) ([scovich](https://github.com/scovich))
 - \[Variant\] VariantArrayBuilder uses MetadataBuilder and ValueBuilder [\#8206](https://github.com/apache/arrow-rs/pull/8206) ([scovich](https://github.com/scovich))
 - \[Variant\]: Implement DataType::List/LargeList support for cast\_to\_variant kernel [\#8201](https://github.com/apache/arrow-rs/pull/8201) ([sdf-jkl](https://github.com/sdf-jkl))
