@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "parquet-geometry"
+name = "parquet-geospatial"
 # This package is still in development and thus the version does
 # not follow the versions of the rest of the crates in this repo.
 version = "0.1.0"
@@ -31,8 +31,7 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
-arrow-schema = { workspace = true }
 
 [lib]
-name = "parquet_geometry"
+name = "parquet_geospatial"
 bench = false

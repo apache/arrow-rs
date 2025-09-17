@@ -19,8 +19,8 @@
 
 # Apache Parquet Geometry/Geography Rust Implementation
 
-[![crates.io](https://img.shields.io/crates/v/parquet-geometry.svg)](https://crates.io/crates/parquet-geometry)
-[![docs.rs](https://img.shields.io/docsrs/parquet-geometry.svg)](https://docs.rs/parquet/latest/parquet-geometry/)
+[![crates.io](https://img.shields.io/crates/v/parquet-geospatial.svg)](https://crates.io/crates/parquet-geospatial)
+[![docs.rs](https://img.shields.io/docsrs/parquet-geospatial.svg)](https://docs.rs/parquet/latest/parquet-geospatial/)
 
 This crate contains an implementation of [Geometry and Geography Encoding] from
 [Apache Parquet]. This software is developed as part of the [Apache Arrow] project.
@@ -29,7 +29,7 @@ This crate contains an implementation of [Geometry and Geography Encoding] from
 [Apache Parquet]: https://parquet.apache.org/
 [Apache Arrow]: https://arrow.apache.org/
 
-Please see the [API documentation](https://docs.rs/parquet-geometry/latest) for more details.
+Please see the [API documentation](https://docs.rs/parquet-geospatial/latest) for more details.
 
 ## 🚧 Work In Progress
 
