@@ -1299,7 +1299,7 @@ impl ReaderPropertiesBuilder {
     /// each page, if present.
     /// If set to `false`, then the reader will skip decoding the statistics.
     ///
-    /// Byte default statistics will not be decoded.
+    /// By default statistics will not be decoded.
     ///
     /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn set_read_page_statistics(mut self, value: bool) -> Self {

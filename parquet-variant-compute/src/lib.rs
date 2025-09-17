@@ -43,9 +43,10 @@ mod type_conversion;
 mod variant_array;
 mod variant_array_builder;
 pub mod variant_get;
+mod variant_to_arrow;
 
 pub use variant_array::{ShreddingState, VariantArray};
-pub use variant_array_builder::{VariantArrayBuilder, VariantArrayVariantBuilder};
+pub use variant_array_builder::VariantArrayBuilder;
 
 pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};
 pub use from_json::json_to_variant;
