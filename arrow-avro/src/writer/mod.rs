@@ -34,7 +34,9 @@ pub mod format;
 
 use crate::codec::AvroFieldBuilder;
 use crate::compression::CompressionCodec;
-use crate::schema::{AvroSchema, FingerprintStrategy, SCHEMA_METADATA_KEY};
+use crate::schema::{
+    AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY,
+};
 use crate::writer::encoder::{write_long, RecordEncoder, RecordEncoderBuilder};
 use crate::writer::format::{AvroBinaryFormat, AvroFormat, AvroOcfFormat};
 use arrow_array::RecordBatch;
@@ -93,15 +95,28 @@ impl WriterBuilder {
             Some(json) => AvroSchema::new(json.clone()),
             None => AvroSchema::try_from(&self.schema)?,
         };
+
+        let maybe_fingerprint = if F::NEEDS_PREFIX {
+            match self.fingerprint_strategy {
+                FingerprintStrategy::Id(id) => Some(Fingerprint::Id(id)),
+                strategy => Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?),
+            }
+        } else {
+            None
+        };
+        let maybe_prefix = maybe_fingerprint.as_ref().map(|fp| fp.make_prefix());
+
         let mut md = self.schema.metadata().clone();
         md.insert(
             SCHEMA_METADATA_KEY.to_string(),
             avro_schema.clone().json_string,
         );
         let schema = Arc::new(Schema::new_with_metadata(self.schema.fields().clone(), md));
-        format.start_stream(&mut writer, &schema, self.codec, self.fingerprint_strategy)?;
+        format.start_stream(&mut writer, &schema, self.codec)?;
         let avro_root = AvroFieldBuilder::new(&avro_schema.schema()?).build()?;
-        let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref()).build()?;
+        let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref())
+            .with_fingerprint(maybe_fingerprint)
+            .build()?;
         Ok(Writer {
             writer,
             schema,
@@ -186,8 +201,7 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
 
     fn write_ocf_block(&mut self, batch: &RecordBatch, sync: &[u8; 16]) -> Result<(), ArrowError> {
         let mut buf = Vec::<u8>::with_capacity(1024);
-        self.encoder
-            .encode(&mut buf, batch, self.format.single_object_prefix())?;
+        self.encoder.encode(&mut buf, batch)?;
         let encoded = match self.compression {
             Some(codec) => codec.compress(&buf)?,
             None => buf,
@@ -204,8 +218,7 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
     }
 
     fn write_stream(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
-        self.encoder
-            .encode(&mut self.writer, batch, self.format.single_object_prefix())?;
+        self.encoder.encode(&mut self.writer, batch)?;
         Ok(())
     }
 }
@@ -247,7 +260,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let avro_schema = AvroSchema::try_from(&schema)?;
 
-        let fingerprint = avro_schema.fingerprint()?;
+        let fingerprint = avro_schema.fingerprint(FingerprintAlgorithm::Rabin)?;
         let mut expected_prefix = Vec::from(crate::schema::SINGLE_OBJECT_MAGIC);
         match fingerprint {
             crate::schema::Fingerprint::Rabin(val) => expected_prefix.extend(val.to_le_bytes()),
@@ -291,7 +304,7 @@ mod tests {
 
         let buffer: Vec<u8> = Vec::new();
         let mut writer = WriterBuilder::new(schema)
-            .with_fingerprint_strategy(FingerprintStrategy::ConfluentSchemaId(schema_id))
+            .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id))
             .build::<_, AvroBinaryFormat>(buffer)?;
         writer.write(&batch)?;
         let actual_bytes = writer.into_inner();

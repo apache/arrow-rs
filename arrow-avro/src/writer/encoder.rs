@@ -523,6 +523,7 @@ struct FieldBinding {
 pub struct RecordEncoderBuilder<'a> {
     avro_root: &'a AvroField,
     arrow_schema: &'a ArrowSchema,
+    fingerprint: Option<Fingerprint>,
 }
 
 impl<'a> RecordEncoderBuilder<'a> {
@@ -531,7 +532,13 @@ impl<'a> RecordEncoderBuilder<'a> {
         Self {
             avro_root,
             arrow_schema,
+            fingerprint: None,
         }
+    }
+
+    pub(crate) fn with_fingerprint(mut self, fingerprint: Option<Fingerprint>) -> Self {
+        self.fingerprint = fingerprint;
+        self
     }
 
     /// Build the `RecordEncoder` by walking the Avro **record** root in Avro order,
@@ -558,7 +565,10 @@ impl<'a> RecordEncoderBuilder<'a> {
                 )?,
             });
         }
-        Ok(RecordEncoder { columns })
+        Ok(RecordEncoder {
+            columns,
+            prefix: self.fingerprint.as_ref().map(|fp| fp.make_prefix()),
+        })
     }
 }
 
@@ -570,6 +580,8 @@ impl<'a> RecordEncoderBuilder<'a> {
 #[derive(Debug, Clone)]
 pub struct RecordEncoder {
     columns: Vec<FieldBinding>,
+    /// Optional pre-built, variable-length prefix written before each record.
+    prefix: Option<Vec<u8>>,
 }
 
 impl RecordEncoder {
@@ -601,18 +613,13 @@ impl RecordEncoder {
     /// Encode a `RecordBatch` using this encoder plan.
     ///
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
-    pub fn encode<W: Write>(
-        &self,
-        out: &mut W,
-        batch: &RecordBatch,
-        prefix: Option<&[u8]>,
-    ) -> Result<(), ArrowError> {
+    pub fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         for row in 0..batch.num_rows() {
-            if let Some(prefix) = prefix {
+            if let Some(prefix) = &self.prefix {
                 if !prefix.is_empty() {
                     out.write_all(prefix).map_err(|e| {
-                        ArrowError::IoError(format!("write single-object prefix: {e}"), e)
+                        ArrowError::IoError(format!("Failed to write single-object prefix: {e}"), e)
                     })?;
                 }
             }

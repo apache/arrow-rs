@@ -17,8 +17,8 @@
 
 use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
 use crate::schema::{
-    AvroSchema, Fingerprint, FingerprintStrategy, CONFLUENT_MAGIC, SCHEMA_METADATA_KEY,
-    SINGLE_OBJECT_MAGIC,
+    AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, CONFLUENT_MAGIC,
+    SCHEMA_METADATA_KEY, SINGLE_OBJECT_MAGIC,
 };
 use crate::writer::encoder::write_long;
 use arrow_schema::{ArrowError, Schema};
@@ -28,6 +28,11 @@ use std::io::Write;
 
 /// Format abstraction implemented by each container‐level writer.
 pub trait AvroFormat: Debug + Default {
+    /// If `true`, the writer for this format will query `single_object_prefix()`
+    /// and write the prefix before each record. If `false`, the writer can
+    /// skip this step. This is a performance hint for the writer.
+    const NEEDS_PREFIX: bool;
+
     /// Write any bytes required at the very beginning of the output stream
     /// (file header, etc.).
     /// Implementations **must not** write any record data.
@@ -36,22 +41,10 @@ pub trait AvroFormat: Debug + Default {
         writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
-        fingerprint_strategy: FingerprintStrategy,
     ) -> Result<(), ArrowError>;
 
     /// Return the 16‑byte sync marker (OCF) or `None` (binary stream).
     fn sync_marker(&self) -> Option<&[u8; 16]>;
-
-    /// Return the 10‑byte **Avro single‑object** prefix (`C3 01` magic +
-    /// little‑endian schema fingerprint) to be written **before each record**,
-    /// or `None` if the format does not use single‑object encoding.
-    ///
-    /// The default implementation returns `None`. `AvroBinaryFormat` overrides
-    /// this to return the appropriate single-object encoding prefix.
-    #[inline]
-    fn single_object_prefix(&self) -> Option<&[u8]> {
-        None
-    }
 }
 
 /// Avro Object Container File (OCF) format writer.
@@ -61,12 +54,12 @@ pub struct AvroOcfFormat {
 }
 
 impl AvroFormat for AvroOcfFormat {
+    const NEEDS_PREFIX: bool = false;
     fn start_stream<W: Write>(
         &mut self,
         writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
-        _fingerprint_strategy: FingerprintStrategy,
     ) -> Result<(), ArrowError> {
         let mut rng = rand::rng();
         rng.fill_bytes(&mut self.sync_marker);
@@ -114,18 +107,15 @@ impl AvroFormat for AvroOcfFormat {
 /// See: <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
 /// See: <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
 #[derive(Debug, Default)]
-pub struct AvroBinaryFormat {
-    /// Pre-built, variable-length prefix written before each record.
-    prefix: Vec<u8>,
-}
+pub struct AvroBinaryFormat {}
 
 impl AvroFormat for AvroBinaryFormat {
+    const NEEDS_PREFIX: bool = true;
     fn start_stream<W: Write>(
         &mut self,
         _writer: &mut W,
         schema: &Schema,
         compression: Option<CompressionCodec>,
-        fingerprint_strategy: FingerprintStrategy,
     ) -> Result<(), ArrowError> {
         if compression.is_some() {
             return Err(ArrowError::InvalidArgumentError(
@@ -133,59 +123,11 @@ impl AvroFormat for AvroBinaryFormat {
             ));
         }
 
-        self.prefix.clear();
-
-        match fingerprint_strategy {
-            FingerprintStrategy::ConfluentSchemaId(id) => {
-                self.prefix.push(CONFLUENT_MAGIC[0]);
-                self.prefix.extend_from_slice(&id.to_be_bytes());
-            }
-            strategy => {
-                // All other strategies use the single-object encoding format
-                self.prefix.extend_from_slice(&SINGLE_OBJECT_MAGIC);
-
-                let avro_schema = AvroSchema::try_from(schema)?;
-                let fp = match strategy {
-                    FingerprintStrategy::Rabin => avro_schema.fingerprint()?,
-                    #[cfg(feature = "md5")]
-                    FingerprintStrategy::MD5 => AvroSchema::generate_fingerprint(
-                        &avro_schema.schema()?,
-                        crate::schema::FingerprintAlgorithm::MD5,
-                    )?,
-                    #[cfg(feature = "sha256")]
-                    FingerprintStrategy::SHA256 => AvroSchema::generate_fingerprint(
-                        &avro_schema.schema()?,
-                        crate::schema::FingerprintAlgorithm::SHA256,
-                    )?,
-                    FingerprintStrategy::ConfluentSchemaId(_) => unreachable!(),
-                };
-
-                match fp {
-                    Fingerprint::Rabin(val) => self.prefix.extend_from_slice(&val.to_le_bytes()),
-                    #[cfg(feature = "md5")]
-                    Fingerprint::MD5(val) => self.prefix.extend_from_slice(val.as_ref()),
-                    #[cfg(feature = "sha256")]
-                    Fingerprint::SHA256(val) => self.prefix.extend_from_slice(val.as_ref()),
-                    Fingerprint::Id(_) => return Err(ArrowError::InvalidArgumentError(
-                        "ConfluentSchemaId strategy cannot be used with a hash-based fingerprint."
-                            .to_string(),
-                    )),
-                }
-            }
-        }
         Ok(())
     }
 
     fn sync_marker(&self) -> Option<&[u8; 16]> {
         None
-    }
-
-    fn single_object_prefix(&self) -> Option<&[u8]> {
-        if self.prefix.is_empty() {
-            None
-        } else {
-            Some(&self.prefix)
-        }
     }
 }
 
