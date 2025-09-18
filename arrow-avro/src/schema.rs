@@ -659,22 +659,7 @@ impl Fingerprint {
     ///
     /// - You can optionally enable the `md5` feature to include the `MD5` variant.
     /// - You can optionally enable the `sha256` feature to include the `SHA256` variant.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use your_crate::YourEnum;
-    ///
-    /// let prefix = YourEnum::Id(12345).make_prefix();
-    /// assert_eq!(prefix, /* expected Vec<u8> data */);
-    /// ```
-    ///
-    /// ```rust
-    /// use your_crate::YourEnum;
-    ///
-    /// let prefix = YourEnum::Rabin(67890).make_prefix();
-    /// assert_eq!(prefix, /* expected Vec<u8> data */);
-    /// ```
+    /// 
     pub fn make_prefix(&self) -> Vec<u8> {
         match self {
             Self::Id(id) => {
