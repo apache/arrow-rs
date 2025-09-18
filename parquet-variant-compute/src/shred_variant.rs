@@ -27,7 +27,7 @@ use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Fields};
 use arrow::error::{ArrowError, Result};
-use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, EMPTY_VARIANT_METADATA};
+use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant};
 
 use indexmap::IndexMap;
 use std::sync::Arc;
@@ -285,8 +285,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         };
 
         // Route the object's fields by name as either shredded or unshredded
-        let metadata = value.metadata().cloned().unwrap_or(EMPTY_VARIANT_METADATA);
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata);
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
         let state = self.value_builder.parent_state(&mut metadata_builder);
         let mut object_builder = ObjectBuilder::new(state, false);
         let mut seen = std::collections::HashSet::new();

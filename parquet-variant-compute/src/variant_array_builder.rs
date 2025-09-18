@@ -22,7 +22,6 @@ use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuild
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{
     BuilderSpecificState, ListBuilder, MetadataBuilder, ObjectBuilder, Variant, VariantBuilderExt,
-    EMPTY_VARIANT_METADATA,
 };
 use parquet_variant::{
     ParentState, ReadOnlyMetadataBuilder, ValueBuilder, WritableMetadataBuilder,
@@ -225,8 +224,7 @@ impl VariantBuilderExt for VariantArrayBuilder {
 /// // Create a variant value builder for 10 rows
 /// let mut builder = VariantValueArrayBuilder::new(10);
 ///
-/// // Append some values with their corresponding metadata. In practice, some of the variant
-/// // values would be objects with internal references to pre-existing metadata, which the
+/// // Append some values with their corresponding metadata, which the
 /// // builder takes advantage of to avoid creating new metadata.
 /// builder.append_value(Variant::from(42));
 /// builder.append_null();
@@ -296,8 +294,7 @@ impl VariantValueArrayBuilder {
     /// builder.append_value(Variant::from(42));
     /// ```
     pub fn append_value(&mut self, value: Variant<'_, '_>) {
-        let metadata = value.metadata().cloned().unwrap_or(EMPTY_VARIANT_METADATA);
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata);
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
         ValueBuilder::append_variant_bytes(self.parent_state(&mut metadata_builder), value);
     }
 
@@ -492,7 +489,7 @@ mod test {
 
         // filtering fields takes more work because we need to manually create an object builder
         let value = array.value(1);
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().unwrap().clone());
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
         let state = builder.parent_state(&mut metadata_builder);
         ObjectBuilder::new(state, false)
             .with_field("name", value.get_object_field("name").unwrap())
@@ -501,7 +498,7 @@ mod test {
 
         // same bytes, but now nested and duplicated inside a list
         let value = array.value(2);
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().unwrap().clone());
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
         let state = builder.parent_state(&mut metadata_builder);
         ListBuilder::new(state, false)
             .with_value(value.clone())
