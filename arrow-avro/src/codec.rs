@@ -424,12 +424,12 @@ impl AvroDataType {
                 }
             },
             Codec::Union(encodings, _, _) => {
-                if encodings.is_empty() {
+                let Some(default_encoding) = encodings.first() else {
                     return Err(ArrowError::SchemaError(
                         "Union with no branches cannot have a default".to_string(),
                     ));
-                }
-                encodings[0].parse_default_literal(default_json)?
+                };
+                default_encoding.parse_default_literal(default_json)?
             }
         };
         Ok(lit)
@@ -1029,53 +1029,35 @@ enum UnionBranchKey {
 }
 
 fn branch_key_of<'a>(s: &Schema<'a>, enclosing_ns: Option<&'a str>) -> Option<UnionBranchKey> {
-    match s {
-        // Primitives
-        Schema::TypeName(TypeName::Primitive(p)) => Some(UnionBranchKey::Primitive(*p)),
-        Schema::Type(Type {
+    let (name, namespace) = match s {
+        Schema::TypeName(TypeName::Primitive(p))
+        | Schema::Type(Type {
             r#type: TypeName::Primitive(p),
             ..
-        }) => Some(UnionBranchKey::Primitive(*p)),
-        // Named references
-        Schema::TypeName(TypeName::Ref(name)) => {
-            let (full, _) = make_full_name(name, None, enclosing_ns);
-            Some(UnionBranchKey::Named(full))
-        }
-        Schema::Type(Type {
+        }) => return Some(UnionBranchKey::Primitive(*p)),
+        Schema::TypeName(TypeName::Ref(name))
+        | Schema::Type(Type {
             r#type: TypeName::Ref(name),
             ..
-        }) => {
-            let (full, _) = make_full_name(name, None, enclosing_ns);
-            Some(UnionBranchKey::Named(full))
-        }
-        // Complex non‑named
-        Schema::Complex(ComplexType::Array(_)) => Some(UnionBranchKey::Array),
-        Schema::Complex(ComplexType::Map(_)) => Some(UnionBranchKey::Map),
-        // Inline named definitions
-        Schema::Complex(ComplexType::Record(r)) => {
-            let (full, _) = make_full_name(r.name, r.namespace, enclosing_ns);
-            Some(UnionBranchKey::Named(full))
-        }
-        Schema::Complex(ComplexType::Enum(e)) => {
-            let (full, _) = make_full_name(e.name, e.namespace, enclosing_ns);
-            Some(UnionBranchKey::Named(full))
-        }
-        Schema::Complex(ComplexType::Fixed(f)) => {
-            let (full, _) = make_full_name(f.name, f.namespace, enclosing_ns);
-            Some(UnionBranchKey::Named(full))
-        }
-        // Unions are validated separately (and disallowed as immediate branches)
-        Schema::Union(_) => None,
-    }
+        }) => (name, None),
+        Schema::Complex(ComplexType::Array(_)) => return Some(UnionBranchKey::Array),
+        Schema::Complex(ComplexType::Map(_)) => return Some(UnionBranchKey::Map),
+        Schema::Complex(ComplexType::Record(r)) => (&r.name, r.namespace),
+        Schema::Complex(ComplexType::Enum(e)) => (&e.name, e.namespace),
+        Schema::Complex(ComplexType::Fixed(f)) => (&f.name, f.namespace),
+        Schema::Union(_) => return None,
+    };
+    let (full, _) = make_full_name(name, namespace, enclosing_ns);
+    Some(UnionBranchKey::Named(full))
 }
 
 fn union_first_duplicate<'a>(
     branches: &'a [Schema<'a>],
     enclosing_ns: Option<&'a str>,
 ) -> Option<String> {
-    let mut seen: HashSet<UnionBranchKey> = HashSet::with_capacity(branches.len());
-    for b in branches {
-        if let Some(key) = branch_key_of(b, enclosing_ns) {
+    let mut seen = HashSet::with_capacity(branches.len());
+    for schema in branches {
+        if let Some(key) = branch_key_of(schema, enclosing_ns) {
             if !seen.insert(key.clone()) {
                 let msg = match key {
                     UnionBranchKey::Named(full) => format!("named type {full}"),
@@ -1346,31 +1328,29 @@ impl<'a> Maker<'a> {
         }
         match (writer_schema, reader_schema) {
             (Schema::Union(writer_variants), Schema::Union(reader_variants)) => {
+                let writer_variants = writer_variants.as_slice();
+                let reader_variants = reader_variants.as_slice();
                 match (
-                    nullable_union_variants(writer_variants.as_slice()),
-                    nullable_union_variants(reader_variants.as_slice()),
+                    nullable_union_variants(writer_variants),
+                    nullable_union_variants(reader_variants),
                 ) {
                     (Some((w_nb, w_nonnull)), Some((_r_nb, r_nonnull))) => {
                         let mut dt = self.make_data_type(w_nonnull, Some(r_nonnull), namespace)?;
                         dt.nullability = Some(w_nb);
                         Ok(dt)
                     }
-                    _ => self.resolve_unions(
-                        writer_variants.as_slice(),
-                        reader_variants.as_slice(),
-                        namespace,
-                    ),
+                    _ => self.resolve_unions(writer_variants, reader_variants, namespace),
                 }
             }
             (Schema::Union(writer_variants), reader_non_union) => {
-                let mut writer_to_reader: Vec<Option<(usize, Promotion)>> =
-                    Vec::with_capacity(writer_variants.len());
-                for writer in writer_variants {
-                    match self.resolve_type(writer, reader_non_union, namespace) {
-                        Ok(tmp) => writer_to_reader.push(Some((0usize, Self::coercion_from(&tmp)))),
-                        Err(_) => writer_to_reader.push(None),
-                    }
-                }
+                let writer_to_reader: Vec<Option<(usize, Promotion)>> = writer_variants
+                    .iter()
+                    .map(|writer| {
+                        self.resolve_type(writer, reader_non_union, namespace)
+                            .ok()
+                            .map(|tmp| (0usize, Self::coercion_from(&tmp)))
+                    })
+                    .collect();
                 let mut dt = self.parse_type(reader_non_union, namespace)?;
                 dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
                     writer_to_reader: Arc::from(writer_to_reader),
@@ -1386,18 +1366,20 @@ impl<'a> Maker<'a> {
                     if let Ok(tmp) = self.resolve_type(writer_non_union, reader, namespace) {
                         let how = Self::coercion_from(&tmp);
                         if how == Promotion::Direct {
-                            direct = Some((reader_index, how));
+                            promo = Some((reader_index, how));
                             break; // first exact match wins
-                        } else if promo.is_none() {
+                        }
+                        if promo.is_none() {
+                            // the first promo wins, unless an exact match is found later
                             promo = Some((reader_index, how));
                         }
                     }
                 }
-                let (reader_index, promotion) = direct.or(promo).ok_or_else(|| {
-                    ArrowError::SchemaError(
+                let Some((reader_index, promotion)) = promo else {
+                    return Err(ArrowError::SchemaError(
                         "Writer schema does not match any reader union branch".to_string(),
-                    )
-                })?;
+                    ));
+                };
                 let mut dt = self.parse_type(reader_schema, namespace)?;
                 dt.resolution = Some(ResolutionInfo::Union(ResolvedUnion {
                     writer_to_reader: Arc::from(vec![Some((reader_index, promotion))]),
@@ -1857,14 +1839,14 @@ mod tests {
             .expect("promotion should resolve")
     }
 
-    fn mk_primitive(pt: PrimitiveType) -> Schema<'static> {
+    fn mk_primitive<'a>(pt: PrimitiveType) -> Schema<'a> {
         Schema::TypeName(TypeName::Primitive(pt))
     }
-    fn mk_union(branches: Vec<Schema<'static>>) -> Schema<'static> {
+    fn mk_union(branches: Vec<Schema<'_>>) -> Schema<'_> {
         Schema::Union(branches)
     }
 
-    fn mk_record_named(name: &'static str) -> Schema<'static> {
+    fn mk_record_name(name: &'_ str) -> Schema<'_> {
         Schema::Complex(ComplexType::Record(Record {
             name,
             namespace: None,
