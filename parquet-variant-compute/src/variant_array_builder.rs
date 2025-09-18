@@ -224,8 +224,7 @@ impl VariantBuilderExt for VariantArrayBuilder {
 /// // Create a variant value builder for 10 rows
 /// let mut builder = VariantValueArrayBuilder::new(10);
 ///
-/// // Append some values with their corresponding metadata. In practice, some of the variant
-/// // values would be objects with internal references to pre-existing metadata, which the
+/// // Append some values with their corresponding metadata, which the
 /// // builder takes advantage of to avoid creating new metadata.
 /// builder.append_value(Variant::from(42));
 /// builder.append_null();
