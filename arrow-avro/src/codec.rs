@@ -1846,7 +1846,7 @@ mod tests {
         Schema::Union(branches)
     }
 
-    fn mk_record_name(name: &'_ str) -> Schema<'_> {
+    fn mk_record_name(name: &str) -> Schema<'_> {
         Schema::Complex(ComplexType::Record(Record {
             name,
             namespace: None,
