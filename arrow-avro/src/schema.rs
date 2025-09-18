@@ -33,6 +33,10 @@ pub const SINGLE_OBJECT_MAGIC: [u8; 2] = [0xC3, 0x01];
 /// The Confluent "magic" byte (`0x00`)
 pub const CONFLUENT_MAGIC: [u8; 1] = [0x00];
 
+/// The maximum possible length of a prefix.
+/// SHA256 (32) + single-object magic (2)
+pub const MAX_PREFIX_LEN: usize = 34;
+
 /// The metadata key used for storing the JSON encoded [`Schema`]
 pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
 
@@ -475,6 +479,20 @@ impl AvroSchema {
     }
 }
 
+/// A stack-allocated, fixed-size buffer for the prefix.
+#[derive(Debug, Copy, Clone)]
+pub struct Prefix {
+    buf: [u8; MAX_PREFIX_LEN],
+    len: u8,
+}
+
+impl Prefix {
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.len as usize]
+    }
+}
+
 /// Defines the strategy for generating the per-record prefix for an Avro binary stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FingerprintStrategy {
@@ -653,43 +671,48 @@ impl Fingerprint {
     ///
     /// # Returns
     ///
-    /// A `Vec<u8>` containing the serialized prefix data.
+    /// A `Prefix` containing the serialized prefix data.
     ///
     /// # Features
     ///
     /// - You can optionally enable the `md5` feature to include the `MD5` variant.
     /// - You can optionally enable the `sha256` feature to include the `SHA256` variant.
     ///
-    pub fn make_prefix(&self) -> Vec<u8> {
-        match self {
+    pub fn make_prefix(&self) -> Prefix {
+        let mut buf = [0u8; MAX_PREFIX_LEN];
+        let len = match self {
             Self::Id(id) => {
-                let mut out = Vec::with_capacity(CONFLUENT_MAGIC.len() + 4);
-                out.extend_from_slice(&CONFLUENT_MAGIC);
-                out.extend_from_slice(&id.to_be_bytes());
-                out
+                let prefix_slice = &mut buf[..5];
+                prefix_slice[..1].copy_from_slice(&CONFLUENT_MAGIC);
+                prefix_slice[1..5].copy_from_slice(&id.to_be_bytes());
+                5
             }
             Self::Rabin(val) => {
-                let mut out = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + 8);
-                out.extend_from_slice(&SINGLE_OBJECT_MAGIC);
-                out.extend_from_slice(&val.to_le_bytes());
-                out
+                let prefix_slice = &mut buf[..10];
+                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
+                prefix_slice[2..10].copy_from_slice(&val.to_le_bytes());
+                10
             }
             #[cfg(feature = "md5")]
             Self::MD5(bytes) => {
-                // Non-standard extension
-                let mut out = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + bytes.len());
-                out.extend_from_slice(&SINGLE_OBJECT_MAGIC);
-                out.extend_from_slice(bytes);
-                out
+                const LEN: usize = 2 + 16;
+                let prefix_slice = &mut buf[..LEN];
+                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
+                prefix_slice[2..LEN].copy_from_slice(bytes);
+                LEN
             }
             #[cfg(feature = "sha256")]
             Self::SHA256(bytes) => {
-                // Non-standard extension
-                let mut out = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + bytes.len());
-                out.extend_from_slice(&SINGLE_OBJECT_MAGIC);
-                out.extend_from_slice(bytes);
-                out
+                const LEN: usize = 2 + 32;
+                let prefix_slice = &mut buf[..LEN];
+                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
+                prefix_slice[2..LEN].copy_from_slice(bytes);
+                LEN
             }
+        };
+        Prefix {
+            buf,
+            len: len as u8,
         }
     }
 }

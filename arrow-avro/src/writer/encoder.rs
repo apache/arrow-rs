@@ -18,7 +18,7 @@
 //! Avro Encoder for Arrow types.
 
 use crate::codec::{AvroDataType, AvroField, Codec};
-use crate::schema::{Fingerprint, Nullability};
+use crate::schema::{Fingerprint, Nullability, Prefix};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalDayTimeType,
@@ -567,7 +567,7 @@ impl<'a> RecordEncoderBuilder<'a> {
         }
         Ok(RecordEncoder {
             columns,
-            prefix: self.fingerprint.as_ref().map(|fp| fp.make_prefix()),
+            prefix: self.fingerprint.map(|fp| fp.make_prefix()),
         })
     }
 }
@@ -581,7 +581,7 @@ impl<'a> RecordEncoderBuilder<'a> {
 pub struct RecordEncoder {
     columns: Vec<FieldBinding>,
     /// Optional pre-built, variable-length prefix written before each record.
-    prefix: Option<Vec<u8>>,
+    prefix: Option<Prefix>,
 }
 
 impl RecordEncoder {
@@ -615,17 +615,23 @@ impl RecordEncoder {
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
     pub fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
-        for row in 0..batch.num_rows() {
-            if let Some(prefix) = &self.prefix {
-                if !prefix.is_empty() {
-                    out.write_all(prefix).map_err(|e| {
-                        ArrowError::IoError(format!("Failed to write single-object prefix: {e}"), e)
-                    })?;
+        let n = batch.num_rows();
+        match self.prefix {
+            Some(prefix) => {
+                for row in 0..n {
+                    out.write_all(prefix.as_slice())
+                        .map_err(|e| ArrowError::IoError(format!("write prefix: {e}"), e))?;
+                    for enc in column_encoders.iter_mut() {
+                        enc.encode(out, row)?;
+                    }
                 }
             }
-
-            for encoder in column_encoders.iter_mut() {
-                encoder.encode(out, row)?;
+            None => {
+                for row in 0..n {
+                    for enc in column_encoders.iter_mut() {
+                        enc.encode(out, row)?;
+                    }
+                }
             }
         }
         Ok(())
