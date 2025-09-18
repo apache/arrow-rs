@@ -298,9 +298,9 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, BinaryViewArray, Date32Array, Float16Array, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, StringArray, StructArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        Array, ArrayRef, BinaryViewArray, Date32Array, Float16Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
@@ -1187,10 +1187,10 @@ mod test {
         ]);
 
         let typed_value = Date32Array::from(vec![
-            Some(20348),  // row 0 is shredded, 2025-09-17
-            None,         // row 1 is null
-            None,         // row 2 is a string, not a date
-            Some(20340),  // row 3 is shredded, 2025-09-09
+            Some(20348), // row 0 is shredded, 2025-09-17
+            None,        // row 1 is null
+            None,        // row 2 is a string, not a date
+            Some(20340), // row 3 is shredded, 2025-09-09
         ]);
 
         let struct_array = StructArrayBuilder::new()

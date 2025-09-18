@@ -21,8 +21,8 @@ use crate::type_conversion::primitive_conversion_single_value;
 use arrow::array::{Array, ArrayData, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use parquet_variant::Uuid;
