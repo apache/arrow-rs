@@ -582,6 +582,16 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             let value = array.value(index);
             Variant::from(value)
         }
+        DataType::BinaryView => {
+            let array = typed_value.as_binary_view();
+            let value = array.value(index);
+            Variant::from(value)
+        }
+        DataType::Utf8 => {
+            let array = typed_value.as_string::<i32>();
+            let value = array.value(index);
+            Variant::from(value)
+        }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
         }

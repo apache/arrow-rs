@@ -309,6 +309,7 @@ mod test {
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
+    use arrow::datatypes::DataType::{Int16, Int32, Int64, UInt16, UInt32, UInt64, UInt8};
     use arrow_schema::{DataType, Field, FieldRef, Fields};
     use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
 
@@ -513,6 +514,40 @@ mod test {
         assert_eq!(result.value(3), Variant::from(&[4u8, 5u8, 6u8][..]));
     }
 
+    #[test]
+    fn get_variant_partially_shredded_utf8_as_variant() {
+        let array = partially_shredded_utf8_variant_array();
+        let options = GetOptions::new();
+        let result = variant_get(&array, options).unwrap();
+
+        // expect the result is a VariantArray
+        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result.len(), 4);
+
+        // Expect the values are the same as the original values
+        assert_eq!(result.value(0), Variant::from("hello"));
+        assert!(!result.is_valid(1));
+        assert_eq!(result.value(2), Variant::from("n/a"));
+        assert_eq!(result.value(3), Variant::from("world"));
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_binary_view_as_variant() {
+        let array = partially_shredded_binary_view_variant_array();
+        let options = GetOptions::new();
+        let result = variant_get(&array, options).unwrap();
+
+        // expect the result is a VariantArray
+        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result.len(), 4);
+
+        // Expect the values are the same as the original values
+        assert_eq!(result.value(0), Variant::from(&[1u8, 2u8, 3u8][..]));
+        assert!(!result.is_valid(1));
+        assert_eq!(result.value(2), Variant::from("n/a"));
+        assert_eq!(result.value(3), Variant::from(&[4u8, 5u8, 6u8][..]));
+    }
+
     /// Shredding: extract a value as an Int32Array
     #[test]
     fn get_variant_shredded_int32_as_int32_safe_cast() {
@@ -632,19 +667,6 @@ mod test {
         numeric_perfectly_shredded_test!(f64, perfectly_shredded_float64_variant_array);
     }
 
-    /// Shredding: Extract the typed value as Int32Array
-    #[test]
-    fn get_variant_perfectly_shredded_int32_as_int32() {
-        // Extract the typed value as Int32Array
-        let array = perfectly_shredded_int32_variant_array();
-        // specify we want the typed value as Int32
-        let field = Field::new("typed_value", DataType::Int32, true);
-        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
-        let result = variant_get(&array, options).unwrap();
-        let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]));
-        assert_eq!(&result, &expected)
-    }
-
     /// AllNull: extract a value as a VariantArray
     #[test]
     fn get_variant_all_null_as_variant() {
@@ -679,17 +701,68 @@ mod test {
         assert_eq!(&result, &expected)
     }
 
-    #[test]
-    fn get_variant_perfectly_shredded_int16_as_int16() {
-        // Extract the typed value as Int16Array
-        let array = perfectly_shredded_int16_variant_array();
-        // specify we want the typed value as Int16
-        let field = Field::new("typed_value", DataType::Int16, true);
-        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
-        let result = variant_get(&array, options).unwrap();
-        let expected: ArrayRef = Arc::new(Int16Array::from(vec![Some(1), Some(2), Some(3)]));
-        assert_eq!(&result, &expected)
+    macro_rules! perfectly_shredded_to_arrow_primitive_test {
+        ($name:ident, $primitive_type:ident, $perfectly_shredded_array_gen_fun:ident, $expected_array:expr) => {
+            #[test]
+            fn $name() {
+                let array = $perfectly_shredded_array_gen_fun();
+                let field = Field::new("typed_value", $primitive_type, true);
+                let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+                let result = variant_get(&array, options).unwrap();
+                let expected_array: ArrayRef = Arc::new($expected_array);
+                assert_eq!(&result, &expected_array);
+            }
+        };
     }
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_int16_as_int16,
+        Int16,
+        perfectly_shredded_int16_variant_array,
+        Int16Array::from(vec![Some(1), Some(2), Some(3)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_int32_as_int32,
+        Int32,
+        perfectly_shredded_int32_variant_array,
+        Int32Array::from(vec![Some(1), Some(2), Some(3)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_int64_as_int64,
+        Int64,
+        perfectly_shredded_int64_variant_array,
+        Int64Array::from(vec![Some(1), Some(2), Some(3)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_uint8_as_int8,
+        UInt8,
+        perfectly_shredded_uint8_variant_array,
+        UInt8Array::from(vec![Some(1), Some(2), Some(3)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_uint16_as_uint16,
+        UInt16,
+        perfectly_shredded_uint16_variant_array,
+        UInt16Array::from(vec![Some(1), Some(2), Some(3)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_uint32_as_uint32,
+        UInt32,
+        perfectly_shredded_uint32_variant_array,
+        UInt32Array::from(vec![Some(1), Some(2), Some(3)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_uint64_as_uint64,
+        UInt64,
+        perfectly_shredded_uint64_variant_array,
+        UInt64Array::from(vec![Some(1), Some(2), Some(3)])
+    );
 
     /// Return a VariantArray that represents a perfectly "shredded" variant
     /// for the given typed value.
@@ -1010,6 +1083,100 @@ mod test {
             Some(typed_value_nulls),
         )
         .expect("should create fixed size binary array");
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("typed_value", Arc::new(typed_value), true)
+            .with_field("value", Arc::new(values), true)
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(
+            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
+        )
+    }
+
+    /// Return a VariantArray that represents a partially "shredded" variant for UTF8
+    fn partially_shredded_utf8_variant_array() -> ArrayRef {
+        let (metadata, string_value) = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            builder.append_value("n/a");
+            builder.finish()
+        };
+
+        // Create the null buffer for the overall array
+        let nulls = NullBuffer::from(vec![
+            true,  // row 0 non null
+            false, // row 1 is null
+            true,  // row 2 non null
+            true,  // row 3 non null
+        ]);
+
+        // metadata is the same for all rows
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+
+        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
+        // about why row1 is an empty but non null, value.
+        let values = BinaryViewArray::from(vec![
+            None,                // row 0 is shredded, so no value
+            Some(b"" as &[u8]),  // row 1 is null, so empty value
+            Some(&string_value), // copy the string value "N/A"
+            None,                // row 3 is shredded, so no value
+        ]);
+
+        let typed_value = StringArray::from(vec![
+            Some("hello"), // row 0 is shredded
+            None,          // row 1 is null
+            None,          // row 2 is a string
+            Some("world"), // row 3 is shredded
+        ]);
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("typed_value", Arc::new(typed_value), true)
+            .with_field("value", Arc::new(values), true)
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(
+            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
+        )
+    }
+
+    /// Return a VariantArray that represents a partially "shredded" variant for BinaryView
+    fn partially_shredded_binary_view_variant_array() -> ArrayRef {
+        let (metadata, string_value) = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            builder.append_value("n/a");
+            builder.finish()
+        };
+
+        // Create the null buffer for the overall array
+        let nulls = NullBuffer::from(vec![
+            true,  // row 0 non null
+            false, // row 1 is null
+            true,  // row 2 non null
+            true,  // row 3 non null
+        ]);
+
+        // metadata is the same for all rows
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+
+        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
+        // about why row1 is an empty but non null, value.
+        let values = BinaryViewArray::from(vec![
+            None,                // row 0 is shredded, so no value
+            Some(b"" as &[u8]),  // row 1 is null, so empty value
+            Some(&string_value), // copy the string value "N/A"
+            None,                // row 3 is shredded, so no value
+        ]);
+
+        let typed_value = BinaryViewArray::from(vec![
+            Some(&[1u8, 2u8, 3u8][..]), // row 0 is shredded
+            None,                       // row 1 is null
+            None,                       // row 2 is a string
+            Some(&[4u8, 5u8, 6u8][..]), // row 3 is shredded
+        ]);
 
         let struct_array = StructArrayBuilder::new()
             .with_field("metadata", Arc::new(metadata), true)
