@@ -848,8 +848,8 @@ mod tests {
 
         let v2 = Variant::try_new(&m, &v).unwrap();
 
-        let m1 = v1.metadata().unwrap();
-        let m2 = v2.metadata().unwrap();
+        let m1 = v1.metadata();
+        let m2 = v2.metadata();
 
         // metadata would be equal since they contain the same keys
         assert_eq!(m1, m2);
@@ -900,7 +900,7 @@ mod tests {
         let (m, v) = b.finish();
 
         let v1 = Variant::try_new(&m, &v).unwrap();
-        assert!(!v1.metadata().unwrap().is_sorted());
+        assert!(!v1.metadata().is_sorted());
 
         // create another object pre-filled with field names, b and a
         // but insert the fields in the order of a, b
@@ -917,7 +917,7 @@ mod tests {
         let v2 = Variant::try_new(&m, &v).unwrap();
 
         // v2 should also have a unsorted dictionary
-        assert!(!v2.metadata().unwrap().is_sorted());
+        assert!(!v2.metadata().is_sorted());
 
         assert_eq!(v1, v2);
     }
@@ -936,7 +936,7 @@ mod tests {
 
         let v1 = Variant::try_new(&meta1, &value1).unwrap();
         // v1 is sorted
-        assert!(v1.metadata().unwrap().is_sorted());
+        assert!(v1.metadata().is_sorted());
 
         // create a second object with different insertion order
         let mut b = VariantBuilder::new().with_field_names(["d", "c", "b", "a"]);
@@ -951,7 +951,7 @@ mod tests {
 
         let v2 = Variant::try_new(&meta2, &value2).unwrap();
         // v2 is not sorted
-        assert!(!v2.metadata().unwrap().is_sorted());
+        assert!(!v2.metadata().is_sorted());
 
         // object metadata are not the same
         assert_ne!(v1.metadata(), v2.metadata());
