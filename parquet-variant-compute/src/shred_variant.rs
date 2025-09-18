@@ -80,7 +80,6 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
         as_type,
         &cast_options,
         array.len(),
-        true,
     )?;
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -102,7 +101,6 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     data_type: &'a DataType,
     cast_options: &'a CastOptions,
     capacity: usize,
-    top_level: bool,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
@@ -110,7 +108,6 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 fields,
                 cast_options,
                 capacity,
-                top_level,
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
@@ -127,7 +124,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
             let typed_value_builder =
-                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, top_level);
+                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
         }
     };
@@ -139,37 +136,11 @@ pub(crate) enum VariantToShreddedVariantRowBuilder<'a> {
     Object(VariantToShreddedObjectVariantRowBuilder<'a>),
 }
 impl<'a> VariantToShreddedVariantRowBuilder<'a> {
-    fn start_append_null(&mut self) {
-        use VariantToShreddedVariantRowBuilder::*;
-
-        let (top_level, nulls, value_builder) = match self {
-            Primitive(VariantToShreddedPrimitiveVariantRowBuilder {
-                top_level,
-                nulls,
-                value_builder,
-                ..
-            })
-            | Object(VariantToShreddedObjectVariantRowBuilder {
-                top_level,
-                nulls,
-                value_builder,
-                ..
-            }) => (top_level, nulls, value_builder),
-        };
-        if *top_level {
-            nulls.append_null();
-            value_builder.append_null();
-        } else {
-            nulls.append_non_null();
-            value_builder.append_value(Variant::Null);
-        }
-    }
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToShreddedVariantRowBuilder::*;
-        self.start_append_null();
         match self {
-            Primitive(b) => b.finish_append_null(),
-            Object(b) => b.finish_append_null(),
+            Primitive(b) => b.append_null(),
+            Object(b) => b.append_null(),
         }
     }
 
@@ -195,23 +166,22 @@ pub(crate) struct VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
     nulls: NullBufferBuilder,
-    top_level: bool,
 }
 
 impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     pub(crate) fn new(
         typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
         capacity: usize,
-        top_level: bool,
     ) -> Self {
         Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
             typed_value_builder,
             nulls: NullBufferBuilder::new(capacity),
-            top_level,
         }
     }
-    fn finish_append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<()> {
+        self.nulls.append_null();
+        self.value_builder.append_null();
         self.typed_value_builder.append_null()
     }
     fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
@@ -237,7 +207,6 @@ pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
     typed_value_builders: IndexMap<&'a str, VariantToShreddedVariantRowBuilder<'a>>,
     typed_value_nulls: NullBufferBuilder,
     nulls: NullBufferBuilder,
-    top_level: bool,
 }
 
 impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
@@ -245,14 +214,12 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         fields: &'a Fields,
         cast_options: &'a CastOptions,
         capacity: usize,
-        top_level: bool,
     ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
                 field.data_type(),
                 cast_options,
                 capacity,
-                top_level,
             )?;
             Ok((field.name().as_str(), builder))
         });
@@ -261,11 +228,12 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             typed_value_builders: typed_value_builders.collect::<Result<_>>()?,
             typed_value_nulls: NullBufferBuilder::new(capacity),
             nulls: NullBufferBuilder::new(capacity),
-            top_level,
         })
     }
 
-    fn finish_append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<()> {
+        self.nulls.append_null();
+        self.value_builder.append_null();
         self.typed_value_nulls.append_null();
         for (_, typed_value_builder) in &mut self.typed_value_builders {
             typed_value_builder.append_null()?;
@@ -347,7 +315,7 @@ mod tests {
     use crate::VariantArrayBuilder;
     use arrow::array::{Float64Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Fields};
-    use parquet_variant::{Variant, VariantBuilderExt};
+    use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt as _};
     use std::sync::Arc;
 
     fn create_test_variant_array(values: Vec<Option<Variant<'_, '_>>>) -> VariantArray {
@@ -563,8 +531,10 @@ mod tests {
         assert!(result.typed_value_field().is_some());
         assert_eq!(result.len(), 9);
 
-        let value_field = result.value_field().unwrap();
-        let typed_value_struct = result
+        let metadata = result.metadata_field();
+
+        let value = result.value_field().unwrap();
+        let typed_value = result
             .typed_value_field()
             .unwrap()
             .as_any()
@@ -572,85 +542,278 @@ mod tests {
             .unwrap();
 
         // Extract score and age fields from typed_value struct
-        let score_field_array = typed_value_struct
+        let score_field = typed_value
             .column_by_name("score")
             .unwrap()
             .as_any()
             .downcast_ref::<crate::variant_array::ShreddedVariantFieldArray>()
             .unwrap();
-        let age_field_array = typed_value_struct
+        let age_field = typed_value
             .column_by_name("age")
             .unwrap()
             .as_any()
             .downcast_ref::<crate::variant_array::ShreddedVariantFieldArray>()
             .unwrap();
 
-        let score_typed_values = score_field_array
+        let score_value = score_field
+            .value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        let score_typed_value = score_field
             .typed_value_field()
             .unwrap()
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        let age_typed_values = age_field_array
+        let age_value = age_field
+            .value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        let age_typed_value = age_field
             .typed_value_field()
             .unwrap()
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
 
+        // Set up exhaustive checking of all shredded columns and their nulls/values
+        struct ShreddedValue<'m, 'v, T> {
+            value: Option<Variant<'m, 'v>>,
+            typed_value: Option<T>,
+        }
+        struct ShreddedStruct<'m, 'v> {
+            score: ShreddedValue<'m, 'v, f64>,
+            age: ShreddedValue<'m, 'v, i64>,
+        }
+        fn get_value<'m, 'v>(i: usize, metadata: &'m BinaryViewArray, value: &'v BinaryViewArray) -> Variant<'m, 'v> {
+            Variant::new(metadata.value(i), value.value(i))
+        }
+        let expect = |i, expected_result: Option<ShreddedValue<ShreddedStruct>>| {
+            match expected_result {
+                Some(ShreddedValue { value: expected_value, typed_value: expected_typed_value }) => {
+                    assert!(result.is_valid(i));
+                    match expected_value {
+                        Some(expected_value) => {
+                            assert!(value.is_valid(i));
+                            assert_eq!(expected_value, get_value(i, metadata, value));
+                        }
+                        None => {
+                            assert!(value.is_null(i));
+                        }
+                    }
+                    match expected_typed_value {
+                        Some(ShreddedStruct { score: expected_score, age: expected_age }) => {
+                            assert!(typed_value.is_valid(i));
+                            assert!(score_field.is_valid(i)); // non-nullable
+                            assert!(age_field.is_valid(i));   // non-nullable
+                            match expected_score.value {
+                                Some(expected_score_value) => {
+                                    assert!(score_value.is_valid(i));
+                                    assert_eq!(expected_score_value, get_value(i, metadata, score_value));
+                                }
+                                None => {
+                                    assert!(score_value.is_null(i));
+                                }
+                            }
+                            match expected_score.typed_value {
+                                Some(expected_score) => {
+                                    assert!(score_typed_value.is_valid(i));
+                                    assert_eq!(expected_score, score_typed_value.value(i));
+                                }
+                                None => {
+                                    assert!(score_typed_value.is_null(i));
+                                }
+                            }
+                            match expected_age.value {
+                                Some(expected_age_value) => {
+                                    assert!(age_value.is_valid(i));
+                                    assert_eq!(expected_age_value, get_value(i, metadata, age_value));
+                                }
+                                None => {
+                                    assert!(age_value.is_null(i));
+                                }
+                            }
+                            match expected_age.typed_value {
+                                Some(expected_age) => {
+                                    assert!(age_typed_value.is_valid(i));
+                                    assert_eq!(expected_age, age_typed_value.value(i));
+                                }
+                                None => {
+                                    assert!(age_typed_value.is_null(i));
+                                }
+                            }
+                        }
+                        None => {
+                            assert!(typed_value.is_null(i));
+                        }
+                    }
+                }
+                None => {
+                    assert!(result.is_null(i));
+                }
+            };
+
+        };
+
         // Row 0: Fully shredded - both fields shred successfully
-        assert!(value_field.is_null(0)); // no unshredded fields
-        assert!(!typed_value_struct.is_null(0));
-        assert_eq!(score_typed_values.value(0), 95.5); // score successfully shredded
-        assert_eq!(age_typed_values.value(0), 30); // age successfully shredded
+        expect(
+            0,
+            Some(ShreddedValue {
+                value: None,
+                typed_value: Some(ShreddedStruct {
+                    score: ShreddedValue {
+                        value: None,
+                        typed_value: Some(95.5),
+                    },
+                    age: ShreddedValue {
+                        value: None,
+                        typed_value: Some(30),
+                    },
+                }),
+            }),
+        );
 
         // Row 1: Partially shredded - value contains extra email field
-        assert!(!value_field.is_null(1)); // contains {"email": "bob@example.com"}
-        assert!(!typed_value_struct.is_null(1));
-        assert_eq!(score_typed_values.value(1), 87.2); // score successfully shredded
-        assert_eq!(age_typed_values.value(1), 25); // age successfully shredded
+        let mut builder = VariantBuilder::new();
+        builder.new_object().with_field("email", "bob@example.com").finish();
+        let (m, v) = builder.finish();
+        let expected_value = Variant::new(&m, &v);
 
-        // Row 2: Missing score field
-        assert!(value_field.is_null(2)); // no unshredded fields
-        assert!(!typed_value_struct.is_null(2));
-        assert!(score_typed_values.is_null(2)); // score is missing
-        assert_eq!(age_typed_values.value(2), 35); // age successfully shredded
+        expect(
+            1,
+            Some(ShreddedValue {
+                value: Some(expected_value),
+                typed_value: Some(ShreddedStruct {
+                    score: ShreddedValue {
+                        value: None,
+                        typed_value: Some(87.2),
+                    },
+                    age: ShreddedValue {
+                        value: None,
+                        typed_value: Some(25),
+                    },
+                }),
+            }),
+        );
+
+        // Row 2: Fully shredded -- missing score field
+        expect(
+            2,
+            Some(ShreddedValue {
+                value: None,
+                typed_value: Some(ShreddedStruct {
+                    score: ShreddedValue {
+                        value: None,
+                        typed_value: None,
+                    },
+                    age: ShreddedValue {
+                        value: None,
+                        typed_value: Some(35),
+                    },
+                }),
+            }),
+        );
 
         // Row 3: Type mismatches - both score and age are strings
-        assert!(value_field.is_null(3)); // no unshredded fields (but both fields have fallback values)
-        assert!(!typed_value_struct.is_null(3));
-        assert!(score_typed_values.is_null(3)); // score failed to shred (string "ninety-five")
-        assert!(age_typed_values.is_null(3)); // age failed to shred (string "thirty")
-                                              // Both should be in their respective field's value arrays (type mismatch fallback)
-        let score_value_field = score_field_array.value_field().unwrap();
-        let age_value_field = age_field_array.value_field().unwrap();
-        assert!(!score_value_field.is_null(3)); // contains "ninety-five" as variant
-        assert!(!age_value_field.is_null(3)); // contains "thirty" as variant
+        expect(
+            3,
+            Some(ShreddedValue {
+                value: None,
+                typed_value: Some(ShreddedStruct {
+                    score: ShreddedValue {
+                        value: Some(Variant::from("ninety-five")),
+                        typed_value: None,
+                    },
+                    age: ShreddedValue {
+                        value: Some(Variant::from("thirty")),
+                        typed_value: None,
+                    },
+                }),
+            }),
+        );
 
         // Row 4: Non-object - falls back to value field
-        assert!(!value_field.is_null(4)); // contains "not an object"
-        assert!(typed_value_struct.is_null(4)); // typed_value is null for non-objects
+        expect(
+            4,
+            Some(ShreddedValue {
+                value: Some(Variant::from("not an object")),
+                typed_value: None,
+            }),
+        );
 
         // Row 5: Empty object
-        assert!(value_field.is_null(5)); // no unshredded fields
-        assert!(!typed_value_struct.is_null(5)); // the struct is there, but all fields are NULL
-        assert!(score_typed_values.is_null(5)); // score is missing
-        assert!(age_typed_values.is_null(5)); // age is missing
+        expect(
+            5,
+            Some(ShreddedValue {
+                value: None,
+                typed_value: Some(ShreddedStruct {
+                    score: ShreddedValue {
+                        value: None,
+                        typed_value: None,
+                    },
+                    age: ShreddedValue {
+                        value: None,
+                        typed_value: None,
+                    },
+                }),
+            }),
+        );
 
         // Row 6: Null
-        assert!(result.is_null(6));
+        expect(
+            6,
+            None,
+        );
 
         // Row 7: Object with only a "wrong" field
-        assert!(!value_field.is_null(7));
-        assert!(!typed_value_struct.is_null(7)); // the struct is there, but all fields are NULL
-        assert!(score_typed_values.is_null(7));
-        assert!(age_typed_values.is_null(7));
+        let mut builder = VariantBuilder::new();
+        builder.new_object().with_field("foo", 10).finish();
+        let (m, v) = builder.finish();
+        let expected_value = Variant::new(&m, &v);
+
+        expect(
+            7,
+            Some(ShreddedValue {
+                value: Some(expected_value),
+                typed_value: Some(ShreddedStruct {
+                    score: ShreddedValue {
+                        value: None,
+                        typed_value: None,
+                    },
+                    age: ShreddedValue {
+                        value: None,
+                        typed_value: None,
+                    },
+                }),
+            }),
+        );
 
         // Row 8: Object with one "wrong" and one "right" field
-        assert!(!value_field.is_null(8));
-        assert!(!typed_value_struct.is_null(8));
-        assert!(!score_typed_values.is_null(8));
-        assert!(age_typed_values.is_null(8));
+        let mut builder = VariantBuilder::new();
+        builder.new_object().with_field("foo", 10).finish();
+        let (m, v) = builder.finish();
+        let expected_value = Variant::new(&m, &v);
+
+        expect(
+            8,
+            Some(ShreddedValue {
+                value: Some(expected_value),
+                typed_value: Some(ShreddedStruct {
+                    score: ShreddedValue {
+                        value: None,
+                        typed_value: Some(66.67),
+                    },
+                    age: ShreddedValue {
+                        value: None,
+                        typed_value: None,
+                    },
+                }),
+            }),
+        );
     }
 
     #[test]
