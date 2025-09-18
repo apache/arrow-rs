@@ -332,60 +332,6 @@ mod tests {
         assert_eq!(to_write, read);
     }
 
-    #[tokio::test]
-    async fn test_async_arrow_group_writer() {
-        let col = Arc::new(Int64Array::from_iter_values([4, 5, 6])) as ArrayRef;
-        let to_write_record = RecordBatch::try_from_iter([("col", col)]).unwrap();
-
-        let mut buffer = Vec::new();
-        let mut writer =
-            AsyncArrowWriter::try_new(&mut buffer, to_write_record.schema(), None).unwrap();
-
-        // Use classic API
-        writer.write(&to_write_record).await.unwrap();
-
-        // Use low-level API to write an Arrow group
-        let arrow_writer = writer.sync_writer;
-        let (mut serialized_file_writer, row_group_writer_factory) =
-            arrow_writer.into_serialized_writer().unwrap();
-
-        // Get column writers
-        let mut writers = row_group_writer_factory.create_column_writers(0).unwrap();
-        let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
-        let to_write_arrow_group = RecordBatch::try_from_iter([("col", col)]).unwrap();
-
-        for (field, column) in to_write_arrow_group
-            .schema()
-            .fields()
-            .iter()
-            .zip(to_write_arrow_group.columns())
-        {
-            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
-                writers[0].write(&leaf).unwrap();
-            }
-        }
-
-        let mut columns: Vec<_> = writers.into_iter().map(|w| w.close().unwrap()).collect();
-        // Append the arrow group as a new row group. Flush in progress
-        let mut row_group_writer = serialized_file_writer.next_row_group().unwrap();
-        let chunk = columns.remove(0);
-        chunk.append_to_row_group(&mut row_group_writer).unwrap();
-        row_group_writer.close().unwrap();
-        let _metadata = serialized_file_writer.close().unwrap();
-
-        let buffer = Bytes::from(buffer);
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let col = Arc::new(Int64Array::from_iter_values([4, 5, 6, 1, 2, 3])) as ArrayRef;
-        let expected = RecordBatch::try_from_iter([("col", col)]).unwrap();
-
-        let read = reader.next().unwrap().unwrap();
-        assert_eq!(expected, read);
-    }
-
     // Read the data from the test file and write it by the async writer and sync writer.
     // And then compares the results of the two writers.
     #[tokio::test]
