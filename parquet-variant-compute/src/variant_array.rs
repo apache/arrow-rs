@@ -48,7 +48,7 @@ use std::sync::Arc;
 ///
 /// [Extension Type for Parquet Variant arrow]: https://github.com/apache/arrow/issues/46908
 /// [document]: https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?usp=sharing
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct VariantArray {
     /// Reference to the underlying StructArray
     inner: StructArray,
@@ -129,7 +129,7 @@ impl VariantArray {
         Ok(Self {
             inner: inner.clone(),
             metadata: metadata.clone(),
-            shredding_state: ShreddingState::try_new(value, typed_value)?,
+            shredding_state: ShreddingState::new(value, typed_value),
         })
     }
 
@@ -151,14 +151,10 @@ impl VariantArray {
             builder = builder.with_nulls(nulls);
         }
 
-        // This would be a lot simpler if ShreddingState were just a pair of Option... we already
-        // have everything we need.
-        let inner = builder.build();
-        let shredding_state = ShreddingState::try_new(value, typed_value).unwrap(); // valid by construction
         Self {
-            inner,
+            inner: builder.build(),
             metadata,
-            shredding_state,
+            shredding_state: ShreddingState::new(value, typed_value),
         }
     }
 
@@ -325,10 +321,9 @@ impl ShreddedVariantFieldArray {
         let typed_value = inner_struct.column_by_name("typed_value").cloned();
 
         // Note this clone is cheap, it just bumps the ref count
-        let inner = inner_struct.clone();
         Ok(Self {
-            inner: inner.clone(),
-            shredding_state: ShreddingState::try_new(value, typed_value)?,
+            inner: inner_struct.clone(),
+            shredding_state: ShreddingState::new(value, typed_value),
         })
     }
 
@@ -368,13 +363,9 @@ impl ShreddedVariantFieldArray {
             builder = builder.with_nulls(nulls);
         }
 
-        // This would be a lot simpler if ShreddingState were just a pair of Option... we already
-        // have everything we need.
-        let inner = builder.build();
-        let shredding_state = ShreddingState::try_new(value, typed_value).unwrap(); // valid by construction
         Self {
-            inner,
-            shredding_state,
+            inner: builder.build(),
+            shredding_state: ShreddingState::new(value, typed_value),
         }
     }
 }
@@ -451,7 +442,7 @@ impl Array for ShreddedVariantFieldArray {
 /// | non-null | non-null     | The value is present and is a partially shredded object |
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ShreddingState {
     /// This variant has no typed_value field
     Unshredded { value: BinaryViewArray },
@@ -482,16 +473,13 @@ pub enum ShreddingState {
 }
 
 impl ShreddingState {
-    /// try to create a new `ShreddingState` from the given fields
-    pub fn try_new(
-        value: Option<BinaryViewArray>,
-        typed_value: Option<ArrayRef>,
-    ) -> Result<Self, ArrowError> {
+    /// Create a new `ShreddingState` from the given fields
+    pub fn new(value: Option<BinaryViewArray>, typed_value: Option<ArrayRef>) -> Self {
         match (value, typed_value) {
-            (Some(value), Some(typed_value)) => Ok(Self::PartiallyShredded { value, typed_value }),
-            (Some(value), None) => Ok(Self::Unshredded { value }),
-            (None, Some(typed_value)) => Ok(Self::Typed { typed_value }),
-            (None, None) => Ok(Self::AllNull),
+            (Some(value), Some(typed_value)) => Self::PartiallyShredded { value, typed_value },
+            (Some(value), None) => Self::Unshredded { value },
+            (None, Some(typed_value)) => Self::Typed { typed_value },
+            (None, None) => Self::AllNull,
         }
     }
 
@@ -795,10 +783,11 @@ mod test {
 
     #[test]
     fn all_null_shredding_state() {
-        let shredding_state = ShreddingState::try_new(None, None).unwrap();
-
         // Verify the shredding state is AllNull
-        assert!(matches!(shredding_state, ShreddingState::AllNull));
+        assert!(matches!(
+            ShreddingState::new(None, None),
+            ShreddingState::AllNull
+        ));
     }
 
     #[test]

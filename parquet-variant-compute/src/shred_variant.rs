@@ -36,7 +36,7 @@ use std::sync::Arc;
 ///
 /// For example, requesting `DataType::Int64` would produce an output variant array with the schema:
 ///
-/// ```
+/// ```text
 /// {
 ///    metadata: BINARY,
 ///    value: BINARY,
@@ -47,7 +47,7 @@ use std::sync::Arc;
 /// Similarly, requesting `DataType::Struct` with two integer fields `a` and `b` would produce an
 /// output variant array with the schema:
 ///
-/// ```
+/// ```text
 /// {
 ///   metadata: BINARY,
 ///   value: BINARY,
@@ -71,13 +71,8 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
     }
 
     if array.value_field().is_none() {
-        // all-null case
-        return Ok(VariantArray::from_parts(
-            array.metadata_field().clone(),
-            None,
-            None,
-            None,
-        ));
+        // all-null case -- nothing to do.
+        return Ok(array.clone());
     };
 
     let cast_options = CastOptions::default();
@@ -124,9 +119,8 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         | DataType::ListView(_)
         | DataType::LargeListView(_)
         | DataType::FixedSizeList(..) => {
-            // TODO: Special handling for shredded variant arrays
             return Err(ArrowError::NotYetImplemented(
-                "shred_variant not yet implemented for lists".to_string(),
+                "Shredding variant array values as arrow lists".to_string(),
             ));
         }
         _ => {
@@ -419,9 +413,9 @@ mod tests {
         ]);
 
         let result = shred_variant(&input, &DataType::Int64).unwrap();
-        println!("result: {:?}", result);
 
         // Verify structure
+        let metadata_field = result.metadata_field();
         let value_field = result.value_field().unwrap();
         let typed_value_field = result
             .typed_value_field()
@@ -443,6 +437,10 @@ mod tests {
         assert!(!result.is_null(1));
         assert!(!value_field.is_null(1)); // value should contain original
         assert!(typed_value_field.is_null(1)); // typed_value should be null
+        assert_eq!(
+            Variant::new(metadata_field.value(1), value_field.value(1)),
+            Variant::from("hello")
+        );
 
         // Row 2: 100 -> should shred successfully
         assert!(!result.is_null(2));
@@ -455,6 +453,10 @@ mod tests {
         // Row 4: Variant::Null -> should not shred (it's a null variant, not an integer)
         assert!(!result.is_null(4));
         assert!(!value_field.is_null(4)); // should contain Variant::Null
+        assert_eq!(
+            Variant::new(metadata_field.value(4), value_field.value(4)),
+            Variant::Null
+        );
         assert!(typed_value_field.is_null(4));
 
         // Row 5: 3i8 -> should shred successfully (int8->int64 conversion)
@@ -535,8 +537,17 @@ mod tests {
         // Row 6: Null
         builder.append_null();
 
+        // Row 7: Object with only "wrong" fields
+        builder.new_object().with_field("foo", 10).finish();
+
+        // Row 8: Object with one "right" and one "wrong" field
+        builder
+            .new_object()
+            .with_field("foo", 10)
+            .with_field("score", 66.67f64)
+            .finish();
+
         let input = builder.build();
-        println!("input: {input:?}");
 
         // Create target schema: struct<score: float64, age: int64>
         // Both types are supported for shredding
@@ -547,12 +558,11 @@ mod tests {
         let target_schema = DataType::Struct(fields);
 
         let result = shred_variant(&input, &target_schema).unwrap();
-        println!("result: {result:?}");
 
         // Verify structure
         assert!(result.value_field().is_some());
         assert!(result.typed_value_field().is_some());
-        assert_eq!(result.len(), 7);
+        assert_eq!(result.len(), 9);
 
         let value_field = result.value_field().unwrap();
         let typed_value_struct = result
@@ -625,6 +635,16 @@ mod tests {
 
         // Row 6: Null
         assert!(result.is_null(6));
+
+        // Row 7: Object with only a "wrong" field
+        assert!(!value_field.is_null(7));
+        assert!(score_typed_values.is_null(7));
+        assert!(age_typed_values.is_null(7));
+
+        // Row 8: Object with one "wrong" and one "right" field
+        assert!(!value_field.is_null(8));
+        assert!(!score_typed_values.is_null(8));
+        assert!(age_typed_values.is_null(8));
     }
 
     #[test]

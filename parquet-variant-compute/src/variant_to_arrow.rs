@@ -188,9 +188,8 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
             capacity,
         )),
         Some(DataType::Struct(_)) => {
-            // TODO: Special handling for shredded variant objects
             return Err(ArrowError::NotYetImplemented(
-                "variant_get not yet implemented for structs".to_string(),
+                "Converting unshredded variant objects to arrow structs".to_string(),
             ));
         }
         Some(
@@ -200,9 +199,8 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
             | DataType::LargeListView(_)
             | DataType::FixedSizeList(..),
         ) => {
-            // TODO: Special handling for shredded variant arrays
             return Err(ArrowError::NotYetImplemented(
-                "variant_get not yet implemented for lists".to_string(),
+                "Converting unshredded variant arrays to arrow lists".to_string(),
             ));
         }
         Some(data_type) => {
