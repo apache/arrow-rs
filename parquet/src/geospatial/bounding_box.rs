@@ -94,11 +94,6 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
-    /// Creates a new bounding box with the default values.
-    pub fn default() -> Self {
-        Self::new(f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY)
-    }
-
     /// Creates a new bounding box with the specified coordinates.
     pub fn new(xmin: f64, xmax: f64, ymin: f64, ymax: f64) -> Self {
         Self { xmin, xmax, ymin, ymax, zmin: None, zmax: None, mmin: None, mmax: None }
