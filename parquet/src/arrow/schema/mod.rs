@@ -35,12 +35,13 @@ use crate::file::{metadata::KeyValue, properties::WriterProperties};
 use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 
 mod complex;
+mod extension;
 mod primitive;
 
+use super::PARQUET_FIELD_ID_META_KEY;
+use crate::arrow::schema::extension::logical_type_for_struct;
 use crate::arrow::ProjectionMask;
 pub(crate) use complex::{ParquetField, ParquetFieldType};
-
-use super::PARQUET_FIELD_ID_META_KEY;
 
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///
@@ -63,7 +64,11 @@ pub fn parquet_to_arrow_schema_by_columns(
     Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata)?.0)
 }
 
-/// Extracts the arrow metadata
+/// Determines the Arrow Schema from a Parquet schema
+///
+/// Looks for an Arrow schema metadata "hint" (see
+/// [`parquet_to_arrow_field_levels`]), and uses it if present to ensure
+/// lossless round trips.
 pub(crate) fn parquet_to_arrow_schema_and_fields(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
@@ -728,6 +733,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .with_fields(fields)
                 .with_repetition(repetition)
                 .with_id(id)
+                .with_logical_type(logical_type_for_struct(field))
                 .build()
         }
         DataType::Map(field, _) => {

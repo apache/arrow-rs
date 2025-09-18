@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::arrow::schema::extension::add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
 use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use crate::basic::{ConvertedType, Repetition};
@@ -172,7 +173,7 @@ impl Visitor {
 
         let parquet_fields = struct_type.get_fields();
 
-        // Extract the arrow fields
+        // Extract any arrow fields from the hints
         let arrow_fields = match &context.data_type {
             Some(DataType::Struct(fields)) => {
                 if fields.len() != parquet_fields.len() {
@@ -220,10 +221,10 @@ impl Visitor {
                 data_type,
             };
 
-            if let Some(child) = self.dispatch(parquet_field, child_ctx)? {
+            if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
-                child_fields.push(convert_field(parquet_field, &child, arrow_field));
+                child_fields.push(convert_field(parquet_field, &mut child, arrow_field));
                 children.push(child);
             }
         }
@@ -352,13 +353,13 @@ impl Visitor {
 
         // Need both columns to be projected
         match (maybe_key, maybe_value) {
-            (Some(key), Some(value)) => {
+            (Some(mut key), Some(mut value)) => {
                 let key_field = Arc::new(
-                    convert_field(map_key, &key, arrow_key)
+                    convert_field(map_key, &mut key, arrow_key)
                         // The key is always non-nullable (#5630)
                         .with_nullable(false),
                 );
-                let value_field = Arc::new(convert_field(map_value, &value, arrow_value));
+                let value_field = Arc::new(convert_field(map_value, &mut value, arrow_value));
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),
                     _ => HashMap::default(),
@@ -495,8 +496,8 @@ impl Visitor {
         };
 
         match self.dispatch(item_type, new_context) {
-            Ok(Some(item)) => {
-                let item_field = Arc::new(convert_field(item_type, &item, arrow_field));
+            Ok(Some(mut item)) => {
+                let item_field = Arc::new(convert_field(item_type, &mut item, arrow_field));
 
                 // Use arrow type as hint for index size
                 let arrow_type = match context.data_type {
@@ -540,11 +541,15 @@ impl Visitor {
     }
 }
 
-/// Computes the [`Field`] for a child column
+/// Computes the Arrow [`Field`] for a child column
 ///
-/// The resulting [`Field`] will have the type dictated by `field`, a name
+/// The resulting Arrow [`Field`] will have the type dictated by the Parquet `field`, a name
 /// dictated by the `parquet_type`, and any metadata from `arrow_hint`
-fn convert_field(parquet_type: &Type, field: &ParquetField, arrow_hint: Option<&Field>) -> Field {
+fn convert_field(
+    parquet_type: &Type,
+    field: &mut ParquetField,
+    arrow_hint: Option<&Field>,
+) -> Field {
     let name = parquet_type.name();
     let data_type = field.arrow_type.clone();
     let nullable = field.nullable;
@@ -575,7 +580,7 @@ fn convert_field(parquet_type: &Type, field: &ParquetField, arrow_hint: Option<&
                 );
                 ret.set_metadata(meta);
             }
-            ret
+            add_extension_type(ret, parquet_type)
         }
     }
 }
