@@ -659,7 +659,7 @@ impl Fingerprint {
     ///
     /// - You can optionally enable the `md5` feature to include the `MD5` variant.
     /// - You can optionally enable the `sha256` feature to include the `SHA256` variant.
-    /// 
+    ///
     pub fn make_prefix(&self) -> Vec<u8> {
         match self {
             Self::Id(id) => {
