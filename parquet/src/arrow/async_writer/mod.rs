@@ -293,7 +293,6 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
 #[cfg(test)]
 mod tests {
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
-    use crate::arrow::arrow_writer::compute_leaves;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
