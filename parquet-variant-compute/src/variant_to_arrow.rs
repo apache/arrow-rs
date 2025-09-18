@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, PrimitiveBuilder};
+use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder};
 use arrow::compute::CastOptions;
 use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
 use crate::type_conversion::VariantAsPrimitive;
-use crate::VariantArrayBuilder;
+use crate::{VariantArray, VariantValueArrayBuilder};
 
 use std::sync::Arc;
 
@@ -39,6 +39,10 @@ pub(crate) enum VariantToArrowRowBuilder<'a> {
     Float16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
     Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
     Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
+    UInt8(VariantToPrimitiveArrowRowBuilder<'a, datatypes::UInt8Type>),
+    UInt16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::UInt16Type>),
+    UInt32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::UInt32Type>),
+    UInt64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::UInt64Type>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
 
     // Path extraction wrapper - contains a boxed enum for any of the above
@@ -53,6 +57,10 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Int16(b) => b.append_null(),
             Int32(b) => b.append_null(),
             Int64(b) => b.append_null(),
+            UInt8(b) => b.append_null(),
+            UInt16(b) => b.append_null(),
+            UInt32(b) => b.append_null(),
+            UInt64(b) => b.append_null(),
             Float16(b) => b.append_null(),
             Float32(b) => b.append_null(),
             Float64(b) => b.append_null(),
@@ -68,6 +76,10 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Int16(b) => b.append_value(value),
             Int32(b) => b.append_value(value),
             Int64(b) => b.append_value(value),
+            UInt8(b) => b.append_value(value),
+            UInt16(b) => b.append_value(value),
+            UInt32(b) => b.append_value(value),
+            UInt64(b) => b.append_value(value),
             Float16(b) => b.append_value(value),
             Float32(b) => b.append_value(value),
             Float64(b) => b.append_value(value),
@@ -83,6 +95,10 @@ impl<'a> VariantToArrowRowBuilder<'a> {
             Int16(b) => b.finish(),
             Int32(b) => b.finish(),
             Int64(b) => b.finish(),
+            UInt8(b) => b.finish(),
+            UInt16(b) => b.finish(),
+            UInt32(b) => b.finish(),
+            UInt64(b) => b.finish(),
             Float16(b) => b.finish(),
             Float32(b) => b.finish(),
             Float64(b) => b.finish(),
@@ -93,7 +109,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
 }
 
 pub(crate) fn make_variant_to_arrow_row_builder<'a>(
-    //metadata: &BinaryViewArray,
+    metadata: &BinaryViewArray,
     path: VariantPath<'a>,
     data_type: Option<&'a DataType>,
     cast_options: &'a CastOptions,
@@ -103,7 +119,10 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
 
     let mut builder = match data_type {
         // If no data type was requested, build an unshredded VariantArray.
-        None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(capacity)),
+        None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(
+            metadata.clone(),
+            capacity,
+        )),
         Some(DataType::Int8) => Int8(VariantToPrimitiveArrowRowBuilder::new(
             cast_options,
             capacity,
@@ -129,6 +148,22 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
             capacity,
         )),
         Some(DataType::Float64) => Float64(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::UInt8) => UInt8(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::UInt16) => UInt16(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::UInt32) => UInt32(VariantToPrimitiveArrowRowBuilder::new(
+            cast_options,
+            capacity,
+        )),
+        Some(DataType::UInt64) => UInt64(VariantToPrimitiveArrowRowBuilder::new(
             cast_options,
             capacity,
         )),
@@ -246,13 +281,17 @@ where
 
 /// Builder for creating VariantArray output (for path extraction without type conversion)
 pub(crate) struct VariantToBinaryVariantArrowRowBuilder {
-    builder: VariantArrayBuilder,
+    metadata: BinaryViewArray,
+    builder: VariantValueArrayBuilder,
+    nulls: NullBufferBuilder,
 }
 
 impl VariantToBinaryVariantArrowRowBuilder {
-    fn new(capacity: usize) -> Self {
+    fn new(metadata: BinaryViewArray, capacity: usize) -> Self {
         Self {
-            builder: VariantArrayBuilder::new(capacity),
+            metadata,
+            builder: VariantValueArrayBuilder::new(capacity),
+            nulls: NullBufferBuilder::new(capacity),
         }
     }
 }
@@ -260,22 +299,22 @@ impl VariantToBinaryVariantArrowRowBuilder {
 impl VariantToBinaryVariantArrowRowBuilder {
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null();
+        self.nulls.append_null();
         Ok(())
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        // TODO: We need a way to convert a Variant directly to bytes. In particular, we want to
-        // just copy across the underlying value byte slice of a `Variant::Object` or
-        // `Variant::List`, without any interaction with a `VariantMetadata` (because the shredding
-        // spec requires us to reuse the existing metadata when unshredding).
-        //
-        // One could _probably_ emulate this with parquet_variant::VariantBuilder, but it would do a
-        // lot of unnecessary work and would also create a new metadata column we don't need.
-        self.builder.append_variant(value.clone());
+        self.builder.append_value(value.clone());
+        self.nulls.append_non_null();
         Ok(true)
     }
 
-    fn finish(self) -> Result<ArrayRef> {
-        Ok(Arc::new(self.builder.build()))
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(Arc::new(VariantArray::from_parts(
+            self.metadata,
+            Some(self.builder.build()?),
+            None, // no typed_value column
+            self.nulls.finish(),
+        )))
     }
 }
