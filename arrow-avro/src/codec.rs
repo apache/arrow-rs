@@ -1360,21 +1360,11 @@ impl<'a> Maker<'a> {
                 Ok(dt)
             }
             (writer_non_union, Schema::Union(reader_variants)) => {
-                let mut direct: Option<(usize, Promotion)> = None;
-                let mut promo: Option<(usize, Promotion)> = None;
-                for (reader_index, reader) in reader_variants.iter().enumerate() {
-                    if let Ok(tmp) = self.resolve_type(writer_non_union, reader, namespace) {
-                        let how = Self::coercion_from(&tmp);
-                        if how == Promotion::Direct {
-                            promo = Some((reader_index, how));
-                            break; // first exact match wins
-                        }
-                        if promo.is_none() {
-                            // the first promo wins, unless an exact match is found later
-                            promo = Some((reader_index, how));
-                        }
-                    }
-                }
+                let promo = self.find_best_promotion(
+                    writer_non_union,
+                    reader_variants.as_slice(),
+                    namespace,
+                );
                 let Some((reader_index, promotion)) = promo else {
                     return Err(ArrowError::SchemaError(
                         "Writer schema does not match any reader union branch".to_string(),
@@ -1424,6 +1414,28 @@ impl<'a> Maker<'a> {
         }
     }
 
+    fn find_best_promotion(
+        &mut self,
+        writer: &Schema<'a>,
+        reader_variants: &[Schema<'a>],
+        namespace: Option<&'a str>,
+    ) -> Option<(usize, Promotion)> {
+        let mut first_promotion: Option<(usize, Promotion)> = None;
+        for (reader_index, reader) in reader_variants.iter().enumerate() {
+            if let Ok(tmp) = self.resolve_type(writer, reader, namespace) {
+                let promotion = Self::coercion_from(&tmp);
+                if promotion == Promotion::Direct {
+                    // An exact match is best, return immediately.
+                    return Some((reader_index, promotion));
+                } else if first_promotion.is_none() {
+                    // Store the first valid promotion but keep searching for a direct match.
+                    first_promotion = Some((reader_index, promotion));
+                }
+            }
+        }
+        first_promotion
+    }
+
     fn resolve_unions<'s>(
         &mut self,
         writer_variants: &'s [Schema<'a>],
@@ -1437,20 +1449,7 @@ impl<'a> Maker<'a> {
         let mut writer_to_reader: Vec<Option<(usize, Promotion)>> =
             Vec::with_capacity(writer_variants.len());
         for writer in writer_variants {
-            let mut direct: Option<(usize, Promotion)> = None;
-            let mut promo: Option<(usize, Promotion)> = None;
-            for (reader_index, reader) in reader_variants.iter().enumerate() {
-                if let Ok(tmp) = self.resolve_type(writer, reader, namespace) {
-                    let promotion = Self::coercion_from(&tmp);
-                    if promotion == Promotion::Direct {
-                        direct = Some((reader_index, promotion));
-                        break;
-                    } else if promo.is_none() {
-                        promo = Some((reader_index, promotion));
-                    }
-                }
-            }
-            writer_to_reader.push(direct.or(promo));
+            writer_to_reader.push(self.find_best_promotion(writer, reader_variants, namespace));
         }
         let union_fields = build_union_fields(&reader_encodings);
         let mut dt = AvroDataType::new(
@@ -1839,7 +1838,7 @@ mod tests {
             .expect("promotion should resolve")
     }
 
-    fn mk_primitive<'a>(pt: PrimitiveType) -> Schema<'a> {
+    fn mk_primitive(pt: PrimitiveType) -> Schema<'static> {
         Schema::TypeName(TypeName::Primitive(pt))
     }
     fn mk_union(branches: Vec<Schema<'_>>) -> Schema<'_> {
