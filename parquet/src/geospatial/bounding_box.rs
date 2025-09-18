@@ -181,11 +181,6 @@ impl BoundingBox {
     pub fn is_m_valid(&self) -> bool {
         self.mmin.is_some() && self.mmax.is_some()
     }
-
-    /// Returns `true` if the X coordinate range wraps around the antimeridian.
-    pub fn is_x_wraparound(&self) -> bool {
-        self.xmin > self.xmax
-    }
 }
 
 impl From<BoundingBox> for parquet::BoundingBox {
@@ -209,60 +204,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_update() {
-        let mut bbox = BoundingBox::new(0.0, 0.0, 5.0, 6.0);
-        // update xy
-        bbox.update_xy(1.0, 2.0);
+    fn test_bounding_box() {
+        let bbox = BoundingBox::new(0.0, 0.0, 10.0, 10.0);
         assert_eq!(bbox.get_xmin(), 0.0);
-        assert_eq!(bbox.get_xmax(), 1.0);
-        assert_eq!(bbox.get_ymin(), 2.0);
-        assert_eq!(bbox.get_ymax(), 6.0);
+        assert_eq!(bbox.get_xmax(), 0.0);
+        assert_eq!(bbox.get_ymin(), 10.0);
+        assert_eq!(bbox.get_ymax(), 10.0);
+        assert_eq!(bbox.get_zmin(), None);
+        assert_eq!(bbox.get_zmax(), None);
+        assert_eq!(bbox.get_mmin(), None);
+        assert_eq!(bbox.get_mmax(), None);
+        assert!(!bbox.is_z_valid());
+        assert!(!bbox.is_m_valid());
 
-        // update xyz
-        bbox = BoundingBox::new(0.0, 0.0, 5.0, 6.0);
-        bbox.update_xyz(10.0, 2.0, Some(3.0));
-        assert_eq!(bbox.get_xmin(), 0.0);
-        assert_eq!(bbox.get_xmax(), 10.0);
-        assert_eq!(bbox.get_ymin(), 2.0);
-        assert_eq!(bbox.get_ymax(), 6.0);
-        assert_eq!(bbox.get_zmin(), Some(3.0));
-        assert_eq!(bbox.get_zmax(), Some(3.0));
+        // test with zrange
+        let bbox = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+            .with_zrange(5.0, 15.0);
+        assert_eq!(bbox.get_zmin(), Some(5.0));
+        assert_eq!(bbox.get_zmax(), Some(15.0));
+        assert!(bbox.is_z_valid());
+        assert!(!bbox.is_m_valid());
 
-        // update xym
-        bbox = BoundingBox::new(0.0, 0.0, 5.0, 6.0);
-        bbox.update_xym(1.0, 2.0, Some(7.0));
-        assert_eq!(bbox.get_xmin(), 0.0);
-        assert_eq!(bbox.get_xmax(), 1.0);
-        assert_eq!(bbox.get_ymin(), 2.0);
-        assert_eq!(bbox.get_ymax(), 6.0);
-        assert_eq!(bbox.get_mmin(), Some(7.0));
-        assert_eq!(bbox.get_mmax(), Some(7.0));
+        // test with mrange
+        let bbox = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+            .with_mrange(10.0, 20.0);
+        assert_eq!(bbox.get_mmin(), Some(10.0));
+        assert_eq!(bbox.get_mmax(), Some(20.0));
+        assert!(!bbox.is_z_valid());
+        assert!(bbox.is_m_valid());
 
-        // update xyzm
-        bbox = BoundingBox::new(0.0, 0.0, 5.0, 6.0);
-        bbox.update_xyzm(1.0, 2.0, Some(3.0), Some(4.0));
-        assert_eq!(bbox.get_xmin(), 0.0);
-        assert_eq!(bbox.get_xmax(), 1.0);
-        assert_eq!(bbox.get_ymin(), 2.0);
-        assert_eq!(bbox.get_ymax(), 6.0);
-        assert_eq!(bbox.get_zmin(), Some(3.0));
-        assert_eq!(bbox.get_zmax(), Some(3.0));
-        assert_eq!(bbox.get_mmin(), Some(4.0));
-        assert_eq!(bbox.get_mmax(), Some(4.0));
-    }
-
-    #[test]
-    fn test_merge() {
-        let mut bbox1 = BoundingBox::new(0.0, 0.0, 10.0, 10.0);
-        let bbox2 = BoundingBox::new(5.0, 5.0, 15.0, 15.0);
-        bbox1.merge(&bbox2);
-        assert_eq!(bbox1.get_xmin(), 0.0);
-        assert_eq!(bbox1.get_xmax(), 5.0);
-        assert_eq!(bbox1.get_ymin(), 10.0);
-        assert_eq!(bbox1.get_ymax(), 15.0);
-        assert_eq!(bbox1.get_zmin(), None);
-        assert_eq!(bbox1.get_zmax(), None);
-        assert_eq!(bbox1.get_mmin(), None);
-        assert_eq!(bbox1.get_mmax(), None);
+        // test with zrange and mrange
+        let bbox = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+            .with_zrange(5.0, 15.0)
+            .with_mrange(10.0, 20.0);
+        assert_eq!(bbox.get_zmin(), Some(5.0));
+        assert_eq!(bbox.get_zmax(), Some(15.0));
+        assert_eq!(bbox.get_mmin(), Some(10.0));
+        assert_eq!(bbox.get_mmax(), Some(20.0));
+        assert!(bbox.is_z_valid());
+        assert!(bbox.is_m_valid());
     }
 }
