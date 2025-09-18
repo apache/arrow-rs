@@ -601,21 +601,25 @@ mod tests {
 
         // Row 0: Fully shredded - both fields shred successfully
         assert!(value_field.is_null(0)); // no unshredded fields
+        assert!(!typed_value_struct.is_null(0));
         assert_eq!(score_typed_values.value(0), 95.5); // score successfully shredded
         assert_eq!(age_typed_values.value(0), 30); // age successfully shredded
 
         // Row 1: Partially shredded - value contains extra email field
         assert!(!value_field.is_null(1)); // contains {"email": "bob@example.com"}
+        assert!(!typed_value_struct.is_null(1));
         assert_eq!(score_typed_values.value(1), 87.2); // score successfully shredded
         assert_eq!(age_typed_values.value(1), 25); // age successfully shredded
 
         // Row 2: Missing score field
         assert!(value_field.is_null(2)); // no unshredded fields
+        assert!(!typed_value_struct.is_null(2));
         assert!(score_typed_values.is_null(2)); // score is missing
         assert_eq!(age_typed_values.value(2), 35); // age successfully shredded
 
         // Row 3: Type mismatches - both score and age are strings
         assert!(value_field.is_null(3)); // no unshredded fields (but both fields have fallback values)
+        assert!(!typed_value_struct.is_null(3));
         assert!(score_typed_values.is_null(3)); // score failed to shred (string "ninety-five")
         assert!(age_typed_values.is_null(3)); // age failed to shred (string "thirty")
                                               // Both should be in their respective field's value arrays (type mismatch fallback)
@@ -630,6 +634,7 @@ mod tests {
 
         // Row 5: Empty object
         assert!(value_field.is_null(5)); // no unshredded fields
+        assert!(!typed_value_struct.is_null(5)); // the struct is there, but all fields are NULL
         assert!(score_typed_values.is_null(5)); // score is missing
         assert!(age_typed_values.is_null(5)); // age is missing
 
@@ -638,11 +643,13 @@ mod tests {
 
         // Row 7: Object with only a "wrong" field
         assert!(!value_field.is_null(7));
+        assert!(!typed_value_struct.is_null(7)); // the struct is there, but all fields are NULL
         assert!(score_typed_values.is_null(7));
         assert!(age_typed_values.is_null(7));
 
         // Row 8: Object with one "wrong" and one "right" field
         assert!(!value_field.is_null(8));
+        assert!(!typed_value_struct.is_null(8));
         assert!(!score_typed_values.is_null(8));
         assert!(age_typed_values.is_null(8));
     }
