@@ -22,7 +22,7 @@
 
 use std::env;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader,Seek, SeekFrom};
 use std::time::Instant;
 
 use arrow_array::{RecordBatch, StringArray, StringViewArray};
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let file = File::open(file_path)?;
-    let file_for_view = file.try_clone()?;
+    let mut file_for_view = file.try_clone()?;
 
     let start = Instant::now();
     let reader = BufReader::new(file);
@@ -48,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let batches: Vec<RecordBatch> = avro_reader.collect::<Result<_, _>>()?;
     let regular_duration = start.elapsed();
 
+    file_for_view.seek(SeekFrom::Start(0))?;
     let start = Instant::now();
     let reader_view = BufReader::new(file_for_view);
     let avro_reader_view = ReaderBuilder::new()
