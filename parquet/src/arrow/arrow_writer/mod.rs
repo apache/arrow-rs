@@ -876,6 +876,11 @@ impl ArrowRowGroupWriter {
             .map(|writer| writer.close())
             .collect()
     }
+
+    /// Return writer for fine control on column writing
+    pub fn into_writers(self) -> Vec<ArrowColumnWriter> {
+        self.writers
+    }
 }
 
 struct ArrowRowGroupWriterFactory {
