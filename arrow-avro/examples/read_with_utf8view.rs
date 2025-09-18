@@ -22,7 +22,7 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{BufReader,Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::time::Instant;
 
 use arrow_array::{RecordBatch, StringArray, StringViewArray};
