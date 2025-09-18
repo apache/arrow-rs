@@ -76,11 +76,8 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
     };
 
     let cast_options = CastOptions::default();
-    let mut builder = make_variant_to_shredded_variant_arrow_row_builder(
-        as_type,
-        &cast_options,
-        array.len(),
-    )?;
+    let mut builder =
+        make_variant_to_shredded_variant_arrow_row_builder(as_type, &cast_options, array.len())?;
     for i in 0..array.len() {
         if array.is_null(i) {
             builder.append_null()?;
@@ -104,11 +101,8 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
-            let typed_value_builder = VariantToShreddedObjectVariantRowBuilder::try_new(
-                fields,
-                cast_options,
-                capacity,
-            )?;
+            let typed_value_builder =
+                VariantToShreddedObjectVariantRowBuilder::try_new(fields, cast_options, capacity)?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
         DataType::List(_)
@@ -210,11 +204,7 @@ pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
 }
 
 impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
-    fn try_new(
-        fields: &'a Fields,
-        cast_options: &'a CastOptions,
-        capacity: usize,
-    ) -> Result<Self> {
+    fn try_new(fields: &'a Fields, cast_options: &'a CastOptions, capacity: usize) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
                 field.data_type(),
@@ -589,12 +579,19 @@ mod tests {
             score: ShreddedValue<'m, 'v, f64>,
             age: ShreddedValue<'m, 'v, i64>,
         }
-        fn get_value<'m, 'v>(i: usize, metadata: &'m BinaryViewArray, value: &'v BinaryViewArray) -> Variant<'m, 'v> {
+        fn get_value<'m, 'v>(
+            i: usize,
+            metadata: &'m BinaryViewArray,
+            value: &'v BinaryViewArray,
+        ) -> Variant<'m, 'v> {
             Variant::new(metadata.value(i), value.value(i))
         }
         let expect = |i, expected_result: Option<ShreddedValue<ShreddedStruct>>| {
             match expected_result {
-                Some(ShreddedValue { value: expected_value, typed_value: expected_typed_value }) => {
+                Some(ShreddedValue {
+                    value: expected_value,
+                    typed_value: expected_typed_value,
+                }) => {
                     assert!(result.is_valid(i));
                     match expected_value {
                         Some(expected_value) => {
@@ -606,14 +603,20 @@ mod tests {
                         }
                     }
                     match expected_typed_value {
-                        Some(ShreddedStruct { score: expected_score, age: expected_age }) => {
+                        Some(ShreddedStruct {
+                            score: expected_score,
+                            age: expected_age,
+                        }) => {
                             assert!(typed_value.is_valid(i));
                             assert!(score_field.is_valid(i)); // non-nullable
-                            assert!(age_field.is_valid(i));   // non-nullable
+                            assert!(age_field.is_valid(i)); // non-nullable
                             match expected_score.value {
                                 Some(expected_score_value) => {
                                     assert!(score_value.is_valid(i));
-                                    assert_eq!(expected_score_value, get_value(i, metadata, score_value));
+                                    assert_eq!(
+                                        expected_score_value,
+                                        get_value(i, metadata, score_value)
+                                    );
                                 }
                                 None => {
                                     assert!(score_value.is_null(i));
@@ -631,7 +634,10 @@ mod tests {
                             match expected_age.value {
                                 Some(expected_age_value) => {
                                     assert!(age_value.is_valid(i));
-                                    assert_eq!(expected_age_value, get_value(i, metadata, age_value));
+                                    assert_eq!(
+                                        expected_age_value,
+                                        get_value(i, metadata, age_value)
+                                    );
                                 }
                                 None => {
                                     assert!(age_value.is_null(i));
@@ -656,7 +662,6 @@ mod tests {
                     assert!(result.is_null(i));
                 }
             };
-
         };
 
         // Row 0: Fully shredded - both fields shred successfully
@@ -679,7 +684,10 @@ mod tests {
 
         // Row 1: Partially shredded - value contains extra email field
         let mut builder = VariantBuilder::new();
-        builder.new_object().with_field("email", "bob@example.com").finish();
+        builder
+            .new_object()
+            .with_field("email", "bob@example.com")
+            .finish();
         let (m, v) = builder.finish();
         let expected_value = Variant::new(&m, &v);
 
@@ -764,10 +772,7 @@ mod tests {
         );
 
         // Row 6: Null
-        expect(
-            6,
-            None,
-        );
+        expect(6, None);
 
         // Row 7: Object with only a "wrong" field
         let mut builder = VariantBuilder::new();
