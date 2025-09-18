@@ -2295,7 +2295,7 @@ mod tests {
         let batch = record_reader.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 1);
 
-        let expected_schema = Schema::new(Fields::from(vec![Field::new(
+        let expected_schema = Schema::new(vec![Field::new(
             "my_map",
             ArrowDataType::Map(
                 Arc::new(Field::new(
@@ -2309,7 +2309,7 @@ mod tests {
                 false,
             ),
             true,
-        )]));
+        )]);
         assert_eq!(batch.schema().as_ref(), &expected_schema);
 
         assert_eq!(batch.num_rows(), 1);
@@ -3106,11 +3106,11 @@ mod tests {
 
         let reader = builder.with_projection(mask).build().unwrap();
 
-        let expected_schema = Schema::new(Fields::from(vec![Field::new(
+        let expected_schema = Schema::new(vec![Field::new(
             "group",
             ArrowDataType::Struct(vec![Field::new("leaf", ArrowDataType::Int32, false)].into()),
             true,
-        )]));
+        )]);
 
         let batch = reader.into_iter().next().unwrap().unwrap();
         assert_eq!(batch.schema().as_ref(), &expected_schema);
