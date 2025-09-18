@@ -18,7 +18,7 @@
 //! Bounding box for GEOMETRY or GEOGRAPHY type in the representation of min/max
 //! value pair of coordinates from each axis.
 //! 
-//! Derived from the parquet format spec: https://github.com/apache/parquet-format/blob/master/Geospatial.md
+//! Derived from the parquet format spec: <https://github.com/apache/parquet-format/blob/master/Geospatial.md>
 //! 
 //! 
 use crate::format as parquet;

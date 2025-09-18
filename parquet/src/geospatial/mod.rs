@@ -20,7 +20,7 @@
 //! * [`GeospatialStatistics`]: describes the geospatial statistics for a Parquet column.
 //! * [`BoundingBox`]: describes the bounding box values for a geospatial column.
 //! 
-//! [`GeospatialStatistics] describes the geospatial statistics for a Parquet column.
+//! [`GeospatialStatistics`] describes the geospatial statistics for a Parquet column.
 //! * bbox: the [`BoundingBox`] for the geospatial data
 //! * geospatial_types: the geospatial types for the geospatial data as specified in [specification][geo-types].
 //! 
@@ -40,8 +40,8 @@
 //!  ymin +-----------------------+ 
 //!       xmin                    xmax
 //! 
-//! [`GeospatialStatistics`]: geospatial::statistics::GeospatialStatistics
-//! [`BoundingBox`]: geospatial::statistics::BoundingBox
+//! [`GeospatialStatistics`]: crate::geospatial::statistics::GeospatialStatistics
+//! [`BoundingBox`]: crate::geospatial::bounding_box::BoundingBox
 //! [parquet-geo-spec]: https://github.com/apache/parquet-format/blob/master/Geospatial.md
 //! [geo-types]: https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types
 
