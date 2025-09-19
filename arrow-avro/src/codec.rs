@@ -930,6 +930,7 @@ impl From<&Codec> for UnionFieldKind {
             Codec::Map(_) => Self::Map,
             Codec::Uuid => Self::Uuid,
             Codec::Union(..) => Self::Union,
+            Codec::Duration(_) => Self::Duration,
         }
     }
 }

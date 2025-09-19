@@ -557,7 +557,11 @@ impl Decoder {
             | Self::Int32ToInt64(v)
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
-            | Self::TimestampMicros(_, v) => match lit {
+            | Self::TimestampMicros(_, v)
+            | Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => match lit {
                 AvroLiteral::Long(i) => {
                     v.push(*i);
                     Ok(())
