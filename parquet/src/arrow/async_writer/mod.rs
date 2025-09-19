@@ -61,7 +61,7 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::{ArrowColumnChunk, ArrowColumnWriter, ArrowWriterOptions},
+    arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
     errors::{ParquetError, Result},
     file::{metadata::RowGroupMetaData, properties::WriterProperties},
@@ -288,33 +288,15 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
 
         Ok(())
     }
-
-    /// Create a new row group writer and return its column writers.
-    pub async fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
-        let before = self.sync_writer.flushed_row_groups().len();
-        let writers = self.sync_writer.get_column_writers()?;
-        if before != self.sync_writer.flushed_row_groups().len() {
-            self.do_write().await?;
-        }
-        Ok(writers)
-    }
-
-    /// Append the given column chunks to the file as a new row group.
-    pub async fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
-        self.sync_writer.append_row_group(chunks)?;
-        self.do_write().await
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
     use std::sync::Arc;
-
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
-    use crate::arrow::arrow_writer::compute_leaves;
 
     use super::*;
 
@@ -347,51 +329,6 @@ mod tests {
         let read = reader.next().unwrap().unwrap();
 
         assert_eq!(to_write, read);
-    }
-
-    #[tokio::test]
-    async fn test_async_arrow_group_writer() {
-        let col = Arc::new(Int64Array::from_iter_values([4, 5, 6])) as ArrayRef;
-        let to_write_record = RecordBatch::try_from_iter([("col", col)]).unwrap();
-
-        let mut buffer = Vec::new();
-        let mut writer =
-            AsyncArrowWriter::try_new(&mut buffer, to_write_record.schema(), None).unwrap();
-
-        // Use classic API
-        writer.write(&to_write_record).await.unwrap();
-
-        let mut writers = writer.get_column_writers().await.unwrap();
-        let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
-        let to_write_arrow_group = RecordBatch::try_from_iter([("col", col)]).unwrap();
-
-        for (field, column) in to_write_arrow_group
-            .schema()
-            .fields()
-            .iter()
-            .zip(to_write_arrow_group.columns())
-        {
-            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
-                writers[0].write(&leaf).unwrap();
-            }
-        }
-
-        let columns: Vec<_> = writers.into_iter().map(|w| w.close().unwrap()).collect();
-        // Append the arrow group as a new row group. Flush in progress
-        writer.append_row_group(columns).await.unwrap();
-        writer.close().await.unwrap();
-
-        let buffer = Bytes::from(buffer);
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new(buffer)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let col = Arc::new(Int64Array::from_iter_values([4, 5, 6, 1, 2, 3])) as ArrayRef;
-        let expected = RecordBatch::try_from_iter([("col", col)]).unwrap();
-
-        let read = reader.next().unwrap().unwrap();
-        assert_eq!(expected, read);
     }
 
     // Read the data from the test file and write it by the async writer and sync writer.
