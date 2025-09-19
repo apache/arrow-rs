@@ -404,8 +404,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
     /// Writes the given buf bytes to the internal buffer.
     ///
-    /// This can be used to write raw data to an in-progress parquet file, for
-    /// example, custom index structures or other payloads. Other parquet readers
+    /// This can be used to write raw data to an in-progress Parquet file, for
+    /// example, custom index structures or other payloads. Other Parquet readers
     /// will skip this data when reading the files.
     ///
     /// It's safe to use this method to write data to the underlying writer,
@@ -658,7 +658,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
     /// writer.
     ///
     /// This method can be used for efficiently concatenating or projecting
-    /// parquet data, or encoding parquet data to temporary in-memory buffers.
+    /// Parquet data, or encoding Parquet data to temporary in-memory buffers.
     ///
     /// Arguments:
     /// - `reader`: a [`ChunkReader`] containing the encoded column data

@@ -175,7 +175,7 @@ pub fn get_typed_column_writer_mut<'a, 'b: 'a, T: DataType>(
     })
 }
 
-/// Metadata for a column chunk of a parquet file.
+/// Metadata for a column chunk of a Parquet file.
 ///
 /// Note this structure is returned by [`ColumnWriter::close`].
 #[derive(Debug, Clone)]
