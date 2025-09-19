@@ -22,8 +22,8 @@ use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
@@ -206,7 +206,7 @@ impl ExtensionType for VariantType {
 /// assert_eq!(variant_array.value(0), Variant::from("such wow"));
 /// ```
 ///
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct VariantArray {
     /// Reference to the underlying StructArray
     inner: StructArray,
@@ -313,8 +313,6 @@ impl VariantArray {
             builder = builder.with_nulls(nulls);
         }
 
-        // This would be a lot simpler if ShreddingState were just a pair of Option... we already
-        // have everything we need.
         Self {
             inner: builder.build(),
             metadata,
@@ -532,13 +530,14 @@ impl ShreddedVariantFieldArray {
     ///    or be a list, large_list, list_view or struct
     ///
     /// Currently, only `value` columns of type [`BinaryViewArray`] are supported.
-    pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
+    pub fn try_new(inner: &dyn Array) -> Result<Self, ArrowError> {
         let Some(inner_struct) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid ShreddedVariantFieldArray: requires StructArray as input".to_string(),
             ));
         };
 
+        // Note this clone is cheap, it just bumps the ref count
         Ok(Self {
             inner: inner_struct.clone(),
             shredding_state: ShreddingState::from(inner_struct),
@@ -563,6 +562,28 @@ impl ShreddedVariantFieldArray {
     /// Returns a reference to the underlying [`StructArray`].
     pub fn inner(&self) -> &StructArray {
         &self.inner
+    }
+
+    pub(crate) fn from_parts(
+        value: Option<BinaryViewArray>,
+        typed_value: Option<ArrayRef>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let mut builder = StructArrayBuilder::new();
+        if let Some(value) = value.clone() {
+            builder = builder.with_field("value", Arc::new(value), true);
+        }
+        if let Some(typed_value) = typed_value.clone() {
+            builder = builder.with_field("typed_value", typed_value, true);
+        }
+        if let Some(nulls) = nulls {
+            builder = builder.with_nulls(nulls);
+        }
+
+        Self {
+            inner: builder.build(),
+            shredding_state: ShreddingState::new(value, typed_value),
+        }
     }
 
     /// Returns the inner [`StructArray`], consuming self
@@ -591,6 +612,15 @@ impl ShreddedVariantFieldArray {
         // physically non-nullable - SQL NULL is inferred by both value and
         // typed_value being physically NULL
         None
+    }
+    /// Is the element at index null?
+    pub fn is_null(&self, index: usize) -> bool {
+        self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
+    }
+
+    /// Is the element at index valid (not null)?
+    pub fn is_valid(&self, index: usize) -> bool {
+        !self.is_null(index)
     }
 }
 
@@ -624,7 +654,7 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 /// | non-null | non-null     | The value is present and is a partially shredded object |
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum ShreddingState {
     /// This variant has no typed_value field
     Unshredded { value: BinaryViewArray },
@@ -775,6 +805,12 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
             Variant::from(value)
+        }
+        DataType::Date32 => {
+            let array = typed_value.as_primitive::<Date32Type>();
+            let value = array.value(index);
+            let date = Date32Type::to_naive_date(value);
+            Variant::from(date)
         }
         DataType::FixedSizeBinary(binary_len) => {
             let array = typed_value.as_fixed_size_binary();
@@ -986,10 +1022,11 @@ mod test {
 
     #[test]
     fn all_null_shredding_state() {
-        let shredding_state = ShreddingState::new(None, None);
-
         // Verify the shredding state is AllNull
-        assert!(matches!(shredding_state, ShreddingState::AllNull));
+        assert!(matches!(
+            ShreddingState::new(None, None),
+            ShreddingState::AllNull
+        ));
     }
 
     #[test]

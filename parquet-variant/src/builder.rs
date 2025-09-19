@@ -3441,7 +3441,7 @@ mod tests {
         let mut metadata = ReadOnlyMetadataBuilder::new(metadata);
         let mut builder2 = ValueBuilder::new();
         let state = ParentState::variant(&mut builder2, &mut metadata);
-        ValueBuilder::append_variant_bytes(state, variant1.clone());
+        ValueBuilder::append_variant_bytes(state, variant1);
         let value2 = builder2.into_inner();
 
         // The bytes should be identical, we merely copied them across.
