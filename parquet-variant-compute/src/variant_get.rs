@@ -303,9 +303,9 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, BinaryViewArray, Float16Array, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, StringArray, StructArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        Array, ArrayRef, BinaryViewArray, Date32Array, Float16Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
@@ -529,6 +529,26 @@ mod test {
         assert!(!result.is_valid(1));
         assert_eq!(result.value(2), Variant::from("n/a"));
         assert_eq!(result.value(3), Variant::from("world"));
+    }
+
+    #[test]
+    fn get_variant_partially_shredded_date32_as_variant() {
+        let array = partially_shredded_date32_variant_array();
+        let options = GetOptions::new();
+        let result = variant_get(&array, options).unwrap();
+
+        // expect the result is a VariantArray
+        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        assert_eq!(result.len(), 4);
+
+        // Expect the values are the same as the original values
+        use chrono::NaiveDate;
+        let date1 = NaiveDate::from_ymd_opt(2025, 9, 17).unwrap();
+        let date2 = NaiveDate::from_ymd_opt(2025, 9, 9).unwrap();
+        assert_eq!(result.value(0), Variant::from(date1));
+        assert!(!result.is_valid(1));
+        assert_eq!(result.value(2), Variant::from("n/a"));
+        assert_eq!(result.value(3), Variant::from(date2));
     }
 
     #[test]
@@ -1129,6 +1149,53 @@ mod test {
             None,          // row 1 is null
             None,          // row 2 is a string
             Some("world"), // row 3 is shredded
+        ]);
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("typed_value", Arc::new(typed_value), true)
+            .with_field("value", Arc::new(values), true)
+            .with_nulls(nulls)
+            .build();
+
+        Arc::new(
+            VariantArray::try_new(Arc::new(struct_array)).expect("should create variant array"),
+        )
+    }
+
+    /// Return a VariantArray that represents a partially "shredded" variant for Date32
+    fn partially_shredded_date32_variant_array() -> ArrayRef {
+        let (metadata, string_value) = {
+            let mut builder = parquet_variant::VariantBuilder::new();
+            builder.append_value("n/a");
+            builder.finish()
+        };
+
+        // Create the null buffer for the overall array
+        let nulls = NullBuffer::from(vec![
+            true,  // row 0 non null
+            false, // row 1 is null
+            true,  // row 2 non null
+            true,  // row 3 non null
+        ]);
+
+        // metadata is the same for all rows
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+
+        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
+        // about why row1 is an empty but non null, value.
+        let values = BinaryViewArray::from(vec![
+            None,                // row 0 is shredded, so no value
+            Some(b"" as &[u8]),  // row 1 is null, so empty value
+            Some(&string_value), // copy the string value "N/A"
+            None,                // row 3 is shredded, so no value
+        ]);
+
+        let typed_value = Date32Array::from(vec![
+            Some(20348), // row 0 is shredded, 2025-09-17
+            None,        // row 1 is null
+            None,        // row 2 is a string, not a date
+            Some(20340), // row 3 is shredded, 2025-09-09
         ]);
 
         let struct_array = StructArrayBuilder::new()

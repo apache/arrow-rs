@@ -21,8 +21,8 @@ use crate::type_conversion::primitive_conversion_single_value;
 use arrow::array::{Array, ArrayData, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use parquet_variant::Uuid;
@@ -555,6 +555,12 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
             Variant::from(value)
+        }
+        DataType::Date32 => {
+            let array = typed_value.as_primitive::<Date32Type>();
+            let value = array.value(index);
+            let date = Date32Type::to_naive_date(value);
+            Variant::from(date)
         }
         DataType::FixedSizeBinary(binary_len) => {
             let array = typed_value.as_fixed_size_binary();
