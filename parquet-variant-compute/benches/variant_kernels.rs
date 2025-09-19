@@ -17,6 +17,7 @@
 
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::util::test_util::seedable_rng;
+use arrow_schema::{DataType, Field, Fields};
 use chrono::{DateTime, Utc};
 use criterion::{criterion_group, criterion_main, Criterion};
 use parquet_variant::{Uuid, Variant, VariantBuilder, VariantBuilderExt};
@@ -28,7 +29,6 @@ use rand::Rng;
 use rand::SeedableRng;
 use std::fmt::Write;
 use std::sync::Arc;
-use arrow_schema::{DataType, Field, Fields};
 
 fn json_to_variant_bench(c: &mut Criterion) {
     let input_array = StringArray::from_iter_values(json_repeated_struct(8000));
@@ -122,7 +122,7 @@ pub fn shred_variant_bench(c: &mut Criterion) {
         Field::new("user_id", DataType::Int64, true),
         //Field::new("session_id", DataType::Utf8, true),
     ]));
-    
+
     // Variants have only required fields
     let variant_array = generator.next().unwrap();
     c.bench_function("shred_variant common fields", |b| {
