@@ -533,7 +533,7 @@ mod test {
         let result = variant_get(&array, options).unwrap();
 
         // expect the result is a VariantArray
-        let result: &VariantArray = result.as_any().downcast_ref().unwrap();
+        let result = VariantArray::try_new(&result).unwrap();
         assert_eq!(result.len(), 4);
 
         // Expect the values are the same as the original values
