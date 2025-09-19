@@ -213,30 +213,71 @@ mod tests {
         assert!(!bbox.is_m_valid());
 
         // test with zrange
-        let bbox = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+        let bbox_z = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
             .with_zrange(5.0, 15.0);
-        assert_eq!(bbox.get_zmin(), Some(5.0));
-        assert_eq!(bbox.get_zmax(), Some(15.0));
-        assert!(bbox.is_z_valid());
-        assert!(!bbox.is_m_valid());
+        assert_eq!(bbox_z.get_zmin(), Some(5.0));
+        assert_eq!(bbox_z.get_zmax(), Some(15.0));
+        assert!(bbox_z.is_z_valid());
+        assert!(!bbox_z.is_m_valid());
 
         // test with mrange
-        let bbox = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+        let bbox_m = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
             .with_mrange(10.0, 20.0);
-        assert_eq!(bbox.get_mmin(), Some(10.0));
-        assert_eq!(bbox.get_mmax(), Some(20.0));
-        assert!(!bbox.is_z_valid());
-        assert!(bbox.is_m_valid());
+        assert_eq!(bbox_m.get_mmin(), Some(10.0));
+        assert_eq!(bbox_m.get_mmax(), Some(20.0));
+        assert!(!bbox_m.is_z_valid());
+        assert!(bbox_m.is_m_valid());
 
         // test with zrange and mrange
-        let bbox = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+        let bbox_zm = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
             .with_zrange(5.0, 15.0)
             .with_mrange(10.0, 20.0);
-        assert_eq!(bbox.get_zmin(), Some(5.0));
-        assert_eq!(bbox.get_zmax(), Some(15.0));
-        assert_eq!(bbox.get_mmin(), Some(10.0));
-        assert_eq!(bbox.get_mmax(), Some(20.0));
-        assert!(bbox.is_z_valid());
-        assert!(bbox.is_m_valid());
+        assert_eq!(bbox_zm.get_zmin(), Some(5.0));
+        assert_eq!(bbox_zm.get_zmax(), Some(15.0));
+        assert_eq!(bbox_zm.get_mmin(), Some(10.0));
+        assert_eq!(bbox_zm.get_mmax(), Some(20.0));
+        assert!(bbox_zm.is_z_valid());
+        assert!(bbox_zm.is_m_valid());
+    }
+
+    #[test]
+    fn test_bounding_box_to_thrift() {
+        use thrift::OrderedFloat;
+
+        let bbox = BoundingBox::new(0.0, 0.0, 10.0, 10.0);
+        let thrift_bbox: parquet::BoundingBox = bbox.into();
+        assert_eq!(thrift_bbox.xmin, 0.0);
+        assert_eq!(thrift_bbox.xmax, 0.0);
+        assert_eq!(thrift_bbox.ymin, 10.0);
+        assert_eq!(thrift_bbox.ymax, 10.0);
+        assert_eq!(thrift_bbox.zmin, None);
+        assert_eq!(thrift_bbox.zmax, None);
+        assert_eq!(thrift_bbox.mmin, None);
+        assert_eq!(thrift_bbox.mmax, None);
+
+        let bbox_z = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+            .with_zrange(5.0, 15.0);
+        let thrift_bbox_z: parquet::BoundingBox = bbox_z.into();
+        assert_eq!(thrift_bbox_z.zmin, Some(OrderedFloat(5.0)));
+        assert_eq!(thrift_bbox_z.zmax, Some(OrderedFloat(15.0)));
+        assert_eq!(thrift_bbox_z.mmin, None);
+        assert_eq!(thrift_bbox_z.mmax, None);
+
+        let bbox_m = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+            .with_mrange(10.0, 20.0);
+        let thrift_bbox_m: parquet::BoundingBox = bbox_m.into();
+        assert_eq!(thrift_bbox_m.zmin, None);
+        assert_eq!(thrift_bbox_m.zmax, None);
+        assert_eq!(thrift_bbox_m.mmin, Some(OrderedFloat(10.0)));
+        assert_eq!(thrift_bbox_m.mmax, Some(OrderedFloat(20.0)));
+
+        let bbox_z_m = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
+            .with_zrange(5.0, 15.0)
+            .with_mrange(10.0, 20.0);
+        let thrift_bbox_zm: parquet::BoundingBox = bbox_z_m.into();
+        assert_eq!(thrift_bbox_zm.zmin, Some(OrderedFloat(5.0)));
+        assert_eq!(thrift_bbox_zm.zmax, Some(OrderedFloat(15.0)));
+        assert_eq!(thrift_bbox_zm.mmin, Some(OrderedFloat(10.0)));
+        assert_eq!(thrift_bbox_zm.mmax, Some(OrderedFloat(20.0)));
     }
 }

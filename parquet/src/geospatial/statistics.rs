@@ -64,8 +64,8 @@ pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Opti
             let bbox = if let Some(bbox) = geo_stats.bbox {
                 let mut new_bbox = BoundingBox::new(
                     bbox.xmin.into(),
-                    bbox.ymin.into(),
                     bbox.xmax.into(),
+                    bbox.ymin.into(),
                     bbox.ymax.into(),
                 );
 
@@ -131,8 +131,8 @@ mod tests {
         let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
         let thrift_bbox: parquet::BoundingBox = bbox.into();
         assert_eq!(thrift_bbox.xmin, 0.0);
-        assert_eq!(thrift_bbox.ymin, 0.0);
-        assert_eq!(thrift_bbox.xmax, 100.0);
+        assert_eq!(thrift_bbox.xmax, 0.0);
+        assert_eq!(thrift_bbox.ymin, 100.0);
         assert_eq!(thrift_bbox.ymax, 100.0);
         assert_eq!(thrift_bbox.zmin, None);
         assert_eq!(thrift_bbox.zmax, None);
