@@ -1111,7 +1111,7 @@ fn datatype_to_avro(
         DataType::Time32(unit) => match unit {
             TimeUnit::Millisecond => json!({ "type": "int", "logicalType": "time-millis" }),
             TimeUnit::Second => {
-                extras.insert("arrowDurationUnit".into(), Value::String("second".into()));
+                extras.insert("arrowTimeUnit".into(), Value::String("second".into()));
                 Value::String("int".into())
             }
             _ => Value::String("int".into()),
@@ -1119,7 +1119,7 @@ fn datatype_to_avro(
         DataType::Time64(unit) => match unit {
             TimeUnit::Microsecond => json!({ "type": "long", "logicalType": "time-micros" }),
             TimeUnit::Nanosecond => {
-                extras.insert("arrowDurationUnit".into(), Value::String("nanosecond".into()));
+                extras.insert("arrowTimeUnit".into(), Value::String("nanosecond".into()));
                 Value::String("long".into())
             }
             _ => Value::String("long".into()),
@@ -1131,11 +1131,11 @@ fn datatype_to_avro(
                 (TimeUnit::Microsecond, true) => "timestamp-micros",
                 (TimeUnit::Microsecond, false) => "local-timestamp-micros",
                 (TimeUnit::Second, _) => {
-                    extras.insert("arrowDurationUnit".into(), Value::String("second".into()));
+                    extras.insert("arrowTimeUnit".into(), Value::String("second".into()));
                     return Ok((Value::String("long".into()), extras));
                 }
                 (TimeUnit::Nanosecond, _) => {
-                    extras.insert("arrowDurationUnit".into(), Value::String("nanosecond".into()));
+                    extras.insert("arrowTimeUnit".into(), Value::String("nanosecond".into()));
                     return Ok((Value::String("long".into()), extras));
                 }
             };
