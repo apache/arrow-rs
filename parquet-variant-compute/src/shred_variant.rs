@@ -500,8 +500,8 @@ mod tests {
         // Row 8: Object with one "right" and one "wrong" field
         builder
             .new_object()
-            .with_field("foo", 10)
             .with_field("score", 66.67f64)
+            .with_field("foo", 10)
             .finish();
 
         let input = builder.build();
@@ -774,16 +774,23 @@ mod tests {
         // Row 6: Null
         expect(6, None);
 
-        // Row 7: Object with only a "wrong" field
-        let mut builder = VariantBuilder::new();
-        builder.new_object().with_field("foo", 10).finish();
-        let (m, v) = builder.finish();
-        let expected_value = Variant::new(&m, &v);
+        // Helper to correctly create a variant object using a row's existing metadata
+        let object_with_foo_field = |i| {
+            use parquet_variant::{ParentState, ValueBuilder, VariantMetadata};
+            let metadata = VariantMetadata::new(metadata.value(i));
+            let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata.clone());
+            let mut value_builder = ValueBuilder::new();
+            let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
+            ObjectBuilder::new(state, false).with_field("foo", 10).finish();
+            (metadata, value_builder.into_inner())
+        };
 
+        // Row 7: Object with only a "wrong" field
+        let (m, v) = object_with_foo_field(7);
         expect(
             7,
             Some(ShreddedValue {
-                value: Some(expected_value),
+                value: Some(Variant::new_with_metadata(m, &v)),
                 typed_value: Some(ShreddedStruct {
                     score: ShreddedValue {
                         value: None,
@@ -798,15 +805,11 @@ mod tests {
         );
 
         // Row 8: Object with one "wrong" and one "right" field
-        let mut builder = VariantBuilder::new();
-        builder.new_object().with_field("foo", 10).finish();
-        let (m, v) = builder.finish();
-        let expected_value = Variant::new(&m, &v);
-
+        let (m, v) = object_with_foo_field(8);
         expect(
             8,
             Some(ShreddedValue {
-                value: Some(expected_value),
+                value: Some(Variant::new_with_metadata(m, &v)),
                 typed_value: Some(ShreddedStruct {
                     score: ShreddedValue {
                         value: None,
