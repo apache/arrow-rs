@@ -30,8 +30,8 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
+    Schema as ArrowSchema, SchemaRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 #[cfg(feature = "small_decimals")]
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
@@ -220,6 +220,10 @@ enum Decoder {
     Boolean(BooleanBufferBuilder),
     Int32(Vec<i32>),
     Int64(Vec<i64>),
+    DurationSecond(Vec<i64>),
+    DurationMillisecond(Vec<i64>),
+    DurationMicrosecond(Vec<i64>),
+    DurationNanosecond(Vec<i64>),
     Float32(Vec<f32>),
     Float64(Vec<f64>),
     Date32(Vec<i32>),
@@ -324,6 +328,18 @@ impl Decoder {
             (Codec::TimestampMicros(is_utc), _) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
+            (Codec::Duration(unit), _) => match unit {
+                TimeUnit::Second => Self::DurationSecond(Vec::with_capacity(DEFAULT_CAPACITY)),
+                TimeUnit::Millisecond => {
+                    Self::DurationMillisecond(Vec::with_capacity(DEFAULT_CAPACITY))
+                }
+                TimeUnit::Microsecond => {
+                    Self::DurationMicrosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+                }
+                TimeUnit::Nanosecond => {
+                    Self::DurationNanosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+                }
+            },
             (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Decimal(precision, scale, size), _) => {
                 let p = *precision;
@@ -453,6 +469,10 @@ impl Decoder {
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
             | Self::TimestampMicros(_, v) => v.push(0),
+            Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => v.push(0),
             Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
             Self::Float64(v)
             | Self::Int32ToFloat64(v)
@@ -743,6 +763,10 @@ impl Decoder {
             | Self::TimeMicros(values)
             | Self::TimestampMillis(_, values)
             | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
+            Self::DurationSecond(values)
+            | Self::DurationMillisecond(values)
+            | Self::DurationMicrosecond(values)
+            | Self::DurationNanosecond(values) => values.push(buf.get_long()?),
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Int32ToInt64(values) => values.push(buf.get_int()? as i64),
@@ -875,6 +899,18 @@ impl Decoder {
                 flush_primitive::<TimestampMicrosecondType>(values, nulls)
                     .with_timezone_opt(is_utc.then(|| "+00:00")),
             ),
+            Self::DurationSecond(values) => {
+                Arc::new(flush_primitive::<DurationSecondType>(values, nulls))
+            }
+            Self::DurationMillisecond(values) => {
+                Arc::new(flush_primitive::<DurationMillisecondType>(values, nulls))
+            }
+            Self::DurationMicrosecond(values) => {
+                Arc::new(flush_primitive::<DurationMicrosecondType>(values, nulls))
+            }
+            Self::DurationNanosecond(values) => {
+                Arc::new(flush_primitive::<DurationNanosecondType>(values, nulls))
+            }
             Self::Float32(values) => Arc::new(flush_primitive::<Float32Type>(values, nulls)),
             Self::Float64(values) => Arc::new(flush_primitive::<Float64Type>(values, nulls)),
             Self::Int32ToInt64(values) => Arc::new(flush_primitive::<Int64Type>(values, nulls)),
@@ -2232,6 +2268,99 @@ mod tests {
         assert_eq!(array.len(), 0);
     }
 
+    #[test]
+    fn test_duration_seconds_decoding() {
+        let avro_type =
+            AvroDataType::new(Codec::Duration(TimeUnit::Second), Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        // Three values: 0, -1, 2
+        data.extend_from_slice(&encode_avro_long(0));
+        data.extend_from_slice(&encode_avro_long(-1));
+        data.extend_from_slice(&encode_avro_long(2));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationSecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[0, -1, 2]);
+    }
+
+    #[test]
+    fn test_duration_milliseconds_decoding() {
+        let avro_type = AvroDataType::new(
+            Codec::Duration(TimeUnit::Millisecond),
+            Default::default(),
+            None,
+        );
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [1i64, 0, -2] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationMillisecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[1, 0, -2]);
+    }
+
+    #[test]
+    fn test_duration_microseconds_decoding() {
+        let avro_type = AvroDataType::new(
+            Codec::Duration(TimeUnit::Microsecond),
+            Default::default(),
+            None,
+        );
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [5i64, -6, 7] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[5, -6, 7]);
+    }
+
+    #[test]
+    fn test_duration_nanoseconds_decoding() {
+        let avro_type = AvroDataType::new(
+            Codec::Duration(TimeUnit::Nanosecond),
+            Default::default(),
+            None,
+        );
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [8i64, 9, -10] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationNanosecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[8, 9, -10]);
+    }
     #[test]
     fn test_nullable_decode_error_bitmap_corruption() {
         // Nullable Int32 with ['T','null'] encoding (NullSecond)

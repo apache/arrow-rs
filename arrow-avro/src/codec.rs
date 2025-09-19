@@ -322,7 +322,8 @@ impl AvroDataType {
             Codec::Int64
             | Codec::TimeMicros
             | Codec::TimestampMillis(_)
-            | Codec::TimestampMicros(_) => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
+            | Codec::TimestampMicros(_)
+            | Codec::Duration(_) => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
             Codec::Float32 => {
                 let f = parse_json_f64(default_json, "float")?;
                 if !f.is_finite() || f < f32::MIN as f64 || f > f32::MAX as f64 {
@@ -667,6 +668,8 @@ pub enum Codec {
     Interval,
     /// Represents Avro union type, maps to Arrow's Union data type
     Union(Arc<[AvroDataType]>, UnionFields, UnionMode),
+    /// Represents an Avro long with an `arrowDurationUnit` metadata property. Maps to Arrow's Duration(TimeUnit) data type.
+    Duration(TimeUnit),
 }
 
 impl Codec {
@@ -740,6 +743,7 @@ impl Codec {
                     false,
                 )
             }
+            Self::Duration(time_unit) => DataType::Duration(*time_unit),
             Self::Union(_, fields, mode) => DataType::Union(fields.clone(), *mode),
         }
     }
@@ -1324,8 +1328,26 @@ impl<'a> Maker<'a> {
                     (None, _) => {}
                 }
                 if !t.attributes.additional.is_empty() {
+                    let mut is_duration = false;
                     for (k, v) in &t.attributes.additional {
-                        field.metadata.insert(k.to_string(), v.to_string());
+                        let key = k.to_string();
+                        if matches!(field.codec, Codec::Int64) && key == "arrowDurationUnit" {
+                            let unit = match v.as_str() {
+                                Some("second") => TimeUnit::Second,
+                                Some("millisecond") => TimeUnit::Millisecond,
+                                Some("microsecond") => TimeUnit::Microsecond,
+                                Some("nanosecond") => TimeUnit::Nanosecond,
+                                other => {
+                                    return Err(ArrowError::SchemaError(format!(
+                                        "Unknown arrowDurationUnit value: {other:?}"
+                                    )))
+                                }
+                            };
+                            field.codec = Codec::Duration(unit);
+                            is_duration = true;
+                        } else {
+                            field.metadata.insert(key, v.to_string());
+                        }
                     }
                 }
                 Ok(field)
