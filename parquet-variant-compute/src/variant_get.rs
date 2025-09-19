@@ -146,7 +146,7 @@ fn shredded_get_path(
                 if target.is_null(i) {
                     builder.append_null()?;
                 } else {
-                    builder.append_value(&target.value(i))?;
+                    builder.append_value(target.value(i))?;
                 }
             }
             builder.finish()
@@ -1455,7 +1455,7 @@ mod test {
             }
             Err(e) => {
                 println!("Nested path 'a.x' error: {}", e);
-                if e.to_string().contains("not yet implemented")
+                if e.to_string().contains("Not yet implemented")
                     || e.to_string().contains("NotYetImplemented")
                 {
                     println!("This is expected - nested paths are not implemented");
@@ -2626,7 +2626,7 @@ mod test {
         // Should fail with NotYetImplemented when the row builder tries to handle struct type
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.to_string().contains("not yet implemented"));
+        assert!(error.to_string().contains("Not yet implemented"));
     }
 
     /// Create comprehensive shredded variant with diverse null patterns and empty objects
