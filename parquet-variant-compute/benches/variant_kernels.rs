@@ -84,7 +84,7 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
 
 pub fn variant_get_bench(c: &mut Criterion) {
     let variant_array = create_primitive_variant_array(8192);
-    let input: ArrayRef = Arc::new(variant_array);
+    let input = ArrayRef::from(variant_array);
 
     let options = GetOptions {
         path: vec![].into(),
