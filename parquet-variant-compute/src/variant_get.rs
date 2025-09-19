@@ -1562,7 +1562,7 @@ mod test {
             }
         }
 
-        builder.build().into()
+        ArrayRef::from(builder.build())
     }
 
     /// Create test data for depth 1 (single nested field)
@@ -1592,7 +1592,7 @@ mod test {
             }
         }
 
-        builder.build().into()
+        ArrayRef::from(builder.build())
     }
 
     /// Create test data for depth 2 (double nested field)
@@ -1633,7 +1633,7 @@ mod test {
             }
         }
 
-        builder.build().into()
+        ArrayRef::from(builder.build())
     }
 
     /// Create simple shredded test data for depth 0 using a simplified working pattern
