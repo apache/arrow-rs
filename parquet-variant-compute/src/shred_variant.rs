@@ -781,7 +781,9 @@ mod tests {
             let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata.clone());
             let mut value_builder = ValueBuilder::new();
             let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
-            ObjectBuilder::new(state, false).with_field("foo", 10).finish();
+            ObjectBuilder::new(state, false)
+                .with_field("foo", 10)
+                .finish();
             (metadata, value_builder.into_inner())
         };
 
