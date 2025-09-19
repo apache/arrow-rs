@@ -119,7 +119,8 @@
 //! let file = std::fs::File::open(file_path())?;
 //! let mut reader = ArrowReaderBuilder::try_new(file)?.build()?;
 //!
-//! // You can find the Variant using the VariantType extension type
+//! // You can check if a column contains a Variant using
+//! // the VariantType extension type
 //! let schema = reader.schema();
 //! let field = schema.field_with_name("var")?;
 //! assert!(field.try_extension_type::<VariantType>().is_ok());
