@@ -291,7 +291,7 @@ impl VariantArray {
         Ok(Self {
             inner: inner.clone(),
             metadata: metadata.clone(),
-            shredding_state: ShreddingState::try_new(value, typed_value)?,
+            shredding_state: ShreddingState::new(value, typed_value),
         })
     }
 
@@ -315,12 +315,10 @@ impl VariantArray {
 
         // This would be a lot simpler if ShreddingState were just a pair of Option... we already
         // have everything we need.
-        let inner = builder.build();
-        let shredding_state = ShreddingState::try_new(value, typed_value).unwrap(); // valid by construction
         Self {
-            inner,
+            inner: builder.build(),
             metadata,
-            shredding_state,
+            shredding_state: ShreddingState::new(value, typed_value),
         }
     }
 
@@ -543,7 +541,7 @@ impl ShreddedVariantFieldArray {
 
         Ok(Self {
             inner: inner_struct.clone(),
-            shredding_state: ShreddingState::try_from(inner_struct)?,
+            shredding_state: ShreddingState::from(inner_struct),
         })
     }
 
@@ -671,15 +669,12 @@ impl ShreddingState {
     /// let struct_array: StructArray = get_struct_array();
     /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
     /// ```
-    pub fn try_new(
-        value: Option<BinaryViewArray>,
-        typed_value: Option<ArrayRef>,
-    ) -> Result<Self, ArrowError> {
+    pub fn new(value: Option<BinaryViewArray>, typed_value: Option<ArrayRef>) -> Self {
         match (value, typed_value) {
-            (Some(value), Some(typed_value)) => Ok(Self::PartiallyShredded { value, typed_value }),
-            (Some(value), None) => Ok(Self::Unshredded { value }),
-            (None, Some(typed_value)) => Ok(Self::Typed { typed_value }),
-            (None, None) => Ok(Self::AllNull),
+            (Some(value), Some(typed_value)) => Self::PartiallyShredded { value, typed_value },
+            (Some(value), None) => Self::Unshredded { value },
+            (None, Some(typed_value)) => Self::Typed { typed_value },
+            (None, None) => Self::AllNull,
         }
     }
 
@@ -723,17 +718,14 @@ impl ShreddingState {
     }
 }
 
-impl TryFrom<&StructArray> for ShreddingState {
-    type Error = ArrowError;
-
-    fn try_from(inner_struct: &StructArray) -> Result<Self, Self::Error> {
-        // Extract value and typed_value fields (metadata is not expected in ShreddedVariantFieldArray)
+impl From<&StructArray> for ShreddingState {
+    fn from(inner_struct: &StructArray) -> Self {
         let value = inner_struct
             .column_by_name("value")
             .and_then(|col| col.as_binary_view_opt().cloned());
         let typed_value = inner_struct.column_by_name("typed_value").cloned();
 
-        ShreddingState::try_new(value, typed_value)
+        ShreddingState::new(value, typed_value)
     }
 }
 
@@ -994,7 +986,7 @@ mod test {
 
     #[test]
     fn all_null_shredding_state() {
-        let shredding_state = ShreddingState::try_new(None, None).unwrap();
+        let shredding_state = ShreddingState::new(None, None);
 
         // Verify the shredding state is AllNull
         assert!(matches!(shredding_state, ShreddingState::AllNull));

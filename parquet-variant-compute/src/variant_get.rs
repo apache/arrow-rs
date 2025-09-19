@@ -98,7 +98,7 @@ pub(crate) fn follow_shredded_path_element(
                 ))
             })?;
 
-            let shredding_state = ShreddingState::try_from(struct_array)?;
+            let shredding_state = ShreddingState::from(struct_array);
 
             Ok(ShreddedPathStep::Success(shredding_state))
         }
