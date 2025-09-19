@@ -19,12 +19,13 @@
 
 # Changelog
 
-## [56.2.0](https://github.com/apache/arrow-rs/tree/56.2.0) (2025-09-17)
+## [56.2.0](https://github.com/apache/arrow-rs/tree/56.2.0) (2025-09-19)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/56.1.0...56.2.0)
 
 **Implemented enhancements:**
 
+- \[Variant\] Add variant to arrow primitives for unsigned integers [\#8368](https://github.com/apache/arrow-rs/issues/8368)
 - \[Variant\] \[Shredding\] Support typed\_access for `FixedSizeBinary` [\#8335](https://github.com/apache/arrow-rs/issues/8335)
 - \[Variant\] \[Shredding\] Support typed\_access for `Utf8` and `BinaryView` [\#8333](https://github.com/apache/arrow-rs/issues/8333)
 - \[Variant\] \[Shredding\] Support typed\_access for `Boolean` [\#8329](https://github.com/apache/arrow-rs/issues/8329)
@@ -36,6 +37,7 @@
 - Add a way to modify WriterProperties [\#8273](https://github.com/apache/arrow-rs/issues/8273)
 - Dont truncate timestamps on display for Row [\#8265](https://github.com/apache/arrow-rs/issues/8265)
 - \[Parquet\] Add row group write with AsyncArrowWriter [\#8261](https://github.com/apache/arrow-rs/issues/8261)
+- \[Parquet\] Expose ArrowRowGroupWriter [\#8259](https://github.com/apache/arrow-rs/issues/8259)
 - \[Parquet\] Do not compress v2 data page when compress is bad quality [\#8256](https://github.com/apache/arrow-rs/issues/8256) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Variant\] Refactor `cast_to_variant` [\#8234](https://github.com/apache/arrow-rs/issues/8234)
 - \[Variant\]: Implement `DataType::Union` support for `cast_to_variant` kernel [\#8195](https://github.com/apache/arrow-rs/issues/8195)
@@ -45,6 +47,7 @@
 - \[Variant\] Support creating Variants with pre-existing Metadata [\#8152](https://github.com/apache/arrow-rs/issues/8152)
 - \[Variant\] Support Shredded Objects in `variant_get`: typed path access \(STEP 1\) [\#8150](https://github.com/apache/arrow-rs/issues/8150)
 - \[Variant\] Add `variant` feature to `parquet` crate [\#8132](https://github.com/apache/arrow-rs/issues/8132)
+- \[Parquet\] Concurrent writes with ArrowWriter.get\_column\_writers should parallelize across row groups [\#8115](https://github.com/apache/arrow-rs/issues/8115)
 - \[Variant\] Implement `VariantArray::value` for shredded variants [\#8091](https://github.com/apache/arrow-rs/issues/8091)
 - \[Variant\] Integration tests for reading parquet w/ Variants [\#8084](https://github.com/apache/arrow-rs/issues/8084)
 - \[Variant\]: Implement `DataType::Map` support for `cast_to_variant` kernel [\#8063](https://github.com/apache/arrow-rs/issues/8063)
@@ -78,14 +81,17 @@
 
 **Merged pull requests:**
 
+- \[Variant\] Support Variant to PrimitiveArrow for unsigned integer [\#8369](https://github.com/apache/arrow-rs/pull/8369) ([klion26](https://github.com/klion26))
 - \[Variant\] \[Shredding\] Support typed\_access for Utf8 and BinaryView [\#8364](https://github.com/apache/arrow-rs/pull/8364) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([petern48](https://github.com/petern48))
 - Fix casting floats to Decimal64 [\#8363](https://github.com/apache/arrow-rs/pull/8363) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([AdamGS](https://github.com/AdamGS))
+- \[Variant\] Implement new VariantValueArrayBuilder [\#8360](https://github.com/apache/arrow-rs/pull/8360) ([scovich](https://github.com/scovich))
 - \[Variant\] Add constants for empty variant metadata [\#8359](https://github.com/apache/arrow-rs/pull/8359) ([scovich](https://github.com/scovich))
 - \[Variant\] Allow lossless casting from integer to floating point [\#8357](https://github.com/apache/arrow-rs/pull/8357) ([scovich](https://github.com/scovich))
 - \[Variant\] Minor code cleanups [\#8356](https://github.com/apache/arrow-rs/pull/8356) ([scovich](https://github.com/scovich))
 - \[Variant\] Remove unused metadata from variant ShreddingState [\#8355](https://github.com/apache/arrow-rs/pull/8355) ([scovich](https://github.com/scovich))
 - Adds Map & Enum support, round-trip & benchmark tests [\#8353](https://github.com/apache/arrow-rs/pull/8353) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([nathaniel-d-ef](https://github.com/nathaniel-d-ef))
 - \[Variant\] \[Shredding\] feat: Support typed\_access for FixedSizeBinary [\#8352](https://github.com/apache/arrow-rs/pull/8352) ([petern48](https://github.com/petern48))
+- Add arrow-avro Reader support for Dense Union and Union resolution \(Part 1\) [\#8348](https://github.com/apache/arrow-rs/pull/8348) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
 - \[Variant\] feat: Support typed\_access for Boolean [\#8346](https://github.com/apache/arrow-rs/pull/8346) ([Weijun-H](https://github.com/Weijun-H))
 - \[Variant\] Make VariantToArrowRowBuilder an enum [\#8345](https://github.com/apache/arrow-rs/pull/8345) ([scovich](https://github.com/scovich))
 - \[Variant\] Rename VariantShreddingRowBuilder to VariantToArrowRowBuilder [\#8344](https://github.com/apache/arrow-rs/pull/8344) ([scovich](https://github.com/scovich))
@@ -147,6 +153,7 @@
 - \[Variant\] Support typed access for numeric types in variant\_get [\#8179](https://github.com/apache/arrow-rs/pull/8179) ([superserious-dev](https://github.com/superserious-dev))
 - \[Variant\] feat: add support for casting MapArray to VariantArray [\#8177](https://github.com/apache/arrow-rs/pull/8177) ([Weijun-H](https://github.com/Weijun-H))
 - Add benchmarks for arrow-avro writer [\#8165](https://github.com/apache/arrow-rs/pull/8165) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
+- Enable parallel writing across row groups when writing encrypted parquet [\#8162](https://github.com/apache/arrow-rs/pull/8162) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([rok](https://github.com/rok))
 - \[Variant\] Allow appending raw object/list bytes to variant builders [\#8141](https://github.com/apache/arrow-rs/pull/8141) ([scovich](https://github.com/scovich))
 - Add `variant_experimental` feature to `parquet` crate [\#8133](https://github.com/apache/arrow-rs/pull/8133) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - \[Variant\] Implement `VariantArray::value` for shredded variants [\#8105](https://github.com/apache/arrow-rs/pull/8105) ([klion26](https://github.com/klion26))
