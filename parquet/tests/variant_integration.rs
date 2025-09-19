@@ -396,7 +396,7 @@ impl VariantTestCase {
             .column_by_name("var")
             .unwrap_or_else(|| panic!("No 'var' column found in parquet file {path:?}"));
 
-        VariantArray::try_new(&var).unwrap_or_else(|e| {
+        VariantArray::try_new(var).unwrap_or_else(|e| {
             panic!("Error converting StructArray to VariantArray for {path:?}: {e}")
         })
     }

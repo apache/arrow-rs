@@ -243,7 +243,7 @@ fn shredded_get_path(
 /// quickly become annoying (and inefficient) to call `variant_get` for each leaf value in a struct or
 /// list and then try to assemble the results.
 pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
-    let variant_array = VariantArray::try_new(&input)?;
+    let variant_array = VariantArray::try_new(input)?;
 
     let GetOptions {
         as_type,
