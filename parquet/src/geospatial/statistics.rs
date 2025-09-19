@@ -20,25 +20,25 @@
 //! This module provides functionality for working with geospatial statistics in Parquet files.
 //! It includes support for bounding boxes and geospatial statistics in column chunk metadata.
 
-use crate::format::GeospatialStatistics as TGeospatialStatistics;
 use crate::errors::Result;
+use crate::format::GeospatialStatistics as TGeospatialStatistics;
 use crate::geospatial::bounding_box::BoundingBox;
 
 // ----------------------------------------------------------------------
 // Geospatial Statistics
 
 /// Represents geospatial statistics for a Parquet column or dataset.
-/// 
+///
 /// This struct contains metadata about the spatial characteristics of geospatial data,
 /// including bounding box information and the types of geospatial geometries present.
 /// It's used to optimize spatial queries and provide spatial context for data analysis.
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use parquet::geospatial::statistics::GeospatialStatistics;
 /// use parquet::geospatial::bounding_box::BoundingBox;
-/// 
+///
 /// // Statistics with bounding box
 /// let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
 /// let stats = GeospatialStatistics::new(Some(bbox), Some(vec![1, 2, 3]));
@@ -54,12 +54,17 @@ pub struct GeospatialStatistics {
 impl GeospatialStatistics {
     /// Creates a new geospatial statistics instance with the specified data.
     pub fn new(bbox: Option<BoundingBox>, geospatial_types: Option<Vec<i32>>) -> Self {
-        Self { bbox, geospatial_types }
+        Self {
+            bbox,
+            geospatial_types,
+        }
     }
 }
 
 /// Converts a Thrift-generated geospatial statistics object to the internal representation.
-pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Option<GeospatialStatistics>> {
+pub fn from_thrift(
+    geo_statistics: Option<TGeospatialStatistics>,
+) -> Result<Option<GeospatialStatistics>> {
     Ok(match geo_statistics {
         Some(geo_stats) => {
             let bbox = if let Some(bbox) = geo_stats.bbox {
@@ -73,22 +78,23 @@ pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Result<Opti
                 new_bbox = match (bbox.zmin, bbox.zmax) {
                     (Some(zmin), Some(zmax)) => new_bbox.with_zrange(zmin.into(), zmax.into()),
                     // If both None or mismatch, set it to None and don't error
-                    _ => new_bbox
+                    _ => new_bbox,
                 };
 
                 new_bbox = match (bbox.mmin, bbox.mmax) {
                     (Some(mmin), Some(mmax)) => new_bbox.with_mrange(mmin.into(), mmax.into()),
                     // If both None or mismatch, set it to None and don't error
-                    _ => new_bbox
+                    _ => new_bbox,
                 };
 
                 Some(new_bbox)
             } else {
-                None    
+                None
             };
 
-            // If vector is empty, then set it to None 
-            let geospatial_types: Option<Vec<i32>> = geo_stats.geospatial_types.filter(|v| !v.is_empty());
+            // If vector is empty, then set it to None
+            let geospatial_types: Option<Vec<i32>> =
+                geo_stats.geospatial_types.filter(|v| !v.is_empty());
             Some(GeospatialStatistics::new(bbox, geospatial_types))
         }
         None => None,
@@ -111,7 +117,10 @@ mod tests {
     #[test]
     fn test_from_thrift() {
         assert_eq!(from_thrift(None).unwrap(), None);
-        assert_eq!(from_thrift(Some(TGeospatialStatistics::new(None, None))).unwrap(), Some(GeospatialStatistics::default()));
+        assert_eq!(
+            from_thrift(Some(TGeospatialStatistics::new(None, None))).unwrap(),
+            Some(GeospatialStatistics::default())
+        );
     }
 
     /// Tests the conversion from Thrift format with actual geospatial data.
@@ -140,14 +149,12 @@ mod tests {
         assert_eq!(thrift_bbox.mmin, None);
         assert_eq!(thrift_bbox.mmax, None);
 
-        let bbox_z = BoundingBox::new(0.0, 0.0, 100.0, 100.0)
-            .with_zrange(5.0, 15.0);
+        let bbox_z = BoundingBox::new(0.0, 0.0, 100.0, 100.0).with_zrange(5.0, 15.0);
         let thrift_bbox_z: parquet::BoundingBox = bbox_z.into();
         assert_eq!(thrift_bbox_z.zmin, Some(OrderedFloat(5.0)));
         assert_eq!(thrift_bbox_z.zmax, Some(OrderedFloat(15.0)));
 
-        let bbox_m = BoundingBox::new(0.0, 0.0, 100.0, 100.0)
-            .with_mrange(10.0, 20.0);
+        let bbox_m = BoundingBox::new(0.0, 0.0, 100.0, 100.0).with_mrange(10.0, 20.0);
         let thrift_bbox_m: parquet::BoundingBox = bbox_m.into();
         assert_eq!(thrift_bbox_m.mmin, Some(OrderedFloat(10.0)));
         assert_eq!(thrift_bbox_m.mmax, Some(OrderedFloat(20.0)));

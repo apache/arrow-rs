@@ -17,10 +17,10 @@
 
 //! Bounding box for GEOMETRY or GEOGRAPHY type in the representation of min/max
 //! value pair of coordinates from each axis.
-//! 
+//!
 //! Derived from the parquet format spec: <https://github.com/apache/parquet-format/blob/master/Geospatial.md>
-//! 
-//! 
+//!
+//!
 use crate::format as parquet;
 
 /// A geospatial instance has at least two coordinate dimensions: X and Y for 2D coordinates of each point.
@@ -51,27 +51,27 @@ use crate::format as parquet;
 /// For GEOGRAPHY types:
 /// - X values must be within [-180, 180] (longitude)
 /// - Y values must be within [-90, 90] (latitude)
-/// 
+///
 /// Derived from the parquet format [spec][bounding-box-spec]
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use parquet::geospatial::bounding_box::BoundingBox;
-/// 
+///
 /// // 2D bounding box
 /// let bbox_2d = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
-/// 
+///
 /// // 3D bounding box with elevation
 /// let bbox_3d = BoundingBox::new(0.0, 0.0, 100.0, 100.0)
 ///     .with_zrange(0.0, 1000.0);
-/// 
+///
 /// // 3D bounding box with elevation and measured value
 /// let bbox_3d_m = BoundingBox::new(0.0, 0.0, 100.0, 100.0)
 ///     .with_zrange(0.0, 1000.0)
 ///     .with_mrange(0.0, 1000.0);
 /// ```
-/// 
+///
 /// [bounding-box-spec]: https://github.com/apache/parquet-format/blob/master/Geospatial.md#bounding-box
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundingBox {
@@ -96,7 +96,16 @@ pub struct BoundingBox {
 impl BoundingBox {
     /// Creates a new bounding box with the specified coordinates.
     pub fn new(xmin: f64, xmax: f64, ymin: f64, ymax: f64) -> Self {
-        Self { xmin, xmax, ymin, ymax, zmin: None, zmax: None, mmin: None, mmax: None }
+        Self {
+            xmin,
+            xmax,
+            ymin,
+            ymax,
+            zmin: None,
+            zmax: None,
+            mmin: None,
+            mmax: None,
+        }
     }
 
     /// Updates the bounding box with specified X-coordinate range.
@@ -213,16 +222,14 @@ mod tests {
         assert!(!bbox.is_m_valid());
 
         // test with zrange
-        let bbox_z = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
-            .with_zrange(5.0, 15.0);
+        let bbox_z = BoundingBox::new(0.0, 0.0, 10.0, 10.0).with_zrange(5.0, 15.0);
         assert_eq!(bbox_z.get_zmin(), Some(5.0));
         assert_eq!(bbox_z.get_zmax(), Some(15.0));
         assert!(bbox_z.is_z_valid());
         assert!(!bbox_z.is_m_valid());
 
         // test with mrange
-        let bbox_m = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
-            .with_mrange(10.0, 20.0);
+        let bbox_m = BoundingBox::new(0.0, 0.0, 10.0, 10.0).with_mrange(10.0, 20.0);
         assert_eq!(bbox_m.get_mmin(), Some(10.0));
         assert_eq!(bbox_m.get_mmax(), Some(20.0));
         assert!(!bbox_m.is_z_valid());
@@ -255,16 +262,14 @@ mod tests {
         assert_eq!(thrift_bbox.mmin, None);
         assert_eq!(thrift_bbox.mmax, None);
 
-        let bbox_z = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
-            .with_zrange(5.0, 15.0);
+        let bbox_z = BoundingBox::new(0.0, 0.0, 10.0, 10.0).with_zrange(5.0, 15.0);
         let thrift_bbox_z: parquet::BoundingBox = bbox_z.into();
         assert_eq!(thrift_bbox_z.zmin, Some(OrderedFloat(5.0)));
         assert_eq!(thrift_bbox_z.zmax, Some(OrderedFloat(15.0)));
         assert_eq!(thrift_bbox_z.mmin, None);
         assert_eq!(thrift_bbox_z.mmax, None);
 
-        let bbox_m = BoundingBox::new(0.0, 0.0, 10.0, 10.0)
-            .with_mrange(10.0, 20.0);
+        let bbox_m = BoundingBox::new(0.0, 0.0, 10.0, 10.0).with_mrange(10.0, 20.0);
         let thrift_bbox_m: parquet::BoundingBox = bbox_m.into();
         assert_eq!(thrift_bbox_m.zmin, None);
         assert_eq!(thrift_bbox_m.zmax, None);
