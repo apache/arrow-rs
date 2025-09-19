@@ -302,19 +302,19 @@ impl<'a> GetOptions<'a> {
 mod test {
     use std::sync::Arc;
 
+    use crate::{json_to_variant, VariantValueArrayBuilder};
     use arrow::array::{
-        make_builder, Array, ArrayRef, BinaryBuilder, BinaryViewArray, Float16Array, Float32Array,
-        Float64Array, GenericListBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
-        StringArray, StringBuilder, StructArray, StructBuilder, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        Array, ArrayRef, BinaryViewArray, Float16Array, Float32Array,
+        Float64Array, GenericListArray, Int16Array, Int32Array, Int64Array,
+        Int8Array, StringArray, StructArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
-    use arrow::buffer::NullBuffer;
+    use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64, UInt16, UInt32, UInt64, UInt8};
     use arrow_schema::{DataType, Field, FieldRef, Fields};
-    use parquet_variant::{Variant, VariantBuilder, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
+    use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
 
-    use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::VariantArray;
 
@@ -1314,82 +1314,39 @@ mod test {
 
         // Building the typed_value ListArray
 
-        // Need a StructBuilder to create a ListBuilder
-        let fields = Fields::from(vec![
-            Field::new("value", DataType::Binary, true),
-            Field::new("typed_value", DataType::Utf8, true),
-        ]);
-        let field_builders = vec![
-            make_builder(&DataType::Binary, 4),
-            make_builder(&DataType::Utf8, 4),
-        ];
-        let struct_builder = StructBuilder::new(fields, field_builders);
+        let mut variant_value_builder = VariantValueArrayBuilder::new(8);
+        variant_value_builder.append_null();
+        variant_value_builder.append_null();
+        variant_value_builder.append_null();
+        variant_value_builder.append_value(Variant::from(123i32));
 
-        let mut builder = GenericListBuilder::<i32, StructBuilder>::new(struct_builder);
+        let struct_array = StructArrayBuilder::new()
+            .with_field(
+                "value",
+                Arc::new(variant_value_builder.build().unwrap()),
+                true,
+            )
+            .with_field(
+                "typed_value",
+                Arc::new(StringArray::from(vec![
+                    Some("comedy"),
+                    Some("drama"),
+                    Some("horror"),
+                    None,
+                ])),
+                true,
+            )
+            .build();
 
-        // Row 0 index 0
-        builder
-            .values()
-            .field_builder::<BinaryBuilder>(0)
-            .unwrap()
-            .append_null();
-        builder
-            .values()
-            .field_builder::<StringBuilder>(1)
-            .unwrap()
-            .append_value("comedy");
-        builder.values().append(true);
-
-        // Row 0 index 1
-        builder
-            .values()
-            .field_builder::<BinaryBuilder>(0)
-            .unwrap()
-            .append_null();
-        builder
-            .values()
-            .field_builder::<StringBuilder>(1)
-            .unwrap()
-            .append_value("drama");
-        builder.values().append(true);
-
-        // Next row
-        builder.append(true);
-
-        // Row 1 index 0
-        builder
-            .values()
-            .field_builder::<BinaryBuilder>(0)
-            .unwrap()
-            .append_null();
-        builder
-            .values()
-            .field_builder::<StringBuilder>(1)
-            .unwrap()
-            .append_value("horror");
-        builder.values().append(true);
-
-        // Row 1 index 1
-        let mut variant_builder = VariantBuilder::new();
-        variant_builder.append_value(123i32); // <------ couldn't find the right way to do it, used this as placeholder for binary
-        let (_, value) = variant_builder.finish();
-
-        builder
-            .values()
-            .field_builder::<BinaryBuilder>(0)
-            .unwrap()
-            .append_value(value);
-        builder
-            .values()
-            .field_builder::<StringBuilder>(1)
-            .unwrap()
-            .append_null();
-        builder.values().append(true);
-
-        // Next row
-        builder.append(true);
-
-        let typed_value_array = builder.finish();
+        let typed_value_array = GenericListArray::<i32>::new(
+            Arc::new(Field::new_list_field(
+                struct_array.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::from_lengths([2,2]),
+            Arc::new(struct_array),
+            None,
+        );
 
         // Build the main VariantArray
         let main_struct = crate::variant_array::StructArrayBuilder::new()
