@@ -36,7 +36,8 @@ use crate::geospatial::bounding_box::BoundingBox;
 /// # Examples
 /// 
 /// ```
-/// use parquet::geospatial::statistics::{GeospatialStatistics, BoundingBox};
+/// use parquet::geospatial::statistics::GeospatialStatistics;
+/// use parquet::geospatial::bounding_box::BoundingBox;
 /// 
 /// // Statistics with bounding box
 /// let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
