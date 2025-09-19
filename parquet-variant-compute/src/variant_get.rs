@@ -23,7 +23,7 @@ use arrow::{
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
-use crate::variant_array::{ShreddedVariantFieldArray, ShreddingState};
+use crate::variant_array::ShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 use crate::VariantArray;
 
@@ -98,8 +98,7 @@ pub(crate) fn follow_shredded_path_element(
                 ))
             })?;
 
-            let shredding_state =
-                ShreddedVariantFieldArray::shredding_state_from_struct_array(struct_array)?;
+            let shredding_state = ShreddingState::try_from(struct_array)?;
 
             Ok(ShreddedPathStep::Success(shredding_state))
         }

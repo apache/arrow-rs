@@ -541,25 +541,10 @@ impl ShreddedVariantFieldArray {
             ));
         };
 
-        let shredding_state = Self::shredding_state_from_struct_array(inner_struct)?;
         Ok(Self {
             inner: inner_struct.clone(),
-            shredding_state,
+            shredding_state: ShreddingState::try_from(inner_struct)?,
         })
-    }
-
-    /// Creates a new `ShreddingState` from a [`StructArray`] representing a potentially
-    /// shredded variant.
-    pub(crate) fn shredding_state_from_struct_array(
-        inner_struct: &StructArray,
-    ) -> Result<ShreddingState, ArrowError> {
-        // Extract value and typed_value fields (metadata is not expected in ShreddedVariantFieldArray)
-        let value = inner_struct
-            .column_by_name("value")
-            .and_then(|col| col.as_binary_view_opt().cloned());
-        let typed_value = inner_struct.column_by_name("typed_value").cloned();
-
-        ShreddingState::try_new(value, typed_value)
     }
 
     /// Return the shredding state of this `VariantArray`
@@ -633,7 +618,7 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 /// single value. Values in the two fields must be interpreted according to the
 /// following table (see [Parquet Variant Shredding Spec] for more details):
 ///
-/// | value | typed_value | Meaning |
+/// | value    | typed_value  | Meaning |
 /// |----------|--------------|---------|
 /// | null     | null         | The value is missing; only valid for shredded object fields |
 /// | non-null | null         | The value is present and may be any type, including `null` |
@@ -672,7 +657,20 @@ pub enum ShreddingState {
 }
 
 impl ShreddingState {
-    /// try to create a new `ShreddingState` from the given fields
+    /// try to create a new `ShreddingState` from the given `value` and `typed_value` fields
+    ///
+    /// Note you can create a `ShreddingState` from a &[`StructArray`] using
+    /// `ShreddingState::try_from(&struct_array)`, for example:
+    ///
+    /// ```no_run
+    /// # use arrow::array::StructArray;
+    /// # use parquet_variant_compute::ShreddingState;
+    /// # fn get_struct_array() -> StructArray {
+    /// #   unimplemented!()
+    /// # }
+    /// let struct_array: StructArray = get_struct_array();
+    /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
+    /// ```
     pub fn try_new(
         value: Option<BinaryViewArray>,
         typed_value: Option<ArrayRef>,
@@ -722,6 +720,20 @@ impl ShreddingState {
             }
             ShreddingState::AllNull => ShreddingState::AllNull,
         }
+    }
+}
+
+impl TryFrom<&StructArray> for ShreddingState {
+    type Error = ArrowError;
+
+    fn try_from(inner_struct: &StructArray) -> Result<Self, Self::Error> {
+        // Extract value and typed_value fields (metadata is not expected in ShreddedVariantFieldArray)
+        let value = inner_struct
+            .column_by_name("value")
+            .and_then(|col| col.as_binary_view_opt().cloned());
+        let typed_value = inner_struct.column_by_name("typed_value").cloned();
+
+        ShreddingState::try_new(value, typed_value)
     }
 }
 
