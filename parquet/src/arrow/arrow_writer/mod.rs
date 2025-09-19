@@ -409,6 +409,7 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Create a new row group writer and return its column writers.
+    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
     pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         self.flush()?;
         let in_progress = self
@@ -418,6 +419,7 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Append the given column chunks to the file as a new row group.
+    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
     pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
         let mut row_group_writer = self.writer.next_row_group()?;
         for chunk in chunks {
@@ -425,6 +427,15 @@ impl<W: Write + Send> ArrowWriter<W> {
         }
         row_group_writer.close()?;
         Ok(())
+    }
+
+    /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
+    /// This can be useful to provide more control over how files are written.
+    pub fn into_serialized_writer(
+        mut self,
+    ) -> Result<(SerializedFileWriter<W>, ArrowRowGroupWriterFactory)> {
+        self.flush()?;
+        Ok((self.writer, self.row_group_writer_factory))
     }
 }
 
@@ -854,7 +865,8 @@ impl ArrowRowGroupWriter {
     }
 }
 
-struct ArrowRowGroupWriterFactory {
+/// Factory that creates new column writers for each row group in the Parquet file.
+pub struct ArrowRowGroupWriterFactory {
     schema: SchemaDescriptor,
     arrow_schema: SchemaRef,
     props: WriterPropertiesPtr,
@@ -908,6 +920,12 @@ impl ArrowRowGroupWriterFactory {
     fn create_row_group_writer(&self, _row_group_index: usize) -> Result<ArrowRowGroupWriter> {
         let writers = get_column_writers(&self.schema, &self.props, &self.arrow_schema)?;
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
+    }
+
+    /// Create column writers for a new row group.
+    pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+        let rg_writer = self.create_row_group_writer(row_group_index)?;
+        Ok(rg_writer.writers)
     }
 }
 
