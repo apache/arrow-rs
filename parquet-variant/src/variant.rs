@@ -1344,14 +1344,12 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Return the metadata associated with this variant, if any.
-    ///
-    /// Returns `Some(&VariantMetadata)` for object and list variants,
-    pub fn metadata(&self) -> Option<&'m VariantMetadata<'_>> {
+    /// Return the metadata dictionary associated with this variant value.
+    pub fn metadata(&self) -> &VariantMetadata<'m> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
-            | Variant::List(VariantList { metadata, .. }) => Some(metadata),
-            _ => None,
+            | Variant::List(VariantList { metadata, .. }) => metadata,
+            _ => &EMPTY_VARIANT_METADATA,
         }
     }
 
