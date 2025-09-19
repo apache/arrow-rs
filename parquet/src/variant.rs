@@ -128,7 +128,7 @@
 //! // to convert them to VariantArray, use VariantArray::try_new
 //! let batch = reader.next().unwrap().unwrap();
 //! let col = batch.column_by_name("var").unwrap();
-//! let var_array = VariantArray::try_new(&col)?;
+//! let var_array = VariantArray::try_new(col)?;
 //! assert_eq!(var_array.len(), 1);
 //! let var_value: Variant = var_array.value(0);
 //! assert_eq!(var_value, Variant::from("iceberg")); // the value in case-075.parquet
