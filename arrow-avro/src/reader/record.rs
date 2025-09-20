@@ -466,12 +466,10 @@ impl Decoder {
                     Vec::new(),
                     Some(union_resolution),
                 );
-                return Ok(match data_type.nullability() {
-                    Some(n) => {
-                        Self::Nullable(n, NullBufferBuilder::new(DEFAULT_CAPACITY), Box::new(base))
-                    }
-                    None => base,
-                });
+                if let Some(n) = match data_type.nullability() {
+                    base = Self::Nullable(n, NullBufferBuilder::new(DEFAULT_CAPACITY), Box::new(base));
+                }
+                return Ok(base);
             }
         }
         Self::try_new_internal(data_type)
