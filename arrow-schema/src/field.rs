@@ -366,7 +366,10 @@ impl Field {
         &self.data_type
     }
 
-    /// Set [`DataType`] of the [`Field`]
+    /// Set [`DataType`] of the [`Field`].
+    ///
+    /// This clears extension type information from this field by calling
+    /// [`Field::clear_extension_type`].
     ///
     /// ```
     /// # use arrow_schema::*;
@@ -378,9 +381,13 @@ impl Field {
     #[inline]
     pub fn set_data_type(&mut self, data_type: DataType) {
         self.data_type = data_type;
+        self.clear_extension_type();
     }
 
     /// Set [`DataType`] of the [`Field`] and returns self.
+    ///
+    /// This clears extension type information from the returned field by
+    /// calling [`Field::without_extension_type`].
     ///
     /// ```
     /// # use arrow_schema::*;
@@ -391,6 +398,49 @@ impl Field {
     /// ```
     pub fn with_data_type(mut self, data_type: DataType) -> Self {
         self.set_data_type(data_type);
+        self.without_extension_type()
+    }
+
+    /// Clears extension type information from this [`Field`].
+    ///
+    /// This clears [`Field::extension_type_name`] and
+    /// [`Field::extension_type_metadata`] from the [`Field::metadata`], if
+    /// set.
+    ///
+    /// ```
+    /// # use arrow_schema::{*, extension::{EXTENSION_TYPE_NAME_KEY, EXTENSION_TYPE_METADATA_KEY}};
+    /// let mut field = Field::new("c1", DataType::Int64, false).with_metadata(
+    ///   [(EXTENSION_TYPE_NAME_KEY.to_owned(), "example".to_owned())]
+    ///       .into_iter()
+    ///       .collect(),
+    /// );
+    /// field.clear_extension_type();
+    ///
+    /// assert!(field.extension_type_name().is_none());
+    /// ```
+    pub fn clear_extension_type(&mut self) {
+        self.metadata.remove(EXTENSION_TYPE_NAME_KEY);
+        self.metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+    }
+
+    /// Clears extension type information from this [`Field`] and returns self.
+    ///
+    /// This clears [`Field::extension_type_name`] and
+    /// [`Field::extension_type_metadata`] from the [`Field::metadata`], if
+    /// set.
+    ///
+    /// ```
+    /// # use arrow_schema::{*, extension::EXTENSION_TYPE_NAME_KEY};
+    /// let field = Field::new("c1", DataType::Int64, false).with_metadata(
+    ///   [(EXTENSION_TYPE_NAME_KEY.to_owned(), "example".to_owned())]
+    ///       .into_iter()
+    ///       .collect(),
+    /// ).without_extension_type();
+    ///
+    /// assert!(field.extension_type_name().is_none());
+    /// ```
+    pub fn without_extension_type(mut self) -> Self {
+        self.clear_extension_type();
         self
     }
 
@@ -570,7 +620,7 @@ impl Field {
     /// let mut field = Field::new("c1", DataType::Int64, false);
     /// field.set_nullable(true);
     ///
-    /// assert_eq!(field.is_nullable(), true);
+    /// assert!(field.is_nullable());
     /// ```
     #[inline]
     pub fn set_nullable(&mut self, nullable: bool) {
