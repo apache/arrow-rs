@@ -899,28 +899,21 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError>
 fn rewrite_to_view_types(data_type: &DataType) -> DataType {
     match data_type {
         DataType::Binary => DataType::BinaryView,
-        DataType::List(field) => {
-            let new_field = field
-                .as_ref()
-                .clone()
-                .with_data_type(rewrite_to_view_types(field.data_type()));
-            DataType::List(Arc::new(new_field))
-        }
+        DataType::List(field) => DataType::List(rewrite_field_type(field)),
         DataType::Struct(fields) => {
-            let new_fields: Fields = fields
-                .iter()
-                .map(|f| {
-                    let new_field = f
-                        .as_ref()
-                        .clone()
-                        .with_data_type(rewrite_to_view_types(f.data_type()));
-                    Arc::new(new_field)
-                })
-                .collect();
+            let new_fields: Fields = fields.iter().map(rewrite_field_type).collect();
             DataType::Struct(new_fields)
         }
         _ => data_type.clone(),
     }
+}
+
+fn rewrite_field_type(field: impl AsRef<Field>) -> Arc<Field> {
+    let field = field.as_ref();
+    let new_field = field
+        .clone()
+        .with_data_type(rewrite_to_view_types(field.data_type()));
+    Arc::new(new_field)
 }
 
 #[cfg(test)]
