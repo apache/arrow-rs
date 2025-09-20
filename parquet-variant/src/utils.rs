@@ -144,3 +144,20 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
         let _ = [""; 0][size];
     }
 }
+
+pub(crate) fn fits_precision<const N: u32>(n: impl Into<i64>) -> bool {
+    n.into().unsigned_abs().leading_zeros() >= (i64::BITS - N)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_fits_precision() {
+        assert!(fits_precision::<10>(1023));
+        assert!(!fits_precision::<10>(1024));
+        assert!(fits_precision::<10>(-1023));
+        assert!(!fits_precision::<10>(-1024));
+    }
+}

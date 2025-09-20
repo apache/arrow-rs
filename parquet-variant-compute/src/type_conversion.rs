@@ -74,6 +74,30 @@ impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
     }
 }
 
+impl VariantAsPrimitive<datatypes::UInt8Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<u8> {
+        self.as_u8()
+    }
+}
+
+impl VariantAsPrimitive<datatypes::UInt16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<u16> {
+        self.as_u16()
+    }
+}
+
+impl VariantAsPrimitive<datatypes::UInt32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<u32> {
+        self.as_u32()
+    }
+}
+
+impl VariantAsPrimitive<datatypes::UInt64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<u64> {
+        self.as_u64()
+    }
+}
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{

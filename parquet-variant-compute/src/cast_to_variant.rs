@@ -65,9 +65,7 @@ pub fn cast_to_variant_with_options(
 
     // Process each row using the row builder
     for i in 0..input.len() {
-        let mut builder = array_builder.variant_builder();
-        row_builder.append_row(&mut builder, i)?;
-        builder.finish();
+        row_builder.append_row(&mut array_builder, i)?;
     }
 
     Ok(array_builder.build())

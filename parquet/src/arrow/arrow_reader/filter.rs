@@ -186,4 +186,12 @@ impl RowFilter {
     pub fn new(predicates: Vec<Box<dyn ArrowPredicate>>) -> Self {
         Self { predicates }
     }
+    /// Returns the inner predicates
+    pub fn predicates(&self) -> &Vec<Box<dyn ArrowPredicate>> {
+        &self.predicates
+    }
+    /// Returns the inner predicates, consuming self
+    pub fn into_predicates(self) -> Vec<Box<dyn ArrowPredicate>> {
+        self.predicates
+    }
 }

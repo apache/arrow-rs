@@ -857,9 +857,7 @@ mod tests {
 
         // The repetitive loop that appears in every test
         for i in 0..array.len() {
-            let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(&mut variant_builder, i).unwrap();
-            variant_builder.finish();
+            row_builder.append_row(&mut array_builder, i).unwrap();
         }
 
         let variant_array = array_builder.build();
@@ -1004,10 +1002,7 @@ mod tests {
 
         for (i, &index) in access_pattern.iter().enumerate() {
             let mut array_builder = VariantArrayBuilder::new(1);
-            let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(&mut variant_builder, index).unwrap();
-            variant_builder.finish();
-
+            row_builder.append_row(&mut array_builder, index).unwrap();
             let variant_array = array_builder.build();
             assert_eq!(variant_array.value(0), Variant::from(expected_values[i]));
         }
@@ -1030,9 +1025,7 @@ mod tests {
 
         // Test sequential access
         for i in 0..5 {
-            let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(&mut variant_builder, i).unwrap();
-            variant_builder.finish();
+            row_builder.append_row(&mut array_builder, i).unwrap();
         }
 
         let variant_array = array_builder.build();
@@ -1084,9 +1077,7 @@ mod tests {
 
         // Test sequential access
         for i in 0..5 {
-            let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(&mut variant_builder, i).unwrap();
-            variant_builder.finish();
+            row_builder.append_row(&mut array_builder, i).unwrap();
         }
 
         let variant_array = array_builder.build();
@@ -1121,10 +1112,7 @@ mod tests {
 
         for (i, &index) in access_pattern.iter().enumerate() {
             let mut array_builder = VariantArrayBuilder::new(1);
-            let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(&mut variant_builder, index).unwrap();
-            variant_builder.finish();
-
+            row_builder.append_row(&mut array_builder, index).unwrap();
             let variant_array = array_builder.build();
             assert_eq!(variant_array.value(0), Variant::from(expected_values[i]));
         }
@@ -1161,9 +1149,7 @@ mod tests {
 
         // Test sequential access
         for i in 0..5 {
-            let mut variant_builder = array_builder.variant_builder();
-            row_builder.append_row(&mut variant_builder, i).unwrap();
-            variant_builder.finish();
+            row_builder.append_row(&mut array_builder, i).unwrap();
         }
 
         let variant_array = array_builder.build();
@@ -1257,10 +1243,9 @@ mod tests {
         let mut variant_array_builder = VariantArrayBuilder::new(sliced_array.len());
 
         // Test the single row
-        let mut builder = variant_array_builder.variant_builder();
-        row_builder.append_row(&mut builder, 0).unwrap();
-        builder.finish();
-
+        row_builder
+            .append_row(&mut variant_array_builder, 0)
+            .unwrap();
         let variant_array = variant_array_builder.build();
 
         // Verify result
@@ -1302,9 +1287,9 @@ mod tests {
         let mut variant_array_builder = VariantArrayBuilder::new(outer_list.len());
 
         for i in 0..outer_list.len() {
-            let mut builder = variant_array_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
+            row_builder
+                .append_row(&mut variant_array_builder, i)
+                .unwrap();
         }
 
         let variant_array = variant_array_builder.build();
@@ -1495,9 +1480,7 @@ mod tests {
 
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
-            let mut builder = variant_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
+            row_builder.append_row(&mut variant_builder, i).unwrap();
         }
         let variant_array = variant_builder.build();
 
@@ -1548,9 +1531,7 @@ mod tests {
 
         let mut variant_builder = VariantArrayBuilder::new(union_array.len());
         for i in 0..union_array.len() {
-            let mut builder = variant_builder.variant_builder();
-            row_builder.append_row(&mut builder, i).unwrap();
-            builder.finish();
+            row_builder.append_row(&mut variant_builder, i).unwrap();
         }
         let variant_array = variant_builder.build();
 

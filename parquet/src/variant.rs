@@ -44,9 +44,7 @@
 //!  // Use the VariantArrayBuilder to build a VariantArray
 //!  let mut builder = VariantArrayBuilder::new(3);
 //!  // row 1: {"name": "Alice"}
-//!  let mut variant_builder = builder.variant_builder();
-//!  variant_builder.new_object().with_field("name", "Alice").finish();
-//!  variant_builder.finish();
+//!  builder.new_object().with_field("name", "Alice").finish();
 //!  let array = builder.build();
 //!
 //! // TODO support writing VariantArray directly

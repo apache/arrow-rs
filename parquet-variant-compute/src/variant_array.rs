@@ -17,18 +17,18 @@
 
 //! [`VariantArray`] implementation
 
+use crate::type_conversion::primitive_conversion_single_value;
 use arrow::array::{Array, ArrayData, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
+use parquet_variant::Uuid;
 use parquet_variant::Variant;
 use std::any::Any;
 use std::sync::Arc;
-
-use crate::type_conversion::primitive_conversion_single_value;
 
 /// An array of Parquet [`Variant`] values
 ///
@@ -48,7 +48,7 @@ use crate::type_conversion::primitive_conversion_single_value;
 ///
 /// [Extension Type for Parquet Variant arrow]: https://github.com/apache/arrow/issues/46908
 /// [document]: https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?usp=sharing
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct VariantArray {
     /// Reference to the underlying StructArray
     inner: StructArray,
@@ -129,7 +129,7 @@ impl VariantArray {
         Ok(Self {
             inner: inner.clone(),
             metadata: metadata.clone(),
-            shredding_state: ShreddingState::try_new(metadata.clone(), value, typed_value)?,
+            shredding_state: ShreddingState::new(value, typed_value),
         })
     }
 
@@ -140,26 +140,21 @@ impl VariantArray {
         nulls: Option<NullBuffer>,
     ) -> Self {
         let mut builder =
-            StructArrayBuilder::new().with_field("metadata", Arc::new(metadata.clone()));
+            StructArrayBuilder::new().with_field("metadata", Arc::new(metadata.clone()), false);
         if let Some(value) = value.clone() {
-            builder = builder.with_field("value", Arc::new(value));
+            builder = builder.with_field("value", Arc::new(value), true);
         }
         if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value);
+            builder = builder.with_field("typed_value", typed_value, true);
         }
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
         }
 
-        // This would be a lot simpler if ShreddingState were just a pair of Option... we already
-        // have everything we need.
-        let inner = builder.build();
-        let shredding_state =
-            ShreddingState::try_new(metadata.clone(), value, typed_value).unwrap(); // valid by construction
         Self {
-            inner,
+            inner: builder.build(),
             metadata,
-            shredding_state,
+            shredding_state: ShreddingState::new(value, typed_value),
         }
     }
 
@@ -222,7 +217,7 @@ impl VariantArray {
                     typed_value_to_variant(typed_value, index)
                 }
             }
-            ShreddingState::AllNull { .. } => {
+            ShreddingState::AllNull => {
                 // AllNull case: neither value nor typed_value fields exist
                 // NOTE: This handles the case where neither value nor typed_value fields exist.
                 // For top-level variants, this returns Variant::Null (JSON null).
@@ -325,14 +320,10 @@ impl ShreddedVariantFieldArray {
             .and_then(|col| col.as_binary_view_opt().cloned());
         let typed_value = inner_struct.column_by_name("typed_value").cloned();
 
-        // Use a dummy metadata for the constructor (ShreddedVariantFieldArray doesn't have metadata)
-        let dummy_metadata = arrow::array::BinaryViewArray::new_null(inner_struct.len());
-
         // Note this clone is cheap, it just bumps the ref count
-        let inner = inner_struct.clone();
         Ok(Self {
-            inner: inner.clone(),
-            shredding_state: ShreddingState::try_new(dummy_metadata, value, typed_value)?,
+            inner: inner_struct.clone(),
+            shredding_state: ShreddingState::new(value, typed_value),
         })
     }
 
@@ -354,6 +345,28 @@ impl ShreddedVariantFieldArray {
     /// Returns a reference to the underlying [`StructArray`].
     pub fn inner(&self) -> &StructArray {
         &self.inner
+    }
+
+    pub(crate) fn from_parts(
+        value: Option<BinaryViewArray>,
+        typed_value: Option<ArrayRef>,
+        nulls: Option<NullBuffer>,
+    ) -> Self {
+        let mut builder = StructArrayBuilder::new();
+        if let Some(value) = value.clone() {
+            builder = builder.with_field("value", Arc::new(value), true);
+        }
+        if let Some(typed_value) = typed_value.clone() {
+            builder = builder.with_field("typed_value", typed_value, true);
+        }
+        if let Some(nulls) = nulls {
+            builder = builder.with_nulls(nulls);
+        }
+
+        Self {
+            inner: builder.build(),
+            shredding_state: ShreddingState::new(value, typed_value),
+        }
     }
 }
 
@@ -429,19 +442,13 @@ impl Array for ShreddedVariantFieldArray {
 /// | non-null | non-null     | The value is present and is a partially shredded object |
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ShreddingState {
     /// This variant has no typed_value field
-    Unshredded {
-        metadata: BinaryViewArray,
-        value: BinaryViewArray,
-    },
+    Unshredded { value: BinaryViewArray },
     /// This variant has a typed_value field and no value field
     /// meaning it is the shredded type
-    Typed {
-        metadata: BinaryViewArray,
-        typed_value: ArrayRef,
-    },
+    Typed { typed_value: ArrayRef },
     /// Imperfectly shredded: Shredded values reside in `typed_value` while those that failed to
     /// shred reside in `value`. Missing field values are NULL in both columns, while NULL primitive
     /// values have NULL `typed_value` and `Variant::Null` in `value`.
@@ -453,7 +460,6 @@ pub enum ShreddingState {
     /// the `value` is a variant object containing the subset of fields for which shredding was
     /// not even attempted.
     PartiallyShredded {
-        metadata: BinaryViewArray,
         value: BinaryViewArray,
         typed_value: ArrayRef,
     },
@@ -463,38 +469,17 @@ pub enum ShreddingState {
     /// Note: By strict spec interpretation, this should only be valid for shredded object fields,
     /// not top-level variants. However, we allow it and treat as Variant::Null for pragmatic
     /// handling of missing data.
-    AllNull { metadata: BinaryViewArray },
+    AllNull,
 }
 
 impl ShreddingState {
-    /// try to create a new `ShreddingState` from the given fields
-    pub fn try_new(
-        metadata: BinaryViewArray,
-        value: Option<BinaryViewArray>,
-        typed_value: Option<ArrayRef>,
-    ) -> Result<Self, ArrowError> {
-        match (metadata, value, typed_value) {
-            (metadata, Some(value), Some(typed_value)) => Ok(Self::PartiallyShredded {
-                metadata,
-                value,
-                typed_value,
-            }),
-            (metadata, Some(value), None) => Ok(Self::Unshredded { metadata, value }),
-            (metadata, None, Some(typed_value)) => Ok(Self::Typed {
-                metadata,
-                typed_value,
-            }),
-            (metadata, None, None) => Ok(Self::AllNull { metadata }),
-        }
-    }
-
-    /// Return a reference to the metadata field
-    pub fn metadata_field(&self) -> &BinaryViewArray {
-        match self {
-            ShreddingState::Unshredded { metadata, .. } => metadata,
-            ShreddingState::Typed { metadata, .. } => metadata,
-            ShreddingState::PartiallyShredded { metadata, .. } => metadata,
-            ShreddingState::AllNull { metadata } => metadata,
+    /// Create a new `ShreddingState` from the given fields
+    pub fn new(value: Option<BinaryViewArray>, typed_value: Option<ArrayRef>) -> Self {
+        match (value, typed_value) {
+            (Some(value), Some(typed_value)) => Self::PartiallyShredded { value, typed_value },
+            (Some(value), None) => Self::Unshredded { value },
+            (None, Some(typed_value)) => Self::Typed { typed_value },
+            (None, None) => Self::AllNull,
         }
     }
 
@@ -504,7 +489,7 @@ impl ShreddingState {
             ShreddingState::Unshredded { value, .. } => Some(value),
             ShreddingState::Typed { .. } => None,
             ShreddingState::PartiallyShredded { value, .. } => Some(value),
-            ShreddingState::AllNull { .. } => None,
+            ShreddingState::AllNull => None,
         }
     }
 
@@ -514,36 +499,26 @@ impl ShreddingState {
             ShreddingState::Unshredded { .. } => None,
             ShreddingState::Typed { typed_value, .. } => Some(typed_value),
             ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
-            ShreddingState::AllNull { .. } => None,
+            ShreddingState::AllNull => None,
         }
     }
 
     /// Slice all the underlying arrays
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         match self {
-            ShreddingState::Unshredded { metadata, value } => ShreddingState::Unshredded {
-                metadata: metadata.slice(offset, length),
+            ShreddingState::Unshredded { value } => ShreddingState::Unshredded {
                 value: value.slice(offset, length),
             },
-            ShreddingState::Typed {
-                metadata,
-                typed_value,
-            } => ShreddingState::Typed {
-                metadata: metadata.slice(offset, length),
+            ShreddingState::Typed { typed_value } => ShreddingState::Typed {
                 typed_value: typed_value.slice(offset, length),
             },
-            ShreddingState::PartiallyShredded {
-                metadata,
-                value,
-                typed_value,
-            } => ShreddingState::PartiallyShredded {
-                metadata: metadata.slice(offset, length),
-                value: value.slice(offset, length),
-                typed_value: typed_value.slice(offset, length),
-            },
-            ShreddingState::AllNull { metadata } => ShreddingState::AllNull {
-                metadata: metadata.slice(offset, length),
-            },
+            ShreddingState::PartiallyShredded { value, typed_value } => {
+                ShreddingState::PartiallyShredded {
+                    value: value.slice(offset, length),
+                    typed_value: typed_value.slice(offset, length),
+                }
+            }
+            ShreddingState::AllNull => ShreddingState::AllNull,
         }
     }
 }
@@ -564,8 +539,8 @@ impl StructArrayBuilder {
     }
 
     /// Add an array to this struct array as a field with the specified name.
-    pub fn with_field(mut self, field_name: &str, array: ArrayRef) -> Self {
-        let field = Field::new(field_name, array.data_type().clone(), true);
+    pub fn with_field(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
+        let field = Field::new(field_name, array.data_type().clone(), nullable);
         self.fields.push(Arc::new(field));
         self.arrays.push(array);
         self
@@ -590,6 +565,39 @@ impl StructArrayBuilder {
 /// returns the non-null element at index as a Variant
 fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '_> {
     match typed_value.data_type() {
+        DataType::Boolean => {
+            let boolean_array = typed_value.as_boolean();
+            let value = boolean_array.value(index);
+            Variant::from(value)
+        }
+        DataType::Date32 => {
+            let array = typed_value.as_primitive::<Date32Type>();
+            let value = array.value(index);
+            let date = Date32Type::to_naive_date(value);
+            Variant::from(date)
+        }
+        DataType::FixedSizeBinary(binary_len) => {
+            let array = typed_value.as_fixed_size_binary();
+            // Try to treat 16 byte FixedSizeBinary as UUID
+            let value = array.value(index);
+            if *binary_len == 16 {
+                if let Ok(uuid) = Uuid::from_slice(value) {
+                    return Variant::from(uuid);
+                }
+            }
+            let value = array.value(index);
+            Variant::from(value)
+        }
+        DataType::BinaryView => {
+            let array = typed_value.as_binary_view();
+            let value = array.value(index);
+            Variant::from(value)
+        }
+        DataType::Utf8 => {
+            let array = typed_value.as_string::<i32>();
+            let value = array.value(index);
+            Variant::from(value)
+        }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
         }
@@ -734,7 +742,7 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState::AllNull { .. }
+            ShreddingState::AllNull
         ));
 
         // Verify that value() returns Variant::Null (compensating for spec violation)
@@ -791,17 +799,11 @@ mod test {
 
     #[test]
     fn all_null_shredding_state() {
-        let metadata = BinaryViewArray::from(vec![b"test" as &[u8]]);
-        let shredding_state = ShreddingState::try_new(metadata.clone(), None, None).unwrap();
-
         // Verify the shredding state is AllNull
-        assert!(matches!(shredding_state, ShreddingState::AllNull { .. }));
-
-        // Verify metadata is preserved correctly
-        if let ShreddingState::AllNull { metadata: m } = shredding_state {
-            assert_eq!(m.len(), metadata.len());
-            assert_eq!(m.value(0), metadata.value(0));
-        }
+        assert!(matches!(
+            ShreddingState::new(None, None),
+            ShreddingState::AllNull
+        ));
     }
 
     #[test]
@@ -817,7 +819,7 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState::AllNull { .. }
+            ShreddingState::AllNull
         ));
 
         // Verify all values are null

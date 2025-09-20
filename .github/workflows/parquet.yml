@@ -42,6 +42,9 @@ on:
       - arrow-json/**
       - arrow-avro/**
       - parquet/**
+      - parquet-variant/**
+      - parquet-variant-compute/**
+      - parquet-variant-json/**
       - .github/**
 
 jobs:

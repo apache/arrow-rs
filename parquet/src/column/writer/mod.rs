@@ -64,6 +64,8 @@ macro_rules! downcast_writer {
 }
 
 /// Column writer for a Parquet type.
+///
+/// See [`get_column_writer`] to create instances of this type
 pub enum ColumnWriter<'a> {
     /// Column writer for boolean type
     BoolColumnWriter(ColumnWriterImpl<'a, BoolType>),
@@ -96,13 +98,13 @@ impl ColumnWriter<'_> {
         downcast_writer!(self, typed, typed.get_estimated_total_bytes())
     }
 
-    /// Close this [`ColumnWriter`]
+    /// Close this [`ColumnWriter`], returning the metadata for the column chunk.
     pub fn close(self) -> Result<ColumnCloseResult> {
         downcast_writer!(self, typed, typed.close())
     }
 }
 
-/// Gets a specific column writer corresponding to column descriptor `descr`.
+/// Create a specific column writer corresponding to column descriptor `descr`.
 pub fn get_column_writer<'a>(
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
@@ -173,7 +175,9 @@ pub fn get_typed_column_writer_mut<'a, 'b: 'a, T: DataType>(
     })
 }
 
-/// Metadata returned by [`GenericColumnWriter::close`]
+/// Metadata for a column chunk of a Parquet file.
+///
+/// Note this structure is returned by [`ColumnWriter::close`].
 #[derive(Debug, Clone)]
 pub struct ColumnCloseResult {
     /// The total number of bytes written
@@ -316,7 +320,7 @@ impl<T: Default> ColumnMetrics<T> {
 /// Typed column writer for a primitive column.
 pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
 
-/// Generic column writer for a primitive column.
+/// Generic column writer for a primitive Parquet column
 pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Column writer properties
     descr: ColumnDescPtr,

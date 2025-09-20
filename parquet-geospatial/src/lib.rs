@@ -15,4 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod row_builder;
+//! Implementation of [Geometry and Geography Encoding] from [Apache Parquet].
+//!
+//! [Geometry and Geography Encoding]: https://github.com/apache/parquet-format/blob/master/Geospatial.md
+//! [Apache Parquet]: https://parquet.apache.org/
+//!
+//! ## 🚧 Work In Progress
+//!
+//! This crate is under active development and is not yet ready for production use.
+//! If you are interested in helping, you can find more information on the GitHub [Geometry issue]
+//!
+//! [Geometry issue]: https://github.com/apache/arrow-rs/issues/8373

@@ -130,6 +130,7 @@ impl VariantMetadataHeader {
 /// [Variant Spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#metadata-encoding
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantMetadata<'m> {
+    /// (Only) the bytes that make up this metadata instance.
     pub(crate) bytes: &'m [u8],
     header: VariantMetadataHeader,
     dictionary_size: u32,
@@ -140,6 +141,39 @@ pub struct VariantMetadata<'m> {
 // We don't want this to grow because it increases the size of VariantList and VariantObject, which
 // could increase the size of Variant. All those size increases could hurt performance.
 const _: () = crate::utils::expect_size_of::<VariantMetadata>(32);
+
+/// The canonical byte slice corresponding to an empty metadata dictionary.
+///
+/// ```
+/// # use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantMetadata, WritableMetadataBuilder};
+/// let mut metadata_builder = WritableMetadataBuilder::default();
+/// metadata_builder.finish();
+/// let metadata_bytes = metadata_builder.into_inner();
+/// assert_eq!(&metadata_bytes, EMPTY_VARIANT_METADATA_BYTES);
+/// ```
+pub const EMPTY_VARIANT_METADATA_BYTES: &[u8] = &[1, 0, 0];
+
+/// The empty metadata dictionary.
+///
+/// ```
+/// # use parquet_variant::{EMPTY_VARIANT_METADATA, VariantMetadata, WritableMetadataBuilder};
+/// let mut metadata_builder = WritableMetadataBuilder::default();
+/// metadata_builder.finish();
+/// let metadata_bytes = metadata_builder.into_inner();
+/// let empty_metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
+/// assert_eq!(empty_metadata, EMPTY_VARIANT_METADATA);
+/// ```
+pub const EMPTY_VARIANT_METADATA: VariantMetadata = VariantMetadata {
+    bytes: EMPTY_VARIANT_METADATA_BYTES,
+    header: VariantMetadataHeader {
+        version: CORRECT_VERSION_VALUE,
+        is_sorted: false,
+        offset_size: OffsetSizeBytes::One,
+    },
+    dictionary_size: 0,
+    first_value_byte: 3,
+    validated: true,
+};
 
 impl<'m> VariantMetadata<'m> {
     /// Attempts to interpret `bytes` as a variant metadata instance, with full [validation] of all
@@ -299,7 +333,7 @@ impl<'m> VariantMetadata<'m> {
         self.header.version
     }
 
-    /// Gets an offset array entry by index.
+    /// Gets an offset into the dictionary entry by index.
     ///
     /// This offset is an index into the dictionary, at the boundary between string `i-1` and string
     /// `i`. See [`Self::get`] to retrieve a specific dictionary entry.
@@ -307,6 +341,15 @@ impl<'m> VariantMetadata<'m> {
         let offset_byte_range = self.header.first_offset_byte() as _..self.first_value_byte as _;
         let bytes = slice_from_slice(self.bytes, offset_byte_range)?;
         self.header.offset_size.unpack_u32(bytes, i)
+    }
+
+    /// Returns the total size, in bytes, of the metadata.
+    ///
+    /// Note this value may be smaller than what was passed to [`Self::new`] or
+    /// [`Self::try_new`] if the input was larger than necessary to encode the
+    /// metadata dictionary.
+    pub fn size(&self) -> usize {
+        self.bytes.len()
     }
 
     /// Attempts to retrieve a dictionary entry by index, failing if out of bounds or if the

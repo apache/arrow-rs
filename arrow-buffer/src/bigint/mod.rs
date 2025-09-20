@@ -586,6 +586,25 @@ impl i256 {
     pub const fn is_positive(self) -> bool {
         self.high.is_positive() || self.high == 0 && self.low != 0
     }
+
+    fn leading_zeros(&self) -> u32 {
+        match self.high {
+            0 => u128::BITS + self.low.leading_zeros(),
+            _ => self.high.leading_zeros(),
+        }
+    }
+
+    fn redundant_leading_sign_bits_i256(n: i256) -> u8 {
+        let mask = n >> 255; // all ones or all zeros
+        ((n ^ mask).leading_zeros() - 1) as u8 // we only need one sign bit
+    }
+
+    fn i256_to_f64(input: i256) -> f64 {
+        let k = i256::redundant_leading_sign_bits_i256(input);
+        let n = input << k; // left-justify (no redundant sign bits)
+        let n = (n.high >> 64) as i64; // throw away the lower 192 bits
+        (n as f64) * f64::powi(2.0, 192 - (k as i32)) // convert to f64 and scale it, as we left-shift k bit previous, so we need to scale it by 2^(192-k)
+    }
 }
 
 /// Temporary workaround due to lack of stable const array slicing
@@ -822,19 +841,14 @@ impl ToPrimitive for i256 {
     }
 
     fn to_f64(&self) -> Option<f64> {
-        let mag = if let Some(u) = self.checked_abs() {
-            let (low, high) = u.to_parts();
-            (high as f64) * 2_f64.powi(128) + (low as f64)
-        } else {
-            // self == MIN
-            2_f64.powi(255)
-        };
-        if *self < i256::ZERO {
-            Some(-mag)
-        } else {
-            Some(mag)
+        match *self {
+            Self::MIN => Some(-2_f64.powi(255)),
+            Self::ZERO => Some(0f64),
+            Self::ONE => Some(1f64),
+            n => Some(Self::i256_to_f64(n)),
         }
     }
+
     fn to_u64(&self) -> Option<u64> {
         let as_i128 = self.low as i128;
 
@@ -1286,6 +1300,20 @@ mod tests {
 
         let v = i256::from_i128(-123456789012345678i128);
         assert_eq!(v.to_f64().unwrap(), -123456789012345678.0);
+
+        let v = i256::from_string("0").unwrap();
+        assert_eq!(v.to_f64().unwrap(), 0.0);
+
+        let v = i256::from_string("1").unwrap();
+        assert_eq!(v.to_f64().unwrap(), 1.0);
+
+        let mut rng = rng();
+        for _ in 0..10 {
+            let f64_value =
+                (rng.random_range(i128::MIN..i128::MAX) as f64) * rng.random_range(0.0..1.0);
+            let big = i256::from_f64(f64_value).unwrap();
+            assert_eq!(big.to_f64().unwrap(), f64_value);
+        }
     }
 
     #[test]

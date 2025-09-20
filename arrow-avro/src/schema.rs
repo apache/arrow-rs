@@ -17,6 +17,7 @@
 
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
+    UnionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value};
@@ -27,14 +28,14 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use strum_macros::AsRefStr;
 
-/// The metadata key used for storing the JSON encoded [`Schema`]
-pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
-
 /// The Avro single‑object encoding “magic” bytes (`0xC3 0x01`)
 pub const SINGLE_OBJECT_MAGIC: [u8; 2] = [0xC3, 0x01];
 
 /// The Confluent "magic" byte (`0x00`)
 pub const CONFLUENT_MAGIC: [u8; 1] = [0x00];
+
+/// The metadata key used for storing the JSON encoded [`Schema`]
+pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
 
 /// Metadata key used to represent Avro enum symbols in an Arrow schema.
 pub const AVRO_ENUM_SYMBOLS_METADATA_KEY: &str = "avro.enum.symbols";
@@ -50,6 +51,9 @@ pub const AVRO_NAMESPACE_METADATA_KEY: &str = "avro.namespace";
 
 /// Metadata key used to store the documentation for a type in an Avro schema.
 pub const AVRO_DOC_METADATA_KEY: &str = "avro.doc";
+
+/// Default name for the root record in an Avro schema.
+pub const AVRO_ROOT_RECORD_DEFAULT_NAME: &str = "topLevelRecord";
 
 /// Compare two Avro schemas for equality (identical schemas).
 /// Returns true if the schemas have the same parsing canonical form (i.e., logically identical).
@@ -91,7 +95,7 @@ pub enum TypeName<'a> {
 /// A primitive type
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#primitive-types>
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, AsRefStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr)]
 #[serde(rename_all = "camelCase")]
 #[strum(serialize_all = "lowercase")]
 pub enum PrimitiveType {
@@ -451,7 +455,7 @@ impl AvroSchema {
         let record_name = schema
             .metadata
             .get(AVRO_NAME_METADATA_KEY)
-            .map_or("topLevelRecord", |s| s.as_str());
+            .map_or(AVRO_ROOT_RECORD_DEFAULT_NAME, |s| s.as_str());
         let mut record = JsonMap::with_capacity(schema.metadata.len() + 4);
         record.insert("type".into(), Value::String("record".into()));
         record.insert(
@@ -715,7 +719,7 @@ fn quote(s: &str) -> Result<String, ArrowError> {
 // handling both ways of specifying the name. It prioritizes a namespace
 // defined within the `name` attribute itself, then the explicit `namespace_attr`,
 // and finally the `enclosing_ns`.
-fn make_full_name(
+pub(crate) fn make_full_name(
     name: &str,
     namespace_attr: Option<&str>,
     enclosing_ns: Option<&str>,
@@ -952,6 +956,8 @@ fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
             Value::Object(map)
         }
         Value::Array(mut union) => {
+            // For unions, we cannot attach attributes to the array itself (per Avro spec).
+            // As a fallback for extension metadata, attach extras to the first non-null branch object.
             if let Some(non_null) = union.iter_mut().find(|val| val.as_str() != Some("null")) {
                 let original = std::mem::take(non_null);
                 *non_null = merge_extras(original, extras);
@@ -967,13 +973,56 @@ fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
     }
 }
 
+#[inline]
+fn is_avro_json_null(v: &Value) -> bool {
+    matches!(v, Value::String(s) if s == "null")
+}
+
 fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
     let null = Value::String("null".into());
-    let elements = match null_order {
-        Nullability::NullFirst => vec![null, inner],
-        Nullability::NullSecond => vec![inner, null],
-    };
-    Value::Array(elements)
+    match inner {
+        Value::Array(mut union) => {
+            union.retain(|v| !is_avro_json_null(v));
+            match null_order {
+                Nullability::NullFirst => union.insert(0, null),
+                Nullability::NullSecond => union.push(null),
+            }
+            Value::Array(union)
+        }
+        other => match null_order {
+            Nullability::NullFirst => Value::Array(vec![null, other]),
+            Nullability::NullSecond => Value::Array(vec![other, null]),
+        },
+    }
+}
+
+fn union_branch_signature(branch: &Value) -> Result<String, ArrowError> {
+    match branch {
+        Value::String(t) => Ok(format!("P:{t}")),
+        Value::Object(map) => {
+            let t = map.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+                ArrowError::SchemaError("Union branch object missing string 'type'".into())
+            })?;
+            match t {
+                "record" | "enum" | "fixed" => {
+                    let name = map.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                        ArrowError::SchemaError(format!(
+                            "Union branch '{t}' missing required 'name'"
+                        ))
+                    })?;
+                    Ok(format!("N:{t}:{name}"))
+                }
+                "array" | "map" => Ok(format!("C:{t}")),
+                other => Ok(format!("P:{other}")),
+            }
+        }
+        Value::Array(_) => Err(ArrowError::SchemaError(
+            "Avro union may not immediately contain another union".into(),
+        )),
+        _ => Err(ArrowError::SchemaError(
+            "Invalid JSON for Avro union branch".into(),
+        )),
+    }
 }
 
 fn datatype_to_avro(
@@ -984,6 +1033,36 @@ fn datatype_to_avro(
     null_order: Nullability,
 ) -> Result<(Value, JsonMap<String, Value>), ArrowError> {
     let mut extras = JsonMap::new();
+    let mut handle_decimal = |precision: &u8, scale: &i8| -> Result<Value, ArrowError> {
+        if *scale < 0 {
+            return Err(ArrowError::SchemaError(format!(
+                "Invalid Avro decimal for field '{field_name}': scale ({scale}) must be >= 0"
+            )));
+        }
+        if (*scale as usize) > (*precision as usize) {
+            return Err(ArrowError::SchemaError(format!(
+                "Invalid Avro decimal for field '{field_name}': scale ({scale}) \
+                 must be <= precision ({precision})"
+            )));
+        }
+
+        let mut meta = JsonMap::from_iter([
+            ("logicalType".into(), json!("decimal")),
+            ("precision".into(), json!(*precision)),
+            ("scale".into(), json!(*scale)),
+        ]);
+        if let Some(size) = metadata
+            .get("size")
+            .and_then(|val| val.parse::<usize>().ok())
+        {
+            meta.insert("type".into(), json!("fixed"));
+            meta.insert("size".into(), json!(size));
+            meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+        } else {
+            meta.insert("type".into(), json!("bytes"));
+        }
+        Ok(Value::Object(meta))
+    };
     let val = match dt {
         DataType::Null => Value::String("null".into()),
         DataType::Boolean => Value::String("boolean".into()),
@@ -995,6 +1074,10 @@ fn datatype_to_avro(
         DataType::Float64 => Value::String("double".into()),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Value::String("string".into()),
         DataType::Binary | DataType::LargeBinary => Value::String("bytes".into()),
+        DataType::BinaryView => {
+            extras.insert("arrowBinaryView".into(), Value::Bool(true));
+            Value::String("bytes".into())
+        }
         DataType::FixedSizeBinary(len) => {
             let is_uuid = metadata
                 .get("logicalType")
@@ -1013,24 +1096,12 @@ fn datatype_to_avro(
                 })
             }
         }
+        #[cfg(feature = "small_decimals")]
+        DataType::Decimal32(precision, scale) | DataType::Decimal64(precision, scale) => {
+            handle_decimal(precision, scale)?
+        }
         DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
-            // Prefer fixed if original size info present
-            let mut meta = JsonMap::from_iter([
-                ("logicalType".into(), json!("decimal")),
-                ("precision".into(), json!(*precision)),
-                ("scale".into(), json!(*scale)),
-            ]);
-            if let Some(size) = metadata
-                .get("size")
-                .and_then(|val| val.parse::<usize>().ok())
-            {
-                meta.insert("type".into(), json!("fixed"));
-                meta.insert("size".into(), json!(size));
-                meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
-            } else {
-                meta.insert("type".into(), json!("bytes"));
-            }
-            Value::Object(meta)
+            handle_decimal(precision, scale)?
         }
         DataType::Date32 => json!({ "type": "int", "logicalType": "date" }),
         DataType::Date64 => json!({ "type": "long", "logicalType": "local-timestamp-millis" }),
@@ -1095,6 +1166,24 @@ fn datatype_to_avro(
             if matches!(dt, DataType::LargeList(_)) {
                 extras.insert("arrowLargeList".into(), Value::Bool(true));
             }
+            let items_schema = process_datatype(
+                child.data_type(),
+                child.name(),
+                child.metadata(),
+                name_gen,
+                null_order,
+                child.is_nullable(),
+            )?;
+            json!({
+                "type": "array",
+                "items": items_schema
+            })
+        }
+        DataType::ListView(child) | DataType::LargeListView(child) => {
+            if matches!(dt, DataType::LargeListView(_)) {
+                extras.insert("arrowLargeList".into(), Value::Bool(true));
+            }
+            extras.insert("arrowListView".into(), Value::Bool(true));
             let items_schema = process_datatype(
                 child.data_type(),
                 child.name(),
@@ -1184,10 +1273,52 @@ fn datatype_to_avro(
             null_order,
             false,
         )?,
-        DataType::Union(_, _) => {
-            return Err(ArrowError::NotYetImplemented(
-                "Arrow Union to Avro Union not yet supported".into(),
-            ))
+        DataType::Union(fields, mode) => {
+            let mut branches: Vec<Value> = Vec::with_capacity(fields.len());
+            let mut type_ids: Vec<i32> = Vec::with_capacity(fields.len());
+            for (type_id, field_ref) in fields.iter() {
+                // NOTE: `process_datatype` would wrap nullability; force is_nullable=false here.
+                let (branch_schema, _branch_extras) = datatype_to_avro(
+                    field_ref.data_type(),
+                    field_ref.name(),
+                    field_ref.metadata(),
+                    name_gen,
+                    null_order,
+                )?;
+                // Avro unions cannot immediately contain another union
+                if matches!(branch_schema, Value::Array(_)) {
+                    return Err(ArrowError::SchemaError(
+                        "Avro union may not immediately contain another union".into(),
+                    ));
+                }
+                branches.push(branch_schema);
+                type_ids.push(type_id as i32);
+            }
+            let mut seen: HashSet<String> = HashSet::with_capacity(branches.len());
+            for b in &branches {
+                let sig = union_branch_signature(b)?;
+                if !seen.insert(sig) {
+                    return Err(ArrowError::SchemaError(
+                        "Avro union contains duplicate branch types (disallowed by spec)".into(),
+                    ));
+                }
+            }
+            extras.insert(
+                "arrowUnionMode".into(),
+                Value::String(
+                    match mode {
+                        UnionMode::Sparse => "sparse",
+                        UnionMode::Dense => "dense",
+                    }
+                    .to_string(),
+                ),
+            );
+            extras.insert(
+                "arrowUnionTypeIds".into(),
+                Value::Array(type_ids.into_iter().map(|id| json!(id)).collect()),
+            );
+
+            Value::Array(branches)
         }
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
@@ -1260,7 +1391,7 @@ fn arrow_field_to_avro(
 mod tests {
     use super::*;
     use crate::codec::{AvroDataType, AvroField};
-    use arrow_schema::{DataType, Fields, SchemaBuilder, TimeUnit};
+    use arrow_schema::{DataType, Fields, SchemaBuilder, TimeUnit, UnionFields};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -1967,17 +2098,47 @@ mod tests {
     }
 
     #[test]
-    fn test_dense_union_error() {
-        use arrow_schema::UnionFields;
-        let uf: UnionFields = vec![(0i8, Arc::new(ArrowField::new("a", DataType::Int32, false)))]
-            .into_iter()
-            .collect();
-        let union_dt = DataType::Union(uf, arrow_schema::UnionMode::Dense);
+    fn test_dense_union() {
+        let uf: UnionFields = vec![
+            (2i8, Arc::new(ArrowField::new("a", DataType::Int32, false))),
+            (7i8, Arc::new(ArrowField::new("b", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect();
+        let union_dt = DataType::Union(uf, UnionMode::Dense);
         let s = single_field_schema(ArrowField::new("u", union_dt, false));
-        let err = AvroSchema::try_from(&s).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Arrow Union to Avro Union not yet supported"));
+        let avro =
+            AvroSchema::try_from(&s).expect("Arrow Union -> Avro union conversion should succeed");
+        let v: serde_json::Value = serde_json::from_str(&avro.json_string).unwrap();
+        let fields = v
+            .get("fields")
+            .and_then(|x| x.as_array())
+            .expect("fields array");
+        let u_field = fields
+            .iter()
+            .find(|f| f.get("name").and_then(|n| n.as_str()) == Some("u"))
+            .expect("field 'u'");
+        let union = u_field.get("type").expect("u.type");
+        let arr = union.as_array().expect("u.type must be Avro union array");
+        assert_eq!(arr.len(), 2, "expected two union branches");
+        let first = &arr[0];
+        let obj = first
+            .as_object()
+            .expect("first branch should be an object with metadata");
+        assert_eq!(obj.get("type").and_then(|t| t.as_str()), Some("int"));
+        assert_eq!(
+            obj.get("arrowUnionMode").and_then(|m| m.as_str()),
+            Some("dense")
+        );
+        let type_ids: Vec<i64> = obj
+            .get("arrowUnionTypeIds")
+            .and_then(|a| a.as_array())
+            .expect("arrowUnionTypeIds array")
+            .iter()
+            .map(|n| n.as_i64().expect("i64"))
+            .collect();
+        assert_eq!(type_ids, vec![2, 7], "type id ordering should be preserved");
+        assert_eq!(arr[1], Value::String("string".into()));
     }
 
     #[test]
@@ -2139,5 +2300,27 @@ mod tests {
         let a = AvroSchema::try_from(&arrow_schema).unwrap().json_string;
         let b = AvroSchema::from_arrow_with_options(&arrow_schema, None);
         assert_eq!(a, b.unwrap().json_string);
+    }
+
+    #[test]
+    fn test_union_branch_missing_name_errors() {
+        for t in ["record", "enum", "fixed"] {
+            let branch = json!({ "type": t });
+            let err = union_branch_signature(&branch).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("Union branch '{t}' missing required 'name'")),
+                "expected missing-name error for {t}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_union_branch_named_type_signature_includes_name() {
+        let rec = json!({ "type": "record", "name": "Foo" });
+        assert_eq!(union_branch_signature(&rec).unwrap(), "N:record:Foo");
+        let en = json!({ "type": "enum", "name": "Color", "symbols": ["R", "G", "B"] });
+        assert_eq!(union_branch_signature(&en).unwrap(), "N:enum:Color");
+        let fx = json!({ "type": "fixed", "name": "Bytes16", "size": 16 });
+        assert_eq!(union_branch_signature(&fx).unwrap(), "N:fixed:Bytes16");
     }
 }
