@@ -112,13 +112,10 @@ macro_rules! get_writer_union_action {
             )));
         }
         let idx = branch as usize;
-        let dispatch = match $union_resolution.dispatch.as_deref() {
-            Some(d) => d,
-            None => {
-                return Err(ArrowError::SchemaError(
-                    "dispatch table missing for writer=union".to_string(),
-                ));
-            }
+        let Some(dispatch) = $union_resolution.dispatch.as_deref() else {
+            return Err(ArrowError::SchemaError(
+                "dispatch table missing for writer=union".to_string(),
+            ));
         };
         (idx, *dispatch.get(idx).unwrap_or(&BranchDispatch::NoMatch))
     }};
