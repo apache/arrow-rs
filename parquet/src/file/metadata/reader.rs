@@ -23,7 +23,7 @@ use std::{io::Read, ops::Range};
 use crate::encryption::decrypt::FileDecryptionProperties;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataPushDecoder};
 use crate::file::reader::ChunkReader;
 use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
 
@@ -31,18 +31,29 @@ use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 use crate::file::metadata::parser::{decode_metadata, parse_column_index, parse_offset_index};
 use crate::file::metadata::push_decoder::range_for_page_index;
+use crate::DecodeResult;
 
-/// Reads the [`ParquetMetaData`] from a byte stream.
+/// Reads the [`ParquetMetaData`] from a byte stream, with either synchronous or
+/// asynchronous I/O.
 ///
-/// See [`crate::file::metadata::ParquetMetaDataWriter#output-format`] for a description of
-/// the Parquet metadata.
+/// There are two flavors of APIs on this metadata reader:
+/// * Synchronous: [`Self::try_parse()`], [`Self::try_parse_sized()`], [`Self::parse_and_finish()`], etc.
+/// * Asynchronous (requires `async` and `arrow` features): [`Self::try_load()`], etc
 ///
 /// Parquet metadata is not necessarily contiguous in the files: part is stored
 /// in the footer (the last bytes of the file), but other portions (such as the
 /// PageIndex) can be stored elsewhere.
+/// See [`crate::file::metadata::ParquetMetaDataWriter#output-format`] for a description of
+/// the Parquet metadata.
 ///
 /// This reader handles reading the footer as well as the non contiguous parts
 /// of the metadata such as the page indexes; excluding Bloom Filters.
+///
+/// # See Also:
+///
+/// * [`ParquetMetaDataPushDecoder`] for more flexible I/O for reading the metadata.
+///
+/// [`ParquetMetaDataPushDecoder`]: crate::file::metadata::ParquetMetaDataPushDecoder
 ///
 /// # Example
 /// ```no_run
