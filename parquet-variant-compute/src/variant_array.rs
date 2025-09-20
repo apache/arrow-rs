@@ -891,26 +891,29 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
 ///
 /// So cast them to get the right type.
 fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    let new_type = map_type(array.data_type());
+    let new_type = rewrite_to_view_types(array.data_type());
     cast(array, &new_type)
 }
 
 /// replaces all instances of Binary with BinaryView in a DataType
-fn map_type(data_type: &DataType) -> DataType {
+fn rewrite_to_view_types(data_type: &DataType) -> DataType {
     match data_type {
         DataType::Binary => DataType::BinaryView,
         DataType::List(field) => {
             let new_field = field
                 .as_ref()
                 .clone()
-                .with_data_type(map_type(field.data_type()));
+                .with_data_type(rewrite_to_view_types(field.data_type()));
             DataType::List(Arc::new(new_field))
         }
         DataType::Struct(fields) => {
             let new_fields: Fields = fields
                 .iter()
                 .map(|f| {
-                    let new_field = f.as_ref().clone().with_data_type(map_type(f.data_type()));
+                    let new_field = f
+                        .as_ref()
+                        .clone()
+                        .with_data_type(rewrite_to_view_types(f.data_type()));
                     Arc::new(new_field)
                 })
                 .collect();
