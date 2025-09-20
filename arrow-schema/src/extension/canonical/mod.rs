@@ -37,6 +37,8 @@ mod uuid;
 pub use uuid::Uuid;
 mod variable_shape_tensor;
 pub use variable_shape_tensor::{VariableShapeTensor, VariableShapeTensorMetadata};
+mod geometry;
+pub use geometry::{Geography, GeographyAlgorithm, Geometry};
 
 use crate::{ArrowError, Field};
 
