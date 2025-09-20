@@ -98,9 +98,7 @@ pub(crate) fn follow_shredded_path_element(
                 ))
             })?;
 
-            let shredding_state = ShreddingState::from(struct_array);
-
-            Ok(ShreddedPathStep::Success(shredding_state))
+            Ok(ShreddedPathStep::Success(struct_array.into()))
         }
         VariantPathElement::Index { .. } => {
             // TODO: Support array indexing. Among other things, it will require slicing not
