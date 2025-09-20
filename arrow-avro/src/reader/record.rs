@@ -321,8 +321,7 @@ impl UnionResolutionBuilder {
                         "UnionResolutionBuilder for reader union requires fields".to_string(),
                     )
                 })?;
-                let reader_type_codes: Vec<i8> =
-                    fields.iter().map(|(tid, _)| tid).collect::<Vec<_>>();
+                let reader_type_codes: Vec<i8> = fields.iter().map(|(tid, _)| tid).collect();
                 let dispatch: Vec<BranchDispatch> = info
                     .writer_to_reader
                     .iter()
