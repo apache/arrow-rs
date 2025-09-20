@@ -1303,7 +1303,7 @@ impl Decoder {
             Promotion::Direct => self.decode(buf),
             Promotion::IntToLong => match self {
                 Self::Int64(v) => {
-                    v.push(buf.get_int()? as i64);
+                    v.push(buf.get_int()?.into());
                     Ok(())
                 }
                 _ => Err(ArrowError::ParseError(
