@@ -314,8 +314,8 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         DataType::Union(fields, UnionMode::Dense) => {
             let values = values.as_any().downcast_ref::<UnionArray>().unwrap();
 
-            let type_ids = <PrimitiveArray<Int8Type>>::new(take_native(values.type_ids(), indices), None);
-            let offsets = <PrimitiveArray<Int32Type>>::new(take_native(values.offsets().unwrap(), indices), None);
+            let type_ids = <PrimitiveArray<Int8Type>>::try_new(take_native(values.type_ids(), indices), None)?;
+            let offsets = <PrimitiveArray<Int32Type>>::try_new(take_native(values.offsets().unwrap(), indices), None)?;
 
             let children = fields.iter()
                 .map(|(field_type_id, _)| {
@@ -387,7 +387,7 @@ where
 {
     let values_buf = take_native(values.values(), indices);
     let nulls = take_nulls(values.nulls(), indices);
-    Ok(PrimitiveArray::new(values_buf, nulls).with_data_type(values.data_type().clone()))
+    Ok(PrimitiveArray::try_new(values_buf, nulls)?.with_data_type(values.data_type().clone()))
 }
 
 #[inline(never)]

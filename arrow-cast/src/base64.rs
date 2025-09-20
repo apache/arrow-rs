@@ -79,11 +79,7 @@ pub fn b64_decode<E: Engine, O: OffsetSizeTrait>(
     // Safety: offsets monotonically increasing by construction
     let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
 
-    Ok(GenericBinaryArray::new(
-        offsets,
-        Buffer::from_vec(buffer),
-        array.nulls().cloned(),
-    ))
+    GenericBinaryArray::try_new(offsets, Buffer::from_vec(buffer), array.nulls().cloned())
 }
 
 #[cfg(test)]

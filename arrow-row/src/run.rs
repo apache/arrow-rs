@@ -98,7 +98,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
 ) -> Result<RunArray<R>, ArrowError> {
     if rows.is_empty() {
         let values = converter.convert_raw(&mut [], validate_utf8)?;
-        let run_ends_array = PrimitiveArray::<R>::new(ScalarBuffer::from(vec![]), None);
+        let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(vec![]), None)?;
         return RunArray::<R>::try_new(&run_ends_array, &values[0]);
     }
 
@@ -149,7 +149,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
     };
 
     // Create run ends array
-    let run_ends_array = PrimitiveArray::<R>::new(ScalarBuffer::from(run_ends), None);
+    let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(run_ends), None)?;
 
     // Create the RunEndEncodedArray
     RunArray::<R>::try_new(&run_ends_array, &values[0])

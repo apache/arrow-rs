@@ -157,7 +157,7 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
         .map(|(a, b)| interleaved.arrays[*a].value(*b))
         .collect::<Vec<_>>();
 
-    let array = PrimitiveArray::<T>::new(values.into(), interleaved.nulls);
+    let array = PrimitiveArray::<T>::try_new(values.into(), interleaved.nulls)?;
     Ok(Arc::new(array.with_data_type(data_type.clone())))
 }
 

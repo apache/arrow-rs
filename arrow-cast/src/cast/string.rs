@@ -115,7 +115,7 @@ fn parse_string_iter<
                 None => Ok(P::Native::default()),
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        PrimitiveArray::new(v.into(), nulls())
+        PrimitiveArray::try_new(v.into(), nulls())?
     };
 
     Ok(Arc::new(array) as ArrayRef)

@@ -120,7 +120,7 @@ where
     }
 
     Ok(Arc::new(
-        PrimitiveArray::<T>::new(mutable_buffer.into(), null_bit_buffer)
+        PrimitiveArray::<T>::try_new(mutable_buffer.into(), null_bit_buffer)?
             .with_data_type(primitive_values.data_type().clone()),
     ))
 }
