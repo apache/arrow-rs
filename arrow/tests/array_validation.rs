@@ -1057,7 +1057,7 @@ fn test_string_data_from_foreign() {
 #[test]
 fn test_decimal_full_validation() {
     let array = Decimal128Array::from(vec![123456_i128]);
-    let error = array.validate_decimal_precision(5).unwrap_err();
+    let error = array.validate_decimal_precision(5, 2).unwrap_err();
     assert_eq!(
         "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
         error.to_string()
