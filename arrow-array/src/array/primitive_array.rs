@@ -1599,11 +1599,11 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Validates values in this array can be properly interpreted
     /// with the specified precision.
-    pub fn validate_decimal_precision(&self, precision: u8) -> Result<(), ArrowError> {
+    pub fn validate_decimal_precision(&self, precision: u8, scale: i8) -> Result<(), ArrowError> {
         (0..self.len()).try_for_each(|idx| {
             if self.is_valid(idx) {
                 let decimal = unsafe { self.value_unchecked(idx) };
-                T::validate_decimal_precision(decimal, precision)
+                T::validate_decimal_precision(decimal, precision, scale)
             } else {
                 Ok(())
             }
@@ -2433,7 +2433,7 @@ mod tests {
         assert_eq!("12.345", arr.value_as_string(1));
 
         // Validate it explicitly
-        let result = arr.validate_decimal_precision(5);
+        let result = arr.validate_decimal_precision(5, 3);
         let error = result.unwrap_err();
         assert_eq!(
             "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
@@ -2452,7 +2452,7 @@ mod tests {
         assert_eq!("-9.9", arr.value_as_string(3));
 
         // Validate it explicitly
-        let result = arr.validate_decimal_precision(2);
+        let result = arr.validate_decimal_precision(2, 1);
         let error = result.unwrap_err();
         assert_eq!(
             "Invalid argument error: 100 is too large to store in a Decimal128 of precision 2. Max is 99",
@@ -2548,7 +2548,7 @@ mod tests {
             // precision is too small to hold value
             .with_precision_and_scale(5, 2)
             .unwrap();
-        arr.validate_decimal_precision(5).unwrap();
+        arr.validate_decimal_precision(5, 2).unwrap();
     }
 
     #[test]

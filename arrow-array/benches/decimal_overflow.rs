@@ -37,13 +37,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_256 = builder_256.finish();
 
     c.bench_function("validate_decimal_precision_128", |b| {
-        b.iter(|| hint::black_box(array_128.validate_decimal_precision(8)));
+        b.iter(|| hint::black_box(array_128.validate_decimal_precision(8, 2)));
     });
     c.bench_function("null_if_overflow_precision_128", |b| {
         b.iter(|| hint::black_box(array_128.null_if_overflow_precision(8)));
     });
     c.bench_function("validate_decimal_precision_256", |b| {
-        b.iter(|| hint::black_box(array_256.validate_decimal_precision(8)));
+        b.iter(|| hint::black_box(array_256.validate_decimal_precision(8, 2)));
     });
     c.bench_function("null_if_overflow_precision_256", |b| {
         b.iter(|| hint::black_box(array_256.null_if_overflow_precision(8)));
