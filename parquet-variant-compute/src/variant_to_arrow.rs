@@ -377,11 +377,13 @@ impl VariantToBinaryVariantArrowRowBuilder {
     }
 
     fn finish(mut self) -> Result<ArrayRef> {
-        Ok(Arc::new(VariantArray::from_parts(
+        let variant_array = VariantArray::from_parts(
             self.metadata,
             Some(self.builder.build()?),
             None, // no typed_value column
             self.nulls.finish(),
-        )))
+        );
+
+        Ok(ArrayRef::from(variant_array))
     }
 }

@@ -24,15 +24,12 @@
 //! Inspired by the arrow-go implementation: <https://github.com/apache/arrow-go/pull/455/files>
 
 use arrow::util::test_util::parquet_test_data;
-use arrow_array::{Array, ArrayRef};
-use arrow_cast::cast;
-use arrow_schema::{DataType, Fields};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet_variant::{Variant, VariantMetadata};
 use parquet_variant_compute::VariantArray;
 use serde::Deserialize;
 use std::path::Path;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::{fs, path::PathBuf};
 
 type Result<T> = std::result::Result<T, String>;
@@ -398,54 +395,9 @@ impl VariantTestCase {
             .column_by_name("var")
             .unwrap_or_else(|| panic!("No 'var' column found in parquet file {path:?}"));
 
-        // the values are read as
-        // * StructArray<metadata: Binary, value: Binary>
-        // but VariantArray needs them as
-        // * StructArray<metadata: BinaryView, value: BinaryView>
-        //
-        // So cast them to get the right type. Hack Alert: the parquet reader
-        // should read them directly as BinaryView
-        let var = cast_to_binary_view_arrays(var);
-
         VariantArray::try_new(var).unwrap_or_else(|e| {
             panic!("Error converting StructArray to VariantArray for {path:?}: {e}")
         })
-    }
-}
-
-fn cast_to_binary_view_arrays(array: &ArrayRef) -> ArrayRef {
-    let new_type = map_type(array.data_type());
-    cast(array, &new_type).unwrap_or_else(|e| {
-        panic!(
-            "Error casting array from {:?} to {:?}: {e}",
-            array.data_type(),
-            new_type
-        )
-    })
-}
-
-/// replaces all instances of Binary with BinaryView in a DataType
-fn map_type(data_type: &DataType) -> DataType {
-    match data_type {
-        DataType::Binary => DataType::BinaryView,
-        DataType::List(field) => {
-            let new_field = field
-                .as_ref()
-                .clone()
-                .with_data_type(map_type(field.data_type()));
-            DataType::List(Arc::new(new_field))
-        }
-        DataType::Struct(fields) => {
-            let new_fields: Fields = fields
-                .iter()
-                .map(|f| {
-                    let new_field = f.as_ref().clone().with_data_type(map_type(f.data_type()));
-                    Arc::new(new_field)
-                })
-                .collect();
-            DataType::Struct(new_fields)
-        }
-        _ => data_type.clone(),
     }
 }
 
