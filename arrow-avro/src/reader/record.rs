@@ -348,18 +348,18 @@ impl UnionResolutionBuilder {
                 })?;
                 let reader_type_codes: Vec<i8> =
                     fields.iter().map(|(tid, _)| tid).collect::<Vec<_>>();
-                let Some(Some((target_reader_index, promotion))) = info.writer_to_reader.first() else {
+                let Some(Some((target_reader_index, promotion))) = info.writer_to_reader.first()
+                else {
                     return Err(ArrowError::SchemaError(
-                                "Writer schema does not match any reader union branch".to_string(),
-                            ))
-                        }
-                    };
+                        "Writer schema does not match any reader union branch".to_string(),
+                    ));
+                };
                 Ok(UnionResolution {
                     dispatch: None,
                     kind: UnionResolvedKind::FromSingle {
                         reader_type_codes: Arc::from(reader_type_codes),
-                        target_reader_index,
-                        promotion,
+                        target_reader_index: *target_reader_index,
+                        promotion: *promotion,
                     },
                 })
             }
@@ -458,7 +458,7 @@ impl Decoder {
                 if let UnionResolvedKind::ToSingle { target: t } = &mut union_resolution.kind {
                     *t = target;
                 }
-                let base = Self::Union(
+                let mut base = Self::Union(
                     UnionFields::empty(),
                     Vec::new(),
                     Vec::new(),
@@ -466,8 +466,9 @@ impl Decoder {
                     Vec::new(),
                     Some(union_resolution),
                 );
-                if let Some(n) = match data_type.nullability() {
-                    base = Self::Nullable(n, NullBufferBuilder::new(DEFAULT_CAPACITY), Box::new(base));
+                if let Some(n) = data_type.nullability() {
+                    base =
+                        Self::Nullable(n, NullBufferBuilder::new(DEFAULT_CAPACITY), Box::new(base));
                 }
                 return Ok(base);
             }
@@ -642,7 +643,10 @@ impl Decoder {
                         "Sparse Arrow unions are not yet supported".to_string(),
                     ));
                 }
-                let decoders = encodings.iter().map(Self::try_new_internal);
+                let decoders = encodings
+                    .iter()
+                    .map(Self::try_new_internal)
+                    .collect::<Result<Vec<_>, _>>()?;
                 let union_resolution = match data_type.resolution.as_ref() {
                     Some(ResolutionInfo::Union(info)) if info.reader_is_union => Some(
                         UnionResolutionBuilder::new()
@@ -723,14 +727,10 @@ impl Decoder {
             Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
             Self::Union(fields, type_ids, offsets, encodings, encoding_counts, None) => {
-                let mut chosen = None;
-                for (i, ch) in encodings.iter().enumerate() {
-                    if matches!(ch, Decoder::Null(_)) {
-                        chosen = Some(i);
-                        break;
-                    }
-                }
-                let idx = chosen.unwrap_or(0);
+                let idx = encodings
+                    .iter()
+                    .position(|ch| matches!(ch, Decoder::Null(_)))
+                    .unwrap_or(0);
                 let type_id = fields
                     .iter()
                     .nth(idx)
