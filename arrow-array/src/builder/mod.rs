@@ -567,7 +567,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                     .with_values_field(fields[1].clone()),
                 )
             }
-            t => panic!("The field of Map data type {t:?} should have a child Struct field"),
+            t => panic!("The field of Map data type {t} should have a child Struct field"),
         },
         DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
         t @ DataType::Dictionary(key_type, value_type) => {
@@ -594,7 +594,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                                 LargeBinaryDictionaryBuilder::with_capacity(capacity, 256, 1024);
                             Box::new(dict_builder)
                         }
-                        t => panic!("Dictionary value type {t:?} is not currently supported"),
+                        t => panic!("Dictionary value type {t} is not currently supported"),
                     }
                 };
             }
@@ -604,10 +604,10 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
                 DataType::Int32 => dict_builder!(Int32Type),
                 DataType::Int64 => dict_builder!(Int64Type),
                 _ => {
-                    panic!("Data type {t:?} with key type {key_type:?} is not currently supported")
+                    panic!("Data type {t} with key type {key_type} is not currently supported")
                 }
             }
         }
-        t => panic!("Data type {t:?} is not currently supported"),
+        t => panic!("Data type {t} is not currently supported"),
     }
 }

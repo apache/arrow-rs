@@ -75,7 +75,7 @@ pub fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
         DataType::Int16 => extend_nulls_impl!(i16),
         DataType::Int32 => extend_nulls_impl!(i32),
         DataType::Int64 => extend_nulls_impl!(i64),
-        _ => panic!("Invalid run end type for RunEndEncoded array: {run_end_type:?}"),
+        _ => panic!("Invalid run end type for RunEndEncoded array: {run_end_type}"),
     };
 
     mutable.child_data[0].data.len += 1;
@@ -225,7 +225,7 @@ pub fn build_extend(array: &ArrayData) -> Extend<'_> {
                 DataType::Int16 => build_and_process_impl!(i16),
                 DataType::Int32 => build_and_process_impl!(i32),
                 DataType::Int64 => build_and_process_impl!(i64),
-                _ => panic!("Invalid run end type for RunEndEncoded array: {dest_run_end_type:?}",),
+                _ => panic!("Invalid run end type for RunEndEncoded array: {dest_run_end_type}",),
             }
         },
     )

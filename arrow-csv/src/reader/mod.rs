@@ -860,7 +860,7 @@ fn parse(
                                 .collect::<DictionaryArray<UInt64Type>>(),
                         ) as ArrayRef),
                         _ => Err(ArrowError::ParseError(format!(
-                            "Unsupported dictionary key type {key_type:?}"
+                            "Unsupported dictionary key type {key_type}"
                         ))),
                     }
                 }

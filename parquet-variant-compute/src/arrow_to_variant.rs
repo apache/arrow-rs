@@ -261,14 +261,14 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
                 }
                 _ => {
                     return Err(ArrowError::CastError(format!(
-                        "Unsupported run ends type: {:?}",
+                        "Unsupported run ends type: {}",
                         run_ends.data_type()
                     )));
                 }
             },
             dt => {
                 return Err(ArrowError::CastError(format!(
-                    "Unsupported data type for casting to Variant: {dt:?}",
+                    "Unsupported data type for casting to Variant: {dt}",
                 )));
             }
         };

@@ -360,7 +360,7 @@ impl RecordBatch {
 
         if let Some((i, (col_type, field_type))) = not_match {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "column types must match schema types, expected {field_type:?} but found {col_type:?} at column index {i}")));
+                "column types must match schema types, expected {field_type} but found {col_type} at column index {i}")));
         }
 
         Ok(RecordBatch {
@@ -422,7 +422,7 @@ impl RecordBatch {
     /// // Insert a key-value pair into the metadata
     /// batch.schema_metadata_mut().insert("key".into(), "value".into());
     /// assert_eq!(batch.schema().metadata().get("key"), Some(&String::from("value")));
-    /// ```    
+    /// ```
     pub fn schema_metadata_mut(&mut self) -> &mut std::collections::HashMap<String, String> {
         let schema = Arc::make_mut(&mut self.schema);
         &mut schema.metadata

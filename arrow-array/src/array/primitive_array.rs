@@ -1290,7 +1290,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let data_type = self.data_type();
 
-        write!(f, "PrimitiveArray<{data_type:?}>\n[\n")?;
+        write!(f, "PrimitiveArray<{data_type}>\n[\n")?;
         print_long_array(self, f, |array, index, f| match data_type {
             DataType::Date32 | DataType::Date64 => {
                 let v = self.value(index).to_i64().unwrap();
@@ -1299,7 +1299,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     None => {
                         write!(
                             f,
-                            "Cast error: Failed to convert {v} to temporal for {data_type:?}"
+                            "Cast error: Failed to convert {v} to temporal for {data_type}"
                         )
                     }
                 }
@@ -1311,7 +1311,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     None => {
                         write!(
                             f,
-                            "Cast error: Failed to convert {v} to temporal for {data_type:?}"
+                            "Cast error: Failed to convert {v} to temporal for {data_type}"
                         )
                     }
                 }

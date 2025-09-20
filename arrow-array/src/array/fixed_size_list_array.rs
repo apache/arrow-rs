@@ -350,7 +350,7 @@ impl From<ArrayData> for FixedSizeListArray {
         let value_length = match data.data_type() {
             DataType::FixedSizeList(_, len) => *len,
             data_type => {
-                panic!("FixedSizeListArray data should contain a FixedSizeList data type, got {data_type:?}")
+                panic!("FixedSizeListArray data should contain a FixedSizeList data type, got {data_type}")
             }
         };
 

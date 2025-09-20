@@ -28,6 +28,7 @@ mod datatype;
 
 pub use datatype::*;
 use std::fmt::Display;
+mod datatype_display;
 mod datatype_parse;
 mod error;
 pub use error::*;
