@@ -21,7 +21,8 @@ use crate::codec::{AvroDataType, AvroField, Codec};
 use crate::schema::Nullability;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalDayTimeType,
+    ArrowPrimitiveType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalDayTimeType,
     IntervalMonthDayNanoType, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{
@@ -269,10 +270,21 @@ impl<'a> FieldEncoder<'a> {
                         array.as_primitive::<IntervalDayTimeType>(),
                     )),
                 }
-                DataType::Duration(_) => {
-                    return Err(ArrowError::NotYetImplemented(
-                        "Avro writer: Arrow Duration(TimeUnit) has no standard Avro mapping; cast to Interval(MonthDayNano) to use Avro 'duration'".into(),
-                    ));
+                DataType::Duration(tu) => {
+                    match tu {
+                        TimeUnit::Second => Encoder::DurationSec(LongEncoder(
+                            array.as_primitive::<DurationSecondType>(),
+                        )),
+                        TimeUnit::Millisecond => Encoder::DurationMs(LongEncoder(
+                            array.as_primitive::<DurationMillisecondType>(),
+                        )),
+                        TimeUnit::Microsecond => Encoder::DurationUs(LongEncoder(
+                            array.as_primitive::<DurationMicrosecondType>(),
+                        )),
+                        TimeUnit::Nanosecond => Encoder::DurationNs(LongEncoder(
+                            array.as_primitive::<DurationNanosecondType>(),
+                        )),
+                    }
                 }
                 other => {
                     return Err(ArrowError::NotYetImplemented(format!(
@@ -774,7 +786,13 @@ impl FieldPlan {
                 other => Err(ArrowError::SchemaError(format!(
                     "Avro duration logical type requires Arrow Interval(MonthDayNano), found: {other:?}"
                 ))),
-            }
+            },
+            Codec::Duration(tu) => match arrow_field.data_type() {
+                DataType::Duration(u) if u == tu => Ok(FieldPlan::Scalar),
+                other => Err(ArrowError::SchemaError(format!(
+                    "Avro long with arrowDurationUnit={tu:?} requires Arrow Duration({tu:?}), found: {other:?}"
+                ))),
+            },
             _ => Ok(FieldPlan::Scalar),
         }
     }
@@ -785,6 +803,10 @@ enum Encoder<'a> {
     Int(IntEncoder<'a, Int32Type>),
     Long(LongEncoder<'a, Int64Type>),
     Timestamp(LongEncoder<'a, TimestampMicrosecondType>),
+    DurationSec(LongEncoder<'a, DurationSecondType>),
+    DurationMs(LongEncoder<'a, DurationMillisecondType>),
+    DurationUs(LongEncoder<'a, DurationMicrosecondType>),
+    DurationNs(LongEncoder<'a, DurationNanosecondType>),
     Float32(F32Encoder<'a>),
     Float64(F64Encoder<'a>),
     Binary(BinaryEncoder<'a, i32>),
@@ -823,6 +845,10 @@ impl<'a> Encoder<'a> {
             Encoder::Int(e) => e.encode(out, idx),
             Encoder::Long(e) => e.encode(out, idx),
             Encoder::Timestamp(e) => e.encode(out, idx),
+            Encoder::DurationSec(e) => e.encode(out, idx),
+            Encoder::DurationMs(e) => e.encode(out, idx),
+            Encoder::DurationUs(e) => e.encode(out, idx),
+            Encoder::DurationNs(e) => e.encode(out, idx),
             Encoder::Float32(e) => e.encode(out, idx),
             Encoder::Float64(e) => e.encode(out, idx),
             Encoder::Binary(e) => e.encode(out, idx),
@@ -1853,6 +1879,50 @@ mod tests {
         expected_b.extend_from_slice(&[0]);
         let got_b = encode_all(&bools, &FieldPlan::Scalar, None);
         assert_bytes_eq(&got_b, &expected_b);
+    }
+
+    #[test]
+    fn duration_encoding_seconds() {
+        let arr: PrimitiveArray<DurationSecondType> = vec![0i64, -1, 2].into();
+        let mut expected = Vec::new();
+        for v in [0i64, -1, 2] {
+            expected.extend_from_slice(&avro_long_bytes(v));
+        }
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn duration_encoding_milliseconds() {
+        let arr: PrimitiveArray<DurationMillisecondType> = vec![1i64, 0, -2].into();
+        let mut expected = Vec::new();
+        for v in [1i64, 0, -2] {
+            expected.extend_from_slice(&avro_long_bytes(v));
+        }
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn duration_encoding_microseconds() {
+        let arr: PrimitiveArray<DurationMicrosecondType> = vec![5i64, -6, 7].into();
+        let mut expected = Vec::new();
+        for v in [5i64, -6, 7] {
+            expected.extend_from_slice(&avro_long_bytes(v));
+        }
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn duration_encoding_nanoseconds() {
+        let arr: PrimitiveArray<DurationNanosecondType> = vec![8i64, 9, -10].into();
+        let mut expected = Vec::new();
+        for v in [8i64, 9, -10] {
+            expected.extend_from_slice(&avro_long_bytes(v));
+        }
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        assert_bytes_eq(&got, &expected);
     }
 
     #[test]
