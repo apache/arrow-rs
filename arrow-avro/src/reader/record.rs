@@ -642,10 +642,7 @@ impl Decoder {
                         "Sparse Arrow unions are not yet supported".to_string(),
                     ));
                 }
-                let mut decoders = Vec::with_capacity(encodings.len());
-                for c in encodings.iter() {
-                    decoders.push(Self::try_new_internal(c)?);
-                }
+                let decoders = encodings.iter().map(Self::try_new_internal);
                 let union_resolution = match data_type.resolution.as_ref() {
                     Some(ResolutionInfo::Union(info)) if info.reader_is_union => Some(
                         UnionResolutionBuilder::new()
