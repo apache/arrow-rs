@@ -34,6 +34,10 @@ pub const SINGLE_OBJECT_MAGIC: [u8; 2] = [0xC3, 0x01];
 /// The Confluent "magic" byte (`0x00`)
 pub const CONFLUENT_MAGIC: [u8; 1] = [0x00];
 
+/// The maximum possible length of a prefix.
+/// SHA256 (32) + single-object magic (2)
+pub const MAX_PREFIX_LEN: usize = 34;
+
 /// The metadata key used for storing the JSON encoded [`Schema`]
 pub const SCHEMA_METADATA_KEY: &str = "avro.schema";
 
@@ -349,9 +353,9 @@ impl AvroSchema {
             .map_err(|e| ArrowError::ParseError(format!("Invalid Avro schema JSON: {e}")))
     }
 
-    /// Returns the Rabin fingerprint of the schema.
-    pub fn fingerprint(&self) -> Result<Fingerprint, ArrowError> {
-        Self::generate_fingerprint_rabin(&self.schema()?)
+    /// Returns the fingerprint of the schema.
+    pub fn fingerprint(&self, hash_type: FingerprintAlgorithm) -> Result<Fingerprint, ArrowError> {
+        Self::generate_fingerprint(&self.schema()?, hash_type)
     }
 
     /// Generates a fingerprint for the given `Schema` using the specified [`FingerprintAlgorithm`].
@@ -476,6 +480,68 @@ impl AvroSchema {
     }
 }
 
+/// A stack-allocated, fixed-size buffer for the prefix.
+#[derive(Debug, Copy, Clone)]
+pub struct Prefix {
+    buf: [u8; MAX_PREFIX_LEN],
+    len: u8,
+}
+
+impl Prefix {
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.len as usize]
+    }
+}
+
+/// Defines the strategy for generating the per-record prefix for an Avro binary stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FingerprintStrategy {
+    /// Use the 64-bit Rabin fingerprint (default for single-object encoding).
+    #[default]
+    Rabin,
+    /// Use a Confluent Schema Registry 32-bit ID.
+    Id(u32),
+    #[cfg(feature = "md5")]
+    /// Use the 128-bit MD5 fingerprint.
+    MD5,
+    #[cfg(feature = "sha256")]
+    /// Use the 256-bit SHA-256 fingerprint.
+    SHA256,
+}
+
+impl From<Fingerprint> for FingerprintStrategy {
+    fn from(f: Fingerprint) -> Self {
+        Self::from(&f)
+    }
+}
+
+impl From<FingerprintAlgorithm> for FingerprintStrategy {
+    fn from(f: FingerprintAlgorithm) -> Self {
+        match f {
+            FingerprintAlgorithm::Rabin => FingerprintStrategy::Rabin,
+            FingerprintAlgorithm::None => FingerprintStrategy::Id(0),
+            #[cfg(feature = "md5")]
+            FingerprintAlgorithm::MD5 => FingerprintStrategy::MD5,
+            #[cfg(feature = "sha256")]
+            FingerprintAlgorithm::SHA256 => FingerprintStrategy::SHA256,
+        }
+    }
+}
+
+impl From<&Fingerprint> for FingerprintStrategy {
+    fn from(f: &Fingerprint) -> Self {
+        match f {
+            Fingerprint::Rabin(_) => FingerprintStrategy::Rabin,
+            Fingerprint::Id(id) => FingerprintStrategy::Id(*id),
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(_) => FingerprintStrategy::MD5,
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(_) => FingerprintStrategy::SHA256,
+        }
+    }
+}
+
 /// Supported fingerprint algorithms for Avro schema identification.
 /// For use with Confluent Schema Registry IDs, set to None.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -507,6 +573,25 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
     }
 }
 
+impl From<FingerprintStrategy> for FingerprintAlgorithm {
+    fn from(s: FingerprintStrategy) -> Self {
+        Self::from(&s)
+    }
+}
+
+impl From<&FingerprintStrategy> for FingerprintAlgorithm {
+    fn from(s: &FingerprintStrategy) -> Self {
+        match s {
+            FingerprintStrategy::Rabin => FingerprintAlgorithm::Rabin,
+            FingerprintStrategy::Id(_) => FingerprintAlgorithm::None,
+            #[cfg(feature = "md5")]
+            FingerprintStrategy::MD5 => FingerprintAlgorithm::MD5,
+            #[cfg(feature = "sha256")]
+            FingerprintStrategy::SHA256 => FingerprintAlgorithm::SHA256,
+        }
+    }
+}
+
 /// A schema fingerprint in one of the supported formats.
 ///
 /// This is used as the key inside `SchemaStore` `HashMap`. Each `SchemaStore`
@@ -529,6 +614,38 @@ pub enum Fingerprint {
     SHA256([u8; 32]),
 }
 
+impl From<FingerprintStrategy> for Fingerprint {
+    fn from(s: FingerprintStrategy) -> Self {
+        Self::from(&s)
+    }
+}
+
+impl From<&FingerprintStrategy> for Fingerprint {
+    fn from(s: &FingerprintStrategy) -> Self {
+        match s {
+            FingerprintStrategy::Rabin => Fingerprint::Rabin(0),
+            FingerprintStrategy::Id(id) => Fingerprint::Id(*id),
+            #[cfg(feature = "md5")]
+            FingerprintStrategy::MD5 => Fingerprint::MD5([0; 16]),
+            #[cfg(feature = "sha256")]
+            FingerprintStrategy::SHA256 => Fingerprint::SHA256([0; 32]),
+        }
+    }
+}
+
+impl From<FingerprintAlgorithm> for Fingerprint {
+    fn from(s: FingerprintAlgorithm) -> Self {
+        match s {
+            FingerprintAlgorithm::Rabin => Fingerprint::Rabin(0),
+            FingerprintAlgorithm::None => Fingerprint::Id(0),
+            #[cfg(feature = "md5")]
+            FingerprintAlgorithm::MD5 => Fingerprint::MD5([0; 16]),
+            #[cfg(feature = "sha256")]
+            FingerprintAlgorithm::SHA256 => Fingerprint::SHA256([0; 32]),
+        }
+    }
+}
+
 impl Fingerprint {
     /// Loads the 32-bit Schema Registry fingerprint (Confluent Schema Registry ID).
     ///
@@ -539,6 +656,65 @@ impl Fingerprint {
     /// A `Fingerprint::Id` variant containing the 32-bit fingerprint.
     pub fn load_fingerprint_id(id: u32) -> Self {
         Fingerprint::Id(u32::from_be(id))
+    }
+
+    /// Constructs a serialized prefix represented as a `Vec<u8>` based on the variant of the enum.
+    ///
+    /// This method serializes data in different formats depending on the variant of `self`:
+    /// - **`Id(id)`**: Uses the Confluent wire format, which includes a predefined magic header (`CONFLUENT_MAGIC`)
+    ///   followed by the big-endian byte representation of the `id`.
+    /// - **`Rabin(val)`**: Uses the Avro single-object specification format. This includes a different magic header
+    ///   (`SINGLE_OBJECT_MAGIC`) followed by the little-endian byte representation of the `val`.
+    /// - **`MD5(bytes)`** (optional, `md5` feature enabled): A non-standard extension that adds the
+    ///   `SINGLE_OBJECT_MAGIC` header followed by the provided `bytes`.
+    /// - **`SHA256(bytes)`** (optional, `sha256` feature enabled): Similar to the `MD5` variant, this is
+    ///   a non-standard extension that attaches the `SINGLE_OBJECT_MAGIC` header followed by the given `bytes`.
+    ///
+    /// # Returns
+    ///
+    /// A `Prefix` containing the serialized prefix data.
+    ///
+    /// # Features
+    ///
+    /// - You can optionally enable the `md5` feature to include the `MD5` variant.
+    /// - You can optionally enable the `sha256` feature to include the `SHA256` variant.
+    ///
+    pub fn make_prefix(&self) -> Prefix {
+        let mut buf = [0u8; MAX_PREFIX_LEN];
+        let len = match self {
+            Self::Id(id) => {
+                let prefix_slice = &mut buf[..5];
+                prefix_slice[..1].copy_from_slice(&CONFLUENT_MAGIC);
+                prefix_slice[1..5].copy_from_slice(&id.to_be_bytes());
+                5
+            }
+            Self::Rabin(val) => {
+                let prefix_slice = &mut buf[..10];
+                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
+                prefix_slice[2..10].copy_from_slice(&val.to_le_bytes());
+                10
+            }
+            #[cfg(feature = "md5")]
+            Self::MD5(bytes) => {
+                const LEN: usize = 2 + 16;
+                let prefix_slice = &mut buf[..LEN];
+                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
+                prefix_slice[2..LEN].copy_from_slice(bytes);
+                LEN
+            }
+            #[cfg(feature = "sha256")]
+            Self::SHA256(bytes) => {
+                const LEN: usize = 2 + 32;
+                let prefix_slice = &mut buf[..LEN];
+                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
+                prefix_slice[2..LEN].copy_from_slice(bytes);
+                LEN
+            }
+        };
+        Prefix {
+            buf,
+            len: len as u8,
+        }
     }
 }
 
@@ -1744,17 +1920,25 @@ mod tests {
         let record_avro_schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
         let mut schemas: HashMap<Fingerprint, AvroSchema> = HashMap::new();
         schemas.insert(
-            int_avro_schema.fingerprint().unwrap(),
+            int_avro_schema
+                .fingerprint(FingerprintAlgorithm::Rabin)
+                .unwrap(),
             int_avro_schema.clone(),
         );
         schemas.insert(
-            record_avro_schema.fingerprint().unwrap(),
+            record_avro_schema
+                .fingerprint(FingerprintAlgorithm::Rabin)
+                .unwrap(),
             record_avro_schema.clone(),
         );
         let store = SchemaStore::try_from(schemas).unwrap();
-        let int_fp = int_avro_schema.fingerprint().unwrap();
+        let int_fp = int_avro_schema
+            .fingerprint(FingerprintAlgorithm::Rabin)
+            .unwrap();
         assert_eq!(store.lookup(&int_fp).cloned(), Some(int_avro_schema));
-        let rec_fp = record_avro_schema.fingerprint().unwrap();
+        let rec_fp = record_avro_schema
+            .fingerprint(FingerprintAlgorithm::Rabin)
+            .unwrap();
         assert_eq!(store.lookup(&rec_fp).cloned(), Some(record_avro_schema));
     }
 
@@ -1764,21 +1948,29 @@ mod tests {
         let record_avro_schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
         let mut schemas: HashMap<Fingerprint, AvroSchema> = HashMap::new();
         schemas.insert(
-            int_avro_schema.fingerprint().unwrap(),
+            int_avro_schema
+                .fingerprint(FingerprintAlgorithm::Rabin)
+                .unwrap(),
             int_avro_schema.clone(),
         );
         schemas.insert(
-            record_avro_schema.fingerprint().unwrap(),
+            record_avro_schema
+                .fingerprint(FingerprintAlgorithm::Rabin)
+                .unwrap(),
             record_avro_schema.clone(),
         );
         // Insert duplicate of int schema
         schemas.insert(
-            int_avro_schema.fingerprint().unwrap(),
+            int_avro_schema
+                .fingerprint(FingerprintAlgorithm::Rabin)
+                .unwrap(),
             int_avro_schema.clone(),
         );
         let store = SchemaStore::try_from(schemas).unwrap();
         assert_eq!(store.schemas.len(), 2);
-        let int_fp = int_avro_schema.fingerprint().unwrap();
+        let int_fp = int_avro_schema
+            .fingerprint(FingerprintAlgorithm::Rabin)
+            .unwrap();
         assert_eq!(store.lookup(&int_fp).cloned(), Some(int_avro_schema));
     }
 
@@ -1838,7 +2030,7 @@ mod tests {
     fn test_set_and_lookup_with_provided_fingerprint() {
         let mut store = SchemaStore::new();
         let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
-        let fp = schema.fingerprint().unwrap();
+        let fp = schema.fingerprint(FingerprintAlgorithm::Rabin).unwrap();
         let out_fp = store.set(fp, schema.clone()).unwrap();
         assert_eq!(out_fp, fp);
         assert_eq!(store.lookup(&fp).cloned(), Some(schema));
@@ -1848,7 +2040,7 @@ mod tests {
     fn test_set_duplicate_same_schema_ok() {
         let mut store = SchemaStore::new();
         let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
-        let fp = schema.fingerprint().unwrap();
+        let fp = schema.fingerprint(FingerprintAlgorithm::Rabin).unwrap();
         let _ = store.set(fp, schema.clone()).unwrap();
         let _ = store.set(fp, schema.clone()).unwrap();
         assert_eq!(store.schemas.len(), 1);

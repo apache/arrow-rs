@@ -18,7 +18,7 @@
 //! Avro Encoder for Arrow types.
 
 use crate::codec::{AvroDataType, AvroField, Codec};
-use crate::schema::Nullability;
+use crate::schema::{Fingerprint, Nullability, Prefix};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalDayTimeType,
@@ -33,6 +33,7 @@ use arrow_array::{
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit};
+use serde::Serialize;
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -522,6 +523,7 @@ struct FieldBinding {
 pub struct RecordEncoderBuilder<'a> {
     avro_root: &'a AvroField,
     arrow_schema: &'a ArrowSchema,
+    fingerprint: Option<Fingerprint>,
 }
 
 impl<'a> RecordEncoderBuilder<'a> {
@@ -530,7 +532,13 @@ impl<'a> RecordEncoderBuilder<'a> {
         Self {
             avro_root,
             arrow_schema,
+            fingerprint: None,
         }
+    }
+
+    pub(crate) fn with_fingerprint(mut self, fingerprint: Option<Fingerprint>) -> Self {
+        self.fingerprint = fingerprint;
+        self
     }
 
     /// Build the `RecordEncoder` by walking the Avro **record** root in Avro order,
@@ -557,7 +565,10 @@ impl<'a> RecordEncoderBuilder<'a> {
                 )?,
             });
         }
-        Ok(RecordEncoder { columns })
+        Ok(RecordEncoder {
+            columns,
+            prefix: self.fingerprint.map(|fp| fp.make_prefix()),
+        })
     }
 }
 
@@ -569,6 +580,8 @@ impl<'a> RecordEncoderBuilder<'a> {
 #[derive(Debug, Clone)]
 pub struct RecordEncoder {
     columns: Vec<FieldBinding>,
+    /// Optional pre-built, variable-length prefix written before each record.
+    prefix: Option<Prefix>,
 }
 
 impl RecordEncoder {
@@ -602,9 +615,23 @@ impl RecordEncoder {
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
     pub fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
-        for row in 0..batch.num_rows() {
-            for encoder in column_encoders.iter_mut() {
-                encoder.encode(out, row)?;
+        let n = batch.num_rows();
+        match self.prefix {
+            Some(prefix) => {
+                for row in 0..n {
+                    out.write_all(prefix.as_slice())
+                        .map_err(|e| ArrowError::IoError(format!("write prefix: {e}"), e))?;
+                    for enc in column_encoders.iter_mut() {
+                        enc.encode(out, row)?;
+                    }
+                }
+            }
+            None => {
+                for row in 0..n {
+                    for enc in column_encoders.iter_mut() {
+                        enc.encode(out, row)?;
+                    }
+                }
             }
         }
         Ok(())
