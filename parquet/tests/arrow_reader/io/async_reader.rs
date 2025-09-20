@@ -346,7 +346,7 @@ async fn async_builder(
 
 /// Build the reader from the specified builder and read all batches from it,
 /// and return the operations log.
-async fn run(
+pub(crate) async fn run(
     test_file: &TestParquetFile,
     builder: ParquetRecordBatchStreamBuilder<RecordingAsyncFileReader>,
 ) -> Vec<String> {
@@ -363,10 +363,10 @@ async fn run(
     ops.snapshot()
 }
 
-struct RecordingAsyncFileReader {
-    bytes: Bytes,
-    ops: Arc<OperationLog>,
-    parquet_meta_data: Arc<ParquetMetaData>,
+pub(crate) struct RecordingAsyncFileReader {
+    pub(crate) bytes: Bytes,
+    pub(crate) ops: Arc<OperationLog>,
+    pub(crate) parquet_meta_data: Arc<ParquetMetaData>,
 }
 
 impl AsyncFileReader for RecordingAsyncFileReader {
