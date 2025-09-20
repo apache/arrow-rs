@@ -16,22 +16,34 @@
 // under the License.
 
 use crate::errors::ParquetError;
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::parser::{decode_metadata, parse_column_index, parse_offset_index};
+use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData};
+use crate::file::page_index::index_reader::acc_range;
+use crate::file::reader::ChunkReader;
+use crate::file::FOOTER_SIZE;
 use crate::DecodeResult;
+use bytes::Bytes;
+use std::ops::Range;
 
 /// A push decoder for [`ParquetMetaData`].
 ///
-/// This structure implements a push API based version of the [`ParquetMetaDataReader`], which
-/// decouples the IO from the metadata decoding logic.
+/// This structure implements a push API for decoding Parquet metadata, which
+/// decouples IO from the metadata decoding logic (sometimes referred to as
+/// [Sans-IO]).
 ///
-/// You can use this decoder to customize your IO operations, as shown in the
-/// examples below for minimizing bytes read, prefetching data, or
-/// using async IO.
+/// See [`ParquetMetaDataReader`] for a pull-based API that incorporates IO and
+/// is simpler to use for basic use cases. This decoder is best for customizing
+/// your IO operations to minimize bytes read, prefetch data, or use async IO.
+///
+/// [Sans-IO]: https://sans-io.readthedocs.io
+/// [`ParquetMetaDataReader`]: crate::file::metadata::ParquetMetaDataReader
 ///
 /// # Example
 ///
 /// The most basic usage is to feed the decoder with the necessary byte ranges
-/// as requested as shown below.
+/// as requested as shown below. This minimizes the number of bytes read, but
+/// requires the most IO operations - one to read the footer and then one
+/// to read the metadata, and possibly more if page indexes are requested.
 ///
 /// ```rust
 /// # use std::ops::Range;
@@ -192,8 +204,13 @@ use crate::DecodeResult;
 /// [`AsyncRead`]: tokio::io::AsyncRead
 #[derive(Debug)]
 pub struct ParquetMetaDataPushDecoder {
-    done: bool,
-    metadata_reader: ParquetMetaDataReader,
+    /// Decoding state
+    state: DecodeState,
+    /// policy for loading ColumnIndex (part of the PageIndex)
+    column_index_policy: PageIndexPolicy,
+    /// policy for loading OffsetIndex (part of the PageIndex)
+    offset_index_policy: PageIndexPolicy,
+    /// Underyling buffers
     buffers: crate::util::push_buffers::PushBuffers,
 }
 
@@ -211,12 +228,10 @@ impl ParquetMetaDataPushDecoder {
             )));
         };
 
-        let metadata_reader =
-            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Optional);
-
         Ok(Self {
-            done: false,
-            metadata_reader,
+            state: DecodeState::ReadingFooter,
+            column_index_policy: PageIndexPolicy::Optional,
+            offset_index_policy: PageIndexPolicy::Optional,
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
         })
     }
@@ -232,9 +247,8 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
-        self.metadata_reader = self
-            .metadata_reader
-            .with_page_index_policy(page_index_policy);
+        self.column_index_policy = page_index_policy;
+        self.offset_index_policy = page_index_policy;
         self
     }
 
@@ -261,12 +275,11 @@ impl ParquetMetaDataPushDecoder {
         &mut self,
         ranges: Vec<std::ops::Range<u64>>,
         buffers: Vec<bytes::Bytes>,
-    ) -> std::result::Result<(), String> {
-        if self.done {
-            return Err(
+    ) -> Result<(), ParquetError> {
+        if matches!(&self.state, DecodeState::Finished) {
+            return Err(general_err!(
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
-                    .to_string(),
-            );
+            ));
         }
         self.buffers.push_ranges(ranges, buffers);
         Ok(())
@@ -274,55 +287,140 @@ impl ParquetMetaDataPushDecoder {
 
     /// Try to decode the metadata from the pushed data, returning the
     /// decoded metadata or an error if not enough data is available.
-    pub fn try_decode(
-        &mut self,
-    ) -> std::result::Result<DecodeResult<ParquetMetaData>, ParquetError> {
-        if self.done {
-            return Ok(DecodeResult::Finished);
-        }
-
-        // need to have the last 8 bytes of the file to decode the metadata
+    pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>, ParquetError> {
         let file_len = self.buffers.file_len();
-        if !self.buffers.has_range(&(file_len - 8..file_len)) {
-            #[expect(clippy::single_range_in_vec_init)]
-            return Ok(DecodeResult::NeedsData(vec![file_len - 8..file_len]));
-        }
+        let footer_len = FOOTER_SIZE as u64;
+        loop {
+            match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
+                DecodeState::ReadingFooter => {
+                    // need to have the last 8 bytes of the file to decode the metadata
+                    let footer_start = file_len.saturating_sub(footer_len);
+                    let footer_range = footer_start..file_len;
 
-        // Try to parse the metadata from the buffers we have.
-        //
-        // If we don't have enough data, returns a `ParquetError::NeedMoreData`
-        // with the number of bytes needed to complete the metadata parsing.
-        //
-        // If we have enough data, returns `Ok(())` and we can complete
-        // the metadata parsing.
-        let maybe_metadata = self
-            .metadata_reader
-            .try_parse_sized(&self.buffers, self.buffers.file_len());
+                    if !self.buffers.has_range(&footer_range) {
+                        self.state = DecodeState::ReadingFooter;
+                        return Ok(needs_range(footer_range));
+                    }
+                    let footer_bytes = self.get_bytes(&footer_range)?;
+                    let footer_tail = FooterTail::try_from(footer_bytes.as_ref())?;
 
-        match maybe_metadata {
-            Ok(()) => {
-                // Metadata successfully parsed, proceed to decode the row groups
-                let metadata = self.metadata_reader.finish()?;
-                self.done = true;
-                Ok(DecodeResult::Data(metadata))
+                    #[cfg(not(feature = "encryption"))]
+                    if footer_tail.is_encrypted_footer() {
+                        self.state = DecodeState::Finished;
+                        return Err(general_err!(
+                            "Parquet file has an encrypted footer but the encryption feature is disabled"
+                        ));
+                    };
+
+                    self.state = DecodeState::ReadingMetadata(footer_tail);
+                    continue;
+                }
+
+                DecodeState::ReadingMetadata(footer_tail) => {
+                    let metadata_len: u64 = footer_tail.metadata_length() as u64;
+                    let metadata_start = file_len - footer_len - metadata_len;
+                    let metadata_end = metadata_start + metadata_len;
+                    let metadata_range = metadata_start..metadata_end;
+
+                    if !self.buffers.has_range(&metadata_range) {
+                        self.state = DecodeState::ReadingMetadata(footer_tail);
+                        return Ok(needs_range(metadata_range));
+                    }
+
+                    let metadata_bytes = self.get_bytes(&metadata_range)?;
+                    let metadata = decode_metadata(&metadata_bytes)?;
+                    self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
+                    continue;
+                }
+
+                DecodeState::ReadingPageIndex(mut metadata) => {
+                    let range = range_for_page_index(
+                        &metadata,
+                        self.column_index_policy,
+                        self.offset_index_policy,
+                    );
+
+                    let Some(page_index_range) = range else {
+                        // no ranges means no page indexes are needed
+                        self.state = DecodeState::Finished;
+                        return Ok(DecodeResult::Data(*metadata));
+                    };
+
+                    if !self.buffers.has_range(&page_index_range) {
+                        self.state = DecodeState::ReadingPageIndex(metadata);
+                        return Ok(needs_range(page_index_range));
+                    }
+
+                    let buffer = self.get_bytes(&page_index_range)?;
+                    let offset = page_index_range.start;
+                    parse_column_index(&mut metadata, self.column_index_policy, &buffer, offset)?;
+                    parse_offset_index(&mut metadata, self.offset_index_policy, &buffer, offset)?;
+                    self.state = DecodeState::Finished;
+                    return Ok(DecodeResult::Data(*metadata));
+                }
+
+                DecodeState::Finished => return Ok(DecodeResult::Finished),
+                DecodeState::Intermediate => {
+                    return Err(general_err!(
+                        "ParquetMetaDataPushDecoder: internal error, invalid state"
+                    ));
+                }
             }
-
-            Err(ParquetError::NeedMoreData(needed)) => {
-                let needed = needed as u64;
-                let Some(start_offset) = file_len.checked_sub(needed) else {
-                    return Err(ParquetError::General(format!(
-                        "Parquet metadata reader needs at least {needed} bytes, but file length is only {file_len}"
-                    )));
-                };
-                let needed_range = start_offset..start_offset + needed;
-                // needs `needed_range` bytes at the end of the file
-                Ok(DecodeResult::NeedsData(vec![needed_range]))
-            }
-            Err(ParquetError::NeedMoreDataRange(range)) => Ok(DecodeResult::NeedsData(vec![range])),
-
-            Err(e) => Err(e), // some other error, pass back
         }
     }
+
+    /// Returns the bytes for the given range from the internal buffer
+    fn get_bytes(&self, range: &Range<u64>) -> Result<Bytes, ParquetError> {
+        let start = range.start;
+        let raw_len = range.end - range.start;
+        let len: usize = raw_len.try_into().map_err(|_| {
+            ParquetError::General(format!("Range length too large to fit in usize: {raw_len}",))
+        })?;
+        self.buffers.get_bytes(start, len)
+    }
+}
+
+/// returns a DecodeResults that describes needing the given range
+fn needs_range(range: Range<u64>) -> DecodeResult<ParquetMetaData> {
+    DecodeResult::NeedsData(vec![range])
+}
+
+/// Decoding state machine
+#[derive(Debug)]
+enum DecodeState {
+    /// Reading the last 8 bytes of the file
+    ReadingFooter,
+    /// Reading the metadata thrift structure
+    ReadingMetadata(FooterTail),
+    //
+    ReadingPageIndex(Box<ParquetMetaData>),
+    // todo read boom filters?
+    Finished,
+    /// State left during decoding. This should never be observed outside
+    /// of the try_decode method
+    Intermediate,
+}
+
+/// Returns the byte range needed to read the offset/page indexes, based on the
+/// policies
+///
+/// Returns None if no page indexes are needed
+pub(crate) fn range_for_page_index(
+    metadata: &ParquetMetaData,
+    column_index_policy: PageIndexPolicy,
+    offset_index_policy: PageIndexPolicy,
+) -> Option<Range<u64>> {
+    // Get bounds needed for page indexes (if any are present in the file).
+    let mut range = None;
+    for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
+        if column_index_policy != PageIndexPolicy::Skip {
+            range = acc_range(range, c.column_index_range());
+        }
+        if offset_index_policy != PageIndexPolicy::Skip {
+            range = acc_range(range, c.offset_index_range());
+        }
+    }
+    range
 }
 
 // These tests use the arrow writer to create a parquet file in memory
