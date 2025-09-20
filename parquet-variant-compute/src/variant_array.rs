@@ -56,8 +56,6 @@ impl ExtensionType for VariantType {
     }
 
     fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
-        // Note don't check for metadata/value fields here because they may be
-        // absent in shredded variants
         if matches!(data_type, DataType::Struct(_)) {
             Ok(())
         } else {
