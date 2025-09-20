@@ -443,7 +443,7 @@ impl VariantArray {
 
     /// Is the element at index null?
     pub fn is_null(&self, index: usize) -> bool {
-        self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
+        self.nulls().is_some_and(|n| n.is_null(index))
     }
 
     /// Is the element at index valid (not null)?
@@ -612,7 +612,7 @@ impl ShreddedVariantFieldArray {
     }
     /// Is the element at index null?
     pub fn is_null(&self, index: usize) -> bool {
-        self.nulls().map(|n| n.is_null(index)).unwrap_or_default()
+        self.nulls().is_some_and(|n| n.is_null(index))
     }
 
     /// Is the element at index valid (not null)?
