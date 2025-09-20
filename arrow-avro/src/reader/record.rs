@@ -348,11 +348,8 @@ impl UnionResolutionBuilder {
                 })?;
                 let reader_type_codes: Vec<i8> =
                     fields.iter().map(|(tid, _)| tid).collect::<Vec<_>>();
-                let (target_reader_index, promotion) =
-                    match info.writer_to_reader.first().and_then(|x| *x) {
-                        Some(pair) => pair,
-                        None => {
-                            return Err(ArrowError::SchemaError(
+                let Some(Some((target_reader_index, promotion))) = info.writer_to_reader.first() else {
+                    return Err(ArrowError::SchemaError(
                                 "Writer schema does not match any reader union branch".to_string(),
                             ))
                         }
