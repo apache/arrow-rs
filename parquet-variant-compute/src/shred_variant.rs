@@ -76,8 +76,12 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
     };
 
     let cast_options = CastOptions::default();
-    let mut builder =
-        make_variant_to_shredded_variant_arrow_row_builder(as_type, &cast_options, array.len())?;
+    let mut builder = make_variant_to_shredded_variant_arrow_row_builder(
+        as_type,
+        &cast_options,
+        array.len(),
+        true,
+    )?;
     for i in 0..array.len() {
         if array.is_null(i) {
             builder.append_null()?;
@@ -98,11 +102,16 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     data_type: &'a DataType,
     cast_options: &'a CastOptions,
     capacity: usize,
+    top_level: bool,
 ) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
     let builder = match data_type {
         DataType::Struct(fields) => {
-            let typed_value_builder =
-                VariantToShreddedObjectVariantRowBuilder::try_new(fields, cast_options, capacity)?;
+            let typed_value_builder = VariantToShreddedObjectVariantRowBuilder::try_new(
+                fields,
+                cast_options,
+                capacity,
+                top_level,
+            )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
         DataType::List(_)
@@ -118,7 +127,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
             let typed_value_builder =
-                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity);
+                VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, top_level);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
         }
     };
@@ -160,21 +169,26 @@ pub(crate) struct VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     value_builder: VariantValueArrayBuilder,
     typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
     nulls: NullBufferBuilder,
+    top_level: bool,
 }
 
 impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
     pub(crate) fn new(
         typed_value_builder: PrimitiveVariantToArrowRowBuilder<'a>,
         capacity: usize,
+        top_level: bool,
     ) -> Self {
         Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
             typed_value_builder,
             nulls: NullBufferBuilder::new(capacity),
+            top_level,
         }
     }
     fn append_null(&mut self) -> Result<()> {
-        self.nulls.append_null();
+        // Only the top-level struct that represents the variant can be nullable; object fields and
+        // array elements are non-nullable.
+        self.nulls.append(!self.top_level);
         self.value_builder.append_null();
         self.typed_value_builder.append_null()
     }
@@ -201,15 +215,22 @@ pub(crate) struct VariantToShreddedObjectVariantRowBuilder<'a> {
     typed_value_builders: IndexMap<&'a str, VariantToShreddedVariantRowBuilder<'a>>,
     typed_value_nulls: NullBufferBuilder,
     nulls: NullBufferBuilder,
+    top_level: bool,
 }
 
 impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
-    fn try_new(fields: &'a Fields, cast_options: &'a CastOptions, capacity: usize) -> Result<Self> {
+    fn try_new(
+        fields: &'a Fields,
+        cast_options: &'a CastOptions,
+        capacity: usize,
+        top_level: bool,
+    ) -> Result<Self> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
                 field.data_type(),
                 cast_options,
                 capacity,
+                false,
             )?;
             Ok((field.name().as_str(), builder))
         });
@@ -218,11 +239,14 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             typed_value_builders: typed_value_builders.collect::<Result<_>>()?,
             typed_value_nulls: NullBufferBuilder::new(capacity),
             nulls: NullBufferBuilder::new(capacity),
+            top_level,
         })
     }
 
     fn append_null(&mut self) -> Result<()> {
-        self.nulls.append_null();
+        // Only the top-level struct that represents the variant can be nullable; object fields and
+        // array elements are non-nullable.
+        self.nulls.append(!self.top_level);
         self.value_builder.append_null();
         self.typed_value_nulls.append_null();
         for (_, typed_value_builder) in &mut self.typed_value_builders {
