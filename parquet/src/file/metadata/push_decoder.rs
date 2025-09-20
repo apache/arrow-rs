@@ -28,23 +28,22 @@ use std::ops::Range;
 /// A push decoder for [`ParquetMetaData`].
 ///
 /// This structure implements a push API for decoding Parquet metadata, which
-/// decouples IO from the metadata decoding logic. This pattern, sometimes
-/// called [Sans-IO], allows you to use any IO mechanism, including synchronous
-/// or asynchronous IO. See [`ParquetMetaDataReader`] for a pull-based API that
-/// incorporates IO and is simpler to use for basic use cases.
+/// decouples IO from the metadata decoding logic (sometimes referred to as
+/// [Sans-IO]).
+///
+/// See [`ParquetMetaDataReader`] for a pull-based API that incorporates IO and
+/// is simpler to use for basic use cases. This decoder is best for customizing
+/// your IO operations to minimize bytes read, prefetch data, or use async IO.
 ///
 /// [Sans-IO]: https://sans-io.readthedocs.io
 /// [`ParquetMetaDataReader`]: crate::file::metadata::ParquetMetaDataReader
 ///
-///
-/// You can use this decoder to customize your IO operations, as shown in the
-/// examples below for minimizing bytes read, prefetching data, or
-/// using async IO.
-///
 /// # Example
 ///
 /// The most basic usage is to feed the decoder with the necessary byte ranges
-/// as requested as shown below.
+/// as requested as shown below. This minimizes the number of bytes read, but
+/// requires the most IO operations - one to read the footer and then one
+/// to read the metadata, and possibly more if page indexes are requested.
 ///
 /// ```rust
 /// # use std::ops::Range;
