@@ -67,9 +67,8 @@ impl ExtensionType for VariantType {
     }
 
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        let new_self = Self;
-        new_self.supports_data_type(data_type)?;
-        Ok(new_self)
+        Self.supports_data_type(data_type)?;
+        Ok(Self)
     }
 }
 
