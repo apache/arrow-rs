@@ -200,6 +200,7 @@ impl RecordDecoder {
     ) -> Result<Self, ArrowError> {
         match data_type.codec() {
             Codec::Struct(reader_fields) => {
+                // Build Arrow schema fields and per-child decoders
                 let mut arrow_fields = Vec::with_capacity(reader_fields.len());
                 let mut encodings = Vec::with_capacity(reader_fields.len());
                 for avro_field in reader_fields.iter() {
@@ -724,7 +725,7 @@ impl Decoder {
             Self::Uuid(v) => {
                 v.extend([0; 16]);
             }
-            Self::Array(_, offsets, _e) => {
+            Self::Array(_, offsets, e) => {
                 offsets.push_length(0);
             }
             Self::Record(_, e, _) => {
@@ -1264,7 +1265,7 @@ impl Decoder {
                 }
             },
             Self::Nullable(order, nb, encoding) => {
-                let branch = buf.get_long()?;
+                let branch = buf.read_vlq()?;
                 let is_not_null = match *order {
                     Nullability::NullFirst => branch != 0,
                     Nullability::NullSecond => branch == 0,
@@ -1946,7 +1947,7 @@ impl Skipper {
                 }
             }
             Self::Nullable(order, inner) => {
-                let branch = buf.get_long()?;
+                let branch = buf.read_vlq()?;
                 let is_not_null = match *order {
                     Nullability::NullFirst => branch != 0,
                     Nullability::NullSecond => branch == 0,
