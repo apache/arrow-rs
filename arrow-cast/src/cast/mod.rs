@@ -375,7 +375,7 @@ where
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
                     .div_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
             })?,
         }
     } else {
@@ -389,7 +389,7 @@ where
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
                     .mul_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
             })?,
         }
     };
@@ -11233,5 +11233,32 @@ mod tests {
             2,
         )) as ArrayRef;
         assert_eq!(*fixed_array, *r);
+    }
+
+    #[test]
+    fn test_cast_decimal_error_output() {
+        let array = Int64Array::from(vec![1]);
+        let error = cast_with_options(
+            &array,
+            &DataType::Decimal32(1, 1),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid argument error: 1.0 is too large to store in a Decimal32 of precision 1. Max is 0.9");
+
+        let array = Int64Array::from(vec![-1]);
+        let error = cast_with_options(
+            &array,
+            &DataType::Decimal32(1, 1),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid argument error: -1.0 is too small to store in a Decimal32 of precision 1. Min is -0.9");
     }
 }

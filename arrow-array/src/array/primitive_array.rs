@@ -1603,7 +1603,7 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
         (0..self.len()).try_for_each(|idx| {
             if self.is_valid(idx) {
                 let decimal = unsafe { self.value_unchecked(idx) };
-                T::validate_decimal_precision(decimal, precision)
+                T::validate_decimal_precision(decimal, precision, self.scale())
             } else {
                 Ok(())
             }
