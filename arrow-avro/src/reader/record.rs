@@ -121,6 +121,22 @@ macro_rules! get_writer_union_action {
     }};
 }
 
+macro_rules! promote_numeric {
+    ($self:expr, $buf:expr, $variant:ident, $getter:ident, $to:ty, $promotion:expr) => {{
+        match $self {
+            Decoder::$variant(v) => {
+                let x = $buf.$getter()?;
+                v.push(x as $to);
+                Ok(())
+            }
+            _ => Err(ArrowError::ParseError(format!(
+                "Promotion {} target mismatch",
+                $promotion
+            ))),
+        }
+    }};
+}
+
 #[derive(Debug)]
 pub(crate) struct RecordDecoderBuilder<'a> {
     data_type: &'a AvroDataType,
@@ -288,7 +304,6 @@ struct UnionResolutionBuilder {
 }
 
 impl UnionResolutionBuilder {
-    #[inline]
     fn new() -> Self {
         Self {
             fields: None,
@@ -296,15 +311,13 @@ impl UnionResolutionBuilder {
         }
     }
 
-    #[inline]
     fn with_fields(mut self, fields: UnionFields) -> Self {
         self.fields = Some(fields);
         self
     }
 
-    #[inline]
-    fn with_resolved_union(mut self, resolved_union: &ResolvedUnion) -> Self {
-        self.resolved = Some(resolved_union.clone());
+    fn with_resolved_union(mut self, resolved_union: ResolvedUnion) -> Self {
+        self.resolved = Some(resolved_union);
         self
     }
 
@@ -314,75 +327,66 @@ impl UnionResolutionBuilder {
                 "UnionResolutionBuilder requires resolved_union to be provided".to_string(),
             )
         })?;
-        match (info.writer_is_union, info.reader_is_union) {
-            (true, true) => {
-                let fields = self.fields.ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "UnionResolutionBuilder for reader union requires fields".to_string(),
-                    )
-                })?;
-                let reader_type_codes: Vec<i8> = fields.iter().map(|(tid, _)| tid).collect();
-                let dispatch: Vec<BranchDispatch> = info
-                    .writer_to_reader
-                    .iter()
-                    .map(|m| match m {
-                        Some((reader_index, promotion)) => BranchDispatch::ToReader {
-                            reader_idx: *reader_index,
-                            promotion: *promotion,
-                        },
-                        None => BranchDispatch::NoMatch,
-                    })
-                    .collect();
-                Ok(UnionResolution {
-                    dispatch: Some(Arc::from(dispatch)),
-                    kind: UnionResolvedKind::Both {
-                        reader_type_codes: Arc::from(reader_type_codes),
+        let writer_dispatch: Option<Arc<[BranchDispatch]>> = info.writer_is_union.then(|| {
+            let dispatches: Vec<BranchDispatch> = info
+                .writer_to_reader
+                .iter()
+                .map(|m| match m {
+                    Some((reader_idx, promotion)) => BranchDispatch::ToReader {
+                        reader_idx: *reader_idx,
+                        promotion: *promotion,
                     },
+                    None => BranchDispatch::NoMatch,
                 })
-            }
-            (false, true) => {
-                let fields = self.fields.ok_or_else(|| {
-                    ArrowError::InvalidArgumentError(
-                        "UnionResolutionBuilder for reader union requires fields".to_string(),
-                    )
-                })?;
-                let reader_type_codes: Vec<i8> =
-                    fields.iter().map(|(tid, _)| tid).collect::<Vec<_>>();
+                .collect();
+            Arc::from(dispatches)
+        });
+        let reader_type_codes: Option<Arc<[i8]>> = if info.reader_is_union {
+            let fields = self.fields.ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "UnionResolutionBuilder for reader union requires fields".to_string(),
+                )
+            })?;
+            let codes: Vec<i8> = fields.iter().map(|(tid, _)| tid).collect();
+            Some(Arc::from(codes))
+        } else {
+            None
+        };
+        match (writer_dispatch, reader_type_codes) {
+            (Some(dispatch), Some(reader_type_codes)) => Ok(UnionResolution {
+                dispatch: Some(dispatch),
+                kind: UnionResolvedKind::Both { reader_type_codes },
+            }),
+            (Some(dispatch), None) => Ok(UnionResolution {
+                dispatch: Some(dispatch),
+                kind: UnionResolvedKind::ToSingle {
+                    target: Box::new(Decoder::Null(0)),
+                },
+            }),
+            (None, Some(reader_type_codes)) => {
+                // writer_is_union == false in this arm, so writer_to_reader must be a singleton:
+                //   [ Some((reader_idx, promotion)) ] if the single writer type matches any
+                //   branch of the reader union; [ None ] otherwise.
+                debug_assert!(
+                    !info.writer_is_union && info.writer_to_reader.len() == 1,
+                    "internal invariant: expected a single writer to reader mapping when writer_is_union=false"
+                );
                 let Some(Some((target_reader_index, promotion))) = info.writer_to_reader.first()
                 else {
                     return Err(ArrowError::SchemaError(
-                        "Writer schema does not match any reader union branch".to_string(),
+                        "Writer type does not match any branch of the reader union".to_string(),
                     ));
                 };
                 Ok(UnionResolution {
                     dispatch: None,
                     kind: UnionResolvedKind::FromSingle {
-                        reader_type_codes: Arc::from(reader_type_codes),
+                        reader_type_codes,
                         target_reader_index: *target_reader_index,
                         promotion: *promotion,
                     },
                 })
             }
-            (true, false) => {
-                let dispatch: Vec<BranchDispatch> = info
-                    .writer_to_reader
-                    .iter()
-                    .map(|m| match m {
-                        Some((reader_index, promotion)) => BranchDispatch::ToReader {
-                            reader_idx: *reader_index,
-                            promotion: *promotion,
-                        },
-                        None => BranchDispatch::NoMatch,
-                    })
-                    .collect();
-                Ok(UnionResolution {
-                    dispatch: Some(Arc::from(dispatch)),
-                    kind: UnionResolvedKind::ToSingle {
-                        target: Box::new(Decoder::Null(0)),
-                    },
-                })
-            }
-            (false, false) => Err(ArrowError::InvalidArgumentError(
+            (None, None) => Err(ArrowError::InvalidArgumentError(
                 "UnionResolutionBuilder used for non-union case".to_string(),
             )),
         }
@@ -453,7 +457,7 @@ impl Decoder {
                 clone.resolution = None;
                 let target = Box::new(Self::try_new_internal(&clone)?);
                 let mut union_resolution = UnionResolutionBuilder::new()
-                    .with_resolved_union(info)
+                    .with_resolved_union(info.clone())
                     .build()?;
                 if let UnionResolvedKind::ToSingle { target: t } = &mut union_resolution.kind {
                     *t = target;
@@ -647,11 +651,23 @@ impl Decoder {
                     .iter()
                     .map(Self::try_new_internal)
                     .collect::<Result<Vec<_>, _>>()?;
+                let fields_len = fields.iter().count();
+                debug_assert_eq!(
+                    fields_len,
+                    decoders.len(),
+                    "Union fields and decoders must align"
+                );
+                if fields_len != decoders.len() {
+                    return Err(ArrowError::SchemaError(format!(
+                        "UnionFields/encodings length mismatch at construction: fields_len={fields_len}, encodings_len={}",
+                        decoders.len()
+                    )));
+                }
                 let union_resolution = match data_type.resolution.as_ref() {
                     Some(ResolutionInfo::Union(info)) if info.reader_is_union => Some(
                         UnionResolutionBuilder::new()
                             .with_fields(fields.clone())
-                            .with_resolved_union(info)
+                            .with_resolved_union(info.clone())
                             .build()?,
                     ),
                     _ => None,
@@ -683,7 +699,7 @@ impl Decoder {
     }
 
     /// Append a null record
-    fn append_null(&mut self) {
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         match self {
             Self::Null(count) => *count += 1,
             Self::Boolean(b) => b.append(false),
@@ -711,7 +727,11 @@ impl Decoder {
             Self::Array(_, offsets, _e) => {
                 offsets.push_length(0);
             }
-            Self::Record(_, e, _) => e.iter_mut().for_each(|e| e.append_null()),
+            Self::Record(_, e, _) => {
+                for encoding in e.iter_mut() {
+                    encoding.append_null();
+                }
+            }
             Self::Map(_, _koff, moff, _, _) => {
                 moff.push_length(0);
             }
@@ -727,16 +747,16 @@ impl Decoder {
             Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
             Self::Union(fields, type_ids, offsets, encodings, encoding_counts, None) => {
+                if encodings.is_empty() {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Cannot append null to empty union".to_string(),
+                    ));
+                }
                 let idx = encodings
                     .iter()
                     .position(|ch| matches!(ch, Decoder::Null(_)))
                     .unwrap_or(0);
-                let type_id = fields
-                    .iter()
-                    .nth(idx)
-                    .map(|(type_id, _)| type_id)
-                    .unwrap_or_else(|| i8::try_from(idx).unwrap_or(0));
-                type_ids.push(type_id);
+                type_ids.push(type_id_at(fields, idx, encodings.len())?);
                 offsets.push(encoding_counts[idx]);
                 encodings[idx].append_null();
                 encoding_counts[idx] += 1;
@@ -758,12 +778,7 @@ impl Decoder {
                         }
                     }
                     let idx = chosen.unwrap_or(0);
-                    let type_id = fields
-                        .iter()
-                        .nth(idx)
-                        .map(|(type_id, _)| type_id)
-                        .unwrap_or_else(|| i8::try_from(idx).unwrap_or(0));
-                    type_ids.push(type_id);
+                    type_ids.push(type_id_at(fields, idx, encodings.len())?);
                     offsets.push(encoding_counts[idx]);
                     encodings[idx].append_null();
                     encoding_counts[idx] += 1;
@@ -775,12 +790,7 @@ impl Decoder {
                     target_reader_index,
                     ..
                 } => {
-                    let type_id = fields
-                        .iter()
-                        .nth(*target_reader_index)
-                        .map(|(type_id, _)| type_id)
-                        .unwrap_or(0);
-                    type_ids.push(type_id);
+                    type_ids.push(type_id_at(fields, *target_reader_index, encodings.len())?);
                     offsets.push(encoding_counts[*target_reader_index]);
                     encodings[*target_reader_index].append_null();
                     encoding_counts[*target_reader_index] += 1;
@@ -791,6 +801,7 @@ impl Decoder {
                 inner.append_null();
             }
         }
+        Ok(())
     }
 
     /// Append a single default literal into the decoder's buffers
@@ -799,8 +810,7 @@ impl Decoder {
             Self::Nullable(_, nb, inner) => {
                 if matches!(lit, AvroLiteral::Null) {
                     nb.append(false);
-                    inner.append_null();
-                    Ok(())
+                    inner.append_null()
                 } else {
                     nb.append(true);
                     inner.append_default(lit)
@@ -1006,12 +1016,7 @@ impl Decoder {
                         "Union default cannot be applied to empty union".to_string(),
                     ));
                 }
-                let type_id = fields
-                    .iter()
-                    .nth(0)
-                    .map(|(type_id, _)| type_id)
-                    .unwrap_or(0_i8);
-                type_ids.push(type_id);
+                type_ids.push(type_id_at(fields, 0, encodings.len())?);
                 offsets.push(encoding_counts[0]);
                 encodings[0].append_default(lit)?;
                 encoding_counts[0] += 1;
@@ -1031,12 +1036,7 @@ impl Decoder {
                             "Union default cannot be applied to empty union".to_string(),
                         ));
                     }
-                    let type_id = fields
-                        .iter()
-                        .nth(0)
-                        .map(|(type_id, _)| type_id)
-                        .unwrap_or(0_i8);
-                    type_ids.push(type_id);
+                    type_ids.push(type_id_at(fields, 0, encodings.len())?);
                     offsets.push(encoding_counts[0]);
                     encodings[0].append_default(lit)?;
                     encoding_counts[0] += 1;
@@ -1047,12 +1047,7 @@ impl Decoder {
                     target_reader_index,
                     ..
                 } => {
-                    let type_id = fields
-                        .iter()
-                        .nth(*target_reader_index)
-                        .map(|(type_id, _)| type_id)
-                        .unwrap_or(0_i8);
-                    type_ids.push(type_id);
+                    type_ids.push(type_id_at(fields, *target_reader_index, encodings.len())?);
                     offsets.push(encoding_counts[*target_reader_index]);
                     encodings[*target_reader_index].append_default(lit)?;
                     encoding_counts[*target_reader_index] += 1;
@@ -1207,12 +1202,7 @@ impl Decoder {
                         encodings.len()
                     )));
                 }
-                let type_id = fields
-                    .iter()
-                    .nth(idx)
-                    .map(|(type_id, _)| type_id)
-                    .unwrap_or_else(|| i8::try_from(idx).unwrap_or(0));
-                type_ids.push(type_id);
+                type_ids.push(type_id_at(fields, idx, encodings.len())?);
                 offsets.push(encoding_counts[idx]);
                 encodings[idx].decode(buf)?;
                 encoding_counts[idx] += 1;
@@ -1298,60 +1288,18 @@ impl Decoder {
     ) -> Result<(), ArrowError> {
         match promotion {
             Promotion::Direct => self.decode(buf),
-            Promotion::IntToLong => match self {
-                Self::Int64(v) => {
-                    v.push(buf.get_int()?.into());
-                    Ok(())
-                }
-                _ => Err(ArrowError::ParseError(
-                    "Promotion Int->Long target mismatch".into(),
-                )),
-            },
-            Promotion::IntToFloat => match self {
-                Self::Float32(v) => {
-                    v.push(buf.get_int()? as f32);
-                    Ok(())
-                }
-                _ => Err(ArrowError::ParseError(
-                    "Promotion Int->Float target mismatch".into(),
-                )),
-            },
-            Promotion::IntToDouble => match self {
-                Self::Float64(v) => {
-                    v.push(buf.get_int()? as f64);
-                    Ok(())
-                }
-                _ => Err(ArrowError::ParseError(
-                    "Promotion Int->Double target mismatch".into(),
-                )),
-            },
-            Promotion::LongToFloat => match self {
-                Self::Float32(v) => {
-                    v.push(buf.get_long()? as f32);
-                    Ok(())
-                }
-                _ => Err(ArrowError::ParseError(
-                    "Promotion Long->Float target mismatch".into(),
-                )),
-            },
-            Promotion::LongToDouble => match self {
-                Self::Float64(v) => {
-                    v.push(buf.get_long()? as f64);
-                    Ok(())
-                }
-                _ => Err(ArrowError::ParseError(
-                    "Promotion Long->Double target mismatch".into(),
-                )),
-            },
-            Promotion::FloatToDouble => match self {
-                Self::Float64(v) => {
-                    v.push(buf.get_float()? as f64);
-                    Ok(())
-                }
-                _ => Err(ArrowError::ParseError(
-                    "Promotion Float->Double target mismatch".into(),
-                )),
-            },
+            Promotion::IntToLong => promote_numeric!(self, buf, Int64, get_int, i64, promotion),
+            Promotion::IntToFloat => promote_numeric!(self, buf, Float32, get_int, f32, promotion),
+            Promotion::IntToDouble => promote_numeric!(self, buf, Float64, get_int, f64, promotion),
+            Promotion::LongToFloat => {
+                promote_numeric!(self, buf, Float32, get_long, f32, promotion)
+            }
+            Promotion::LongToDouble => {
+                promote_numeric!(self, buf, Float64, get_long, f64, promotion)
+            }
+            Promotion::FloatToDouble => {
+                promote_numeric!(self, buf, Float64, get_float, f64, promotion)
+            }
             Promotion::StringToBytes => match self {
                 Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => {
                     let data = buf.get_bytes()?;
@@ -1359,9 +1307,9 @@ impl Decoder {
                     values.extend_from_slice(data);
                     Ok(())
                 }
-                _ => Err(ArrowError::ParseError(
-                    "Promotion String->Bytes target mismatch".into(),
-                )),
+                _ => Err(ArrowError::ParseError(format!(
+                    "Promotion {promotion} target mismatch",
+                ))),
             },
             Promotion::BytesToString => match self {
                 Self::String(offsets, values)
@@ -1372,9 +1320,9 @@ impl Decoder {
                     values.extend_from_slice(data);
                     Ok(())
                 }
-                _ => Err(ArrowError::ParseError(
-                    "Promotion Bytes->String target mismatch".into(),
-                )),
+                _ => Err(ArrowError::ParseError(format!(
+                    "Promotion {promotion} target mismatch",
+                ))),
             },
         }
     }
@@ -1563,6 +1511,20 @@ fn flush_dict(
     DictionaryArray::try_new(keys, values)
         .map_err(|e| ArrowError::ParseError(e.to_string()))
         .map(|arr| Arc::new(arr) as ArrayRef)
+}
+
+#[inline]
+fn type_id_at(fields: &UnionFields, idx: usize, encodings_len: usize) -> Result<i8, ArrowError> {
+    fields
+        .iter()
+        .nth(idx)
+        .map(|(tid, _)| tid)
+        .ok_or_else(|| {
+            ArrowError::SchemaError(format!(
+                "UnionFields/encodings length mismatch: child_idx={idx}, fields_len={}, encodings_len={encodings_len}",
+                fields.iter().count()
+            ))
+        })
 }
 
 #[inline]
@@ -1784,8 +1746,7 @@ impl Projector {
         if let Some(default_literal) = self.field_defaults[index].as_ref() {
             decoder.append_default(default_literal)
         } else {
-            decoder.append_null();
-            Ok(())
+            decoder.append_null()
         }
     }
 
@@ -3884,5 +3845,44 @@ mod tests {
             .unwrap();
         assert_eq!(id.value(0), 99);
         assert_eq!(name.value(0), "alice");
+    }
+
+    #[test]
+    fn union_type_ids_are_not_child_indexes() {
+        let encodings: Vec<AvroDataType> =
+            vec![avro_from_codec(Codec::Int32), avro_from_codec(Codec::Utf8)];
+        let fields: UnionFields = [
+            (42_i8, Arc::new(ArrowField::new("a", DataType::Int32, true))),
+            (7_i8, Arc::new(ArrowField::new("b", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect();
+        let dt = avro_from_codec(Codec::Union(
+            encodings.into(),
+            fields.clone(),
+            UnionMode::Dense,
+        ));
+        let mut dec = Decoder::try_new(&dt).expect("decoder");
+        let mut b1 = encode_avro_long(1);
+        b1.extend(encode_avro_bytes("hi".as_bytes()));
+        dec.decode(&mut AvroCursor::new(&b1)).expect("decode b1");
+        let mut b0 = encode_avro_long(0);
+        b0.extend(encode_avro_int(5));
+        dec.decode(&mut AvroCursor::new(&b0)).expect("decode b0");
+        let arr = dec.flush(None).expect("flush");
+        let ua = arr.as_any().downcast_ref::<UnionArray>().expect("union");
+        assert_eq!(ua.len(), 2);
+        assert_eq!(ua.type_id(0), 7, "type id must come from UnionFields");
+        assert_eq!(ua.type_id(1), 42, "type id must come from UnionFields");
+        assert_eq!(ua.value_offset(0), 0);
+        assert_eq!(ua.value_offset(1), 0);
+        let utf8_child = ua.child(7).as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(utf8_child.len(), 1);
+        assert_eq!(utf8_child.value(0), "hi");
+        let int_child = ua.child(42).as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int_child.len(), 1);
+        assert_eq!(int_child.value(0), 5);
+        let type_ids: Vec<i8> = fields.iter().map(|(tid, _)| tid).collect();
+        assert_eq!(type_ids, vec![42_i8, 7_i8]);
     }
 }

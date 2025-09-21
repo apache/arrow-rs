@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::codec::Promotion::{
+    BytesToString, Direct, FloatToDouble, IntToDouble, IntToFloat, IntToLong, LongToDouble,
+    LongToFloat, StringToBytes,
+};
 use crate::schema::{
     make_full_name, Array, Attributes, AvroSchema, ComplexType, Enum, Fixed, Map, Nullability,
     PrimitiveType, Record, Schema, Type, TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
@@ -29,6 +33,8 @@ use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use indexmap::IndexMap;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::fmt::Display;
 use std::sync::Arc;
 use strum_macros::AsRefStr;
 
@@ -115,6 +121,22 @@ pub(crate) enum Promotion {
     StringToBytes,
     /// Promotes `bytes` to a `string`.
     BytesToString,
+}
+
+impl Display for Promotion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Direct => write!(f, "Direct"),
+            IntToLong => write!(f, "Int->Long"),
+            IntToFloat => write!(f, "Int->Float"),
+            IntToDouble => write!(f, "Int->Double"),
+            LongToFloat => write!(f, "Long->Float"),
+            LongToDouble => write!(f, "Long->Double"),
+            FloatToDouble => write!(f, "Float->Double"),
+            StringToBytes => write!(f, "String->Bytes"),
+            BytesToString => write!(f, "Bytes->String"),
+        }
+    }
 }
 
 /// Information required to resolve a writer union against a reader union (or single type).
