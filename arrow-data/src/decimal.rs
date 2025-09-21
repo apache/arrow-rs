@@ -1202,7 +1202,7 @@ pub fn validate_decimal256_precision(
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value:?} is too large to store in a Decimal256 of precision {precision}. Max is {:?}",
+            "{unscaled_value} is too large to store in a Decimal256 of precision {precision}. Max is {}",
             unscaled_max_value
         )))
     } else if value < MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize] {
@@ -1214,7 +1214,7 @@ pub fn validate_decimal256_precision(
             scale,
         );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{unscaled_value:?} is too small to store in a Decimal256 of precision {precision}. Min is {:?}",
+            "{unscaled_value} is too small to store in a Decimal256 of precision {precision}. Min is {}",
             unscaled_min_value
         )))
     } else {
