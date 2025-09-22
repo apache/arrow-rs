@@ -22,7 +22,7 @@
 //! Use this module to serialize Arrow `RecordBatch` values into Avro. Two output
 //! formats are supported:
 //!
-//! * **`AvroWriter`** — writes an **Object Container File (OCF)**: a self‑describing
+//! * **[`AvroWriter`]** — writes an **Object Container File (OCF)**: a self‑describing
 //!   file with header (schema JSON + metadata), optional compression, data blocks, and
 //!   sync markers. See Avro 1.11.1 “Object Container Files.”
 //!   <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
