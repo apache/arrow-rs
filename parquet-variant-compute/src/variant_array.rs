@@ -901,8 +901,7 @@ fn rewrite_to_view_types(data_type: &DataType) -> DataType {
         DataType::Binary => DataType::BinaryView,
         DataType::List(field) => DataType::List(rewrite_field_type(field)),
         DataType::Struct(fields) => {
-            let new_fields: Fields = fields.iter().map(rewrite_field_type).collect();
-            DataType::Struct(new_fields)
+            DataType::Struct(fields.iter().map(rewrite_field_type).collect())
         }
         _ => data_type.clone(),
     }
