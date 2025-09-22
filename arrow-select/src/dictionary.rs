@@ -75,7 +75,7 @@ pub fn garbage_collect_dictionary<K: ArrowDictionaryKeyType>(
     // Create a new values array by filtering using the mask
     let values = filter(dictionary.values(), &BooleanArray::new(mask, None))?;
 
-    Ok(DictionaryArray::new(new_keys, values))
+    DictionaryArray::try_new(new_keys, values)
 }
 
 /// Equivalent to [`garbage_collect_dictionary`] but without requiring casting to a specific key type.

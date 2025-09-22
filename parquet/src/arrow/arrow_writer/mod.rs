@@ -632,6 +632,9 @@ impl PageWriter for ArrowPageWriter {
 pub struct ArrowLeafColumn(ArrayLevels);
 
 /// Computes the [`ArrowLeafColumn`] for a potentially nested [`ArrayRef`]
+///
+/// This function can be used along with [`get_column_writers`] to encode
+/// individual columns in parallel. See example on [`ArrowColumnWriter`]
 pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
     let levels = calculate_array_levels(array, field)?;
     Ok(levels.into_iter().map(ArrowLeafColumn).collect())
@@ -926,7 +929,7 @@ impl ArrowRowGroupWriterFactory {
     }
 }
 
-/// Returns the [`ArrowColumnWriter`] for a given schema
+/// Returns [`ArrowColumnWriter`]s for each column in a given schema
 pub fn get_column_writers(
     parquet: &SchemaDescriptor,
     props: &WriterPropertiesPtr,
@@ -970,7 +973,7 @@ fn get_column_writers_with_encryptor(
     Ok(writers)
 }
 
-/// Gets [`ArrowColumnWriter`] instances for different data types
+/// Creates [`ArrowColumnWriter`] instances
 struct ArrowColumnWriterFactory {
     #[cfg(feature = "encryption")]
     row_group_index: usize,
@@ -1026,7 +1029,8 @@ impl ArrowColumnWriterFactory {
         Ok(Box::<ArrowPageWriter>::default())
     }
 
-    /// Gets the [`ArrowColumnWriter`] for the given `data_type`
+    /// Gets an [`ArrowColumnWriter`] for the given `data_type`, appending the
+    /// output ColumnDesc to `leaves` and the column writers to `out`
     fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,
@@ -1034,6 +1038,7 @@ impl ArrowColumnWriterFactory {
         leaves: &mut Iter<'_, ColumnDescPtr>,
         out: &mut Vec<ArrowColumnWriter>,
     ) -> Result<()> {
+        // Instantiate writers for normal columns
         let col = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
             let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
@@ -1044,6 +1049,7 @@ impl ArrowColumnWriterFactory {
             })
         };
 
+        // Instantiate writers for byte arrays (e.g. Utf8,  Binary, etc)
         let bytes = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
             let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();

@@ -92,9 +92,8 @@ variant_test_case!(14);
 variant_test_case!(15);
 variant_test_case!(16);
 variant_test_case!(17);
-// https://github.com/apache/arrow-rs/issues/8330
-variant_test_case!(18, "Unsupported typed_value type: Date32");
-variant_test_case!(19, "Unsupported typed_value type: Date32");
+variant_test_case!(18);
+variant_test_case!(19);
 // https://github.com/apache/arrow-rs/issues/8331
 variant_test_case!(
     20,

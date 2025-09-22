@@ -1148,17 +1148,10 @@ fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
         Value::Array(mut union) => {
             union.retain(|v| !is_avro_json_null(v));
             match null_order {
-                Nullability::NullFirst => {
-                    let mut out = Vec::with_capacity(union.len() + 1);
-                    out.push(null);
-                    out.extend(union);
-                    Value::Array(out)
-                }
-                Nullability::NullSecond => {
-                    union.push(null);
-                    Value::Array(union)
-                }
+                Nullability::NullFirst => union.insert(0, null),
+                Nullability::NullSecond => union.push(null),
             }
+            Value::Array(union)
         }
         other => match null_order {
             Nullability::NullFirst => Value::Array(vec![null, other]),
@@ -1176,7 +1169,11 @@ fn union_branch_signature(branch: &Value) -> Result<String, ArrowError> {
             })?;
             match t {
                 "record" | "enum" | "fixed" => {
-                    let name = map.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                    let name = map.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                        ArrowError::SchemaError(format!(
+                            "Union branch '{t}' missing required 'name'"
+                        ))
+                    })?;
                     Ok(format!("N:{t}:{name}"))
                 }
                 "array" | "map" => Ok(format!("C:{t}")),
@@ -2483,5 +2480,27 @@ mod tests {
         let a = AvroSchema::try_from(&arrow_schema).unwrap().json_string;
         let b = AvroSchema::from_arrow_with_options(&arrow_schema, None);
         assert_eq!(a, b.unwrap().json_string);
+    }
+
+    #[test]
+    fn test_union_branch_missing_name_errors() {
+        for t in ["record", "enum", "fixed"] {
+            let branch = json!({ "type": t });
+            let err = union_branch_signature(&branch).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("Union branch '{t}' missing required 'name'")),
+                "expected missing-name error for {t}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_union_branch_named_type_signature_includes_name() {
+        let rec = json!({ "type": "record", "name": "Foo" });
+        assert_eq!(union_branch_signature(&rec).unwrap(), "N:record:Foo");
+        let en = json!({ "type": "enum", "name": "Color", "symbols": ["R", "G", "B"] });
+        assert_eq!(union_branch_signature(&en).unwrap(), "N:enum:Color");
+        let fx = json!({ "type": "fixed", "name": "Bytes16", "size": 16 });
+        assert_eq!(union_branch_signature(&fx).unwrap(), "N:fixed:Bytes16");
     }
 }
