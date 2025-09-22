@@ -418,7 +418,9 @@ macro_rules! dataset {
             let schema =
                 ApacheSchema::parse_str($schema_json).expect("invalid schema for generator");
             let arrow_schema = AvroSchema::new($schema_json.parse().unwrap());
-            let fingerprint = arrow_schema.fingerprint().expect("fingerprint failed");
+            let fingerprint = arrow_schema
+                .fingerprint(FingerprintAlgorithm::Rabin)
+                .expect("fingerprint failed");
             let prefix = make_prefix(fingerprint);
             SIZES
                 .iter()

@@ -187,7 +187,7 @@ pub type SchemaRef = Arc<Schema>;
 pub struct Schema {
     /// A sequence of fields that describe the schema.
     pub fields: Fields,
-    /// A map of key-value pairs containing additional meta data.
+    /// A map of key-value pairs containing additional metadata.
     pub metadata: HashMap<String, String>,
 }
 
