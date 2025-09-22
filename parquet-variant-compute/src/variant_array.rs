@@ -40,19 +40,20 @@ pub struct VariantType;
 impl ExtensionType for VariantType {
     const NAME: &'static str = "parquet.variant";
 
-    // Variants have no extension metadata
-    type Metadata = ();
+    // Variants extension metadata is an empty string
+    // <https://github.com/apache/arrow/blob/d803afcc43f5d132506318fd9e162d33b2c3d4cd/docs/source/format/CanonicalExtensions.rst?plain=1#L473>
+    type Metadata = &'static str;
 
     fn metadata(&self) -> &Self::Metadata {
-        &()
+        &""
     }
 
     fn serialize_metadata(&self) -> Option<String> {
-        None
+        Some(String::new())
     }
 
     fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
-        Ok(())
+        Ok("")
     }
 
     fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
