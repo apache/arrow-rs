@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::arrow::schema::extension::add_extension_type;
+use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
 use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use crate::basic::{ConvertedType, Repetition};
@@ -224,7 +224,7 @@ impl Visitor {
             if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
-                child_fields.push(convert_field(parquet_field, &mut child, arrow_field));
+                child_fields.push(convert_field(parquet_field, &mut child, arrow_field)?);
                 children.push(child);
             }
         }
@@ -355,11 +355,11 @@ impl Visitor {
         match (maybe_key, maybe_value) {
             (Some(mut key), Some(mut value)) => {
                 let key_field = Arc::new(
-                    convert_field(map_key, &mut key, arrow_key)
+                    convert_field(map_key, &mut key, arrow_key)?
                         // The key is always non-nullable (#5630)
                         .with_nullable(false),
                 );
-                let value_field = Arc::new(convert_field(map_value, &mut value, arrow_value));
+                let value_field = Arc::new(convert_field(map_value, &mut value, arrow_value)?);
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),
                     _ => HashMap::default(),
@@ -497,7 +497,7 @@ impl Visitor {
 
         match self.dispatch(item_type, new_context) {
             Ok(Some(mut item)) => {
-                let item_field = Arc::new(convert_field(item_type, &mut item, arrow_field));
+                let item_field = Arc::new(convert_field(item_type, &mut item, arrow_field)?);
 
                 // Use arrow type as hint for index size
                 let arrow_type = match context.data_type {
@@ -549,7 +549,7 @@ fn convert_field(
     parquet_type: &Type,
     field: &mut ParquetField,
     arrow_hint: Option<&Field>,
-) -> Field {
+) -> Result<Field, ParquetError> {
     let name = parquet_type.name();
     let data_type = field.arrow_type.clone();
     let nullable = field.nullable;
@@ -567,7 +567,7 @@ fn convert_field(
                 _ => Field::new(name, data_type, nullable),
             };
 
-            field.with_metadata(hint.metadata().clone())
+            Ok(field.with_metadata(hint.metadata().clone()))
         }
         None => {
             let mut ret = Field::new(name, data_type, nullable);
@@ -580,7 +580,7 @@ fn convert_field(
                 );
                 ret.set_metadata(meta);
             }
-            add_extension_type(ret, parquet_type)
+            try_add_extension_type(ret, parquet_type)
         }
     }
 }
