@@ -28,3 +28,4 @@
 //! [Geometry issue]: https://github.com/apache/arrow-rs/issues/8373
 
 pub mod interval;
+pub mod bounding;

@@ -32,6 +32,11 @@ rust-version = { workspace = true }
 
 [dependencies]
 arrow-schema = { workspace = true }
+geo-traits = { version = "0.3" }
+wkb = { version = "0.9" }
+
+[dev-dependencies]
+wkt = { version = "0.14" }
 
 [lib]
 name = "parquet_geospatial"
