@@ -17,15 +17,17 @@
 
 //! [`VariantArray`] implementation
 
-use crate::type_conversion::primitive_conversion_single_value;
+use crate::type_conversion::{generic_conversion_single_value, primitive_conversion_single_value};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
     Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    TimestampMicrosecondType, TimestampNanosecondType
 };
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
+use chrono::DateTime;
 use parquet_variant::Uuid;
 use parquet_variant::Variant;
 
@@ -837,6 +839,51 @@ fn typed_value_to_variant<'a>(
         DataType::Float64 => {
             primitive_conversion_single_value!(Float64Type, typed_value, index)
         }
+        DataType::Timestamp(timeunit, tz) => {
+            match (timeunit, tz) {
+                (TimeUnit::Microsecond, Some(_)) => {
+                    generic_conversion_single_value!(
+                        TimestampMicrosecondType,
+                        as_primitive,
+                        |v| DateTime::from_timestamp_micros(v).unwrap(),
+                        typed_value,
+                        index
+                    )
+                }
+                (TimeUnit::Microsecond, None) => {
+                    generic_conversion_single_value!(
+                        TimestampMicrosecondType,
+                        as_primitive,
+                        |v| DateTime::from_timestamp_micros(v).unwrap().naive_utc(),
+                        typed_value,
+                        index
+                    )
+                }
+                (TimeUnit::Nanosecond, Some(_)) => {
+                    generic_conversion_single_value!(
+                        TimestampNanosecondType,
+                        as_primitive,
+                        DateTime::from_timestamp_nanos,
+                        typed_value,
+                        index
+                    )
+                }
+                (TimeUnit::Nanosecond, None) => {
+                    generic_conversion_single_value!(
+                        TimestampNanosecondType,
+                        as_primitive,
+                        |v| DateTime::from_timestamp_nanos(v).naive_utc(),
+                        typed_value,
+                        index
+                    )
+                }
+                // Variant timestamp only support time unit with microsecond or nanosecond precision
+                _ => panic!(
+                    "Variant only support timestamp with microsecond or nanosecond precision"
+                ),
+            }
+        }
+
         // todo other types here (note this is very similar to cast_to_variant.rs)
         // so it would be great to figure out how to share this code
         _ => {
