@@ -26,7 +26,7 @@
 //! - Arrow project site: <https://arrow.apache.org/>
 //! - Avro 1.11.1 specification: <https://avro.apache.org/docs/1.11.1/specification/>
 //!
-//! ## Quickstart: OCF (Object Container File) round‑trip *(runnable)*
+//! ## Example: OCF (Object Container File) round‑trip
 //!
 //! The example below creates an Arrow table, writes an **Avro OCF** fully in memory,
 //! and then reads it back. OCF is a self‑describing file format that embeds the Avro
