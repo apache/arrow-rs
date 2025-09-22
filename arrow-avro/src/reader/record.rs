@@ -443,7 +443,7 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
-            (Codec::Union(encodings, fields, mode), _) if *mode == UnionMode::Dense => {
+            (Codec::Union(encodings, fields, UnionMode::Dense), _) => {
                 let decoders = encodings
                     .iter()
                     .map(Self::try_new_internal)
