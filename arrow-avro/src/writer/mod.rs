@@ -43,77 +43,6 @@
 //!   - **Confluent wire format**: magic `0x00` + **big‑endian** 4‑byte schema ID and Avro body.
 //!     <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
 //!
-//! ## Quickstart: Write an OCF in memory (runnable)
-//!
-//! ```
-//! use std::io::Cursor;
-//! use std::sync::Arc;
-//! use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
-//! use arrow_schema::{DataType, Field, Schema};
-//! use arrow_avro::writer::AvroWriter;
-//! use arrow_avro::reader::ReaderBuilder;
-//! use arrow_avro::schema::AvroSchema;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Writer schema: { id: long, name: string }
-//! let writer_schema = Schema::new(vec![
-//!     Field::new("id", DataType::Int64, false),
-//!     Field::new("name", DataType::Utf8, false),
-//! ]);
-//! let batch = RecordBatch::try_new(
-//!     Arc::new(writer_schema.clone()),
-//!     vec![
-//!         Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
-//!         Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
-//!     ],
-//! )?;
-//!
-//! // Write an Avro **Object Container File** (OCF) to memory
-//! let mut w = AvroWriter::new(Vec::<u8>::new(), writer_schema.clone())?;
-//! w.write(&batch)?;
-//! w.finish()?;
-//! let bytes = w.into_inner();
-//!
-//! // Build a Reader with the explicit reader schema
-//! let mut r = ReaderBuilder::new()
-//!     .build(Cursor::new(bytes))?;
-//!
-//! // Decode one batch and assert row count
-//! let out = r.next().unwrap()?;
-//! assert_eq!(out.num_rows(), 2);
-//! # Ok(()) }
-//! ```
-//!
-//! ## Quickstart: Write a raw Avro binary stream (runnable)
-//!
-//! This writes only the **Avro body** bytes - no OCF header/sync, no SOE/confluent prefix.
-//! If you plan to interoperate with a schema registry, add the appropriate prefix yourself
-//! (see links above).
-//!
-//! ```
-//! use std::sync::Arc;
-//! use arrow_array::{ArrayRef, Int64Array, RecordBatch};
-//! use arrow_schema::{DataType, Field, Schema};
-//! use arrow_avro::writer::AvroStreamWriter;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // One‑column Arrow batch
-//! let schema = Schema::new(vec![Field::new("x", DataType::Int64, false)]);
-//! let batch = RecordBatch::try_new(
-//!     Arc::new(schema.clone()),
-//!     vec![Arc::new(Int64Array::from(vec![10, 20])) as ArrayRef],
-//! )?;
-//!
-//! // Write a **raw** Avro stream: just Avro binary datum bytes
-//! let sink: Vec<u8> = Vec::new();
-//! let mut w = AvroStreamWriter::new(sink, schema.clone())?;
-//! w.write(&batch)?;
-//! w.finish()?;
-//! let body = w.into_inner();
-//! assert!(!body.is_empty());
-//! # Ok(()) }
-//! ```
-//!
 //! ## Choosing the Avro schema
 //!
 //! By default, the writer converts your Arrow schema to Avro (including a top‑level record
@@ -201,7 +130,6 @@ impl WriterBuilder {
             Some(json) => AvroSchema::new(json.clone()),
             None => AvroSchema::try_from(&self.schema)?,
         };
-
         let maybe_fingerprint = if F::NEEDS_PREFIX {
             match self.fingerprint_strategy {
                 Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(id)),
@@ -216,7 +144,6 @@ impl WriterBuilder {
         } else {
             None
         };
-
         let mut md = self.schema.metadata().clone();
         md.insert(
             SCHEMA_METADATA_KEY.to_string(),
@@ -257,8 +184,77 @@ pub struct Writer<W: Write, F: AvroFormat> {
 }
 
 /// Alias for an Avro **Object Container File** writer.
+///
+/// ### Quickstart (runnable)
+///
+/// ```
+/// use std::io::Cursor;
+/// use std::sync::Arc;
+/// use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
+/// use arrow_schema::{DataType, Field, Schema};
+/// use arrow_avro::writer::AvroWriter;
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Writer schema: { id: long, name: string }
+/// let writer_schema = Schema::new(vec![
+///     Field::new("id", DataType::Int64, false),
+///     Field::new("name", DataType::Utf8, false),
+/// ]);
+///
+/// // Build a RecordBatch with two rows
+/// let batch = RecordBatch::try_new(
+///     Arc::new(writer_schema.clone()),
+///     vec![
+///         Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+///         Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+///     ],
+/// )?;
+///
+/// // Write an Avro **Object Container File** (OCF) to memory
+/// let mut w = AvroWriter::new(Vec::<u8>::new(), writer_schema.clone())?;
+/// w.write(&batch)?;
+/// w.finish()?;
+/// let bytes = w.into_inner();
+///
+/// // Build a Reader and decode the batch back
+/// let mut r = ReaderBuilder::new().build(Cursor::new(bytes))?;
+/// let out = r.next().unwrap()?;
+/// assert_eq!(out.num_rows(), 2);
+/// # Ok(()) }
+/// ```
 pub type AvroWriter<W> = Writer<W, AvroOcfFormat>;
+
 /// Alias for a raw Avro **binary stream** writer.
+///
+/// ### Example
+///
+/// This writes only the **Avro body** bytes — no OCF header/sync and no
+/// single‑object or Confluent framing. If you need those frames, add them externally.
+///
+/// ```
+/// use std::sync::Arc;
+/// use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// use arrow_schema::{DataType, Field, Schema};
+/// use arrow_avro::writer::AvroStreamWriter;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // One‑column Arrow batch
+/// let schema = Schema::new(vec![Field::new("x", DataType::Int64, false)]);
+/// let batch = RecordBatch::try_new(
+///     Arc::new(schema.clone()),
+///     vec![Arc::new(Int64Array::from(vec![10, 20])) as ArrayRef],
+/// )?;
+///
+/// // Write a raw Avro stream to a Vec<u8>
+/// let sink: Vec<u8> = Vec::new();
+/// let mut w = AvroStreamWriter::new(sink, schema)?;
+/// w.write(&batch)?;
+/// w.finish()?;
+/// let bytes = w.into_inner();
+/// assert!(!bytes.is_empty());
+/// # Ok(()) }
+/// ```
 pub type AvroStreamWriter<W> = Writer<W, AvroBinaryFormat>;
 
 impl<W: Write> Writer<W, AvroOcfFormat> {

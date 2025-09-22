@@ -21,15 +21,15 @@
 //!
 //! This module exposes three layers of the API surface, from highest to lowest-level:
 //!
-//! * `ReaderBuilder`: configures how Avro is read (batch size, strict union handling,
+//! * [`ReaderBuilder`](crate::reader::ReaderBuilder): configures how Avro is read (batch size, strict union handling,
 //!   string representation, reader schema, etc.) and produces either:
 //!   * a `Reader` for **Avro Object Container Files (OCF)** read from any `BufRead`, or
 //!   * a low-level `Decoder` for **single‑object encoded** Avro bytes and Confluent
 //!     **Schema Registry** framed messages.
-//! * `Reader`: a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
+//! * [`Reader`](crate::reader::Reader): a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
 //!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
 //!   `RecordBatchReader`.
-//! * `Decoder`: a push‑based row decoder that consumes raw Avro bytes and yields ready
+//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes raw Avro bytes and yields ready
 //!   `RecordBatch` values when batches fill. This is suitable for integrating with async
 //!   byte streams, network protocols, or other custom data sources.
 //!
@@ -138,13 +138,18 @@
 //!
 //! ### Building and using a `Decoder` for **single‑object encoding** (Rabin fingerprints)
 //!
-//! The doctest below constructs a single‑object frame for a simple writer schema
-//! (`{"type":"record","name":"User","fields":[{"name":"id","type":"long"}]}`) and then
-//! decodes it into a `RecordBatch`. The Avro body encodes the long value `42` using
-//! standard zig‑zag varint encoding.
+//! The doctest below **writes** a single‑object framed record using the Avro writer
+//! (no manual varints) for the writer schema
+//! (`{"type":"record","name":"User","fields":[{"name":"id","type":"long"}]}`)
+//! and then decodes it into a `RecordBatch`.
 //!
 //! ```
-//! use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, SINGLE_OBJECT_MAGIC};
+//! use std::sync::Arc;
+//! use std::collections::HashMap;
+//! use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//! use arrow_avro::schema::{AvroSchema, SchemaStore, SCHEMA_METADATA_KEY, FingerprintStrategy};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
 //! use arrow_avro::reader::ReaderBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -152,40 +157,32 @@
 //! let mut store = SchemaStore::new();
 //! let avro_schema = AvroSchema::new(r#"{"type":"record","name":"User","fields":[
 //!   {"name":"id","type":"long"}]}"#.to_string());
-//! let fp = store.register(avro_schema)?;
+//! let _fp = store.register(avro_schema.clone())?;
 //!
-//! // Minimal Avro long encoder (zig-zag + varint).
-//! fn enc_long(v: i64, out: &mut Vec<u8>) {
-//!   let mut n = ((v << 1) ^ (v >> 63)) as u64;
-//!   while (n & !0x7F) != 0 {
-//!     out.push(((n as u8) & 0x7F) | 0x80);
-//!     n >>= 7;
-//!   }
-//!   out.push(n as u8);
-//! }
+//! // Create a single-object framed record { id: 42 } with the Avro writer.
+//! let mut md = HashMap::new();
+//! md.insert(SCHEMA_METADATA_KEY.to_string(), avro_schema.json_string.clone());
+//! let arrow = Schema::new_with_metadata(vec![Field::new("id", DataType::Int64, false)], md);
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(arrow.clone()),
+//!     vec![Arc::new(Int64Array::from(vec![42])) as ArrayRef],
+//! )?;
+//! let mut w = WriterBuilder::new(arrow)
+//!     .with_fingerprint_strategy(FingerprintStrategy::Rabin) // SOE prefix
+//!     .build::<_, AvroBinaryFormat>(Vec::new())?;
+//! w.write(&batch)?;
+//! w.finish()?;
+//! let frame = w.into_inner(); // C3 01 + fp + Avro body
 //!
-//! // Encode body for { id: 42 } according to the writer schema.
-//! let mut body = Vec::new();
-//! enc_long(42, &mut body);
-//!
-//! // Build the single-object frame: magic + 8-byte LE Rabin fingerprint + body.
-//! let mut frame = Vec::new();
-//! frame.extend_from_slice(&SINGLE_OBJECT_MAGIC);
-//! match fp {
-//!   Fingerprint::Rabin(v) => frame.extend_from_slice(&v.to_le_bytes()),
-//!   _ => unreachable!("SchemaStore::new() computes Rabin by default"),
-//! }
-//! frame.extend_from_slice(&body);
-//!
-//! // Create a Decoder and feed the frame.
+//! // Decode with a `Decoder`
 //! let mut dec = ReaderBuilder::new()
 //!   .with_writer_schema_store(store)
 //!   .with_batch_size(1024)
 //!   .build_decoder()?;
 //!
 //! dec.decode(&frame)?;
-//! let batch = dec.flush()?.expect("one batch");
-//! assert_eq!(batch.num_rows(), 1);
+//! let out = dec.flush()?.expect("one batch");
+//! assert_eq!(out.num_rows(), 1);
 //! # Ok(()) }
 //! ```
 //!
@@ -200,7 +197,12 @@
 //! decodes them into a single `RecordBatch` with two rows.
 //!
 //! ```
-//! use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm, CONFLUENT_MAGIC};
+//! use std::sync::Arc;
+//! use std::collections::HashMap;
+//! use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//! use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY, FingerprintStrategy};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
 //! use arrow_avro::reader::ReaderBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -209,31 +211,31 @@
 //! let schema_id = 7u32;
 //! let avro_schema = AvroSchema::new(r#"{"type":"record","name":"User","fields":[
 //!   {"name":"id","type":"long"}, {"name":"name","type":"string"}]}"#.to_string());
-//! store.set(Fingerprint::Id(schema_id), avro_schema)?;
+//! store.set(Fingerprint::Id(schema_id), avro_schema.clone())?;
 //!
-//! // Helpers for Avro encoding.
-//! fn enc_long(v: i64, out: &mut Vec<u8>) {
-//!   let mut n = ((v << 1) ^ (v >> 63)) as u64;
-//!   while (n & !0x7F) != 0 {
-//!     out.push(((n as u8) & 0x7F) | 0x80);
-//!     n >>= 7;
-//!   }
-//!   out.push(n as u8);
+//! // Write two Confluent-framed messages {id:1,name:"a"} and {id:2,name:"b"}.
+//! fn msg(id: i64, name: &str, schema: &AvroSchema, schema_id: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+//!     let mut md = HashMap::new();
+//!     md.insert(SCHEMA_METADATA_KEY.to_string(), schema.json_string.clone());
+//!     let arrow = Schema::new_with_metadata(
+//!         vec![Field::new("id", DataType::Int64, false), Field::new("name", DataType::Utf8, false)],
+//!         md,
+//!     );
+//!     let batch = RecordBatch::try_new(
+//!         Arc::new(arrow.clone()),
+//!         vec![
+//!           Arc::new(Int64Array::from(vec![id])) as ArrayRef,
+//!           Arc::new(StringArray::from(vec![name])) as ArrayRef,
+//!         ],
+//!     )?;
+//!     let mut w = WriterBuilder::new(arrow)
+//!         .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id)) // 0x00 + ID + body
+//!         .build::<_, AvroBinaryFormat>(Vec::new())?;
+//!     w.write(&batch)?; w.finish()?;
+//!     Ok(w.into_inner())
 //! }
-//! fn enc_len(l: usize, out: &mut Vec<u8>) { enc_long(l as i64, out); }
-//! fn enc_str(s: &str, out: &mut Vec<u8>) { enc_len(s.len(), out); out.extend_from_slice(s.as_bytes()); }
-//!
-//! // Build two messages: {id:1,name:"a"} and {id:2,name:"b"}.
-//! fn message(id: i64, name: &str, schema_id: u32) -> Vec<u8> {
-//!   let mut body = Vec::new(); enc_long(id, &mut body); enc_str(name, &mut body);
-//!   let mut m = Vec::new();
-//!   m.extend_from_slice(&CONFLUENT_MAGIC);
-//!   m.extend_from_slice(&schema_id.to_be_bytes());
-//!   m.extend_from_slice(&body);
-//!   m
-//! }
-//! let m1 = message(1, "a", schema_id);
-//! let m2 = message(2, "b", schema_id);
+//! let m1 = msg(1, "a", &avro_schema, schema_id)?;
+//! let m2 = msg(2, "b", &avro_schema, schema_id)?;
 //!
 //! // Decode both into a single batch.
 //! let mut dec = ReaderBuilder::new()
@@ -328,59 +330,15 @@
 //! The decoder uses the reader schema to resolve both versions.
 //!
 //! ```
+//! use std::sync::Arc;
+//! use std::collections::HashMap;
 //! use arrow_avro::reader::ReaderBuilder;
 //! use arrow_avro::schema::{
-//!     AvroSchema, Fingerprint, FingerprintAlgorithm, SchemaStore, CONFLUENT_MAGIC,
+//!     AvroSchema, Fingerprint, FingerprintAlgorithm, SchemaStore,
+//!     SCHEMA_METADATA_KEY, FingerprintStrategy,
 //! };
-//!
-//! fn encode_long(value: i64, out: &mut Vec<u8>) {
-//!     // Avro zigzag + varint
-//!     let mut n = ((value << 1) ^ (value >> 63)) as u64;
-//!     while (n & !0x7F) != 0 {
-//!         out.push(((n as u8) & 0x7F) | 0x80);
-//!         n >>= 7;
-//!     }
-//!     out.push(n as u8);
-//! }
-//! fn encode_len(len: usize, out: &mut Vec<u8>) { encode_long(len as i64, out) }
-//! fn encode_string(s: &str, out: &mut Vec<u8>) { encode_len(s.len(), out); out.extend_from_slice(s.as_bytes()); }
-//! fn encode_union_index(index: i64, out: &mut Vec<u8>) { encode_long(index, out) }
-//!
-//! // Writer v0 (ID=0):
-//! //   {"type":"record","name":"User","fields":[
-//! //     {"name":"id","type":"int"},
-//! //     {"name":"name","type":"string"}]}
-//! fn encode_user_v0_body(id: i32, name: &str) -> Vec<u8> {
-//!     let mut v = Vec::with_capacity(16 + name.len());
-//!     encode_long(id as i64, &mut v);   // id: int (zigzag-encoded)
-//!     encode_string(name, &mut v);      // name: string
-//!     v
-//! }
-//!
-//! // Writer v1 (ID=1):
-//! //   {"type":"record","name":"User","fields":[
-//! //     {"name":"id","type":"long"},
-//! //     {"name":"name","type":"string"},
-//! //     {"name":"email","type":["null","string"],"default":null}]}
-//! fn encode_user_v1_body(id: i64, name: &str, email: Option<&str>) -> Vec<u8> {
-//!     let mut v = Vec::with_capacity(24 + name.len() + email.map(|s| s.len()).unwrap_or(0));
-//!     encode_long(id, &mut v);          // id: long
-//!     encode_string(name, &mut v);      // name: string
-//!     match email {
-//!         None => encode_union_index(0, &mut v), // union idx 0 => null
-//!         Some(s) => { encode_union_index(1, &mut v); encode_string(s, &mut v); }
-//!     }
-//!     v
-//! }
-//!
-//! // Confluent wire format: 0x00 (magic) + 4B big-endian schema ID and Avro body
-//! fn frame_confluent(id_be: u32, body: &[u8]) -> Vec<u8> {
-//!     let mut out = Vec::with_capacity(5 + body.len());
-//!     out.extend_from_slice(&CONFLUENT_MAGIC);     // 0x00
-//!     out.extend_from_slice(&id_be.to_be_bytes()); // 4-byte BE schema id
-//!     out.extend_from_slice(body);                 // Avro record body
-//!     out
-//! }
+//! use arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Reader: current topic schema (no reader-added fields)
@@ -410,8 +368,43 @@
 //!     let id_v1: u32 = 1;
 //!
 //!     let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None); // integer IDs
-//!     store.set(Fingerprint::Id(id_v0), writer_v0)?;
-//!     store.set(Fingerprint::Id(id_v1), writer_v1)?;
+//!     store.set(Fingerprint::Id(id_v0), writer_v0.clone())?;
+//!     store.set(Fingerprint::Id(id_v1), writer_v1.clone())?;
+//!
+//!     // Write two Confluent-framed messages using each writer version
+//!     // frame0: writer v0 body {id:1001_i32, name:"v0-alice"}
+//!     let mut md0 = HashMap::new();
+//!     md0.insert(SCHEMA_METADATA_KEY.to_string(), writer_v0.json_string.clone());
+//!     let arrow0 = Schema::new_with_metadata(
+//!         vec![Field::new("id", DataType::Int32, false),
+//!              Field::new("name", DataType::Utf8, false)], md0);
+//!     let batch0 = RecordBatch::try_new(
+//!         Arc::new(arrow0.clone()),
+//!         vec![Arc::new(Int32Array::from(vec![1001])) as ArrayRef,
+//!              Arc::new(StringArray::from(vec!["v0-alice"])) as ArrayRef])?;
+//!     let mut w0 = arrow_avro::writer::WriterBuilder::new(arrow0)
+//!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v0))
+//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!     w0.write(&batch0)?; w0.finish()?;
+//!     let frame0 = w0.into_inner(); // 0x00 + id_v0 + body
+//!
+//!     // frame1: writer v1 body {id:2002_i64, name:"v1-bob", email: Some("bob@example.com")}
+//!     let mut md1 = HashMap::new();
+//!    md1.insert(SCHEMA_METADATA_KEY.to_string(), writer_v1.json_string.clone());
+//!     let arrow1 = Schema::new_with_metadata(
+//!         vec![Field::new("id", DataType::Int64, false),
+//!              Field::new("name", DataType::Utf8, false),
+//!              Field::new("email", DataType::Utf8, true)], md1);
+//!     let batch1 = RecordBatch::try_new(
+//!         Arc::new(arrow1.clone()),
+//!         vec![Arc::new(Int64Array::from(vec![2002])) as ArrayRef,
+//!              Arc::new(StringArray::from(vec!["v1-bob"])) as ArrayRef,
+//!              Arc::new(StringArray::from(vec![Some("bob@example.com")])) as ArrayRef])?;
+//!     let mut w1 = arrow_avro::writer::WriterBuilder::new(arrow1)
+//!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v1))
+//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!     w1.write(&batch1)?; w1.finish()?;
+//!     let frame1 = w1.into_inner(); // 0x00 + id_v1 + body
 //!
 //!     // Build a streaming Decoder that understands Confluent framing
 //!     let mut decoder = ReaderBuilder::new()
@@ -419,12 +412,6 @@
 //!         .with_writer_schema_store(store)
 //!         .with_batch_size(8) // small demo batches
 //!         .build_decoder()?;
-//!
-//!     // Prepare a couple of framed messages (as if read from Kafka)
-//!     let body0 = encode_user_v0_body(1001, "v0-alice");
-//!     let body1 = encode_user_v1_body(2002, "v1-bob", Some("bob@example.com"));
-//!     let frame0 = frame_confluent(id_v0, &body0);
-//!     let frame1 = frame_confluent(id_v1, &body1);
 //!
 //!     // Decode each whole frame, then drain completed rows with flush()
 //!     let mut total_rows = 0usize;
@@ -437,7 +424,7 @@
 //!     assert_eq!(consumed1, frame1.len(), "decoder must consume the whole frame");
 //!     while let Some(batch) = decoder.flush()? { total_rows += batch.num_rows(); }
 //!
-//!     // We sent 2 records to we should get 2 rows (possibly one per flush)
+//!     // We sent 2 records so we should get 2 rows (possibly one per flush)
 //!     assert_eq!(total_rows, 2);
 //!     Ok(())
 //! }
@@ -561,7 +548,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// Build and use a `Decoder` for single‑object encoding:
 ///
 /// ```
-/// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, SINGLE_OBJECT_MAGIC};
+/// use arrow_avro::schema::{AvroSchema, SchemaStore};
 /// use arrow_avro::reader::ReaderBuilder;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -572,36 +559,29 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// );
 /// let fp = store.register(avro)?;
 ///
-/// // Minimal Avro long encoder (zig-zag varint)
-/// fn enc_long(v: i64, out: &mut Vec<u8>) {
-///     let mut n = ((v << 1) ^ (v >> 63)) as u64;
-///     while (n & !0x7F) != 0 {
-///         out.push(((n as u8) & 0x7F) | 0x80);
-///         n >>= 7;
-///     }
-///     out.push(n as u8);
-/// }
+/// // --- Hidden: write a single-object framed row {x:7} ---
+/// # use std::sync::Arc;
+/// # use std::collections::HashMap;
+/// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// # use arrow_schema::{DataType, Field, Schema};
+/// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # let mut md = HashMap::new();
+/// # md.insert(SCHEMA_METADATA_KEY.to_string(),
+/// #     r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string());
+/// # let arrow = Schema::new_with_metadata(vec![Field::new("x", DataType::Int64, false)], md);
+/// # let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![7])) as ArrayRef])?;
+/// # let mut w = WriterBuilder::new(arrow)
+/// #     .with_fingerprint_strategy(fp.into())
+/// #     .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// # w.write(&batch)?; w.finish()?; let frame = w.into_inner();
 ///
-/// // Body for record { x: 7 }
-/// let mut body = Vec::new();
-/// enc_long(7, &mut body);
-///
-/// // Single-object frame: magic + 8-byte little-endian Rabin fingerprint + body
-/// let mut frame = Vec::new();
-/// frame.extend_from_slice(&SINGLE_OBJECT_MAGIC);
-/// match fp {
-///     Fingerprint::Rabin(v) => frame.extend_from_slice(&v.to_le_bytes()),
-///     _ => unreachable!("SchemaStore::new() computes Rabin fingerprints"),
-/// }
-/// frame.extend_from_slice(&body);
-///
-/// // Decode one row from the frame
 /// let mut decoder = ReaderBuilder::new()
 ///     .with_writer_schema_store(store)
 ///     .with_batch_size(16)
 ///     .build_decoder()?;
 ///
-/// decoder.decode(&frame)?;
+/// # decoder.decode(&frame)?;
 /// let batch = decoder.flush()?.expect("one row");
 /// assert_eq!(batch.num_rows(), 1);
 /// # Ok(()) }
@@ -614,35 +594,39 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// Build and use a `Decoder` for Confluent Registry messages:
 ///
 /// ```
-/// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm, CONFLUENT_MAGIC};
+/// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm};
 /// use arrow_avro::reader::ReaderBuilder;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
 /// store.set(Fingerprint::Id(1234), AvroSchema::new(r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string()))?;
 ///
-/// // Encode two messages {x:1} and {x:2}
-/// fn enc_long(v: i64, out: &mut Vec<u8>) {
-///   let mut n = ((v << 1) ^ (v >> 63)) as u64;
-///   while (n & !0x7F) != 0 { out.push(((n as u8) & 0x7F) | 0x80); n >>= 7; }
-///   out.push(n as u8);
-/// }
-/// fn msg(x: i64) -> Vec<u8> {
-///   let mut body = Vec::new(); enc_long(x, &mut body);
-///   let mut m = Vec::new();
-///   m.extend_from_slice(&CONFLUENT_MAGIC);
-///   m.extend_from_slice(&1234u32.to_be_bytes());
-///   m.extend_from_slice(&body);
-///   m
-/// }
-/// let m1 = msg(1);
-/// let m2 = msg(2);
+/// // --- Hidden: encode two Confluent-framed messages {x:1} and {x:2} ---
+/// # use std::sync::Arc;
+/// # use std::collections::HashMap;
+/// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// # use arrow_schema::{DataType, Field, Schema};
+/// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # fn msg(x: i64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+/// #   let mut md = HashMap::new();
+/// #   md.insert(SCHEMA_METADATA_KEY.to_string(),
+/// #     r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string());
+/// #   let arrow = Schema::new_with_metadata(vec![Field::new("x", DataType::Int64, false)], md);
+/// #   let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![x])) as ArrayRef])?;
+/// #   let mut w = WriterBuilder::new(arrow)
+/// #       .with_fingerprint_strategy(FingerprintStrategy::Id(1234))
+/// #       .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// #   w.write(&batch)?; w.finish()?; Ok(w.into_inner())
+/// # }
+/// # let m1 = msg(1)?;
+/// # let m2 = msg(2)?;
 ///
 /// let mut decoder = ReaderBuilder::new()
 ///     .with_writer_schema_store(store)
 ///     .build_decoder()?;
-/// decoder.decode(&m1)?;
-/// decoder.decode(&m2)?;
+/// # decoder.decode(&m1)?;
+/// # decoder.decode(&m2)?;
 /// let batch = decoder.flush()?.expect("two rows");
 /// assert_eq!(batch.num_rows(), 2);
 /// # Ok(()) }
