@@ -668,9 +668,12 @@ impl FlightIpcEncoder {
     /// Convert a `RecordBatch` to a Vec of `FlightData` representing
     /// dictionaries and a `FlightData` representing the batch
     fn encode_batch(&mut self, batch: &RecordBatch) -> Result<(Vec<FlightData>, FlightData)> {
-        let (encoded_dictionaries, encoded_batch) =
-            self.data_gen
-                .encoded_batch(batch, &mut self.dictionary_tracker, &self.options, &mut self.compression_context)?;
+        let (encoded_dictionaries, encoded_batch) = self.data_gen.encoded_batch(
+            batch,
+            &mut self.dictionary_tracker,
+            &self.options,
+            &mut self.compression_context,
+        )?;
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
         let flight_batch = encoded_batch.into();
@@ -1601,7 +1604,12 @@ mod tests {
         let mut compression_context = CompressionContext::default();
 
         let (encoded_dictionaries, encoded_batch) = data_gen
-            .encoded_batch(batch, &mut dictionary_tracker, options, &mut compression_context)
+            .encoded_batch(
+                batch,
+                &mut dictionary_tracker,
+                options,
+                &mut compression_context,
+            )
             .expect("DictionaryTracker configured above to not error on replacement");
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
