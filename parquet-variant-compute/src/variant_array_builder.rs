@@ -133,7 +133,7 @@ impl VariantArrayBuilder {
         );
         // TODO add arrow extension type metadata
 
-        VariantArray::try_new(Arc::new(inner)).expect("valid VariantArray by construction")
+        VariantArray::try_new(&inner).expect("valid VariantArray by construction")
     }
 
     /// Appends a null row to the builder.

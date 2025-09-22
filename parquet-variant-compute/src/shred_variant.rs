@@ -22,7 +22,7 @@ use crate::variant_to_arrow::{
     make_primitive_variant_to_arrow_row_builder, PrimitiveVariantToArrowRowBuilder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{Array as _, ArrayRef, BinaryViewArray, NullBufferBuilder};
+use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
 use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Fields};
@@ -310,7 +310,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
             let array =
                 ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
-            builder = builder.with_field(field_name, Arc::new(array), false);
+            builder = builder.with_field(field_name, ArrayRef::from(array), false);
         }
         if let Some(nulls) = self.typed_value_nulls.finish() {
             builder = builder.with_nulls(nulls);
@@ -327,7 +327,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use arrow::array::{Float64Array, Int64Array};
+    use arrow::array::{Array, Float64Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Fields};
     use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt as _};
     use std::sync::Arc;
@@ -556,18 +556,11 @@ mod tests {
             .unwrap();
 
         // Extract score and age fields from typed_value struct
-        let score_field = typed_value
-            .column_by_name("score")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<crate::variant_array::ShreddedVariantFieldArray>()
-            .unwrap();
-        let age_field = typed_value
-            .column_by_name("age")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<crate::variant_array::ShreddedVariantFieldArray>()
-            .unwrap();
+        let score_field =
+            ShreddedVariantFieldArray::try_new(typed_value.column_by_name("score").unwrap())
+                .unwrap();
+        let age_field =
+            ShreddedVariantFieldArray::try_new(typed_value.column_by_name("age").unwrap()).unwrap();
 
         let score_value = score_field
             .value_field()
