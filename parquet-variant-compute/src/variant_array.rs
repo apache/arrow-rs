@@ -38,7 +38,7 @@ use std::sync::Arc;
 pub struct VariantType;
 
 impl ExtensionType for VariantType {
-    const NAME: &'static str = "parquet.variant";
+    const NAME: &'static str = "arrow.parquet.variant";
 
     // Variants extension metadata is an empty string
     // <https://github.com/apache/arrow/blob/d803afcc43f5d132506318fd9e162d33b2c3d4cd/docs/source/format/CanonicalExtensions.rst?plain=1#L473>
@@ -61,8 +61,7 @@ impl ExtensionType for VariantType {
             Ok(())
         } else {
             Err(ArrowError::InvalidArgumentError(format!(
-                "VariantType only supports StructArray, got {}",
-                data_type
+                "VariantType only supports StructArray, got {data_type}"
             )))
         }
     }
