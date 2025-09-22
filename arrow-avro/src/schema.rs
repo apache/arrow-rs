@@ -360,8 +360,8 @@ impl AvroSchema {
     /// as defined by the Avro specification. Depending on `hash_type`, this
     /// will return one of the supported [`Fingerprint`] variants:
     /// - [`Fingerprint::Rabin`] for [`FingerprintAlgorithm::Rabin`]
-    /// - [`Fingerprint::MD5`] for [`FingerprintAlgorithm::MD5`]
-    /// - [`Fingerprint::SHA256`] for [`FingerprintAlgorithm::SHA256`]
+    /// - `Fingerprint::MD5` for `FingerprintAlgorithm::MD5`
+    /// - `Fingerprint::SHA256` for `FingerprintAlgorithm::SHA256`
     ///
     /// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
     /// and will result in an error. If you intend to use a Schema Registry ID-based
