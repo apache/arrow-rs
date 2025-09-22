@@ -264,7 +264,6 @@ enum Decoder {
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        // Extract just the Promotion (if any) to simplify pattern matching
         if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
             if info.writer_is_union && !info.reader_is_union {
                 let mut clone = data_type.clone();
@@ -283,6 +282,7 @@ impl Decoder {
     }
 
     fn try_new_internal(data_type: &AvroDataType) -> Result<Self, ArrowError> {
+        // Extract just the Promotion (if any) to simplify pattern matching
         let promotion = match data_type.resolution.as_ref() {
             Some(ResolutionInfo::Promotion(p)) => Some(p),
             _ => None,
@@ -443,6 +443,7 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
+            (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Union(encodings, fields, UnionMode::Dense), _) => {
                 let decoders = encodings
                     .iter()
@@ -470,7 +471,6 @@ impl Decoder {
                     "Sparse Arrow unions are not yet supported".to_string(),
                 ));
             }
-            (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
@@ -1270,10 +1270,10 @@ impl UnionDecoder {
 
     #[inline]
     fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, ArrowError> {
+        let branches_len = self.branches.len();
         let Some(reader_branch) = self.branches.get_mut(reader_idx) else {
             return Err(ArrowError::ParseError(format!(
-                "Union branch index {reader_idx} out of range ({} branches)",
-                self.branches.len()
+                "Union branch index {reader_idx} out of range ({branches_len} branches)"
             )));
         };
         self.type_ids.push(self.type_id_by_reader_idx[reader_idx]);
@@ -1851,21 +1851,19 @@ impl Skipper {
             }
             Self::Union(encodings) => {
                 // Union tag must be ZigZag-decoded
-                let branch = buf.get_long()?;
-                if branch < 0 {
+                let idx = buf.get_long()?;
+                if idx < 0 {
                     return Err(ArrowError::ParseError(format!(
-                        "Negative union branch index {branch}"
+                        "Negative union branch index {idx}"
                     )));
                 }
-                let idx = branch as usize;
-                if let Some(encoding) = encodings.get_mut(idx) {
-                    encoding.skip(buf)
-                } else {
-                    Err(ArrowError::ParseError(format!(
+                let Some(encoding) = encodings.get_mut(idx as usize) else {
+                    return Err(ArrowError::ParseError(format!(
                         "Union branch index {idx} out of range for skipper ({} branches)",
                         encodings.len()
-                    )))
-                }
+                    )));
+                };
+                encoding.skip(buf)
             }
             Self::Nullable(order, inner) => {
                 let branch = buf.read_vlq()?;
