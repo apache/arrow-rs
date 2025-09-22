@@ -203,6 +203,31 @@ impl From<BoundingBox> for parquet::BoundingBox {
     }
 }
 
+impl From<parquet::BoundingBox> for BoundingBox {
+    fn from(bbox: parquet::BoundingBox) -> Self {
+        let mut new_bbox = Self::new(
+            bbox.xmin.into(),
+            bbox.xmax.into(),
+            bbox.ymin.into(),
+            bbox.ymax.into(),
+        );
+
+        new_bbox = match (bbox.zmin, bbox.zmax) {
+            (Some(zmin), Some(zmax)) => new_bbox.with_zrange(zmin.into(), zmax.into()),
+            // If both None or mismatch, set it to None and don't error
+            _ => new_bbox,
+        };
+
+        new_bbox = match (bbox.mmin, bbox.mmax) {
+            (Some(mmin), Some(mmax)) => new_bbox.with_mrange(mmin.into(), mmax.into()),
+            // If both None or mismatch, set it to None and don't error
+            _ => new_bbox,
+        };
+
+        new_bbox
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +309,121 @@ mod tests {
         assert_eq!(thrift_bbox_zm.zmax, Some(OrderedFloat(15.0)));
         assert_eq!(thrift_bbox_zm.mmin, Some(OrderedFloat(10.0)));
         assert_eq!(thrift_bbox_zm.mmax, Some(OrderedFloat(20.0)));
+    }
+
+    #[test]
+    fn test_bounding_box_from_thrift() {
+        use thrift::OrderedFloat;
+
+        let thrift_bbox = parquet::BoundingBox {
+            xmin: OrderedFloat(0.0),
+            xmax: OrderedFloat(0.0),
+            ymin: OrderedFloat(10.0),
+            ymax: OrderedFloat(10.0),
+            zmin: None,
+            zmax: None,
+            mmin: None,
+            mmax: None,
+        };
+        let bbox: BoundingBox = thrift_bbox.into();
+        assert_eq!(bbox.get_xmin(), 0.0);
+        assert_eq!(bbox.get_xmax(), 0.0);
+        assert_eq!(bbox.get_ymin(), 10.0);
+        assert_eq!(bbox.get_ymax(), 10.0);
+        assert_eq!(bbox.get_zmin(), None);
+        assert_eq!(bbox.get_zmax(), None);
+        assert_eq!(bbox.get_mmin(), None);
+        assert_eq!(bbox.get_mmax(), None);
+
+        let thrift_bbox_z = parquet::BoundingBox {
+            xmin: OrderedFloat(0.0),
+            xmax: OrderedFloat(0.0),
+            ymin: OrderedFloat(10.0),
+            ymax: OrderedFloat(10.0),
+            zmin: Some(OrderedFloat(130.0)),
+            zmax: Some(OrderedFloat(130.0)),
+            mmin: None,
+            mmax: None,
+        };
+        let bbox_z: BoundingBox = thrift_bbox_z.into();
+        assert_eq!(bbox_z.get_xmin(), 0.0);
+        assert_eq!(bbox_z.get_xmax(), 0.0);
+        assert_eq!(bbox_z.get_ymin(), 10.0);
+        assert_eq!(bbox_z.get_ymax(), 10.0);
+        assert_eq!(bbox_z.get_zmin(), Some(130.0));
+        assert_eq!(bbox_z.get_zmax(), Some(130.0));
+        assert_eq!(bbox_z.get_mmin(), None);
+        assert_eq!(bbox_z.get_mmax(), None);
+
+        let thrift_bbox_m = parquet::BoundingBox {
+            xmin: OrderedFloat(0.0),
+            xmax: OrderedFloat(0.0),
+            ymin: OrderedFloat(10.0),
+            ymax: OrderedFloat(10.0),
+            zmin: None,
+            zmax: None,
+            mmin: Some(OrderedFloat(120.0)),
+            mmax: Some(OrderedFloat(120.0)),
+        };
+        let bbox_m: BoundingBox = thrift_bbox_m.into();
+        assert_eq!(bbox_m.get_xmin(), 0.0);
+        assert_eq!(bbox_m.get_xmax(), 0.0);
+        assert_eq!(bbox_m.get_ymin(), 10.0);
+        assert_eq!(bbox_m.get_ymax(), 10.0);
+        assert_eq!(bbox_m.get_zmin(), None);
+        assert_eq!(bbox_m.get_zmax(), None);
+        assert_eq!(bbox_m.get_mmin(), Some(120.0));
+        assert_eq!(bbox_m.get_mmax(), Some(120.0));
+
+        let thrift_bbox_zm = parquet::BoundingBox {
+            xmin: OrderedFloat(0.0),
+            xmax: OrderedFloat(0.0),
+            ymin: OrderedFloat(10.0),
+            ymax: OrderedFloat(10.0),
+            zmin: Some(OrderedFloat(130.0)),
+            zmax: Some(OrderedFloat(130.0)),
+            mmin: Some(OrderedFloat(120.0)),
+            mmax: Some(OrderedFloat(120.0)),
+        };
+
+        let bbox_zm: BoundingBox = thrift_bbox_zm.into();
+        assert_eq!(bbox_zm.get_xmin(), 0.0);
+        assert_eq!(bbox_zm.get_xmax(), 0.0);
+        assert_eq!(bbox_zm.get_ymin(), 10.0);
+        assert_eq!(bbox_zm.get_ymax(), 10.0);
+        assert_eq!(bbox_zm.get_zmin(), Some(130.0));
+        assert_eq!(bbox_zm.get_zmax(), Some(130.0));
+        assert_eq!(bbox_zm.get_mmin(), Some(120.0));
+        assert_eq!(bbox_zm.get_mmax(), Some(120.0));
+    }
+
+    #[test]
+    fn test_bounding_box_from_and_to_thrift() {
+        use thrift::OrderedFloat;
+
+        let thrift_bbox = parquet::BoundingBox {
+            xmin: OrderedFloat(0.0),
+            xmax: OrderedFloat(0.0),
+            ymin: OrderedFloat(10.0),
+            ymax: OrderedFloat(10.0),
+            zmin: Some(OrderedFloat(130.0)),
+            zmax: Some(OrderedFloat(130.0)),
+            mmin: Some(OrderedFloat(120.0)),
+            mmax: Some(OrderedFloat(120.0)),
+        };
+
+        // cloning to make sure it's not moved
+        let bbox: BoundingBox = thrift_bbox.clone().into();
+        assert_eq!(bbox.get_xmin(), 0.0);
+        assert_eq!(bbox.get_xmax(), 0.0);
+        assert_eq!(bbox.get_ymin(), 10.0);
+        assert_eq!(bbox.get_ymax(), 10.0);
+        assert_eq!(bbox.get_zmin(), Some(130.0));
+        assert_eq!(bbox.get_zmax(), Some(130.0));
+        assert_eq!(bbox.get_mmin(), Some(120.0));
+        assert_eq!(bbox.get_mmax(), Some(120.0));
+
+        let thrift_bbox_2: parquet::BoundingBox = bbox.into();
+        assert_eq!(thrift_bbox_2, thrift_bbox);
     }
 }

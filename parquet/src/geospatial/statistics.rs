@@ -67,31 +67,7 @@ pub fn from_thrift(
 ) -> Result<Option<GeospatialStatistics>> {
     Ok(match geo_statistics {
         Some(geo_stats) => {
-            let bbox = if let Some(bbox) = geo_stats.bbox {
-                let mut new_bbox = BoundingBox::new(
-                    bbox.xmin.into(),
-                    bbox.xmax.into(),
-                    bbox.ymin.into(),
-                    bbox.ymax.into(),
-                );
-
-                new_bbox = match (bbox.zmin, bbox.zmax) {
-                    (Some(zmin), Some(zmax)) => new_bbox.with_zrange(zmin.into(), zmax.into()),
-                    // If both None or mismatch, set it to None and don't error
-                    _ => new_bbox,
-                };
-
-                new_bbox = match (bbox.mmin, bbox.mmax) {
-                    (Some(mmin), Some(mmax)) => new_bbox.with_mrange(mmin.into(), mmax.into()),
-                    // If both None or mismatch, set it to None and don't error
-                    _ => new_bbox,
-                };
-
-                Some(new_bbox)
-            } else {
-                None
-            };
-
+            let bbox = geo_stats.bbox.map(|bbox| bbox.into());
             // If vector is empty, then set it to None
             let geospatial_types: Option<Vec<i32>> =
                 geo_stats.geospatial_types.filter(|v| !v.is_empty());
