@@ -837,7 +837,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
-    geo_statistics: Option<geo_statistics::GeospatialStatistics>,
+    geo_statistics: Option<Box<geo_statistics::GeospatialStatistics>>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
@@ -1066,7 +1066,7 @@ impl ColumnChunkMetaData {
     /// Returns geospatial statistics that are set for this column chunk,
     /// or `None` if no geospatial statistics are available.
     pub fn geo_statistics(&self) -> Option<&geo_statistics::GeospatialStatistics> {
-        self.geo_statistics.as_ref()
+        self.geo_statistics.as_ref().map(|boxed| boxed.as_ref())
     }
 
     /// Returns the offset for the page encoding stats,
@@ -1173,7 +1173,8 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
-        let geo_statistics = geo_statistics::from_thrift(col_metadata.geospatial_statistics)?;
+        let geo_statistics =
+            geo_statistics::from_thrift(col_metadata.geospatial_statistics)?.map(Box::new);
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()
@@ -1305,7 +1306,9 @@ impl ColumnChunkMetaData {
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
             size_statistics,
-            geospatial_statistics: geo_statistics::to_thrift(self.geo_statistics.as_ref()),
+            geospatial_statistics: geo_statistics::to_thrift(
+                self.geo_statistics.as_ref().map(|boxed| boxed.as_ref()),
+            ),
         }
     }
 
@@ -1443,7 +1446,7 @@ impl ColumnChunkMetaDataBuilder {
 
     /// Sets geospatial statistics for this column chunk.
     pub fn set_geo_statistics(mut self, value: geo_statistics::GeospatialStatistics) -> Self {
-        self.0.geo_statistics = Some(value);
+        self.0.geo_statistics = Some(Box::new(value));
         self
     }
 
@@ -1986,9 +1989,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2792;
+        let base_expected_size = 2344;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 3128;
+        let base_expected_size = 2680;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2016,9 +2019,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3296;
+        let bigger_expected_size = 2848;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3632;
+        let bigger_expected_size = 3184;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
