@@ -2702,7 +2702,7 @@ mod tests {
         let gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
         let (_, encoded) = gen
-            .encoded_batch(
+            .encode(
                 &batch,
                 &mut dict_tracker,
                 &Default::default(),
@@ -2745,7 +2745,7 @@ mod tests {
         let gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
         let (_, encoded) = gen
-            .encoded_batch(
+            .encode(
                 &batch,
                 &mut dict_tracker,
                 &Default::default(),

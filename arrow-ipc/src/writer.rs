@@ -186,7 +186,7 @@ impl Default for IpcWriteOptions {
 /// // and the data for the actual array.
 /// let data_gen = IpcDataGenerator::default();
 /// let (encoded_dictionaries, encoded_message) = data_gen
-///   .encoded_batch(&batch, &mut dictionary_tracker, &options, &mut compression_context)
+///   .encode(&batch, &mut dictionary_tracker, &options, &mut compression_context)
 ///   .unwrap();
 /// # }
 /// ```
@@ -438,7 +438,7 @@ impl IpcDataGenerator {
     /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
     /// The [DictionaryTracker] keeps track of dictionaries with new `dict_id`s  (so they are only sent once)
     /// Make sure the [DictionaryTracker] is initialized at the start of the stream.
-    pub fn encoded_batch(
+    pub fn encode(
         &self,
         batch: &RecordBatch,
         dictionary_tracker: &mut DictionaryTracker,
@@ -466,6 +466,24 @@ impl IpcDataGenerator {
         let encoded_message =
             self.record_batch_to_bytes(batch, write_options, compression_context)?;
         Ok((encoded_dictionaries, encoded_message))
+    }
+
+    /// Encodes a batch to a number of [EncodedData] items (dictionary batches + the record batch).
+    /// The [DictionaryTracker] keeps track of dictionaries with new `dict_id`s  (so they are only sent once)
+    /// Make sure the [DictionaryTracker] is initialized at the start of the stream.
+    #[deprecated(since = "57.0.0", note = "Use `encode` instead")]
+    pub fn encoded_batch(
+        &self,
+        batch: &RecordBatch,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+    ) -> Result<(Vec<EncodedData>, EncodedData), ArrowError> {
+        self.encode(
+            batch,
+            dictionary_tracker,
+            write_options,
+            &mut Default::default(),
+        )
     }
 
     /// Write a `RecordBatch` into two sets of bytes, one for the header (crate::Message) and the
@@ -1113,7 +1131,7 @@ impl<W: Write> FileWriter<W> {
             ));
         }
 
-        let (encoded_dictionaries, encoded_message) = self.data_gen.encoded_batch(
+        let (encoded_dictionaries, encoded_message) = self.data_gen.encode(
             batch,
             &mut self.dictionary_tracker,
             &self.write_options,
@@ -1388,7 +1406,7 @@ impl<W: Write> StreamWriter<W> {
 
         let (encoded_dictionaries, encoded_message) = self
             .data_gen
-            .encoded_batch(
+            .encode(
                 batch,
                 &mut self.dictionary_tracker,
                 &self.write_options,
@@ -2311,7 +2329,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
-        gen.encoded_batch(
+        gen.encode(
             &batch,
             &mut dict_tracker,
             &Default::default(),
@@ -2359,7 +2377,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
-        gen.encoded_batch(
+        gen.encode(
             &batch,
             &mut dict_tracker,
             &Default::default(),
