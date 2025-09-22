@@ -144,7 +144,7 @@ impl FlightService for FlightServiceImpl {
             .enumerate()
             .flat_map(|(counter, batch)| {
                 let (encoded_dictionaries, encoded_batch) = data_gen
-                    .encoded_batch(
+                    .encode(
                         batch,
                         &mut dictionary_tracker,
                         &options,

@@ -95,7 +95,7 @@ pub fn batches_to_flight_data(
     let mut compression_context = CompressionContext::default();
 
     for batch in batches.iter() {
-        let (encoded_dictionaries, encoded_batch) = data_gen.encoded_batch(
+        let (encoded_dictionaries, encoded_batch) = data_gen.encode(
             batch,
             &mut dictionary_tracker,
             &options,

@@ -162,7 +162,7 @@ async fn send_batch(
     let data_gen = writer::IpcDataGenerator::default();
 
     let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, dictionary_tracker, options, compression_context)
+        .encode(batch, dictionary_tracker, options, compression_context)
         .expect("DictionaryTracker configured above to not error on replacement");
 
     let dictionary_flight_data: Vec<FlightData> =
