@@ -2381,11 +2381,11 @@ fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
     let array = array.as_primitive::<FROM>();
     let size = std::mem::size_of::<FROM::Native>();
     let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(size, array.len()));
-    Ok(Arc::new(GenericBinaryArray::<O>::new(
+    Ok(Arc::new(GenericBinaryArray::<O>::try_new(
         offsets,
         array.values().inner().clone(),
         array.nulls().cloned(),
-    )))
+    )?))
 }
 
 fn adjust_timestamp_to_timezone<T: ArrowTimestampType>(

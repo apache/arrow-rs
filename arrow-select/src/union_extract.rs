@@ -257,7 +257,7 @@ fn extract_dense(
                 //case 6: some type_ids matches our target, but not all. For selected values, take the value pointed by the offset. For unselected, use a valid null
                 Ok(take(
                     target,
-                    &Int32Array::new(offsets.clone(), Some(selected.into())),
+                    &Int32Array::try_new(offsets.clone(), Some(selected.into()))?,
                     None,
                 )?)
             }
