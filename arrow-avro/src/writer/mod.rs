@@ -22,11 +22,11 @@
 //! Use this module to serialize Arrow `RecordBatch` values into Avro. Two output
 //! formats are supported:
 //!
-//! * **[`AvroWriter`]** — writes an **Object Container File (OCF)**: a self‑describing
+//! * **[`AvroWriter`](crate::writer::AvroWriter)** — writes an **Object Container File (OCF)**: a self‑describing
 //!   file with header (schema JSON + metadata), optional compression, data blocks, and
 //!   sync markers. See Avro 1.11.1 “Object Container Files.”
 //!   <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
-//! * **`AvroStreamWriter`** — writes a **raw Avro binary stream** (“datum” bytes) without
+//! * **[`AvroStreamWriter`](crate::writer::AvroStreamWriter)** — writes a **raw Avro binary stream** (“datum” bytes) without
 //!   any container framing. This is useful when the schema is known out‑of‑band (i.e.,
 //!   via a registry) and you want minimal overhead.
 //!
@@ -90,7 +90,7 @@
 //! If you plan to interoperate with a schema registry, add the appropriate prefix yourself
 //! (see links above).
 //!
-//! ```ignore
+//! ```
 //! use std::sync::Arc;
 //! use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 //! use arrow_schema::{DataType, Field, Schema};
@@ -244,8 +244,8 @@ impl WriterBuilder {
 /// This type is generic over the output Write sink (`W`) and the Avro format (`F`).
 /// You’ll usually use the concrete aliases:
 ///
-/// * [`AvroWriter`] for **OCF** (self‑describing container file)
-/// * [`AvroStreamWriter`] for **raw** Avro binary streams
+/// * **[`AvroWriter`]** for **OCF** (self‑describing container file)
+/// * **[`AvroStreamWriter`]** for **raw** Avro binary streams
 #[derive(Debug)]
 pub struct Writer<W: Write, F: AvroFormat> {
     writer: W,
@@ -305,7 +305,7 @@ impl<W: Write> Writer<W, AvroBinaryFormat> {
     ///
     /// ### Example
     ///
-    /// ```ignore
+    /// ```
     /// use std::sync::Arc;
     /// use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     /// use arrow_schema::{DataType, Field, Schema};
