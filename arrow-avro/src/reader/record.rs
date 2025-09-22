@@ -35,6 +35,7 @@ use arrow_schema::{
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use std::cmp::Ordering;
 use std::sync::Arc;
+use strum_macros::AsRefStr;
 use uuid::Uuid;
 
 const DEFAULT_CAPACITY: usize = 1024;
@@ -77,22 +78,6 @@ macro_rules! append_decimal_default {
                 )
                 .to_string(),
             )),
-        }
-    }};
-}
-
-macro_rules! promote_numeric {
-    ($self:expr, $buf:expr, $variant:ident, $getter:ident, $to:ty, $promotion:expr) => {{
-        match $self {
-            Decoder::$variant(v) => {
-                let x = $buf.$getter()?;
-                v.push(x as $to);
-                Ok(())
-            }
-            _ => Err(ArrowError::ParseError(format!(
-                "Promotion {} target mismatch",
-                $promotion
-            ))),
         }
     }};
 }
@@ -228,7 +213,7 @@ struct EnumResolution {
     default_index: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, AsRefStr)]
 enum Decoder {
     Null(usize),
     Boolean(BooleanBufferBuilder),
@@ -458,12 +443,7 @@ impl Decoder {
                     Box::new(val_dec),
                 )
             }
-            (Codec::Union(encodings, fields, mode), _) => {
-                if *mode != UnionMode::Dense {
-                    return Err(ArrowError::NotYetImplemented(
-                        "Sparse Arrow unions are not yet supported".to_string(),
-                    ));
-                }
+            (Codec::Union(encodings, fields, mode), _) if *mode == UnionMode::Dense => {
                 let decoders = encodings
                     .iter()
                     .map(Self::try_new_internal)
@@ -485,12 +465,12 @@ impl Decoder {
                 }
                 Self::Union(builder.build()?)
             }
-            (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (&Codec::Union(_, _, _), _) => {
+            (Codec::Union(_, _, _), _) => {
                 return Err(ArrowError::NotYetImplemented(
-                    "Union type decoding is not yet supported".to_string(),
-                ))
+                    "Sparse Arrow unions are not yet supported".to_string(),
+                ));
             }
+            (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
@@ -924,20 +904,30 @@ impl Decoder {
         buf: &mut AvroCursor<'_>,
         promotion: Promotion,
     ) -> Result<(), ArrowError> {
+        macro_rules! promote_numeric_to {
+            ($variant:ident, $getter:ident, $to:ty) => {{
+                match self {
+                    Self::$variant(v) => {
+                        let x = buf.$getter()?;
+                        v.push(x as $to);
+                        Ok(())
+                    }
+                    other => Err(ArrowError::ParseError(format!(
+                        "Promotion {promotion} target mismatch: expected {}, got {}",
+                        stringify!($variant),
+                        <Self as ::std::convert::AsRef<str>>::as_ref(other)
+                    ))),
+                }
+            }};
+        }
         match promotion {
             Promotion::Direct => self.decode(buf),
-            Promotion::IntToLong => promote_numeric!(self, buf, Int64, get_int, i64, promotion),
-            Promotion::IntToFloat => promote_numeric!(self, buf, Float32, get_int, f32, promotion),
-            Promotion::IntToDouble => promote_numeric!(self, buf, Float64, get_int, f64, promotion),
-            Promotion::LongToFloat => {
-                promote_numeric!(self, buf, Float32, get_long, f32, promotion)
-            }
-            Promotion::LongToDouble => {
-                promote_numeric!(self, buf, Float64, get_long, f64, promotion)
-            }
-            Promotion::FloatToDouble => {
-                promote_numeric!(self, buf, Float64, get_float, f64, promotion)
-            }
+            Promotion::IntToLong => promote_numeric_to!(Int64, get_int, i64),
+            Promotion::IntToFloat => promote_numeric_to!(Float32, get_int, f32),
+            Promotion::IntToDouble => promote_numeric_to!(Float64, get_int, f64),
+            Promotion::LongToFloat => promote_numeric_to!(Float32, get_long, f32),
+            Promotion::LongToDouble => promote_numeric_to!(Float64, get_long, f64),
+            Promotion::FloatToDouble => promote_numeric_to!(Float64, get_float, f64),
             Promotion::StringToBytes => match self {
                 Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => {
                     let data = buf.get_bytes()?;
@@ -945,8 +935,9 @@ impl Decoder {
                     values.extend_from_slice(data);
                     Ok(())
                 }
-                _ => Err(ArrowError::ParseError(format!(
-                    "Promotion {promotion} target mismatch",
+                other => Err(ArrowError::ParseError(format!(
+                    "Promotion {promotion} target mismatch: expected bytes (Binary/StringToBytes), got {}",
+                    <Self as AsRef<str>>::as_ref(other)
                 ))),
             },
             Promotion::BytesToString => match self {
@@ -958,8 +949,9 @@ impl Decoder {
                     values.extend_from_slice(data);
                     Ok(())
                 }
-                _ => Err(ArrowError::ParseError(format!(
-                    "Promotion {promotion} target mismatch",
+                other => Err(ArrowError::ParseError(format!(
+                    "Promotion {promotion} target mismatch: expected string (String/StringView/BytesToString), got {}",
+                    <Self as AsRef<str>>::as_ref(other)
                 ))),
             },
         }
@@ -1110,12 +1102,12 @@ impl Decoder {
 }
 
 #[derive(Debug)]
-struct DispatchLut {
+struct DispatchLookupTable {
     to_reader: Box<[i16]>,
     promotion: Box<[Promotion]>,
 }
 
-impl DispatchLut {
+impl DispatchLookupTable {
     fn from_writer_to_reader(promotion_map: &[Option<(usize, Promotion)>]) -> Self {
         let mut to_reader = Vec::with_capacity(promotion_map.len());
         let mut promotion = Vec::with_capacity(promotion_map.len());
@@ -1140,16 +1132,9 @@ impl DispatchLut {
 
     // Resolve a writer branch index to (reader_idx, promotion)
     #[inline]
-    fn resolve(&self, writer_idx: usize) -> Option<(usize, Promotion)> {
-        if writer_idx >= self.to_reader.len() {
-            return None;
-        }
-        let reader_index = self.to_reader[writer_idx];
-        if reader_index < 0 {
-            None
-        } else {
-            Some((reader_index as usize, self.promotion[writer_idx]))
-        }
+    fn resolve(&self, writer_index: usize) -> Option<(usize, Promotion)> {
+        let reader_index = *self.to_reader.get(writer_index)?;
+        (reader_index >= 0).then(|| (reader_index as usize, self.promotion[writer_index]))
     }
 }
 
@@ -1160,7 +1145,7 @@ struct UnionDecoder {
     offsets: Vec<i32>,
     branches: Vec<Decoder>,
     counts: Vec<i32>,
-    type_id_by_reader_idx: Arc<[i8]>,
+    type_id_by_reader_idx: Vec<i8>,
     null_branch: Option<usize>,
     default_emit_idx: usize,
     null_emit_idx: usize,
@@ -1175,7 +1160,7 @@ impl Default for UnionDecoder {
             offsets: Vec::new(),
             branches: Vec::new(),
             counts: Vec::new(),
-            type_id_by_reader_idx: Arc::from([]),
+            type_id_by_reader_idx: Vec::new(),
             null_branch: None,
             default_emit_idx: 0,
             null_emit_idx: 0,
@@ -1187,7 +1172,7 @@ impl Default for UnionDecoder {
 #[derive(Debug)]
 enum UnionReadPlan {
     ReaderUnion {
-        lookup_table: DispatchLut,
+        lookup_table: DispatchLookupTable,
     },
     FromSingle {
         reader_idx: usize,
@@ -1195,7 +1180,7 @@ enum UnionReadPlan {
     },
     ToSingle {
         target: Box<Decoder>,
-        lookup_table: DispatchLut,
+        lookup_table: DispatchLookupTable,
     },
     Passthrough,
 }
@@ -1206,12 +1191,10 @@ impl UnionDecoder {
         branches: Vec<Decoder>,
         resolved: Option<ResolvedUnion>,
     ) -> Result<Self, ArrowError> {
-        let reader_type_codes: Arc<[i8]> =
-            Arc::from(fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>());
+        let reader_type_codes = fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>();
         let null_branch = branches.iter().position(|b| matches!(b, Decoder::Null(_)));
         let default_emit_idx = 0;
         let null_emit_idx = null_branch.unwrap_or(default_emit_idx);
-        let plan = Self::plan_from_resolved(resolved)?;
         let branch_len = branches.len().max(reader_type_codes.len());
         Ok(Self {
             fields,
@@ -1223,7 +1206,7 @@ impl UnionDecoder {
             null_branch,
             default_emit_idx,
             null_emit_idx,
-            plan,
+            plan: Self::plan_from_resolved(resolved)?,
         })
     }
 
@@ -1233,7 +1216,7 @@ impl UnionDecoder {
     ) -> Result<Self, ArrowError> {
         // This constructor is only for writer-union to single-type resolution
         debug_assert!(info.writer_is_union && !info.reader_is_union);
-        let lookup_table = DispatchLut::from_writer_to_reader(&info.writer_to_reader);
+        let lookup_table = DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader);
         Ok(Self {
             plan: UnionReadPlan::ToSingle {
                 target,
@@ -1244,31 +1227,33 @@ impl UnionDecoder {
     }
 
     fn plan_from_resolved(resolved: Option<ResolvedUnion>) -> Result<UnionReadPlan, ArrowError> {
-        match resolved {
-            None => Ok(UnionReadPlan::Passthrough),
-            Some(info) => match (info.writer_is_union, info.reader_is_union) {
-                (true, true) => {
-                    let lookup_table = DispatchLut::from_writer_to_reader(&info.writer_to_reader);
-                    Ok(UnionReadPlan::ReaderUnion { lookup_table })
-                }
-                (false, true) => {
-                    let (reader_idx, promotion) =
-                        info.writer_to_reader.first().and_then(|x| *x).ok_or_else(|| {
-                            ArrowError::SchemaError(
-                                "Writer type does not match any reader union branch".to_string(),
-                            )
-                        })?;
-                    Ok(UnionReadPlan::FromSingle {
-                        reader_idx,
-                        promotion,
-                    })
-                }
-                (true, false) => Err(ArrowError::InvalidArgumentError(
-                    "UnionDecoder::try_new cannot build writer-union to single; use UnionDecoderBuilder with a target"
-                        .to_string(),
-                )),
-                (false, false) => Ok(UnionReadPlan::Passthrough),
-            },
+        let Some(info) = resolved else {
+            return Ok(UnionReadPlan::Passthrough);
+        };
+        match (info.writer_is_union, info.reader_is_union) {
+            (true, true) => {
+                let lookup_table =
+                    DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader);
+                Ok(UnionReadPlan::ReaderUnion { lookup_table })
+            }
+            (false, true) => {
+                let Some(&(reader_idx, promotion)) =
+                    info.writer_to_reader.first().and_then(Option::as_ref)
+                else {
+                    return Err(ArrowError::SchemaError(
+                        "Writer type does not match any reader union branch".to_string(),
+                    ));
+                };
+                Ok(UnionReadPlan::FromSingle {
+                    reader_idx,
+                    promotion,
+                })
+            }
+            (true, false) => Err(ArrowError::InvalidArgumentError(
+                "UnionDecoder::try_new cannot build writer-union to single; use UnionDecoderBuilder with a target"
+                    .to_string(),
+            )),
+            (false, false) => Ok(UnionReadPlan::Passthrough),
         }
     }
 
@@ -1322,18 +1307,6 @@ impl UnionDecoder {
 
     fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
         let (reader_idx, promotion) = match &mut self.plan {
-            UnionReadPlan::ToSingle {
-                target,
-                lookup_table,
-            } => {
-                let idx = Self::read_tag(buf)?;
-                return match lookup_table.resolve(idx) {
-                    Some((_, promotion)) => target.decode_with_promotion(buf, promotion),
-                    None => Err(ArrowError::ParseError(format!(
-                        "Writer union branch {idx} does not resolve to reader type"
-                    ))),
-                };
-            }
             UnionReadPlan::Passthrough => (Self::read_tag(buf)?, Promotion::Direct),
             UnionReadPlan::ReaderUnion { lookup_table } => {
                 let idx = Self::read_tag(buf)?;
@@ -1347,10 +1320,17 @@ impl UnionDecoder {
                 reader_idx,
                 promotion,
             } => (*reader_idx, *promotion),
-            UnionReadPlan::ToSingle { .. } => {
-                return Err(ArrowError::ParseError(
-                    "Invalid union read plan state".to_string(),
-                ));
+            UnionReadPlan::ToSingle {
+                target,
+                lookup_table,
+            } => {
+                let idx = Self::read_tag(buf)?;
+                return match lookup_table.resolve(idx) {
+                    Some((_, promotion)) => target.decode_with_promotion(buf, promotion),
+                    None => Err(ArrowError::ParseError(format!(
+                        "Writer union branch {idx} does not resolve to reader type"
+                    ))),
+                };
             }
         };
         let decoder = self.emit_to(reader_idx)?;
@@ -1358,31 +1338,29 @@ impl UnionDecoder {
     }
 
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
-        match &mut self.plan {
-            UnionReadPlan::ToSingle { target, .. } => target.flush(nulls),
-            _ => {
-                debug_assert!(
-                    nulls.is_none(),
-                    "UnionArray does not accept a validity bitmap; \
-                     nulls should have been materialized as a Null child during decode"
-                );
-                let children = self
-                    .branches
-                    .iter_mut()
-                    .map(|d| d.flush(None))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let type_ids_buf = flush_values(&mut self.type_ids).into_iter().collect();
-                let offsets_buf = flush_values(&mut self.offsets).into_iter().collect();
-                let arr = UnionArray::try_new(
-                    self.fields.clone(),
-                    type_ids_buf,
-                    Some(offsets_buf),
-                    children,
-                )
-                .map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                Ok(Arc::new(arr))
-            }
+        if let UnionReadPlan::ToSingle { target, .. } = &mut self.plan {
+            return target.flush(nulls);
         }
+        debug_assert!(
+            nulls.is_none(),
+            "UnionArray does not accept a validity bitmap; \
+                     nulls should have been materialized as a Null child during decode"
+        );
+        let children = self
+            .branches
+            .iter_mut()
+            .map(|d| d.flush(None))
+            .collect::<Result<Vec<_>, _>>()?;
+        let type_ids_buf = flush_values(&mut self.type_ids).into_iter().collect();
+        let offsets_buf = flush_values(&mut self.offsets).into_iter().collect();
+        let arr = UnionArray::try_new(
+            self.fields.clone(),
+            type_ids_buf,
+            Some(offsets_buf),
+            children,
+        )
+        .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+        Ok(Arc::new(arr))
     }
 }
 
@@ -1421,7 +1399,7 @@ impl UnionDecoderBuilder {
 
     fn build(self) -> Result<UnionDecoder, ArrowError> {
         match (self.resolved, self.fields, self.branches, self.target) {
-            (resolved, Some(fields), Some(branches), _) => {
+            (resolved, Some(fields), Some(branches), None) => {
                 UnionDecoder::try_new(fields, branches, resolved)
             }
             (Some(info), None, None, Some(target))
@@ -1430,8 +1408,9 @@ impl UnionDecoderBuilder {
                 UnionDecoder::try_new_from_writer_union(info, target)
             }
             _ => Err(ArrowError::InvalidArgumentError(
-                "UnionDecoderBuilder requires (fields + branches) for reader-unions \
-                 or (resolved + target) for writer-union to single"
+                "Invalid UnionDecoderBuilder configuration: expected either \
+                 (fields + branches + resolved) with no target for reader-unions, or \
+                 (resolved + target) with no fields/branches for writer-union to single."
                     .to_string(),
             )),
         }
