@@ -1103,7 +1103,7 @@ impl Decoder {
 
 #[derive(Debug)]
 struct DispatchLookupTable {
-    to_reader: Box<[i16]>,
+    to_reader: Box<[i8]>,
     promotion: Box<[Promotion]>,
 }
 
@@ -1114,8 +1114,8 @@ impl DispatchLookupTable {
         for map in promotion_map {
             match *map {
                 Some((idx, promo)) => {
-                    debug_assert!(idx <= i16::MAX as usize);
-                    to_reader.push(idx as i16);
+                    debug_assert!(idx <= i8::MAX as usize);
+                    to_reader.push(idx as i8);
                     promotion.push(promo);
                 }
                 None => {
