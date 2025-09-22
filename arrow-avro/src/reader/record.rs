@@ -19,12 +19,9 @@ use crate::codec::{
     AvroDataType, AvroField, AvroLiteral, Codec, Promotion, ResolutionInfo, ResolvedRecord,
     ResolvedUnion,
 };
-use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::schema::Nullability;
-use arrow_array::builder::{
-    Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder, StringViewBuilder,
-};
+use arrow_array::builder::{Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder};
 #[cfg(feature = "small_decimals")]
 use arrow_array::builder::{Decimal32Builder, Decimal64Builder};
 use arrow_array::types::*;
@@ -81,43 +78,6 @@ macro_rules! append_decimal_default {
                 .to_string(),
             )),
         }
-    }};
-}
-
-macro_rules! flush_union {
-    ($fields:expr, $type_ids:expr, $offsets:expr, $encodings:expr) => {{
-        let encoding_arrays = $encodings
-            .iter_mut()
-            .map(|d| d.flush(None))
-            .collect::<Result<Vec<_>, _>>()?;
-        let type_ids_buf: ScalarBuffer<i8> = flush_values($type_ids).into_iter().collect();
-        let offsets_buf: ScalarBuffer<i32> = flush_values($offsets).into_iter().collect();
-        let arr = UnionArray::try_new(
-            $fields.clone(),
-            type_ids_buf,
-            Some(offsets_buf),
-            encoding_arrays,
-        )
-        .map_err(|e| ArrowError::ParseError(e.to_string()))?;
-        Arc::new(arr)
-    }};
-}
-
-macro_rules! get_writer_union_action {
-    ($buf:expr, $union_resolution:expr) => {{
-        let branch = $buf.get_long()?;
-        if branch < 0 {
-            return Err(ArrowError::ParseError(format!(
-                "Negative union branch index {branch}"
-            )));
-        }
-        let idx = branch as usize;
-        let Some(dispatch) = $union_resolution.dispatch.as_deref() else {
-            return Err(ArrowError::SchemaError(
-                "dispatch table missing for writer=union".to_string(),
-            ));
-        };
-        (idx, *dispatch.get(idx).unwrap_or(&BranchDispatch::NoMatch))
     }};
 }
 
@@ -268,132 +228,6 @@ struct EnumResolution {
     default_index: i32,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum BranchDispatch {
-    NoMatch,
-    ToReader {
-        reader_idx: usize,
-        promotion: Promotion,
-    },
-}
-
-#[derive(Debug)]
-struct UnionResolution {
-    dispatch: Option<Arc<[BranchDispatch]>>,
-    kind: UnionResolvedKind,
-}
-
-#[derive(Debug)]
-enum UnionResolvedKind {
-    Both {
-        reader_type_codes: Arc<[i8]>,
-    },
-    ToSingle {
-        target: Box<Decoder>,
-    },
-    FromSingle {
-        reader_type_codes: Arc<[i8]>,
-        target_reader_index: usize,
-        promotion: Promotion,
-    },
-}
-
-#[derive(Debug, Default)]
-struct UnionResolutionBuilder {
-    fields: Option<UnionFields>,
-    resolved: Option<ResolvedUnion>,
-}
-
-impl UnionResolutionBuilder {
-    fn new() -> Self {
-        Self {
-            fields: None,
-            resolved: None,
-        }
-    }
-
-    fn with_fields(mut self, fields: UnionFields) -> Self {
-        self.fields = Some(fields);
-        self
-    }
-
-    fn with_resolved_union(mut self, resolved_union: ResolvedUnion) -> Self {
-        self.resolved = Some(resolved_union);
-        self
-    }
-
-    fn build(self) -> Result<UnionResolution, ArrowError> {
-        let info = self.resolved.ok_or_else(|| {
-            ArrowError::InvalidArgumentError(
-                "UnionResolutionBuilder requires resolved_union to be provided".to_string(),
-            )
-        })?;
-        let writer_dispatch: Option<Arc<[BranchDispatch]>> = info.writer_is_union.then(|| {
-            let dispatches: Vec<BranchDispatch> = info
-                .writer_to_reader
-                .iter()
-                .map(|m| match m {
-                    Some((reader_idx, promotion)) => BranchDispatch::ToReader {
-                        reader_idx: *reader_idx,
-                        promotion: *promotion,
-                    },
-                    None => BranchDispatch::NoMatch,
-                })
-                .collect();
-            Arc::from(dispatches)
-        });
-        let reader_type_codes: Option<Arc<[i8]>> = if info.reader_is_union {
-            let fields = self.fields.ok_or_else(|| {
-                ArrowError::InvalidArgumentError(
-                    "UnionResolutionBuilder for reader union requires fields".to_string(),
-                )
-            })?;
-            let codes: Vec<i8> = fields.iter().map(|(tid, _)| tid).collect();
-            Some(Arc::from(codes))
-        } else {
-            None
-        };
-        match (writer_dispatch, reader_type_codes) {
-            (Some(dispatch), Some(reader_type_codes)) => Ok(UnionResolution {
-                dispatch: Some(dispatch),
-                kind: UnionResolvedKind::Both { reader_type_codes },
-            }),
-            (Some(dispatch), None) => Ok(UnionResolution {
-                dispatch: Some(dispatch),
-                kind: UnionResolvedKind::ToSingle {
-                    target: Box::new(Decoder::Null(0)),
-                },
-            }),
-            (None, Some(reader_type_codes)) => {
-                // writer_is_union == false in this arm, so writer_to_reader must be a singleton:
-                //   [ Some((reader_idx, promotion)) ] if the single writer type matches any
-                //   branch of the reader union; [ None ] otherwise.
-                debug_assert!(
-                    !info.writer_is_union && info.writer_to_reader.len() == 1,
-                    "internal invariant: expected a single writer to reader mapping when writer_is_union=false"
-                );
-                let Some(Some((target_reader_index, promotion))) = info.writer_to_reader.first()
-                else {
-                    return Err(ArrowError::SchemaError(
-                        "Writer type does not match any branch of the reader union".to_string(),
-                    ));
-                };
-                Ok(UnionResolution {
-                    dispatch: None,
-                    kind: UnionResolvedKind::FromSingle {
-                        reader_type_codes,
-                        target_reader_index: *target_reader_index,
-                        promotion: *promotion,
-                    },
-                })
-            }
-            (None, None) => Err(ArrowError::InvalidArgumentError(
-                "UnionResolutionBuilder used for non-union case".to_string(),
-            )),
-        }
-    }
-}
-
 #[derive(Debug)]
 enum Decoder {
     Null(usize),
@@ -439,43 +273,25 @@ enum Decoder {
     Decimal64(usize, Option<usize>, Option<usize>, Decimal64Builder),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
-    Union(
-        UnionFields,
-        Vec<i8>,
-        Vec<i32>,
-        Vec<Decoder>,
-        Vec<i32>,
-        Option<UnionResolution>,
-    ),
+    Union(UnionDecoder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
 }
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
+        // Extract just the Promotion (if any) to simplify pattern matching
         if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
             if info.writer_is_union && !info.reader_is_union {
                 let mut clone = data_type.clone();
-                clone.resolution = None;
+                clone.resolution = None; // Build target base decoder without Union resolution
                 let target = Box::new(Self::try_new_internal(&clone)?);
-                let mut union_resolution = UnionResolutionBuilder::new()
-                    .with_resolved_union(info.clone())
-                    .build()?;
-                if let UnionResolvedKind::ToSingle { target: t } = &mut union_resolution.kind {
-                    *t = target;
-                }
-                let mut base = Self::Union(
-                    UnionFields::empty(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Some(union_resolution),
+                let decoder = Self::Union(
+                    UnionDecoderBuilder::new()
+                        .with_resolved_union(info.clone())
+                        .with_target(target)
+                        .build()?,
                 );
-                if let Some(n) = data_type.nullability() {
-                    base =
-                        Self::Nullable(n, NullBufferBuilder::new(DEFAULT_CAPACITY), Box::new(base));
-                }
-                return Ok(base);
+                return Ok(decoder);
             }
         }
         Self::try_new_internal(data_type)
@@ -652,35 +468,22 @@ impl Decoder {
                     .iter()
                     .map(Self::try_new_internal)
                     .collect::<Result<Vec<_>, _>>()?;
-                let fields_len = fields.iter().count();
-                debug_assert_eq!(
-                    fields_len,
-                    decoders.len(),
-                    "Union fields and decoders must align"
-                );
-                if fields_len != decoders.len() {
+                if fields.len() != decoders.len() {
                     return Err(ArrowError::SchemaError(format!(
-                        "UnionFields/encodings length mismatch at construction: fields_len={fields_len}, encodings_len={}",
+                        "Union has {} fields but {} decoders",
+                        fields.len(),
                         decoders.len()
                     )));
                 }
-                let union_resolution = match data_type.resolution.as_ref() {
-                    Some(ResolutionInfo::Union(info)) if info.reader_is_union => Some(
-                        UnionResolutionBuilder::new()
-                            .with_fields(fields.clone())
-                            .with_resolved_union(info.clone())
-                            .build()?,
-                    ),
-                    _ => None,
-                };
-                Self::Union(
-                    fields.clone(),
-                    Vec::with_capacity(DEFAULT_CAPACITY),
-                    Vec::with_capacity(DEFAULT_CAPACITY),
-                    decoders,
-                    vec![0; encodings.len()],
-                    union_resolution,
-                )
+                let mut builder = UnionDecoderBuilder::new()
+                    .with_fields(fields.clone())
+                    .with_branches(decoders);
+                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
+                    if info.reader_is_union {
+                        builder = builder.with_resolved_union(info.clone());
+                    }
+                }
+                Self::Union(builder.build()?)
             }
             (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
             (&Codec::Union(_, _, _), _) => {
@@ -747,56 +550,7 @@ impl Decoder {
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
             Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
-            Self::Union(fields, type_ids, offsets, encodings, encoding_counts, None) => {
-                if encodings.is_empty() {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Cannot append null to empty union".to_string(),
-                    ));
-                }
-                let idx = encodings
-                    .iter()
-                    .position(|ch| matches!(ch, Decoder::Null(_)))
-                    .unwrap_or(0);
-                type_ids.push(type_id_at(fields, idx, encodings.len())?);
-                offsets.push(encoding_counts[idx]);
-                encodings[idx].append_null();
-                encoding_counts[idx] += 1;
-            }
-            Self::Union(
-                fields,
-                type_ids,
-                offsets,
-                encodings,
-                encoding_counts,
-                Some(union_resolution),
-            ) => match &mut union_resolution.kind {
-                UnionResolvedKind::Both { .. } => {
-                    let mut chosen = None;
-                    for (i, ch) in encodings.iter().enumerate() {
-                        if matches!(ch, Decoder::Null(_)) {
-                            chosen = Some(i);
-                            break;
-                        }
-                    }
-                    let idx = chosen.unwrap_or(0);
-                    type_ids.push(type_id_at(fields, idx, encodings.len())?);
-                    offsets.push(encoding_counts[idx]);
-                    encodings[idx].append_null();
-                    encoding_counts[idx] += 1;
-                }
-                UnionResolvedKind::ToSingle { target } => {
-                    target.append_null();
-                }
-                UnionResolvedKind::FromSingle {
-                    target_reader_index,
-                    ..
-                } => {
-                    type_ids.push(type_id_at(fields, *target_reader_index, encodings.len())?);
-                    offsets.push(encoding_counts[*target_reader_index]);
-                    encodings[*target_reader_index].append_null();
-                    encoding_counts[*target_reader_index] += 1;
-                }
-            },
+            Self::Union(u) => u.append_null()?,
             Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null();
@@ -1011,50 +765,7 @@ impl Decoder {
                     "Default for enum must be a symbol".to_string(),
                 )),
             },
-            Self::Union(fields, type_ids, offsets, encodings, encoding_counts, None) => {
-                if encodings.is_empty() {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Union default cannot be applied to empty union".to_string(),
-                    ));
-                }
-                type_ids.push(type_id_at(fields, 0, encodings.len())?);
-                offsets.push(encoding_counts[0]);
-                encodings[0].append_default(lit)?;
-                encoding_counts[0] += 1;
-                Ok(())
-            }
-            Self::Union(
-                fields,
-                type_ids,
-                offsets,
-                encodings,
-                encoding_counts,
-                Some(union_resolution),
-            ) => match &mut union_resolution.kind {
-                UnionResolvedKind::Both { .. } => {
-                    if encodings.is_empty() {
-                        return Err(ArrowError::InvalidArgumentError(
-                            "Union default cannot be applied to empty union".to_string(),
-                        ));
-                    }
-                    type_ids.push(type_id_at(fields, 0, encodings.len())?);
-                    offsets.push(encoding_counts[0]);
-                    encodings[0].append_default(lit)?;
-                    encoding_counts[0] += 1;
-                    Ok(())
-                }
-                UnionResolvedKind::ToSingle { target } => target.append_default(lit),
-                UnionResolvedKind::FromSingle {
-                    target_reader_index,
-                    ..
-                } => {
-                    type_ids.push(type_id_at(fields, *target_reader_index, encodings.len())?);
-                    offsets.push(encoding_counts[*target_reader_index]);
-                    encodings[*target_reader_index].append_default(lit)?;
-                    encoding_counts[*target_reader_index] += 1;
-                    Ok(())
-                }
-            },
+            Self::Union(u) => u.append_default(lit),
             Self::Record(field_meta, decoders, projector) => match lit {
                 AvroLiteral::Map(entries) => {
                     for (i, dec) in decoders.iter_mut().enumerate() {
@@ -1189,81 +900,7 @@ impl Decoder {
                 let nanos = (millis as i64) * 1_000_000;
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
-            Self::Union(fields, type_ids, offsets, encodings, encoding_counts, None) => {
-                let branch = buf.get_long()?;
-                if branch < 0 {
-                    return Err(ArrowError::ParseError(format!(
-                        "Negative union branch index {branch}"
-                    )));
-                }
-                let idx = branch as usize;
-                if idx >= encodings.len() {
-                    return Err(ArrowError::ParseError(format!(
-                        "Union branch index {idx} out of range ({} branches)",
-                        encodings.len()
-                    )));
-                }
-                type_ids.push(type_id_at(fields, idx, encodings.len())?);
-                offsets.push(encoding_counts[idx]);
-                encodings[idx].decode(buf)?;
-                encoding_counts[idx] += 1;
-            }
-            Self::Union(
-                _,
-                type_ids,
-                offsets,
-                encodings,
-                encoding_counts,
-                Some(union_resolution),
-            ) => match &mut union_resolution.kind {
-                UnionResolvedKind::Both {
-                    reader_type_codes, ..
-                } => {
-                    let (idx, action) = get_writer_union_action!(buf, union_resolution);
-                    match action {
-                        BranchDispatch::NoMatch => {
-                            return Err(ArrowError::ParseError(format!(
-                                "Union branch index {idx} not resolvable by reader schema"
-                            )));
-                        }
-                        BranchDispatch::ToReader {
-                            reader_idx,
-                            promotion,
-                        } => {
-                            let type_id = reader_type_codes[reader_idx];
-                            type_ids.push(type_id);
-                            offsets.push(encoding_counts[reader_idx]);
-                            encodings[reader_idx].decode_with_promotion(buf, promotion)?;
-                            encoding_counts[reader_idx] += 1;
-                        }
-                    }
-                }
-                UnionResolvedKind::ToSingle { target } => {
-                    let (idx, action) = get_writer_union_action!(buf, union_resolution);
-                    match action {
-                        BranchDispatch::NoMatch => {
-                            return Err(ArrowError::ParseError(format!(
-                                "Writer union branch {idx} does not resolve to reader type"
-                            )));
-                        }
-                        BranchDispatch::ToReader { promotion, .. } => {
-                            target.decode_with_promotion(buf, promotion)?;
-                        }
-                    }
-                }
-                UnionResolvedKind::FromSingle {
-                    reader_type_codes,
-                    target_reader_index,
-                    promotion,
-                    ..
-                } => {
-                    let type_id = reader_type_codes[*target_reader_index];
-                    type_ids.push(type_id);
-                    offsets.push(encoding_counts[*target_reader_index]);
-                    encodings[*target_reader_index].decode_with_promotion(buf, *promotion)?;
-                    encoding_counts[*target_reader_index] += 1;
-                }
-            },
+            Self::Union(u) => u.decode(buf)?,
             Self::Nullable(order, nb, encoding) => {
                 let branch = buf.read_vlq()?;
                 let is_not_null = match *order {
@@ -1467,18 +1104,339 @@ impl Decoder {
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(vals)
             }
-            Self::Union(fields, type_ids, offsets, encodings, _, None) => {
-                flush_union!(fields, type_ids, offsets, encodings)
-            }
-            Self::Union(fields, type_ids, offsets, encodings, _, Some(union_resolution)) => {
-                match &mut union_resolution.kind {
-                    UnionResolvedKind::Both { .. } | UnionResolvedKind::FromSingle { .. } => {
-                        flush_union!(fields, type_ids, offsets, encodings)
-                    }
-                    UnionResolvedKind::ToSingle { target } => target.flush(nulls)?,
+            Self::Union(u) => u.flush(nulls)?,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct DispatchLut {
+    to_reader: Box<[i16]>,
+    promotion: Box<[Promotion]>,
+}
+
+impl DispatchLut {
+    fn from_writer_to_reader(promotion_map: &[Option<(usize, Promotion)>]) -> Self {
+        let mut to_reader = Vec::with_capacity(promotion_map.len());
+        let mut promotion = Vec::with_capacity(promotion_map.len());
+        for map in promotion_map {
+            match *map {
+                Some((idx, promo)) => {
+                    debug_assert!(idx <= i16::MAX as usize);
+                    to_reader.push(idx as i16);
+                    promotion.push(promo);
+                }
+                None => {
+                    to_reader.push(-1);
+                    promotion.push(Promotion::Direct);
                 }
             }
+        }
+        Self {
+            to_reader: to_reader.into_boxed_slice(),
+            promotion: promotion.into_boxed_slice(),
+        }
+    }
+
+    // Resolve a writer branch index to (reader_idx, promotion)
+    #[inline]
+    fn resolve(&self, writer_idx: usize) -> Option<(usize, Promotion)> {
+        if writer_idx >= self.to_reader.len() {
+            return None;
+        }
+        let reader_index = self.to_reader[writer_idx];
+        if reader_index < 0 {
+            None
+        } else {
+            Some((reader_index as usize, self.promotion[writer_idx]))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct UnionDecoder {
+    fields: UnionFields,
+    type_ids: Vec<i8>,
+    offsets: Vec<i32>,
+    branches: Vec<Decoder>,
+    counts: Vec<i32>,
+    type_id_by_reader_idx: Arc<[i8]>,
+    null_branch: Option<usize>,
+    default_emit_idx: usize,
+    null_emit_idx: usize,
+    plan: UnionReadPlan,
+}
+
+impl Default for UnionDecoder {
+    fn default() -> Self {
+        Self {
+            fields: UnionFields::empty(),
+            type_ids: Vec::new(),
+            offsets: Vec::new(),
+            branches: Vec::new(),
+            counts: Vec::new(),
+            type_id_by_reader_idx: Arc::from([]),
+            null_branch: None,
+            default_emit_idx: 0,
+            null_emit_idx: 0,
+            plan: UnionReadPlan::Passthrough,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum UnionReadPlan {
+    ReaderUnion {
+        lookup_table: DispatchLut,
+    },
+    FromSingle {
+        reader_idx: usize,
+        promotion: Promotion,
+    },
+    ToSingle {
+        target: Box<Decoder>,
+        lookup_table: DispatchLut,
+    },
+    Passthrough,
+}
+
+impl UnionDecoder {
+    fn try_new(
+        fields: UnionFields,
+        branches: Vec<Decoder>,
+        resolved: Option<ResolvedUnion>,
+    ) -> Result<Self, ArrowError> {
+        let reader_type_codes: Arc<[i8]> =
+            Arc::from(fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>());
+        let null_branch = branches.iter().position(|b| matches!(b, Decoder::Null(_)));
+        let default_emit_idx = 0;
+        let null_emit_idx = null_branch.unwrap_or(default_emit_idx);
+        let plan = Self::plan_from_resolved(resolved)?;
+        let branch_len = branches.len().max(reader_type_codes.len());
+        Ok(Self {
+            fields,
+            type_ids: Vec::with_capacity(DEFAULT_CAPACITY),
+            offsets: Vec::with_capacity(DEFAULT_CAPACITY),
+            branches,
+            counts: vec![0; branch_len],
+            type_id_by_reader_idx: reader_type_codes,
+            null_branch,
+            default_emit_idx,
+            null_emit_idx,
+            plan,
         })
+    }
+
+    fn try_new_from_writer_union(
+        info: ResolvedUnion,
+        target: Box<Decoder>,
+    ) -> Result<Self, ArrowError> {
+        // This constructor is only for writer-union to single-type resolution
+        debug_assert!(info.writer_is_union && !info.reader_is_union);
+        let lookup_table = DispatchLut::from_writer_to_reader(&info.writer_to_reader);
+        Ok(Self {
+            plan: UnionReadPlan::ToSingle {
+                target,
+                lookup_table,
+            },
+            ..Self::default()
+        })
+    }
+
+    fn plan_from_resolved(resolved: Option<ResolvedUnion>) -> Result<UnionReadPlan, ArrowError> {
+        match resolved {
+            None => Ok(UnionReadPlan::Passthrough),
+            Some(info) => match (info.writer_is_union, info.reader_is_union) {
+                (true, true) => {
+                    let lookup_table = DispatchLut::from_writer_to_reader(&info.writer_to_reader);
+                    Ok(UnionReadPlan::ReaderUnion { lookup_table })
+                }
+                (false, true) => {
+                    let (reader_idx, promotion) =
+                        info.writer_to_reader.first().and_then(|x| *x).ok_or_else(|| {
+                            ArrowError::SchemaError(
+                                "Writer type does not match any reader union branch".to_string(),
+                            )
+                        })?;
+                    Ok(UnionReadPlan::FromSingle {
+                        reader_idx,
+                        promotion,
+                    })
+                }
+                (true, false) => Err(ArrowError::InvalidArgumentError(
+                    "UnionDecoder::try_new cannot build writer-union to single; use UnionDecoderBuilder with a target"
+                        .to_string(),
+                )),
+                (false, false) => Ok(UnionReadPlan::Passthrough),
+            },
+        }
+    }
+
+    #[inline]
+    fn read_tag(buf: &mut AvroCursor<'_>) -> Result<usize, ArrowError> {
+        let tag = buf.get_long()?;
+        if tag < 0 {
+            return Err(ArrowError::ParseError(format!(
+                "Negative union branch index {tag}"
+            )));
+        }
+        Ok(tag as usize)
+    }
+
+    #[inline]
+    fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, ArrowError> {
+        if reader_idx >= self.branches.len() {
+            return Err(ArrowError::ParseError(format!(
+                "Union branch index {reader_idx} out of range ({} branches)",
+                self.branches.len()
+            )));
+        }
+        self.type_ids.push(self.type_id_by_reader_idx[reader_idx]);
+        self.offsets.push(self.counts[reader_idx]);
+        self.counts[reader_idx] += 1;
+        Ok(&mut self.branches[reader_idx])
+    }
+
+    #[inline]
+    fn on_decoder<F>(&mut self, fallback_idx: usize, action: F) -> Result<(), ArrowError>
+    where
+        F: FnOnce(&mut Decoder) -> Result<(), ArrowError>,
+    {
+        if let UnionReadPlan::ToSingle { target, .. } = &mut self.plan {
+            return action(target);
+        }
+        let reader_idx = match &self.plan {
+            UnionReadPlan::FromSingle { reader_idx, .. } => *reader_idx,
+            _ => fallback_idx,
+        };
+        self.emit_to(reader_idx).and_then(action)
+    }
+
+    fn append_null(&mut self) -> Result<(), ArrowError> {
+        self.on_decoder(self.null_emit_idx, |decoder| decoder.append_null())
+    }
+
+    fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), ArrowError> {
+        self.on_decoder(self.default_emit_idx, |decoder| decoder.append_default(lit))
+    }
+
+    fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
+        let (reader_idx, promotion) = match &mut self.plan {
+            UnionReadPlan::ToSingle {
+                target,
+                lookup_table,
+            } => {
+                let idx = Self::read_tag(buf)?;
+                return match lookup_table.resolve(idx) {
+                    Some((_, promotion)) => target.decode_with_promotion(buf, promotion),
+                    None => Err(ArrowError::ParseError(format!(
+                        "Writer union branch {idx} does not resolve to reader type"
+                    ))),
+                };
+            }
+            UnionReadPlan::Passthrough => (Self::read_tag(buf)?, Promotion::Direct),
+            UnionReadPlan::ReaderUnion { lookup_table } => {
+                let idx = Self::read_tag(buf)?;
+                lookup_table.resolve(idx).ok_or_else(|| {
+                    ArrowError::ParseError(format!(
+                        "Union branch index {idx} not resolvable by reader schema"
+                    ))
+                })?
+            }
+            UnionReadPlan::FromSingle {
+                reader_idx,
+                promotion,
+            } => (*reader_idx, *promotion),
+            UnionReadPlan::ToSingle { .. } => {
+                return Err(ArrowError::ParseError(
+                    "Invalid union read plan state".to_string(),
+                ));
+            }
+        };
+        let decoder = self.emit_to(reader_idx)?;
+        decoder.decode_with_promotion(buf, promotion)
+    }
+
+    fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
+        match &mut self.plan {
+            UnionReadPlan::ToSingle { target, .. } => target.flush(nulls),
+            _ => {
+                debug_assert!(
+                    nulls.is_none(),
+                    "UnionArray does not accept a validity bitmap; \
+                     nulls should have been materialized as a Null child during decode"
+                );
+                let children = self
+                    .branches
+                    .iter_mut()
+                    .map(|d| d.flush(None))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let type_ids_buf: ScalarBuffer<i8> =
+                    flush_values(&mut self.type_ids).into_iter().collect();
+                let offsets_buf: ScalarBuffer<i32> =
+                    flush_values(&mut self.offsets).into_iter().collect();
+                let arr = UnionArray::try_new(
+                    self.fields.clone(),
+                    type_ids_buf,
+                    Some(offsets_buf),
+                    children,
+                )
+                .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                Ok(Arc::new(arr))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct UnionDecoderBuilder {
+    fields: Option<UnionFields>,
+    branches: Option<Vec<Decoder>>,
+    resolved: Option<ResolvedUnion>,
+    target: Option<Box<Decoder>>,
+}
+
+impl UnionDecoderBuilder {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_fields(mut self, fields: UnionFields) -> Self {
+        self.fields = Some(fields);
+        self
+    }
+
+    fn with_branches(mut self, branches: Vec<Decoder>) -> Self {
+        self.branches = Some(branches);
+        self
+    }
+
+    fn with_resolved_union(mut self, resolved_union: ResolvedUnion) -> Self {
+        self.resolved = Some(resolved_union);
+        self
+    }
+
+    fn with_target(mut self, target: Box<Decoder>) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    fn build(self) -> Result<UnionDecoder, ArrowError> {
+        match (self.resolved, self.fields, self.branches, self.target) {
+            (resolved, Some(fields), Some(branches), _) => {
+                UnionDecoder::try_new(fields, branches, resolved)
+            }
+            (Some(info), None, None, Some(target))
+                if info.writer_is_union && !info.reader_is_union =>
+            {
+                UnionDecoder::try_new_from_writer_union(info, target)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "UnionDecoderBuilder requires (fields + branches) for reader-unions \
+                 or (resolved + target) for writer-union to single"
+                    .to_string(),
+            )),
+        }
     }
 }
 
@@ -1513,20 +1471,6 @@ fn flush_dict(
     DictionaryArray::try_new(keys, values)
         .map_err(|e| ArrowError::ParseError(e.to_string()))
         .map(|arr| Arc::new(arr) as ArrayRef)
-}
-
-#[inline]
-fn type_id_at(fields: &UnionFields, idx: usize, encodings_len: usize) -> Result<i8, ArrowError> {
-    fields
-        .iter()
-        .nth(idx)
-        .map(|(tid, _)| tid)
-        .ok_or_else(|| {
-            ArrowError::SchemaError(format!(
-                "UnionFields/encodings length mismatch: child_idx={idx}, fields_len={}, encodings_len={encodings_len}",
-                fields.iter().count()
-            ))
-        })
 }
 
 #[inline]
@@ -1966,11 +1910,7 @@ mod tests {
     use super::*;
     use crate::codec::AvroField;
     use crate::schema::{PrimitiveType, Schema, TypeName};
-    use arrow_array::{
-        cast::AsArray, Array, Decimal128Array, Decimal256Array, Decimal32Array, DictionaryArray,
-        FixedSizeBinaryArray, IntervalMonthDayNanoArray, ListArray, MapArray, StringArray,
-        StructArray,
-    };
+    use arrow_array::cast::AsArray;
     use indexmap::IndexMap;
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
@@ -3232,12 +3172,11 @@ mod tests {
     }
 
     fn make_dense_union_avro(
-        children: Vec<(Codec, &'static str, DataType)>,
+        children: Vec<(Codec, &'_ str, DataType)>,
         type_ids: Vec<i8>,
     ) -> AvroDataType {
         let mut avro_children: Vec<AvroDataType> = Vec::with_capacity(children.len());
         let mut fields: Vec<arrow_schema::Field> = Vec::with_capacity(children.len());
-
         for (codec, name, dt) in children.into_iter() {
             avro_children.push(AvroDataType::new(codec, Default::default(), None));
             fields.push(arrow_schema::Field::new(name, dt, true));

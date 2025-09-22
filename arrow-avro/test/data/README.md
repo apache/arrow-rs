@@ -20,12 +20,12 @@
 # Avro test files for `arrow-avro`
 
 This directory contains small Avro Object Container Files (OCF) used by
-`arrow-avro` tests to validate the `Reader` implementation. These files are generated from
+`arrow-avro` tests to validate the `Reader` implementation. These files are generated from 
 a set of python scripts and will gradually be removed as they are merged into `arrow-testing`.
 
 ## Decimal Files
 
-This directory contains OCF files used to exercise decoding of Avro’s `decimal` logical type
+This directory contains OCF files used to exercise decoding of Avro’s `decimal` logical type 
 across both `bytes` and `fixed` encodings, and to cover Arrow decimal widths ranging
 from `Decimal32` up through `Decimal256`. The files were generated from a
 script (see **How these files were created** below).

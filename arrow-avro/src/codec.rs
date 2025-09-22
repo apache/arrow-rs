@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::Promotion::{
-    BytesToString, Direct, FloatToDouble, IntToDouble, IntToFloat, IntToLong, LongToDouble,
-    LongToFloat, StringToBytes,
-};
 use crate::schema::{
     make_full_name, Array, Attributes, AvroSchema, ComplexType, Enum, Fixed, Map, Nullability,
     PrimitiveType, Record, Schema, Type, TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
@@ -124,17 +120,17 @@ pub(crate) enum Promotion {
 }
 
 impl Display for Promotion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Direct => write!(f, "Direct"),
-            IntToLong => write!(f, "Int->Long"),
-            IntToFloat => write!(f, "Int->Float"),
-            IntToDouble => write!(f, "Int->Double"),
-            LongToFloat => write!(f, "Long->Float"),
-            LongToDouble => write!(f, "Long->Double"),
-            FloatToDouble => write!(f, "Float->Double"),
-            StringToBytes => write!(f, "String->Bytes"),
-            BytesToString => write!(f, "Bytes->String"),
+            Self::Direct => write!(formatter, "Direct"),
+            Self::IntToLong => write!(formatter, "Int->Long"),
+            Self::IntToFloat => write!(formatter, "Int->Float"),
+            Self::IntToDouble => write!(formatter, "Int->Double"),
+            Self::LongToFloat => write!(formatter, "Long->Float"),
+            Self::LongToDouble => write!(formatter, "Long->Double"),
+            Self::FloatToDouble => write!(formatter, "Float->Double"),
+            Self::StringToBytes => write!(formatter, "String->Bytes"),
+            Self::BytesToString => write!(formatter, "Bytes->String"),
         }
     }
 }
