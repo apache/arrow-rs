@@ -1371,10 +1371,8 @@ impl UnionDecoder {
                     .iter_mut()
                     .map(|d| d.flush(None))
                     .collect::<Result<Vec<_>, _>>()?;
-                let type_ids_buf: ScalarBuffer<i8> =
-                    flush_values(&mut self.type_ids).into_iter().collect();
-                let offsets_buf: ScalarBuffer<i32> =
-                    flush_values(&mut self.offsets).into_iter().collect();
+                let type_ids_buf = flush_values(&mut self.type_ids).into_iter().collect();
+                let offsets_buf = flush_values(&mut self.offsets).into_iter().collect();
                 let arr = UnionArray::try_new(
                     self.fields.clone(),
                     type_ids_buf,
