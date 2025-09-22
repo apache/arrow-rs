@@ -31,7 +31,7 @@
 //! * mmin, mmax: (optional) the minimum and maximum linear reference values
 //!
 //! In 2D representation, where x are points:
-//!       
+//! ```text      
 //!  ymax +-----------------------+
 //!       |               x       |
 //!       |      x                |
@@ -39,6 +39,7 @@
 //!       |      x                |
 //!  ymin +-----------------------+
 //!       xmin                    xmax
+//! ```
 //!
 //! [`GeospatialStatistics`]: crate::geospatial::statistics::GeospatialStatistics
 //! [`BoundingBox`]: crate::geospatial::bounding_box::BoundingBox
