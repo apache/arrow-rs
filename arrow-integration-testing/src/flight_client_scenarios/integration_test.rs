@@ -24,7 +24,10 @@ use arrow::{
     array::ArrayRef,
     buffer::Buffer,
     datatypes::SchemaRef,
-    ipc::{self, reader, writer},
+    ipc::{
+        self, reader,
+        writer::{self, CompressionContext},
+    },
     record_batch::RecordBatch,
 };
 use arrow_flight::{
@@ -90,6 +93,8 @@ async fn upload_data(
 
     let mut original_data_iter = original_data.iter().enumerate();
 
+    let mut compression_context = CompressionContext::default();
+
     if let Some((counter, first_batch)) = original_data_iter.next() {
         let metadata = counter.to_string().into_bytes();
         // Preload the first batch into the channel before starting the request
@@ -99,6 +104,7 @@ async fn upload_data(
             first_batch,
             &options,
             &mut dict_tracker,
+            &mut compression_context,
         )
         .await?;
 
@@ -121,6 +127,7 @@ async fn upload_data(
                 batch,
                 &options,
                 &mut dict_tracker,
+                &mut compression_context,
             )
             .await?;
 
@@ -150,11 +157,12 @@ async fn send_batch(
     batch: &RecordBatch,
     options: &writer::IpcWriteOptions,
     dictionary_tracker: &mut writer::DictionaryTracker,
+    compression_context: &mut CompressionContext,
 ) -> Result {
     let data_gen = writer::IpcDataGenerator::default();
 
     let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, dictionary_tracker, options)
+        .encoded_batch(batch, dictionary_tracker, options, compression_context)
         .expect("DictionaryTracker configured above to not error on replacement");
 
     let dictionary_flight_data: Vec<FlightData> =
