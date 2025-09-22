@@ -50,7 +50,7 @@ pub struct WriterBuilder {
     schema: Schema,
     codec: Option<CompressionCodec>,
     capacity: usize,
-    fingerprint_strategy: FingerprintStrategy,
+    fingerprint_strategy: Option<FingerprintStrategy>,
 }
 
 impl WriterBuilder {
@@ -60,14 +60,14 @@ impl WriterBuilder {
             schema,
             codec: None,
             capacity: 1024,
-            fingerprint_strategy: FingerprintStrategy::default(),
+            fingerprint_strategy: None,
         }
     }
 
     /// Set the fingerprinting strategy for the stream writer.
     /// This determines the per-record prefix format.
     pub fn with_fingerprint_strategy(mut self, strategy: FingerprintStrategy) -> Self {
-        self.fingerprint_strategy = strategy;
+        self.fingerprint_strategy = Some(strategy);
         self
     }
 
@@ -98,13 +98,18 @@ impl WriterBuilder {
 
         let maybe_fingerprint = if F::NEEDS_PREFIX {
             match self.fingerprint_strategy {
-                FingerprintStrategy::Id(id) => Some(Fingerprint::Id(id)),
-                strategy => Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?),
+                Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(id)),
+                Some(strategy) => {
+                    Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?)
+                }
+                None => Some(
+                    avro_schema
+                        .fingerprint(FingerprintAlgorithm::from(FingerprintStrategy::Rabin))?,
+                ),
             }
         } else {
             None
         };
-        let maybe_prefix = maybe_fingerprint.as_ref().map(|fp| fp.make_prefix());
 
         let mut md = self.schema.metadata().clone();
         md.insert(
@@ -256,78 +261,69 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_writer_writes_prefix_per_row() -> Result<(), ArrowError> {
+    fn test_stream_writer_writes_prefix_per_row_rt() -> Result<(), ArrowError> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let avro_schema = AvroSchema::try_from(&schema)?;
-
-        let fingerprint = avro_schema.fingerprint(FingerprintAlgorithm::Rabin)?;
-        let mut expected_prefix = Vec::from(crate::schema::SINGLE_OBJECT_MAGIC);
-        match fingerprint {
-            crate::schema::Fingerprint::Rabin(val) => expected_prefix.extend(val.to_le_bytes()),
-            _ => panic!("Expected Rabin fingerprint for default stream writer"),
-        }
-
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef],
         )?;
-
-        let buffer: Vec<u8> = Vec::new();
-        let mut writer = AvroStreamWriter::new(buffer, schema)?;
+        let buf: Vec<u8> = Vec::new();
+        let mut writer = AvroStreamWriter::new(buf, schema.clone())?;
         writer.write(&batch)?;
-        let actual_bytes = writer.into_inner();
-
-        let mut expected_bytes = Vec::new();
-        // Row 1: prefix + zig-zag encoded(10)
-        expected_bytes.extend(&expected_prefix);
-        expected_bytes.push(0x14);
-        // Row 2: prefix + zig-zag encoded(20)
-        expected_bytes.extend(&expected_prefix);
-        expected_bytes.push(0x28);
-
-        assert_eq!(
-            actual_bytes, expected_bytes,
-            "Stream writer output did not match expected prefix-per-row format"
-        );
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new(); // Rabin by default
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _fp = store.register(avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _consumed = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 2);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![10, 20]));
         Ok(())
     }
 
     #[test]
-    fn test_stream_writer_with_id_fingerprint() -> Result<(), ArrowError> {
-        let schema_id = 42u32;
-        let schema = Schema::new(vec![Field::new("value", DataType::Int64, false)]);
-
+    fn test_stream_writer_with_id_fingerprint_rt() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int64Array::from(vec![100, 200])) as ArrayRef],
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
         )?;
-
-        let buffer: Vec<u8> = Vec::new();
-        let mut writer = WriterBuilder::new(schema)
+        let schema_id: u32 = 42;
+        let mut writer = WriterBuilder::new(schema.clone())
             .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id))
-            .build::<_, AvroBinaryFormat>(buffer)?;
+            .build::<_, AvroBinaryFormat>(Vec::new())?;
         writer.write(&batch)?;
-        let actual_bytes = writer.into_inner();
-
-        let mut expected_bytes: Vec<u8> = Vec::new();
-        let prefix = {
-            let mut p = vec![CONFLUENT_MAGIC[0]];
-            p.extend(&schema_id.to_be_bytes());
-            p
-        };
-
-        // Row 1: prefix + zig-zag encoded(100) -> 200 -> [0xC8, 0x01]
-        expected_bytes.extend(&prefix);
-        expected_bytes.extend(&[0xC8, 0x01]);
-        // Row 2: prefix + zig-zag encoded(200) -> 400 -> [0x90, 0x03]
-        expected_bytes.extend(&prefix);
-        expected_bytes.extend(&[0x90, 0x03]);
-
-        // 5. Assert
-        assert_eq!(
-            actual_bytes, expected_bytes,
-            "Stream writer output for Confluent ID did not match expected format"
-        );
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _ = store.set(Fingerprint::Id(schema_id), avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _ = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 3);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
         Ok(())
     }
 

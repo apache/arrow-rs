@@ -682,40 +682,28 @@ impl Fingerprint {
     pub fn make_prefix(&self) -> Prefix {
         let mut buf = [0u8; MAX_PREFIX_LEN];
         let len = match self {
-            Self::Id(id) => {
-                let prefix_slice = &mut buf[..5];
-                prefix_slice[..1].copy_from_slice(&CONFLUENT_MAGIC);
-                prefix_slice[1..5].copy_from_slice(&id.to_be_bytes());
-                5
-            }
-            Self::Rabin(val) => {
-                let prefix_slice = &mut buf[..10];
-                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
-                prefix_slice[2..10].copy_from_slice(&val.to_le_bytes());
-                10
-            }
+            Self::Id(val) => write_prefix(&mut buf, &CONFLUENT_MAGIC, &val.to_be_bytes()),
+            Self::Rabin(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, &val.to_le_bytes()),
             #[cfg(feature = "md5")]
-            Self::MD5(bytes) => {
-                const LEN: usize = 2 + 16;
-                let prefix_slice = &mut buf[..LEN];
-                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
-                prefix_slice[2..LEN].copy_from_slice(bytes);
-                LEN
-            }
+            Self::MD5(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, val),
             #[cfg(feature = "sha256")]
-            Self::SHA256(bytes) => {
-                const LEN: usize = 2 + 32;
-                let prefix_slice = &mut buf[..LEN];
-                prefix_slice[..2].copy_from_slice(&SINGLE_OBJECT_MAGIC);
-                prefix_slice[2..LEN].copy_from_slice(bytes);
-                LEN
-            }
+            Self::SHA256(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, val),
         };
-        Prefix {
-            buf,
-            len: len as u8,
-        }
+        Prefix { buf, len }
     }
+}
+
+fn write_prefix<const MAGIC_LEN: usize, const PAYLOAD_LEN: usize>(
+    buf: &mut [u8; MAX_PREFIX_LEN],
+    magic: &[u8; MAGIC_LEN],
+    payload: &[u8; PAYLOAD_LEN],
+) -> u8 {
+    debug_assert!(MAGIC_LEN + PAYLOAD_LEN <= MAX_PREFIX_LEN);
+    let total = MAGIC_LEN + PAYLOAD_LEN;
+    let prefix_slice = &mut buf[..total];
+    prefix_slice[..MAGIC_LEN].copy_from_slice(magic);
+    prefix_slice[MAGIC_LEN..total].copy_from_slice(payload);
+    total as u8
 }
 
 /// An in-memory cache of Avro schemas, indexed by their fingerprint.

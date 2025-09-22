@@ -114,7 +114,7 @@ impl AvroFormat for AvroBinaryFormat {
     fn start_stream<W: Write>(
         &mut self,
         _writer: &mut W,
-        schema: &Schema,
+        _schema: &Schema,
         compression: Option<CompressionCodec>,
     ) -> Result<(), ArrowError> {
         if compression.is_some() {
