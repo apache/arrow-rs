@@ -528,7 +528,7 @@ impl Decoder {
             Self::Uuid(v) => {
                 v.extend([0; 16]);
             }
-            Self::Array(_, offsets, e) => {
+            Self::Array(_, offsets, _) => {
                 offsets.push_length(0);
             }
             Self::Record(_, e, _) => {
