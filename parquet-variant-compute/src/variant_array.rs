@@ -18,36 +18,191 @@
 //! [`VariantArray`] implementation
 
 use crate::type_conversion::primitive_conversion_single_value;
-use arrow::array::{Array, ArrayData, ArrayRef, AsArray, BinaryViewArray, StructArray};
+use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
+use arrow::compute::cast;
 use arrow::datatypes::{
     Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
+use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use parquet_variant::Uuid;
 use parquet_variant::Variant;
-use std::any::Any;
 use std::sync::Arc;
+
+/// Arrow Variant [`ExtensionType`].
+///
+/// Represents the canonical Arrow Extension Type for storing variants.
+/// See [`VariantArray`] for more examples of using this extension type.
+pub struct VariantType;
+
+impl ExtensionType for VariantType {
+    const NAME: &'static str = "arrow.parquet.variant";
+
+    // Variants extension metadata is an empty string
+    // <https://github.com/apache/arrow/blob/d803afcc43f5d132506318fd9e162d33b2c3d4cd/docs/source/format/CanonicalExtensions.rst?plain=1#L473>
+    type Metadata = &'static str;
+
+    fn metadata(&self) -> &Self::Metadata {
+        &""
+    }
+
+    fn serialize_metadata(&self) -> Option<String> {
+        Some(String::new())
+    }
+
+    fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
+        Ok("")
+    }
+
+    fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
+        if matches!(data_type, DataType::Struct(_)) {
+            Ok(())
+        } else {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "VariantType only supports StructArray, got {data_type}"
+            )))
+        }
+    }
+
+    fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
+        Self.supports_data_type(data_type)?;
+        Ok(Self)
+    }
+}
 
 /// An array of Parquet [`Variant`] values
 ///
 /// A [`VariantArray`] wraps an Arrow [`StructArray`] that stores the underlying
 /// `metadata` and `value` fields, and adds convenience methods to access
-/// the `Variant`s
+/// the [`Variant`]s.
 ///
-/// See [`VariantArrayBuilder`] for constructing a `VariantArray`.
+/// See [`VariantArrayBuilder`] for constructing `VariantArray` row by row.
+///
+/// See the examples below from converting between `VariantArray` and
+/// `StructArray`.
 ///
 /// [`VariantArrayBuilder`]: crate::VariantArrayBuilder
 ///
-/// # Specification
+/// # Documentation
 ///
-/// 1. This code follows the conventions for storing variants in Arrow `StructArray`
-///    defined by [Extension Type for Parquet Variant arrow] and this [document].
-///    At the time of this writing, this is not yet a standardized Arrow extension type.
+/// At the time of this writing, Variant has been accepted as an official
+/// extension type but not been published to the [official list of extension
+/// types] on the Apache Arrow website. See the [Extension Type for Parquet
+/// Variant arrow] ticket for more details.
 ///
 /// [Extension Type for Parquet Variant arrow]: https://github.com/apache/arrow/issues/46908
-/// [document]: https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?usp=sharing
+/// [official list of extension types]: https://arrow.apache.org/docs/format/CanonicalExtensions.html
+///
+/// # Example: Check if a [`StructArray`] has the [`VariantType`] extension
+///
+/// Arrow Arrays only provide [`DataType`], but the extension type information
+/// is stored on a [`Field`]. Thus, you must have access to the [`Schema`] or
+/// [`Field`] to check for the extension type.
+///
+/// [`Schema`]: arrow_schema::Schema
+/// ```
+/// # use arrow::array::StructArray;
+/// # use arrow_schema::{Schema, Field, DataType};
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # fn get_variant_array() -> VariantArray {
+/// #   let mut builder = VariantArrayBuilder::new(10);
+/// #   builder.append_variant(Variant::from("such wow"));
+/// #   builder.build()
+/// # }
+/// # fn get_schema() -> Schema {
+/// #   Schema::new(vec![
+/// #     Field::new("id", DataType::Int32, false),
+/// #     get_variant_array().field("var"),
+/// #   ])
+/// # }
+/// let schema = get_schema();
+/// assert_eq!(schema.fields().len(), 2);
+/// // first field is not a Variant
+/// assert!(schema.field(0).try_extension_type::<VariantType>().is_err());
+/// // second field is a Variant
+/// assert!(schema.field(1).try_extension_type::<VariantType>().is_ok());
+/// ```
+///
+/// # Example: Constructing the correct [`Field`] for a [`VariantArray`]
+///
+/// You can construct the correct [`Field`] for a [`VariantArray`] using the
+/// [`VariantArray::field`] method.
+///
+/// ```
+/// # use arrow_schema::{Schema, Field, DataType};
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # fn get_variant_array() -> VariantArray {
+/// #   let mut builder = VariantArrayBuilder::new(10);
+/// #   builder.append_variant(Variant::from("such wow"));
+/// #   builder.build()
+/// # }
+/// let variant_array = get_variant_array();
+/// // First field is an integer id, second field is a variant
+/// let schema = Schema::new(vec![
+///   Field::new("id", DataType::Int32, false),
+///   // call VariantArray::field to get the correct Field
+///   variant_array.field("var"),
+/// ]);
+/// ```
+///
+/// You can also construct the [`Field`] using [`VariantType`] directly
+///
+/// ```
+/// # use arrow_schema::{Schema, Field, DataType};
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray, VariantType};
+/// # fn get_variant_array() -> VariantArray {
+/// #   let mut builder = VariantArrayBuilder::new(10);
+/// #   builder.append_variant(Variant::from("such wow"));
+/// #   builder.build()
+/// # }
+/// # let variant_array = get_variant_array();
+/// // The DataType of a VariantArray varies depending on how it is shredded
+/// let data_type = variant_array.data_type().clone();
+/// // First field is an integer id, second field is a variant
+/// let schema = Schema::new(vec![
+///   Field::new("id", DataType::Int32, false),
+///   Field::new("var", data_type, false)
+///     // Add extension metadata to the field using `VariantType`
+///     .with_extension_type(VariantType),
+/// ]);
+/// ```
+///
+/// # Example: Converting a [`VariantArray`] to a [`StructArray`]
+///
+/// ```
+/// # use arrow::array::StructArray;
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArrayBuilder;
+/// // Create Variant Array
+/// let mut builder = VariantArrayBuilder::new(10);
+/// builder.append_variant(Variant::from("such wow"));
+/// let variant_array = builder.build();
+/// // convert to StructArray
+/// let struct_array: StructArray = variant_array.into();
+/// ```
+///
+/// # Example: Converting a [`StructArray`] to a [`VariantArray`]
+///
+/// ```
+/// # use arrow::array::StructArray;
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::{VariantArrayBuilder, VariantArray};
+/// # fn get_struct_array() -> StructArray {
+/// #   let mut builder = VariantArrayBuilder::new(10);
+/// #   builder.append_variant(Variant::from("such wow"));
+/// #   builder.build().into()
+/// # }
+/// let struct_array: StructArray = get_struct_array();
+/// // try and create a VariantArray from it
+/// let variant_array = VariantArray::try_new(&struct_array).unwrap();
+/// assert_eq!(variant_array.value(0), Variant::from("such wow"));
+/// ```
+///
 #[derive(Clone, Debug)]
 pub struct VariantArray {
     /// Reference to the underlying StructArray
@@ -88,7 +243,11 @@ impl VariantArray {
     /// int8.
     ///
     /// Currently, only [`BinaryViewArray`] are supported.
-    pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
+    pub fn try_new(inner: &dyn Array) -> Result<Self, ArrowError> {
+        // Workaround lack of support for Binary
+        // https://github.com/apache/arrow-rs/issues/8387
+        let inner = cast_to_binary_view_arrays(inner)?;
+
         let Some(inner) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid VariantArray: requires StructArray as input".to_string(),
@@ -242,6 +401,67 @@ impl VariantArray {
     pub fn typed_value_field(&self) -> Option<&ArrayRef> {
         self.shredding_state.typed_value_field()
     }
+
+    /// Return a field to represent this VariantArray in a `Schema` with
+    /// a particular name
+    pub fn field(&self, name: impl Into<String>) -> Field {
+        Field::new(
+            name.into(),
+            self.data_type().clone(),
+            self.inner.is_nullable(),
+        )
+        .with_extension_type(VariantType)
+    }
+
+    /// Returns a new DataType representing this VariantArray's inner type
+    pub fn data_type(&self) -> &DataType {
+        self.inner.data_type()
+    }
+
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        let inner = self.inner.slice(offset, length);
+        let metadata = self.metadata.slice(offset, length);
+        let shredding_state = self.shredding_state.slice(offset, length);
+        Self {
+            inner,
+            metadata,
+            shredding_state,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn nulls(&self) -> Option<&NullBuffer> {
+        self.inner.nulls()
+    }
+
+    /// Is the element at index null?
+    pub fn is_null(&self, index: usize) -> bool {
+        self.nulls().is_some_and(|n| n.is_null(index))
+    }
+
+    /// Is the element at index valid (not null)?
+    pub fn is_valid(&self, index: usize) -> bool {
+        !self.is_null(index)
+    }
+}
+
+impl From<VariantArray> for StructArray {
+    fn from(variant_array: VariantArray) -> Self {
+        variant_array.into_inner()
+    }
+}
+
+impl From<VariantArray> for ArrayRef {
+    fn from(variant_array: VariantArray) -> Self {
+        Arc::new(variant_array.into_inner())
+    }
 }
 
 /// One shredded field of a partially or prefectly shredded variant. For example, suppose the
@@ -307,23 +527,17 @@ impl ShreddedVariantFieldArray {
     ///    or be a list, large_list, list_view or struct
     ///
     /// Currently, only `value` columns of type [`BinaryViewArray`] are supported.
-    pub fn try_new(inner: ArrayRef) -> Result<Self, ArrowError> {
+    pub fn try_new(inner: &dyn Array) -> Result<Self, ArrowError> {
         let Some(inner_struct) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid ShreddedVariantFieldArray: requires StructArray as input".to_string(),
             ));
         };
 
-        // Extract value and typed_value fields (metadata is not expected in ShreddedVariantFieldArray)
-        let value = inner_struct
-            .column_by_name("value")
-            .and_then(|col| col.as_binary_view_opt().cloned());
-        let typed_value = inner_struct.column_by_name("typed_value").cloned();
-
         // Note this clone is cheap, it just bumps the ref count
         Ok(Self {
             inner: inner_struct.clone(),
-            shredding_state: ShreddingState::new(value, typed_value),
+            shredding_state: ShreddingState::from(inner_struct),
         })
     }
 
@@ -368,59 +582,54 @@ impl ShreddedVariantFieldArray {
             shredding_state: ShreddingState::new(value, typed_value),
         }
     }
-}
 
-impl Array for ShreddedVariantFieldArray {
-    fn as_any(&self) -> &dyn Any {
-        self
+    /// Returns the inner [`StructArray`], consuming self
+    pub fn into_inner(self) -> StructArray {
+        self.inner
     }
 
-    fn to_data(&self) -> ArrayData {
-        self.inner.to_data()
-    }
-
-    fn into_data(self) -> ArrayData {
-        self.inner.into_data()
-    }
-
-    fn data_type(&self) -> &DataType {
+    pub fn data_type(&self) -> &DataType {
         self.inner.data_type()
     }
 
-    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        let inner = self.inner.slice(offset, length);
-        let shredding_state = self.shredding_state.slice(offset, length);
-        Arc::new(Self {
-            inner,
-            shredding_state,
-        })
-    }
-
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.inner.len()
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
-    fn offset(&self) -> usize {
+    pub fn offset(&self) -> usize {
         self.inner.offset()
     }
 
-    fn nulls(&self) -> Option<&NullBuffer> {
+    pub fn nulls(&self) -> Option<&NullBuffer> {
         // According to the shredding spec, ShreddedVariantFieldArray should be
         // physically non-nullable - SQL NULL is inferred by both value and
         // typed_value being physically NULL
         None
     }
-
-    fn get_buffer_memory_size(&self) -> usize {
-        self.inner.get_buffer_memory_size()
+    /// Is the element at index null?
+    pub fn is_null(&self, index: usize) -> bool {
+        self.nulls().is_some_and(|n| n.is_null(index))
     }
 
-    fn get_array_memory_size(&self) -> usize {
-        self.inner.get_array_memory_size()
+    /// Is the element at index valid (not null)?
+    pub fn is_valid(&self, index: usize) -> bool {
+        !self.is_null(index)
+    }
+}
+
+impl From<ShreddedVariantFieldArray> for ArrayRef {
+    fn from(array: ShreddedVariantFieldArray) -> Self {
+        Arc::new(array.into_inner())
+    }
+}
+
+impl From<ShreddedVariantFieldArray> for StructArray {
+    fn from(array: ShreddedVariantFieldArray) -> Self {
+        array.into_inner()
     }
 }
 
@@ -434,7 +643,7 @@ impl Array for ShreddedVariantFieldArray {
 /// single value. Values in the two fields must be interpreted according to the
 /// following table (see [Parquet Variant Shredding Spec] for more details):
 ///
-/// | value | typed_value | Meaning |
+/// | value    | typed_value  | Meaning |
 /// |----------|--------------|---------|
 /// | null     | null         | The value is missing; only valid for shredded object fields |
 /// | non-null | null         | The value is present and may be any type, including `null` |
@@ -473,7 +682,20 @@ pub enum ShreddingState {
 }
 
 impl ShreddingState {
-    /// Create a new `ShreddingState` from the given fields
+    /// try to create a new `ShreddingState` from the given `value` and `typed_value` fields
+    ///
+    /// Note you can create a `ShreddingState` from a &[`StructArray`] using
+    /// `ShreddingState::try_from(&struct_array)`, for example:
+    ///
+    /// ```no_run
+    /// # use arrow::array::StructArray;
+    /// # use parquet_variant_compute::ShreddingState;
+    /// # fn get_struct_array() -> StructArray {
+    /// #   unimplemented!()
+    /// # }
+    /// let struct_array: StructArray = get_struct_array();
+    /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
+    /// ```
     pub fn new(value: Option<BinaryViewArray>, typed_value: Option<ArrayRef>) -> Self {
         match (value, typed_value) {
             (Some(value), Some(typed_value)) => Self::PartiallyShredded { value, typed_value },
@@ -520,6 +742,17 @@ impl ShreddingState {
             }
             ShreddingState::AllNull => ShreddingState::AllNull,
         }
+    }
+}
+
+impl From<&StructArray> for ShreddingState {
+    fn from(inner_struct: &StructArray) -> Self {
+        let value = inner_struct
+            .column_by_name("value")
+            .and_then(|col| col.as_binary_view_opt().cloned());
+        let typed_value = inner_struct.column_by_name("typed_value").cloned();
+
+        ShreddingState::new(value, typed_value)
     }
 }
 
@@ -647,70 +880,52 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
     }
 }
 
-impl Array for VariantArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
+/// Workaround for lack of direct support for BinaryArray
+/// <https://github.com/apache/arrow-rs/issues/8387>
+///
+/// The values are read as
+/// * `StructArray<metadata: Binary, value: Binary>`
+///
+/// but VariantArray needs them as
+/// * `StructArray<metadata: BinaryView, value: BinaryView>`
+///
+/// So cast them to get the right type.
+fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+    let new_type = rewrite_to_view_types(array.data_type());
+    cast(array, &new_type)
+}
 
-    fn to_data(&self) -> ArrayData {
-        self.inner.to_data()
+/// replaces all instances of Binary with BinaryView in a DataType
+fn rewrite_to_view_types(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::Binary => DataType::BinaryView,
+        DataType::List(field) => DataType::List(rewrite_field_type(field)),
+        DataType::Struct(fields) => {
+            DataType::Struct(fields.iter().map(rewrite_field_type).collect())
+        }
+        _ => data_type.clone(),
     }
+}
 
-    fn into_data(self) -> ArrayData {
-        self.inner.into_data()
-    }
-
-    fn data_type(&self) -> &DataType {
-        self.inner.data_type()
-    }
-
-    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
-        let inner = self.inner.slice(offset, length);
-        let metadata = self.metadata.slice(offset, length);
-        let shredding_state = self.shredding_state.slice(offset, length);
-        Arc::new(Self {
-            inner,
-            metadata,
-            shredding_state,
-        })
-    }
-
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    fn offset(&self) -> usize {
-        self.inner.offset()
-    }
-
-    fn nulls(&self) -> Option<&NullBuffer> {
-        self.inner.nulls()
-    }
-
-    fn get_buffer_memory_size(&self) -> usize {
-        self.inner.get_buffer_memory_size()
-    }
-
-    fn get_array_memory_size(&self) -> usize {
-        self.inner.get_array_memory_size()
-    }
+fn rewrite_field_type(field: impl AsRef<Field>) -> Arc<Field> {
+    let field = field.as_ref();
+    let new_field = field
+        .clone()
+        .with_data_type(rewrite_to_view_types(field.data_type()));
+    Arc::new(new_field)
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow::array::{BinaryArray, BinaryViewArray};
+    use arrow::array::{BinaryViewArray, Int32Array};
     use arrow_schema::{Field, Fields};
 
     #[test]
     fn invalid_not_a_struct_array() {
         let array = make_binary_view_array();
         // Should fail because the input is not a StructArray
-        let err = VariantArray::try_new(array);
+        let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
             "Invalid argument error: Invalid VariantArray: requires StructArray as input"
@@ -722,7 +937,7 @@ mod test {
         let fields = Fields::from(vec![Field::new("value", DataType::BinaryView, true)]);
         let array = StructArray::new(fields, vec![make_binary_view_array()], None);
         // Should fail because the StructArray does not contain a 'metadata' field
-        let err = VariantArray::try_new(Arc::new(array));
+        let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
             "Invalid argument error: Invalid VariantArray: StructArray must contain a 'metadata' field"
@@ -737,7 +952,7 @@ mod test {
         // NOTE: By strict spec interpretation, this case (top-level variant with null/null)
         // should be invalid, but we currently allow it and treat it as Variant::Null.
         // This is a pragmatic decision to handle missing data gracefully.
-        let variant_array = VariantArray::try_new(Arc::new(array)).unwrap();
+        let variant_array = VariantArray::try_new(&array).unwrap();
 
         // Verify the shredding state is AllNull
         assert!(matches!(
@@ -756,18 +971,18 @@ mod test {
     #[test]
     fn invalid_metadata_field_type() {
         let fields = Fields::from(vec![
-            Field::new("metadata", DataType::Binary, true), // Not yet supported
+            Field::new("metadata", DataType::Int32, true), // not supported
             Field::new("value", DataType::BinaryView, true),
         ]);
         let array = StructArray::new(
             fields,
-            vec![make_binary_array(), make_binary_view_array()],
+            vec![make_int32_array(), make_binary_view_array()],
             None,
         );
-        let err = VariantArray::try_new(Arc::new(array));
+        let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Not yet implemented: VariantArray 'metadata' field must be BinaryView, got Binary"
+            "Not yet implemented: VariantArray 'metadata' field must be BinaryView, got Int32"
         );
     }
 
@@ -775,17 +990,17 @@ mod test {
     fn invalid_value_field_type() {
         let fields = Fields::from(vec![
             Field::new("metadata", DataType::BinaryView, true),
-            Field::new("value", DataType::Binary, true), // Not yet supported
+            Field::new("value", DataType::Int32, true), // Not yet supported
         ]);
         let array = StructArray::new(
             fields,
-            vec![make_binary_view_array(), make_binary_array()],
+            vec![make_binary_view_array(), make_int32_array()],
             None,
         );
-        let err = VariantArray::try_new(Arc::new(array));
+        let err = VariantArray::try_new(&array);
         assert_eq!(
             err.unwrap_err().to_string(),
-            "Not yet implemented: VariantArray 'value' field must be BinaryView, got Binary"
+            "Not yet implemented: VariantArray 'value' field must be BinaryView, got Int32"
         );
     }
 
@@ -793,8 +1008,8 @@ mod test {
         Arc::new(BinaryViewArray::from(vec![b"test" as &[u8]]))
     }
 
-    fn make_binary_array() -> ArrayRef {
-        Arc::new(BinaryArray::from(vec![b"test" as &[u8]]))
+    fn make_int32_array() -> ArrayRef {
+        Arc::new(Int32Array::from(vec![1]))
     }
 
     #[test]
@@ -814,7 +1029,7 @@ mod test {
         let fields = Fields::from(vec![Field::new("metadata", DataType::BinaryView, false)]);
         let struct_array = StructArray::new(fields, vec![Arc::new(metadata)], Some(nulls));
 
-        let variant_array = VariantArray::try_new(Arc::new(struct_array)).unwrap();
+        let variant_array = VariantArray::try_new(&struct_array).unwrap();
 
         // Verify the shredding state is AllNull
         assert!(matches!(
@@ -864,7 +1079,7 @@ mod test {
             None, // struct itself is not null, just the value field is all null
         );
 
-        let variant_array = VariantArray::try_new(Arc::new(struct_array)).unwrap();
+        let variant_array = VariantArray::try_new(&struct_array).unwrap();
 
         // This should be Unshredded, not AllNull, because value field exists in schema
         assert!(matches!(
