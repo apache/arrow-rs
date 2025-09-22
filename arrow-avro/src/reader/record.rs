@@ -1270,16 +1270,16 @@ impl UnionDecoder {
 
     #[inline]
     fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, ArrowError> {
-        if reader_idx >= self.branches.len() {
+        let Some(reader_branch) = self.branches.get_mut(reader_idx) else {
             return Err(ArrowError::ParseError(format!(
                 "Union branch index {reader_idx} out of range ({} branches)",
                 self.branches.len()
             )));
-        }
+        };
         self.type_ids.push(self.type_id_by_reader_idx[reader_idx]);
         self.offsets.push(self.counts[reader_idx]);
         self.counts[reader_idx] += 1;
-        Ok(&mut self.branches[reader_idx])
+        Ok(reader_branch)
     }
 
     #[inline]
