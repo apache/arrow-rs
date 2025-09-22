@@ -221,10 +221,6 @@ fn compress_zstd(
     output: &mut Vec<u8>,
     context: &mut CompressionContext,
 ) -> Result<(), ArrowError> {
-    // use std::io::Write;
-    // let mut encoder = zstd::Encoder::new(output, 0)?;
-    // encoder.write_all(input)?;
-    // encoder.finish()?;
     let result = context.compressor.compress(input)?;
     output.extend_from_slice(&result);
     Ok(())
