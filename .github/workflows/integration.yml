@@ -98,6 +98,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           path: rust
+          submodules: true
           fetch-depth: 0
       - name: Checkout Arrow .NET
         uses: actions/checkout@v5
