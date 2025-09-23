@@ -142,18 +142,18 @@ variant_test_case!(38, "Unsupported typed_value type: Struct(");
 variant_test_case!(39);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(40, "Unsupported typed_value type: List(");
-variant_test_case!(41, "Unsupported typed_value type: List(Field");
+variant_test_case!(41, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(
     42,
     "Expected an error 'Invalid variant, conflicting value and typed_value`, but got no error"
 );
 // https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(43, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(44, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(43, "Unsupported typed_value type: Struct(");
+variant_test_case!(44, "Unsupported typed_value type: Struct(");
 // https://github.com/apache/arrow-rs/issues/8337
-variant_test_case!(45, "Unsupported typed_value type: List(Field");
-variant_test_case!(46, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(45, "Unsupported typed_value type: List(");
+variant_test_case!(46, "Unsupported typed_value type: Struct(");
 variant_test_case!(47);
 variant_test_case!(48);
 variant_test_case!(49);
@@ -191,14 +191,14 @@ variant_test_case!(80);
 variant_test_case!(81);
 variant_test_case!(82);
 // https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(83, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(84, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(83, "Unsupported typed_value type: Struct(");
+variant_test_case!(84, "Unsupported typed_value type: Struct(");
 // https://github.com/apache/arrow-rs/issues/8337
-variant_test_case!(85, "Unsupported typed_value type: List(Field");
-variant_test_case!(86, "Unsupported typed_value type: List(Field");
+variant_test_case!(85, "Unsupported typed_value type: List(");
+variant_test_case!(86, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
-variant_test_case!(87, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(88, "Unsupported typed_value type: List(Field");
+variant_test_case!(87, "Unsupported typed_value type: Struct(");
+variant_test_case!(88, "Unsupported typed_value type: List(");
 variant_test_case!(89);
 variant_test_case!(90);
 variant_test_case!(91);
@@ -243,17 +243,17 @@ variant_test_case!(
     "Invalid variant data: InvalidArgumentError(\"Received empty bytes\")"
 );
 // Is an error case (should be failing as the expected error message indicates)
-variant_test_case!(128, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(128, "Unsupported typed_value type: Struct(");
 variant_test_case!(129, "Invalid variant data: InvalidArgumentError(");
-variant_test_case!(130, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(130, "Unsupported typed_value type: Struct(");
 variant_test_case!(131);
-variant_test_case!(132, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(133, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(134, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(132, "Unsupported typed_value type: Struct(");
+variant_test_case!(133, "Unsupported typed_value type: Struct(");
+variant_test_case!(134, "Unsupported typed_value type: Struct(");
 variant_test_case!(135);
-variant_test_case!(136, "Unsupported typed_value type: List(Field ");
+variant_test_case!(136, "Unsupported typed_value type: List(");
 variant_test_case!(137, "Invalid variant data: InvalidArgumentError(");
-variant_test_case!(138, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(138, "Unsupported typed_value type: Struct(");
 
 /// Test case definition structure matching the format from
 /// `parquet-testing/parquet_shredded/cases.json`
