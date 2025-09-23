@@ -6383,15 +6383,19 @@ mod tests {
             None,
         ]);
 
-        let mut strict_options = CastOptions::default();
-        strict_options.safe = false;
+        let strict_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
 
         assert!(
             cast_with_options(&binary_view_array, &DataType::Utf8View, &strict_options).is_err()
         );
 
-        let mut safe_options = CastOptions::default();
-        safe_options.safe = true;
+        let safe_options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
 
         let string_view_array =
             cast_with_options(&binary_view_array, &DataType::Utf8View, &safe_options).unwrap();
