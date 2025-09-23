@@ -19,21 +19,21 @@
 name = "parquet-variant-json"
 # This package is still in development and thus the version does
 # not follow the versions of the rest of the crates in this repo.
-version = "0.1.0"
+version = "0.2.0"
 license = { workspace = true }
 description = "Apache Parquet Variant to/from JSON"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
-readme = "README.md"
+readme = "../parquet-variant/README.md"
 edition = { workspace = true }
 rust-version = { workspace = true }
 
 
 [dependencies]
 arrow-schema = { workspace = true }
-parquet-variant = { path = "../parquet-variant" }
+parquet-variant = { workspace = true }
 chrono = { workspace = true }
 serde_json = "1.0"
 base64 = "0.22"

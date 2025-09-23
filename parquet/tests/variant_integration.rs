@@ -24,15 +24,12 @@
 //! Inspired by the arrow-go implementation: <https://github.com/apache/arrow-go/pull/455/files>
 
 use arrow::util::test_util::parquet_test_data;
-use arrow_array::{Array, ArrayRef};
-use arrow_cast::cast;
-use arrow_schema::{DataType, Fields};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet_variant::{Variant, VariantMetadata};
 use parquet_variant_compute::VariantArray;
 use serde::Deserialize;
 use std::path::Path;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::{fs, path::PathBuf};
 
 type Result<T> = std::result::Result<T, String>;
@@ -92,9 +89,8 @@ variant_test_case!(14);
 variant_test_case!(15);
 variant_test_case!(16);
 variant_test_case!(17);
-// https://github.com/apache/arrow-rs/issues/8330
-variant_test_case!(18, "Unsupported typed_value type: Date32");
-variant_test_case!(19, "Unsupported typed_value type: Date32");
+variant_test_case!(18);
+variant_test_case!(19);
 // https://github.com/apache/arrow-rs/issues/8331
 variant_test_case!(
     20,
@@ -146,18 +142,18 @@ variant_test_case!(38, "Unsupported typed_value type: Struct(");
 variant_test_case!(39);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(40, "Unsupported typed_value type: List(");
-variant_test_case!(41, "Unsupported typed_value type: List(Field");
+variant_test_case!(41, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(
     42,
     "Expected an error 'Invalid variant, conflicting value and typed_value`, but got no error"
 );
 // https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(43, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(44, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(43, "Unsupported typed_value type: Struct(");
+variant_test_case!(44, "Unsupported typed_value type: Struct(");
 // https://github.com/apache/arrow-rs/issues/8337
-variant_test_case!(45, "Unsupported typed_value type: List(Field");
-variant_test_case!(46, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(45, "Unsupported typed_value type: List(");
+variant_test_case!(46, "Unsupported typed_value type: Struct(");
 variant_test_case!(47);
 variant_test_case!(48);
 variant_test_case!(49);
@@ -195,14 +191,14 @@ variant_test_case!(80);
 variant_test_case!(81);
 variant_test_case!(82);
 // https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(83, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(84, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(83, "Unsupported typed_value type: Struct(");
+variant_test_case!(84, "Unsupported typed_value type: Struct(");
 // https://github.com/apache/arrow-rs/issues/8337
-variant_test_case!(85, "Unsupported typed_value type: List(Field");
-variant_test_case!(86, "Unsupported typed_value type: List(Field");
+variant_test_case!(85, "Unsupported typed_value type: List(");
+variant_test_case!(86, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
-variant_test_case!(87, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(88, "Unsupported typed_value type: List(Field");
+variant_test_case!(87, "Unsupported typed_value type: Struct(");
+variant_test_case!(88, "Unsupported typed_value type: List(");
 variant_test_case!(89);
 variant_test_case!(90);
 variant_test_case!(91);
@@ -247,17 +243,17 @@ variant_test_case!(
     "Invalid variant data: InvalidArgumentError(\"Received empty bytes\")"
 );
 // Is an error case (should be failing as the expected error message indicates)
-variant_test_case!(128, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(128, "Unsupported typed_value type: Struct(");
 variant_test_case!(129, "Invalid variant data: InvalidArgumentError(");
-variant_test_case!(130, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(130, "Unsupported typed_value type: Struct(");
 variant_test_case!(131);
-variant_test_case!(132, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(133, "Unsupported typed_value type: Struct([Field");
-variant_test_case!(134, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(132, "Unsupported typed_value type: Struct(");
+variant_test_case!(133, "Unsupported typed_value type: Struct(");
+variant_test_case!(134, "Unsupported typed_value type: Struct(");
 variant_test_case!(135);
-variant_test_case!(136, "Unsupported typed_value type: List(Field ");
+variant_test_case!(136, "Unsupported typed_value type: List(");
 variant_test_case!(137, "Invalid variant data: InvalidArgumentError(");
-variant_test_case!(138, "Unsupported typed_value type: Struct([Field");
+variant_test_case!(138, "Unsupported typed_value type: Struct(");
 
 /// Test case definition structure matching the format from
 /// `parquet-testing/parquet_shredded/cases.json`
@@ -399,54 +395,9 @@ impl VariantTestCase {
             .column_by_name("var")
             .unwrap_or_else(|| panic!("No 'var' column found in parquet file {path:?}"));
 
-        // the values are read as
-        // * StructArray<metadata: Binary, value: Binary>
-        // but VariantArray needs them as
-        // * StructArray<metadata: BinaryView, value: BinaryView>
-        //
-        // So cast them to get the right type. Hack Alert: the parquet reader
-        // should read them directly as BinaryView
-        let var = cast_to_binary_view_arrays(var);
-
         VariantArray::try_new(var).unwrap_or_else(|e| {
             panic!("Error converting StructArray to VariantArray for {path:?}: {e}")
         })
-    }
-}
-
-fn cast_to_binary_view_arrays(array: &ArrayRef) -> ArrayRef {
-    let new_type = map_type(array.data_type());
-    cast(array, &new_type).unwrap_or_else(|e| {
-        panic!(
-            "Error casting array from {:?} to {:?}: {e}",
-            array.data_type(),
-            new_type
-        )
-    })
-}
-
-/// replaces all instances of Binary with BinaryView in a DataType
-fn map_type(data_type: &DataType) -> DataType {
-    match data_type {
-        DataType::Binary => DataType::BinaryView,
-        DataType::List(field) => {
-            let new_field = field
-                .as_ref()
-                .clone()
-                .with_data_type(map_type(field.data_type()));
-            DataType::List(Arc::new(new_field))
-        }
-        DataType::Struct(fields) => {
-            let new_fields: Fields = fields
-                .iter()
-                .map(|f| {
-                    let new_field = f.as_ref().clone().with_data_type(map_type(f.data_type()));
-                    Arc::new(new_field)
-                })
-                .collect();
-            DataType::Struct(new_fields)
-        }
-        _ => data_type.clone(),
     }
 }
 

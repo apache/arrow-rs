@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
-use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+use crate::schema::{
+    AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, CONFLUENT_MAGIC,
+    SCHEMA_METADATA_KEY, SINGLE_OBJECT_MAGIC,
+};
 use crate::writer::encoder::write_long;
 use arrow_schema::{ArrowError, Schema};
 use rand::RngCore;
@@ -25,7 +28,13 @@ use std::io::Write;
 
 /// Format abstraction implemented by each container‐level writer.
 pub trait AvroFormat: Debug + Default {
+    /// If `true`, the writer for this format will query `single_object_prefix()`
+    /// and write the prefix before each record. If `false`, the writer can
+    /// skip this step. This is a performance hint for the writer.
+    const NEEDS_PREFIX: bool;
+
     /// Write any bytes required at the very beginning of the output stream
+    /// (file header, etc.).
     /// Implementations **must not** write any record data.
     fn start_stream<W: Write>(
         &mut self,
@@ -45,6 +54,7 @@ pub struct AvroOcfFormat {
 }
 
 impl AvroFormat for AvroOcfFormat {
+    const NEEDS_PREFIX: bool = false;
     fn start_stream<W: Write>(
         &mut self,
         writer: &mut W,
@@ -53,10 +63,15 @@ impl AvroFormat for AvroOcfFormat {
     ) -> Result<(), ArrowError> {
         let mut rng = rand::rng();
         rng.fill_bytes(&mut self.sync_marker);
+        // Choose the Avro schema JSON that the file will advertise.
+        // If `schema.metadata[SCHEMA_METADATA_KEY]` exists, AvroSchema::try_from
+        // uses it verbatim; otherwise it is generated from the Arrow schema.
         let avro_schema = AvroSchema::try_from(schema)?;
+        // Magic
         writer
             .write_all(b"Obj\x01")
             .map_err(|e| ArrowError::IoError(format!("write OCF magic: {e}"), e))?;
+        // File metadata map: { "avro.schema": <json>, "avro.codec": <codec> }
         let codec_str = match compression {
             Some(CompressionCodec::Deflate) => "deflate",
             Some(CompressionCodec::Snappy) => "snappy",
@@ -65,6 +80,7 @@ impl AvroFormat for AvroOcfFormat {
             Some(CompressionCodec::Xz) => "xz",
             None => "null",
         };
+        // Map block: count=2, then key/value pairs, then terminating count=0
         write_long(writer, 2)?;
         write_string(writer, SCHEMA_METADATA_KEY)?;
         write_bytes(writer, avro_schema.json_string.as_bytes())?;
@@ -75,7 +91,6 @@ impl AvroFormat for AvroOcfFormat {
         writer
             .write_all(&self.sync_marker)
             .map_err(|e| ArrowError::IoError(format!("write OCF sync marker: {e}"), e))?;
-
         Ok(())
     }
 
@@ -84,20 +99,31 @@ impl AvroFormat for AvroOcfFormat {
     }
 }
 
-/// Raw Avro binary streaming format (no header or footer).
+/// Raw Avro binary streaming format using **Single-Object Encoding** per record.
+///
+/// Each record written by the stream writer is framed with a prefix determined
+/// by the schema fingerprinting algorithm.
+///
+/// See: <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
+/// See: <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
 #[derive(Debug, Default)]
-pub struct AvroBinaryFormat;
+pub struct AvroBinaryFormat {}
 
 impl AvroFormat for AvroBinaryFormat {
+    const NEEDS_PREFIX: bool = true;
     fn start_stream<W: Write>(
         &mut self,
         _writer: &mut W,
         _schema: &Schema,
-        _compression: Option<CompressionCodec>,
+        compression: Option<CompressionCodec>,
     ) -> Result<(), ArrowError> {
-        Err(ArrowError::NotYetImplemented(
-            "avro binary format not yet implemented".to_string(),
-        ))
+        if compression.is_some() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Compression not supported for Avro binary streaming".to_string(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn sync_marker(&self) -> Option<&[u8; 16]> {
