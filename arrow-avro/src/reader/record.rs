@@ -456,6 +456,17 @@ impl Decoder {
                         decoders.len()
                     )));
                 }
+                // Proactive guard: if a user provides a union with more branches than
+                // a 32-bit Avro index can address, fail fast with a clear message.
+                let branch_count = decoders.len();
+                let max_addr = (i32::MAX as usize) + 1;
+                if branch_count > max_addr {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Union has {branch_count} branches, which exceeds the maximum addressable \
+                         branches by an Avro int tag ({} + 1).",
+                        i32::MAX
+                    )));
+                }
                 let mut builder = UnionDecoderBuilder::new()
                     .with_fields(fields.clone())
                     .with_branches(decoders);
@@ -945,11 +956,6 @@ impl Decoder {
                 | Self::StringView(offsets, values)
                 | Self::BytesToString(offsets, values) => {
                     let data = buf.get_bytes()?;
-                    std::str::from_utf8(data)
-                        .map(|_| ())
-                        .map_err(|e| ArrowError::ParseError(format!(
-                            "bytes->string promotion: invalid UTF-8 ({e})"
-                        )));
                     offsets.push_length(data.len());
                     values.extend_from_slice(data);
                     Ok(())
@@ -1106,11 +1112,35 @@ impl Decoder {
     }
 }
 
+// A lookup table for resolving fields between writer and reader schemas during record projection.
 #[derive(Debug)]
 struct DispatchLookupTable {
+    // Maps each reader field index `r` to the corresponding writer field index.
+    //
+    // Semantics:
+    // - `to_reader[r] >= 0`: The value is an index into the writer's fields. The value from
+    //   the writer field is decoded, and `promotion[r]` is applied.
+    // - `to_reader[r] == NO_SOURCE` (-1): No matching writer field exists. The reader field's
+    //   default value is used.
+    //
+    // Representation (`i8`):
+    // `i8` is used for a dense, cache-friendly dispatch table, consistent with Arrow's use of
+    // `i8` for union type IDs. This requires that writer field indices do not exceed `i8::MAX`.
+    //
+    // Invariants:
+    // - `to_reader.len() == promotion.len()` and matches the reader field count.
+    // - If `to_reader[r] == NO_SOURCE`, `promotion[r]` is ignored.
     to_reader: Box<[i8]>,
+    // For each reader field `r`, specifies the `Promotion` to apply to the writer's value.
+    //
+    // This is used when a writer field's type can be promoted to a reader field's type
+    // (e.g., `Int` to `Long`). It is ignored if `to_reader[r] == NO_SOURCE`.
     promotion: Box<[Promotion]>,
 }
+
+// Sentinel used in `DispatchLookupTable::to_reader` to mark
+// "no matching writer field".
+const NO_SOURCE: i8 = -1;
 
 impl DispatchLookupTable {
     fn from_writer_to_reader(
@@ -1131,7 +1161,7 @@ impl DispatchLookupTable {
                     promotion.push(promo);
                 }
                 None => {
-                    to_reader.push(-1);
+                    to_reader.push(NO_SOURCE);
                     promotion.push(Promotion::Direct);
                 }
             }
@@ -1208,6 +1238,16 @@ impl UnionDecoder {
         let default_emit_idx = 0;
         let null_emit_idx = null_branch.unwrap_or(default_emit_idx);
         let branch_len = branches.len().max(reader_type_codes.len());
+        // Guard against impractically large unions that cannot be indexed by an Avro int
+        let max_addr = (i32::MAX as usize) + 1;
+        if branches.len() > max_addr {
+            return Err(ArrowError::SchemaError(format!(
+                "Reader union has {} branches, which exceeds the maximum addressable \
+                 branches by an Avro int tag ({} + 1).",
+                branches.len(),
+                i32::MAX
+            )));
+        }
         Ok(Self {
             fields,
             type_ids: Vec::with_capacity(DEFAULT_CAPACITY),
@@ -1275,13 +1315,22 @@ impl UnionDecoder {
 
     #[inline]
     fn read_tag(buf: &mut AvroCursor<'_>) -> Result<usize, ArrowError> {
-        let tag = buf.get_long()?;
-        if tag < 0 {
+        // Avro unions are encoded by first writing the zero-based branch index.
+        // In Avro 1.11.1 this is specified as an *int*; older specs said *long*,
+        // but both use zig-zag varint encoding, so decoding as long is compatible
+        // with either form and widely used in practice.
+        let raw = buf.get_long()?;
+        if raw < 0 {
             return Err(ArrowError::ParseError(format!(
-                "Negative union branch index {tag}"
+                "Negative union branch index {raw}"
             )));
         }
-        Ok(tag as usize)
+        usize::try_from(raw).map_err(|_| {
+            ArrowError::ParseError(format!(
+                "Union branch index {raw} does not fit into usize on this platform ({}-bit)",
+                (usize::BITS as usize)
+            ))
+        })
     }
 
     #[inline]
@@ -1780,12 +1829,23 @@ impl Skipper {
             ),
             Codec::Map(values) => Self::Map(Box::new(Skipper::from_avro(values)?)),
             Codec::Interval => Self::DurationFixed12,
-            Codec::Union(encodings, _, _) => Self::Union(
-                encodings
-                    .iter()
-                    .map(Skipper::from_avro)
-                    .collect::<Result<_, _>>()?,
-            ),
+            Codec::Union(encodings, _, _) => {
+                let max_addr = (i32::MAX as usize) + 1;
+                if encodings.len() > max_addr {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Writer union has {} branches, which exceeds the maximum addressable \
+                         branches by an Avro int tag ({} + 1).",
+                        encodings.len(),
+                        i32::MAX
+                    )));
+                }
+                Self::Union(
+                    encodings
+                        .iter()
+                        .map(Skipper::from_avro)
+                        .collect::<Result<_, _>>()?,
+                )
+            }
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Skipper not implemented for codec {:?}",
@@ -1865,13 +1925,19 @@ impl Skipper {
             }
             Self::Union(encodings) => {
                 // Union tag must be ZigZag-decoded
-                let idx = buf.get_long()?;
-                if idx < 0 {
+                let raw = buf.get_long()?;
+                if raw < 0 {
                     return Err(ArrowError::ParseError(format!(
-                        "Negative union branch index {idx}"
+                        "Negative union branch index {raw}"
                     )));
                 }
-                let Some(encoding) = encodings.get_mut(idx as usize) else {
+                let idx: usize = usize::try_from(raw).map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Union branch index {raw} does not fit into usize on this platform ({}-bit)",
+                        (usize::BITS as usize)
+                    ))
+                })?;
+                let Some(encoding) = encodings.get_mut(idx) else {
                     return Err(ArrowError::ParseError(format!(
                         "Union branch index {idx} out of range for skipper ({} branches)",
                         encodings.len()
