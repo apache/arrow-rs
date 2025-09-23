@@ -319,7 +319,7 @@ pub(crate) fn page_stats_to_thrift(stats: Option<&Statistics>) -> Option<PageSta
 /// Strongly typed statistics for a column chunk within a row group.
 ///
 /// This structure is a natively typed, in memory representation of the thrift
-/// `Statistics` structure in a parquet file footer. The statistics stored in
+/// `Statistics` structure in a Parquet file footer. The statistics stored in
 /// this structure can be used by query engines to skip decoding pages while
 /// reading parquet data.
 ///
