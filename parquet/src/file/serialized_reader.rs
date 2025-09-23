@@ -33,6 +33,9 @@ use crate::file::{
     properties::{ReaderProperties, ReaderPropertiesPtr},
     reader::*,
 };
+#[cfg(feature = "encryption")]
+use crate::parquet_thrift::ThriftSliceInputProtocol;
+use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
@@ -734,8 +737,6 @@ impl SerializedPageReaderContext {
         _page_index: usize,
         _dictionary_page: bool,
     ) -> Result<PageHeader> {
-        use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
-
         let mut prot = ThriftReadInputProtocol::new(input);
         if self.read_stats {
             Ok(PageHeader::read_thrift(&mut prot)?)
@@ -764,8 +765,6 @@ impl SerializedPageReaderContext {
     ) -> Result<PageHeader> {
         match self.page_crypto_context(page_index, dictionary_page) {
             None => {
-                use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
-
                 let mut prot = ThriftReadInputProtocol::new(input);
                 if self.read_stats {
                     Ok(PageHeader::read_thrift(&mut prot)?)
@@ -776,8 +775,6 @@ impl SerializedPageReaderContext {
                 }
             }
             Some(page_crypto_context) => {
-                use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
-
                 let data_decryptor = page_crypto_context.data_decryptor();
                 let aad = page_crypto_context.create_page_header_aad()?;
 
@@ -790,12 +787,8 @@ impl SerializedPageReaderContext {
 
                 let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
                 if self.read_stats {
-                    use crate::file::metadata::thrift_gen::PageHeader;
-
                     Ok(PageHeader::read_thrift(&mut prot)?)
                 } else {
-                    use crate::file::metadata::thrift_gen::PageHeader;
-
                     Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
                 }
             }
