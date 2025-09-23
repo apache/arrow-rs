@@ -1113,14 +1113,21 @@ struct DispatchLookupTable {
 }
 
 impl DispatchLookupTable {
-    fn from_writer_to_reader(promotion_map: &[Option<(usize, Promotion)>]) -> Self {
+    fn from_writer_to_reader(
+        promotion_map: &[Option<(usize, Promotion)>],
+    ) -> Result<Self, ArrowError> {
         let mut to_reader = Vec::with_capacity(promotion_map.len());
         let mut promotion = Vec::with_capacity(promotion_map.len());
         for map in promotion_map {
             match *map {
                 Some((idx, promo)) => {
-                    let idx: i8 = idx.try_into().map_err(|e| ...)?;
-                    to_reader.push(idx as i8);
+                    let idx_i8 = i8::try_from(idx).map_err(|_| {
+                        ArrowError::SchemaError(format!(
+                            "Reader branch index {idx} exceeds i8 range (max {})",
+                            i8::MAX
+                        ))
+                    })?;
+                    to_reader.push(idx_i8);
                     promotion.push(promo);
                 }
                 None => {
@@ -1129,10 +1136,10 @@ impl DispatchLookupTable {
                 }
             }
         }
-        Self {
+        Ok(Self {
             to_reader: to_reader.into_boxed_slice(),
             promotion: promotion.into_boxed_slice(),
-        }
+        })
     }
 
     // Resolve a writer branch index to (reader_idx, promotion)
@@ -1221,7 +1228,7 @@ impl UnionDecoder {
     ) -> Result<Self, ArrowError> {
         // This constructor is only for writer-union to single-type resolution
         debug_assert!(info.writer_is_union && !info.reader_is_union);
-        let lookup_table = DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader);
+        let lookup_table = DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
         Ok(Self {
             plan: UnionReadPlan::ToSingle {
                 target,
@@ -1238,7 +1245,7 @@ impl UnionDecoder {
         match (info.writer_is_union, info.reader_is_union) {
             (true, true) => {
                 let lookup_table =
-                    DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader);
+                    DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
                 Ok(UnionReadPlan::ReaderUnion { lookup_table })
             }
             (false, true) => {

@@ -1289,6 +1289,7 @@ mod test {
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
         ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     };
+    use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
     use arrow_buffer::{i256, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -2742,11 +2743,7 @@ mod test {
         let batch = read_file(path, 1024, false);
         let schema = batch.schema();
         let idx = schema.index_of("nullable_int_nullfirst").unwrap();
-        let a = batch
-            .column(idx)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("nullable_int_nullfirst should be Int32");
+        let a = batch.column(idx).as_primitive::<Int32Type>();
         assert_eq!(a.len(), 4);
         assert!(a.is_null(0));
         assert_eq!(a.value(1), 42);
