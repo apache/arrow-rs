@@ -18,31 +18,30 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
-use crate::basic::{Encoding, Type};
+use crate::basic::{PageType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::thrift_gen::PageHeader;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
+use crate::file::statistics;
 use crate::file::{
     metadata::*,
     properties::{ReaderProperties, ReaderPropertiesPtr},
     reader::*,
-    statistics,
 };
-use crate::format::{PageHeader, PageType};
+#[cfg(feature = "encryption")]
+use crate::parquet_thrift::ThriftSliceInputProtocol;
+use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
-#[cfg(feature = "encryption")]
-use crate::thrift::TCompactSliceInputProtocol;
-use crate::thrift::TSerializable;
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
-use thrift::protocol::TCompactInputProtocol;
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -423,7 +422,7 @@ pub(crate) fn decode_page(
             Page::DictionaryPage {
                 buf: buffer,
                 num_values: dict_header.num_values.try_into()?,
-                encoding: Encoding::try_from(dict_header.encoding)?,
+                encoding: dict_header.encoding,
                 is_sorted,
             }
         }
@@ -434,10 +433,10 @@ pub(crate) fn decode_page(
             Page::DataPage {
                 buf: buffer,
                 num_values: header.num_values.try_into()?,
-                encoding: Encoding::try_from(header.encoding)?,
-                def_level_encoding: Encoding::try_from(header.definition_level_encoding)?,
-                rep_level_encoding: Encoding::try_from(header.repetition_level_encoding)?,
-                statistics: statistics::from_thrift(physical_type, header.statistics)?,
+                encoding: header.encoding,
+                def_level_encoding: header.definition_level_encoding,
+                rep_level_encoding: header.repetition_level_encoding,
+                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
         PageType::DATA_PAGE_V2 => {
@@ -448,13 +447,13 @@ pub(crate) fn decode_page(
             Page::DataPageV2 {
                 buf: buffer,
                 num_values: header.num_values.try_into()?,
-                encoding: Encoding::try_from(header.encoding)?,
+                encoding: header.encoding,
                 num_nulls: header.num_nulls.try_into()?,
                 num_rows: header.num_rows.try_into()?,
                 def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
                 rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
                 is_compressed,
-                statistics: statistics::from_thrift(physical_type, header.statistics)?,
+                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
         _ => {
@@ -499,6 +498,8 @@ enum SerializedPageReaderState {
 
 #[derive(Default)]
 struct SerializedPageReaderContext {
+    /// Controls decoding of page-level statistics
+    read_stats: bool,
     /// Crypto context carrying objects required for decryption
     #[cfg(feature = "encryption")]
     crypto_context: Option<Arc<CryptoContext>>,
@@ -610,12 +611,16 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 require_dictionary: meta.dictionary_page_offset().is_some(),
             },
         };
+        let mut context = SerializedPageReaderContext::default();
+        if props.read_page_stats() {
+            context.read_stats = true;
+        }
         Ok(Self {
             reader,
             decompressor,
             state,
             physical_type: meta.column_type(),
-            context: Default::default(),
+            context,
         })
     }
 
@@ -732,8 +737,12 @@ impl SerializedPageReaderContext {
         _page_index: usize,
         _dictionary_page: bool,
     ) -> Result<PageHeader> {
-        let mut prot = TCompactInputProtocol::new(input);
-        Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+        let mut prot = ThriftReadInputProtocol::new(input);
+        if self.read_stats {
+            Ok(PageHeader::read_thrift(&mut prot)?)
+        } else {
+            Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+        }
     }
 
     fn decrypt_page_data<T>(
@@ -756,8 +765,14 @@ impl SerializedPageReaderContext {
     ) -> Result<PageHeader> {
         match self.page_crypto_context(page_index, dictionary_page) {
             None => {
-                let mut prot = TCompactInputProtocol::new(input);
-                Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+                let mut prot = ThriftReadInputProtocol::new(input);
+                if self.read_stats {
+                    Ok(PageHeader::read_thrift(&mut prot)?)
+                } else {
+                    use crate::file::metadata::thrift_gen::PageHeader;
+
+                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+                }
             }
             Some(page_crypto_context) => {
                 let data_decryptor = page_crypto_context.data_decryptor();
@@ -770,8 +785,12 @@ impl SerializedPageReaderContext {
                     ))
                 })?;
 
-                let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
-                Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+                let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
+                if self.read_stats {
+                    Ok(PageHeader::read_thrift(&mut prot)?)
+                } else {
+                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+                }
             }
         }
     }
@@ -1107,7 +1126,7 @@ mod tests {
     };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
 
-    use crate::basic::{self, BoundaryOrder, ColumnOrder, SortOrder};
+    use crate::basic::{self, BoundaryOrder, ColumnOrder, Encoding, SortOrder};
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
@@ -1396,7 +1415,7 @@ mod tests {
                     assert_eq!(def_levels_byte_len, 2);
                     assert_eq!(rep_levels_byte_len, 0);
                     assert!(is_compressed);
-                    assert!(statistics.is_some());
+                    assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
                 _ => false,
@@ -1498,7 +1517,7 @@ mod tests {
                     assert_eq!(def_levels_byte_len, 2);
                     assert_eq!(rep_levels_byte_len, 0);
                     assert!(is_compressed);
-                    assert!(statistics.is_some());
+                    assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
                 _ => false,

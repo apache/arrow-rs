@@ -22,6 +22,7 @@ use crate::encryption::ciphers::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
+use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use crate::thrift::TSerializable;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -376,6 +377,18 @@ pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
     Ok(())
 }
 
+/// Write an encrypted Thrift serializable object
+pub(crate) fn encrypt_thrift_object<T: WriteThrift, W: Write>(
+    object: &T,
+    encryptor: &mut Box<dyn BlockEncryptor>,
+    sink: &mut W,
+    module_aad: &[u8],
+) -> Result<()> {
+    let encrypted_buffer = encrypt_thrift_object_to_vec(object, encryptor, module_aad)?;
+    sink.write_all(&encrypted_buffer)?;
+    Ok(())
+}
+
 pub(crate) fn write_signed_plaintext_object<T: TSerializable, W: Write>(
     object: &T,
     encryptor: &mut Box<dyn BlockEncryptor>,
@@ -409,6 +422,21 @@ pub(crate) fn encrypt_object_to_vec<T: TSerializable>(
     {
         let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut buffer);
         object.write_to_out_protocol(&mut unencrypted_protocol)?;
+    }
+
+    encryptor.encrypt(buffer.as_ref(), module_aad)
+}
+
+/// Encrypt a Thrift serializable object to a byte vector
+pub(crate) fn encrypt_thrift_object_to_vec<T: WriteThrift>(
+    object: &T,
+    encryptor: &mut Box<dyn BlockEncryptor>,
+    module_aad: &[u8],
+) -> Result<Vec<u8>> {
+    let mut buffer: Vec<u8> = vec![];
+    {
+        let mut unencrypted_protocol = ThriftCompactOutputProtocol::new(&mut buffer);
+        object.write_thrift(&mut unencrypted_protocol)?;
     }
 
     encryptor.encrypt(buffer.as_ref(), module_aad)

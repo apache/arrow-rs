@@ -258,6 +258,26 @@ fn criterion_benchmark(c: &mut Criterion) {
             });
         })
     });
+
+    #[cfg(feature = "arrow")]
+    c.bench_function("page headers (no stats)", |b| {
+        b.iter(|| {
+            metadata.row_groups.iter().for_each(|rg| {
+                rg.columns.iter().for_each(|col| {
+                    if let Some(col_meta) = &col.meta_data {
+                        if let Some(dict_offset) = col_meta.dictionary_page_offset {
+                            parquet::thrift::bench_page_header_no_stats(
+                                &file_bytes.slice(dict_offset as usize..),
+                            );
+                        }
+                        parquet::thrift::bench_page_header_no_stats(
+                            &file_bytes.slice(col_meta.data_page_offset as usize..),
+                        );
+                    }
+                });
+            });
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -68,103 +68,6 @@ pub(crate) struct SchemaElement<'a> {
 );
 
 thrift_struct!(
-pub(crate) struct DataPageHeader {
-  /// Number of values, including NULLs, in this data page.
-  ///
-  /// If a OffsetIndex is present, a page must begin at a row
-  /// boundary (repetition_level = 0). Otherwise, pages may begin
-  /// within a row (repetition_level > 0).
-  1: required i32 num_values
-
-  /// Encoding used for this data page
-  2: required Encoding encoding
-
-  /// Encoding used for definition levels
-  3: required Encoding definition_level_encoding;
-
-  /// Encoding used for repetition levels
-  4: required Encoding repetition_level_encoding;
-
-  // Optional statistics for the data in this page
-  // page stats are pretty useless...lets ignore them
-  //5: optional Statistics statistics;
-}
-);
-
-thrift_struct!(
-    pub(crate) struct IndexPageHeader {}
-);
-
-thrift_struct!(
-pub(crate) struct DictionaryPageHeader {
-  /// Number of values in the dictionary
-  1: required i32 num_values;
-
-  /// Encoding using this dictionary page
-  2: required Encoding encoding
-
-  /// If true, the entries in the dictionary are sorted in ascending order
-  3: optional bool is_sorted;
-}
-);
-
-thrift_struct!(
-pub(crate) struct DataPageHeaderV2 {
-  /// Number of values, including NULLs, in this data page.
-  1: required i32 num_values
-  /// Number of NULL values, in this data page.
-  /// Number of non-null = num_values - num_nulls which is also the number of values in the data section
-  2: required i32 num_nulls
-  /// Number of rows in this data page. Every page must begin at a
-  /// row boundary (repetition_level = 0): rows must **not** be
-  /// split across page boundaries when using V2 data pages.
-  3: required i32 num_rows
-  /// Encoding used for data in this page
-  4: required Encoding encoding
-
-  // repetition levels and definition levels are always using RLE (without size in it)
-
-  /// Length of the definition levels
-  5: required i32 definition_levels_byte_length;
-  /// Length of the repetition levels
-  6: required i32 repetition_levels_byte_length;
-
-  /// Whether the values are compressed.
-  /// Which means the section of the page between
-  /// definition_levels_byte_length + repetition_levels_byte_length + 1 and compressed_page_size (included)
-  /// is compressed with the compression_codec.
-  /// If missing it is considered compressed
-  7: optional bool is_compressed = true;
-
-  // Optional statistics for the data in this page
-  //8: optional Statistics statistics;
-}
-);
-
-thrift_struct!(
-#[allow(dead_code)]
-pub(crate) struct PageHeader {
-  /// the type of the page: indicates which of the *_header fields is set
-  1: required PageType type_
-
-  /// Uncompressed page size in bytes (not including this header)
-  2: required i32 uncompressed_page_size
-
-  /// Compressed (and potentially encrypted) page size in bytes, not including this header
-  3: required i32 compressed_page_size
-
-  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
-  4: optional i32 crc
-
-  // Headers for page specific data.  One only will be set.
-  5: optional DataPageHeader data_page_header;
-  6: optional IndexPageHeader index_page_header;
-  7: optional DictionaryPageHeader dictionary_page_header;
-  8: optional DataPageHeaderV2 data_page_header_v2;
-}
-);
-
-thrift_struct!(
 pub(crate) struct AesGcmV1<'a> {
   /// AAD prefix
   1: optional binary<'a> aad_prefix
@@ -213,6 +116,13 @@ pub(crate) struct FileCryptoMetaData<'a> {
   2: optional binary<'a> key_metadata
 }
 );
+
+// expose for benchmarking
+pub(crate) fn bench_file_metadata(bytes: &bytes::Bytes) {
+    use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
+    let mut prot = ThriftSliceInputProtocol::new(bytes);
+    crate::file::metadata::thrift_gen::FileMetaData::read_thrift(&mut prot).unwrap();
+}
 
 // the following are only used internally so are private
 thrift_struct!(
@@ -906,6 +816,345 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ParquetMetaDat
         );
 
         Ok(ParquetMetaData::new(fmd, row_groups))
+    }
+}
+
+thrift_struct!(
+    pub(crate) struct IndexPageHeader {}
+);
+
+thrift_struct!(
+pub(crate) struct DictionaryPageHeader {
+  /// Number of values in the dictionary
+  1: required i32 num_values;
+
+  /// Encoding using this dictionary page
+  2: required Encoding encoding
+
+  /// If true, the entries in the dictionary are sorted in ascending order
+  3: optional bool is_sorted;
+}
+);
+
+thrift_struct!(
+/// Statistics for the page header.
+///
+/// This is a duplicate of the [`Statistics`] struct above. Because the page reader uses
+/// the [`Read`] API, we cannot read the min/max values as slices. This should not be
+/// a huge problem since this crate no longer reads the page header statistics by default.
+///
+/// [`Read`]: crate::parquet_thrift::ThriftReadInputProtocol
+pub(crate) struct PageStatistics {
+   1: optional binary max;
+   2: optional binary min;
+   3: optional i64 null_count;
+   4: optional i64 distinct_count;
+   5: optional binary max_value;
+   6: optional binary min_value;
+   7: optional bool is_max_value_exact;
+   8: optional bool is_min_value_exact;
+}
+);
+
+thrift_struct!(
+pub(crate) struct DataPageHeader {
+  1: required i32 num_values
+  2: required Encoding encoding
+  3: required Encoding definition_level_encoding;
+  4: required Encoding repetition_level_encoding;
+  5: optional PageStatistics statistics;
+}
+);
+
+impl DataPageHeader {
+    // reader that skips decoding page statistics
+    fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
+    where
+        R: ThriftCompactInputProtocol<'a>,
+    {
+        let mut num_values: Option<i32> = None;
+        let mut encoding: Option<Encoding> = None;
+        let mut definition_level_encoding: Option<Encoding> = None;
+        let mut repetition_level_encoding: Option<Encoding> = None;
+        let statistics: Option<PageStatistics> = None;
+        let mut last_field_id = 0i16;
+        loop {
+            let field_ident = prot.read_field_begin(last_field_id)?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    num_values = Some(val);
+                }
+                2 => {
+                    let val = Encoding::read_thrift(&mut *prot)?;
+                    encoding = Some(val);
+                }
+                3 => {
+                    let val = Encoding::read_thrift(&mut *prot)?;
+                    definition_level_encoding = Some(val);
+                }
+                4 => {
+                    let val = Encoding::read_thrift(&mut *prot)?;
+                    repetition_level_encoding = Some(val);
+                }
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+            last_field_id = field_ident.id;
+        }
+        let Some(num_values) = num_values else {
+            return Err(ParquetError::General(
+                "Required field num_values is missing".to_owned(),
+            ));
+        };
+        let Some(encoding) = encoding else {
+            return Err(ParquetError::General(
+                "Required field encoding is missing".to_owned(),
+            ));
+        };
+        let Some(definition_level_encoding) = definition_level_encoding else {
+            return Err(ParquetError::General(
+                "Required field definition_level_encoding is missing".to_owned(),
+            ));
+        };
+        let Some(repetition_level_encoding) = repetition_level_encoding else {
+            return Err(ParquetError::General(
+                "Required field repetition_level_encoding is missing".to_owned(),
+            ));
+        };
+        Ok(Self {
+            num_values,
+            encoding,
+            definition_level_encoding,
+            repetition_level_encoding,
+            statistics,
+        })
+    }
+}
+
+thrift_struct!(
+pub(crate) struct DataPageHeaderV2 {
+  1: required i32 num_values
+  2: required i32 num_nulls
+  3: required i32 num_rows
+  4: required Encoding encoding
+  5: required i32 definition_levels_byte_length;
+  6: required i32 repetition_levels_byte_length;
+  7: optional bool is_compressed = true;
+  8: optional PageStatistics statistics;
+}
+);
+
+impl DataPageHeaderV2 {
+    // reader that skips decoding page statistics
+    fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
+    where
+        R: ThriftCompactInputProtocol<'a>,
+    {
+        let mut num_values: Option<i32> = None;
+        let mut num_nulls: Option<i32> = None;
+        let mut num_rows: Option<i32> = None;
+        let mut encoding: Option<Encoding> = None;
+        let mut definition_levels_byte_length: Option<i32> = None;
+        let mut repetition_levels_byte_length: Option<i32> = None;
+        let mut is_compressed: Option<bool> = None;
+        let statistics: Option<PageStatistics> = None;
+        let mut last_field_id = 0i16;
+        loop {
+            let field_ident = prot.read_field_begin(last_field_id)?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    num_values = Some(val);
+                }
+                2 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    num_nulls = Some(val);
+                }
+                3 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    num_rows = Some(val);
+                }
+                4 => {
+                    let val = Encoding::read_thrift(&mut *prot)?;
+                    encoding = Some(val);
+                }
+                5 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    definition_levels_byte_length = Some(val);
+                }
+                6 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    repetition_levels_byte_length = Some(val);
+                }
+                7 => {
+                    let val = field_ident.bool_val.unwrap();
+                    is_compressed = Some(val);
+                }
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+            last_field_id = field_ident.id;
+        }
+        let Some(num_values) = num_values else {
+            return Err(ParquetError::General(
+                "Required field num_values is missing".to_owned(),
+            ));
+        };
+        let Some(num_nulls) = num_nulls else {
+            return Err(ParquetError::General(
+                "Required field num_nulls is missing".to_owned(),
+            ));
+        };
+        let Some(num_rows) = num_rows else {
+            return Err(ParquetError::General(
+                "Required field num_rows is missing".to_owned(),
+            ));
+        };
+        let Some(encoding) = encoding else {
+            return Err(ParquetError::General(
+                "Required field encoding is missing".to_owned(),
+            ));
+        };
+        let Some(definition_levels_byte_length) = definition_levels_byte_length else {
+            return Err(ParquetError::General(
+                "Required field definition_levels_byte_length is missing".to_owned(),
+            ));
+        };
+        let Some(repetition_levels_byte_length) = repetition_levels_byte_length else {
+            return Err(ParquetError::General(
+                "Required field repetition_levels_byte_length is missing".to_owned(),
+            ));
+        };
+        Ok(Self {
+            num_values,
+            num_nulls,
+            num_rows,
+            encoding,
+            definition_levels_byte_length,
+            repetition_levels_byte_length,
+            is_compressed,
+            statistics,
+        })
+    }
+}
+
+thrift_struct!(
+pub(crate) struct PageHeader {
+  /// the type of the page: indicates which of the *_header fields is set
+  1: required PageType type_
+
+  /// Uncompressed page size in bytes (not including this header)
+  2: required i32 uncompressed_page_size
+
+  /// Compressed (and potentially encrypted) page size in bytes, not including this header
+  3: required i32 compressed_page_size
+
+  /// The 32-bit CRC checksum for the page, to be be calculated as follows:
+  4: optional i32 crc
+
+  // Headers for page specific data.  One only will be set.
+  5: optional DataPageHeader data_page_header;
+  6: optional IndexPageHeader index_page_header;
+  7: optional DictionaryPageHeader dictionary_page_header;
+  8: optional DataPageHeaderV2 data_page_header_v2;
+}
+);
+
+impl PageHeader {
+    // reader that skips reading page statistics. obtained by running
+    // `cargo expand -p parquet --all-features --lib file::metadata::thrift_gen`
+    // and modifying the impl of `read_thrift`
+    pub(crate) fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
+    where
+        R: ThriftCompactInputProtocol<'a>,
+    {
+        let mut type_: Option<PageType> = None;
+        let mut uncompressed_page_size: Option<i32> = None;
+        let mut compressed_page_size: Option<i32> = None;
+        let mut crc: Option<i32> = None;
+        let mut data_page_header: Option<DataPageHeader> = None;
+        let mut index_page_header: Option<IndexPageHeader> = None;
+        let mut dictionary_page_header: Option<DictionaryPageHeader> = None;
+        let mut data_page_header_v2: Option<DataPageHeaderV2> = None;
+        let mut last_field_id = 0i16;
+        loop {
+            let field_ident = prot.read_field_begin(last_field_id)?;
+            if field_ident.field_type == FieldType::Stop {
+                break;
+            }
+            match field_ident.id {
+                1 => {
+                    let val = PageType::read_thrift(&mut *prot)?;
+                    type_ = Some(val);
+                }
+                2 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    uncompressed_page_size = Some(val);
+                }
+                3 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    compressed_page_size = Some(val);
+                }
+                4 => {
+                    let val = i32::read_thrift(&mut *prot)?;
+                    crc = Some(val);
+                }
+                5 => {
+                    let val = DataPageHeader::read_thrift_without_stats(&mut *prot)?;
+                    data_page_header = Some(val);
+                }
+                6 => {
+                    let val = IndexPageHeader::read_thrift(&mut *prot)?;
+                    index_page_header = Some(val);
+                }
+                7 => {
+                    let val = DictionaryPageHeader::read_thrift(&mut *prot)?;
+                    dictionary_page_header = Some(val);
+                }
+                8 => {
+                    let val = DataPageHeaderV2::read_thrift_without_stats(&mut *prot)?;
+                    data_page_header_v2 = Some(val);
+                }
+                _ => {
+                    prot.skip(field_ident.field_type)?;
+                }
+            };
+            last_field_id = field_ident.id;
+        }
+        let Some(type_) = type_ else {
+            return Err(ParquetError::General(
+                "Required field type_ is missing".to_owned(),
+            ));
+        };
+        let Some(uncompressed_page_size) = uncompressed_page_size else {
+            return Err(ParquetError::General(
+                "Required field uncompressed_page_size is missing".to_owned(),
+            ));
+        };
+        let Some(compressed_page_size) = compressed_page_size else {
+            return Err(ParquetError::General(
+                "Required field compressed_page_size is missing".to_owned(),
+            ));
+        };
+        Ok(Self {
+            type_,
+            uncompressed_page_size,
+            compressed_page_size,
+            crc,
+            data_page_header,
+            index_page_header,
+            dictionary_page_header,
+            data_page_header_v2,
+        })
     }
 }
 
