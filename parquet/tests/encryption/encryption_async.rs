@@ -34,9 +34,9 @@ use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
 use parquet::file::writer::SerializedFileWriter;
-use parquet::format::FileMetaData;
 use std::io::Write;
 use std::sync::Arc;
 use tokio::fs::File;
@@ -647,7 +647,7 @@ fn spawn_column_parallel_row_group_writer(
 async fn concatenate_parallel_row_groups<W: Write + Send>(
     mut parquet_writer: SerializedFileWriter<W>,
     mut serialize_rx: Receiver<JoinHandle<RBStreamSerializeResult>>,
-) -> Result<FileMetaData, ParquetError> {
+) -> Result<ParquetMetaData, ParquetError> {
     while let Some(task) = serialize_rx.recv().await {
         let result = task.await;
         let mut rg_out = parquet_writer.next_row_group()?;
@@ -818,8 +818,8 @@ async fn test_multi_threaded_encrypted_writing() {
     let metadata = serialized_file_writer.close().unwrap();
 
     // Close the file writer which writes the footer
-    assert_eq!(metadata.num_rows, 50);
-    assert_eq!(metadata.schema, metadata.schema);
+    assert_eq!(metadata.file_metadata().num_rows(), 50);
+    // TODO(ets): what was this meant to test? assert_eq!(metadata.schema, metadata.schema);
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
