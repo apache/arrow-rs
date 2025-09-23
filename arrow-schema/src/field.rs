@@ -44,7 +44,7 @@ pub type FieldRef = Arc<Field>;
 ///
 /// Arrow Extension types, are encoded in `Field`s metadata. See
 /// [`Self::try_extension_type`] to retrieve the [`ExtensionType`], if any.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
     name: String,
@@ -58,6 +58,39 @@ pub struct Field {
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
     metadata: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #![expect(deprecated)] // Must still print dict_id, if set
+        let Self {
+            name,
+            data_type,
+            nullable,
+            dict_id,
+            dict_is_ordered,
+            metadata,
+        } = self;
+
+        let mut s = f.debug_struct("Field");
+        let s = s
+            .field("name", name)
+            .field("data_type", data_type)
+            .field("nullable", nullable);
+
+        if *dict_id != 0 {
+            s.field("dict_id", dict_id);
+        }
+
+        if *dict_is_ordered {
+            s.field("dict_is_ordered", dict_is_ordered);
+        }
+
+        if !metadata.is_empty() {
+            s.field("metadata", metadata);
+        }
+        s.finish()
+    }
 }
 
 // Auto-derive `PartialEq` traits will pull `dict_id` and `dict_is_ordered`
@@ -912,6 +945,24 @@ mod test {
         let s = "c1";
         #[allow(deprecated)]
         Field::new_dict(s, DataType::Int64, false, 4, false);
+    }
+
+    #[test]
+    fn test_debug_format_field() {
+        insta::assert_debug_snapshot!(Field::new("item", DataType::UInt8, true), @r#"
+        Field {
+            name: "item",
+            data_type: UInt8,
+            nullable: true,
+        }
+        "#);
+        insta::assert_debug_snapshot!(Field::new("item", DataType::UInt8, false), @r#"
+        Field {
+            name: "item",
+            data_type: UInt8,
+            nullable: false,
+        }
+        "#);
     }
 
     #[test]
