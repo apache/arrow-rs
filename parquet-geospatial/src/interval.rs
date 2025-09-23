@@ -20,11 +20,40 @@ use arrow_schema::ArrowError;
 /// Generic 1D intervals with wraparound support
 ///
 /// This trait specifies common behaviour implemented by the [Interval] and
-/// [WraparoundInterval]. In general, one should use [Interval] unless
-/// specifically working with wraparound, as the contingency of wraparound
-/// incurs overhead (particularly in a loop). This trait is mostly used to
-/// simplify testing and unify documentation for the two concrete
-/// implementations.
+/// [WraparoundInterval].
+///
+/// Briefly, "wraparound" support was included in the Parquet specification
+/// to ensure that geometries or geographies with components on both sides of
+/// antimeridian (180 degrees longitude) can be reasonably summarized. This
+/// concept was borrowed from the widely used GeoJSON and matches identical
+/// bounding box specifications for GeoParquet and STAC, among others.
+///
+/// Because the Parquet specification also states that longitude values
+/// are always stored as `x` values (i.e., the first coordinate component),
+/// this contingency is only available for the `xmin`/`xmax` component of the
+/// GeoStatistics. Thus, the `xmin`/`xmax` pair may either represent a regular
+/// interval (specified by xmin = 10 and xmax = 20):
+///
+/// ```text
+///           10         20
+///            |==========|
+/// ```
+///
+/// ...or a "wraparound" interval (specified by xmin = 20 and xmax = 10). This
+/// interval is the union of the two regular intervals (-Inf, 10] and (20, Inf).
+/// Infinity was chosen rather than any particular value to ensure that Parquet
+/// implementations did not have to consider the value of the coordinate
+/// reference system when comparing intervals.
+///
+/// ```text
+///           10         20
+/// <==========|          |============>
+/// ```
+///
+/// In general, one should use [Interval] unless specifically working with
+/// wraparound, as the contingency of wraparound incurs overhead (particularly
+/// in a loop). This trait is mostly used to simplify testing and unify
+/// documentation for the two concrete implementations.
 pub trait IntervalTrait: std::fmt::Debug + PartialEq {
     /// Create an interval from lo and hi values
     fn new(lo: f64, hi: f64) -> Self;
