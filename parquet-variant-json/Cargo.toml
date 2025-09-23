@@ -26,7 +26,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
-readme = "README.md"
+readme = "../parquet-variant/README.md"
 edition = { workspace = true }
 rust-version = { workspace = true }
 
