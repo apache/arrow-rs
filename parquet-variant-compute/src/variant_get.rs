@@ -144,7 +144,9 @@ fn shredded_get_path(
                 if target.is_null(i) {
                     builder.append_null()?;
                 } else {
-                    builder.append_value(target.value(i))?;
+                    target
+                        .value(i)
+                        .consume(|value| builder.append_value(value))?;
                 }
             }
             builder.finish()
@@ -1596,7 +1598,7 @@ mod test {
             let json_str = r#"{"x": 42}"#;
             let string_array: ArrayRef = Arc::new(StringArray::from(vec![json_str]));
             if let Ok(variant_array) = json_to_variant(&string_array) {
-                builder.append_variant(variant_array.value(0));
+                variant_array.value(0).consume(|value| builder.append_variant(value));
             } else {
                 builder.append_null();
             }
@@ -1607,7 +1609,7 @@ mod test {
             let json_str = r#"{"x": "foo"}"#;
             let string_array: ArrayRef = Arc::new(StringArray::from(vec![json_str]));
             if let Ok(variant_array) = json_to_variant(&string_array) {
-                builder.append_variant(variant_array.value(0));
+                variant_array.value(0).consume(|value| builder.append_variant(value));
             } else {
                 builder.append_null();
             }
@@ -1618,7 +1620,7 @@ mod test {
             let json_str = r#"{"y": 10}"#;
             let string_array: ArrayRef = Arc::new(StringArray::from(vec![json_str]));
             if let Ok(variant_array) = json_to_variant(&string_array) {
-                builder.append_variant(variant_array.value(0));
+                variant_array.value(0).consume(|value| builder.append_variant(value));
             } else {
                 builder.append_null();
             }
@@ -1637,7 +1639,7 @@ mod test {
             let json_str = r#"{"a": {"x": 55}, "b": 42}"#;
             let string_array: ArrayRef = Arc::new(StringArray::from(vec![json_str]));
             if let Ok(variant_array) = json_to_variant(&string_array) {
-                builder.append_variant(variant_array.value(0));
+                variant_array.value(0).consume(|value| builder.append_variant(value));
             } else {
                 builder.append_null();
             }
@@ -1648,7 +1650,7 @@ mod test {
             let json_str = r#"{"a": {"x": "foo"}, "b": 42}"#;
             let string_array: ArrayRef = Arc::new(StringArray::from(vec![json_str]));
             if let Ok(variant_array) = json_to_variant(&string_array) {
-                builder.append_variant(variant_array.value(0));
+                variant_array.value(0).consume(|value| builder.append_variant(value));
             } else {
                 builder.append_null();
             }
@@ -1667,7 +1669,7 @@ mod test {
             let json_str = r#"{"a": {"b": {"x": 100}}}"#;
             let string_array: ArrayRef = Arc::new(StringArray::from(vec![json_str]));
             if let Ok(variant_array) = json_to_variant(&string_array) {
-                builder.append_variant(variant_array.value(0));
+                variant_array.value(0).consume(|value| builder.append_variant(value));
             } else {
                 builder.append_null();
             }
@@ -1678,7 +1680,7 @@ mod test {
             let json_str = r#"{"a": {"b": {"x": "bar"}}}"#;
             let string_array: ArrayRef = Arc::new(StringArray::from(vec![json_str]));
             if let Ok(variant_array) = json_to_variant(&string_array) {
-                builder.append_variant(variant_array.value(0));
+                variant_array.value(0).consume(|value| builder.append_variant(value));
             } else {
                 builder.append_null();
             }
@@ -1689,7 +1691,7 @@ mod test {
             let json_str = r#"{"a": {"b": {"y": 200}}}"#;
             let string_array: ArrayRef = Arc::new(StringArray::from(vec![json_str]));
             if let Ok(variant_array) = json_to_variant(&string_array) {
-                builder.append_variant(variant_array.value(0));
+                variant_array.value(0).consume(|value| builder.append_variant(value));
             } else {
                 builder.append_null();
             }

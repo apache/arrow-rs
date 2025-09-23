@@ -485,7 +485,7 @@ mod test {
         let mut builder = VariantValueArrayBuilder::new(3);
 
         // straight copy
-        builder.append_value(array.value(0));
+        array.value(0).consume(|value| builder.append_value(value));
 
         // filtering fields takes more work because we need to manually create an object builder
         let value = array.value(1);
@@ -498,6 +498,7 @@ mod test {
 
         // same bytes, but now nested and duplicated inside a list
         let value = array.value(2);
+        let value = value.as_variant();
         let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
         let state = builder.parent_state(&mut metadata_builder);
         ListBuilder::new(state, false)

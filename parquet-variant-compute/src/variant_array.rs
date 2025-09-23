@@ -28,7 +28,9 @@ use arrow::datatypes::{
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
 use parquet_variant::Uuid;
-use parquet_variant::Variant;
+use parquet_variant::{Variant, VariantList, VariantMetadata, VariantObject};
+
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// Arrow Variant [`ExtensionType`].
@@ -69,6 +71,96 @@ impl ExtensionType for VariantType {
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
         Self.supports_data_type(data_type)?;
         Ok(Self)
+    }
+}
+
+pub enum VariantArrayValue<'m, 'v> {
+    Borrowed(Variant<'m, 'v>),
+    Owned {
+        metadata: VariantMetadata<'m>,
+        value_bytes: Vec<u8>,
+    },
+}
+
+impl<'m, 'v> VariantArrayValue<'m, 'v> {
+    pub fn borrowed(value: Variant<'m, 'v>) -> Self {
+        Self::Borrowed(value)
+    }
+    pub fn owned(metadata_bytes: &'m [u8], value_bytes: Vec<u8>) -> Self {
+        Self::Owned {
+            metadata: VariantMetadata::new(metadata_bytes),
+            value_bytes,
+        }
+    }
+    pub fn consume<R>(self, visitor: impl FnOnce(Variant<'_, '_>) -> R) -> R {
+        match self {
+            VariantArrayValue::Borrowed(v) => visitor(v),
+            VariantArrayValue::Owned {
+                metadata,
+                value_bytes,
+            } => visitor(Variant::new_with_metadata(metadata, &value_bytes)),
+        }
+    }
+    // internal helper for when we don't want to pay the extra clone
+    fn as_variant_cow(&self) -> Cow<'_, Variant<'m, '_>> {
+        match self {
+            VariantArrayValue::Borrowed(v) => Cow::Borrowed(v),
+            VariantArrayValue::Owned {
+                metadata,
+                value_bytes,
+            } => Cow::Owned(Variant::new_with_metadata(metadata.clone(), value_bytes)),
+        }
+    }
+    pub fn as_variant(&self) -> Variant<'m, '_> {
+        self.as_variant_cow().into_owned()
+    }
+    pub fn metadata(&self) -> &VariantMetadata<'m> {
+        match self {
+            VariantArrayValue::Borrowed(v) => v.metadata(),
+            VariantArrayValue::Owned { metadata, .. } => metadata,
+        }
+    }
+    pub fn as_object(&self) -> Option<VariantObject<'m, '_>> {
+        self.as_variant_cow().as_object().cloned()
+    }
+    pub fn as_list(&self) -> Option<VariantList<'m, '_>> {
+        self.as_variant_cow().as_list().cloned()
+    }
+    pub fn get_object_field<'s>(&'s self, field_name: &str) -> Option<Variant<'m, 's>> {
+        self.as_variant_cow().get_object_field(field_name)
+    }
+    pub fn get_list_element(&self, index: usize) -> Option<Variant<'m, '_>> {
+        self.as_variant_cow().get_list_element(index)
+    }
+}
+
+impl<'m, 'v> From<Variant<'m, 'v>> for VariantArrayValue<'m, 'v> {
+    fn from(value: Variant<'m, 'v>) -> Self {
+        Self::borrowed(value)
+    }
+}
+
+impl PartialEq for VariantArrayValue<'_, '_> {
+    fn eq(&self, other: &VariantArrayValue<'_, '_>) -> bool {
+        self.as_variant_cow().as_ref() == other.as_variant_cow().as_ref()
+    }
+}
+
+impl PartialEq<Variant<'_, '_>> for VariantArrayValue<'_, '_> {
+    fn eq(&self, other: &Variant<'_, '_>) -> bool {
+        self.as_variant_cow().as_ref() == other
+    }
+}
+
+impl PartialEq<VariantArrayValue<'_, '_>> for Variant<'_, '_> {
+    fn eq(&self, other: &VariantArrayValue<'_, '_>) -> bool {
+        self == other.as_variant_cow().as_ref()
+    }
+}
+
+impl std::fmt::Debug for VariantArrayValue<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_variant_cow().fmt(f)
     }
 }
 
@@ -352,39 +444,24 @@ impl VariantArray {
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn value(&self, index: usize) -> Variant<'_, '_> {
-        match &self.shredding_state {
-            ShreddingState::Unshredded { value, .. } => {
-                // Unshredded case
+    pub fn value(&self, index: usize) -> VariantArrayValue<'_, '_> {
+        let value = match &self.shredding_state {
+            // Always prefer to use the typed_value, if present
+            ShreddingState::Typed { typed_value, .. }
+            | ShreddingState::PartiallyShredded { typed_value, .. }
+                if typed_value.is_valid(index) =>
+            {
+                return typed_value_to_variant(typed_value, index);
+            }
+            // If no typed_value, fall back to value, if present
+            ShreddingState::Unshredded { value, .. }
+            | ShreddingState::PartiallyShredded { value, .. } => {
                 Variant::new(self.metadata.value(index), value.value(index))
             }
-            ShreddingState::Typed { typed_value, .. } => {
-                // Typed case (formerly PerfectlyShredded)
-                if typed_value.is_null(index) {
-                    Variant::Null
-                } else {
-                    typed_value_to_variant(typed_value, index)
-                }
-            }
-            ShreddingState::PartiallyShredded {
-                value, typed_value, ..
-            } => {
-                // PartiallyShredded case (formerly ImperfectlyShredded)
-                if typed_value.is_null(index) {
-                    Variant::new(self.metadata.value(index), value.value(index))
-                } else {
-                    typed_value_to_variant(typed_value, index)
-                }
-            }
-            ShreddingState::AllNull => {
-                // AllNull case: neither value nor typed_value fields exist
-                // NOTE: This handles the case where neither value nor typed_value fields exist.
-                // For top-level variants, this returns Variant::Null (JSON null).
-                // For shredded object fields, this technically should indicate SQL NULL,
-                // but the current API cannot distinguish these contexts.
-                Variant::Null
-            }
-        }
+            // If neither value nor typed_value fields exist, return Variant::Null.
+            ShreddingState::Typed { .. } | ShreddingState::AllNull => Variant::Null,
+        };
+        value.into()
     }
 
     /// Return a reference to the metadata field of the [`StructArray`]
@@ -796,8 +873,8 @@ impl StructArrayBuilder {
 }
 
 /// returns the non-null element at index as a Variant
-fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '_> {
-    match typed_value.data_type() {
+fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> VariantArrayValue<'_, '_> {
+    let value = match typed_value.data_type() {
         DataType::Boolean => {
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
@@ -815,7 +892,7 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             let value = array.value(index);
             if *binary_len == 16 {
                 if let Ok(uuid) = Uuid::from_slice(value) {
-                    return Variant::from(uuid);
+                    return Variant::from(uuid).into();
                 }
             }
             let value = array.value(index);
@@ -877,7 +954,8 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
             );
             Variant::Null
         }
-    }
+    };
+    value.into()
 }
 
 /// Workaround for lack of direct support for BinaryArray

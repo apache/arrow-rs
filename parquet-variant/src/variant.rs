@@ -1218,7 +1218,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let obj = variant.as_object().expect("variant should be an object");
     /// assert_eq!(obj.get("name"), Some(Variant::from("John")));
     /// ```
-    pub fn as_object(&'m self) -> Option<&'m VariantObject<'m, 'v>> {
+    pub fn as_object(&self) -> Option<&VariantObject<'m, 'v>> {
         if let Variant::Object(obj) = self {
             Some(obj)
         } else {
@@ -1280,7 +1280,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// assert_eq!(list.get(0).unwrap(), Variant::from("John"));
     /// assert_eq!(list.get(1).unwrap(), Variant::from("Doe"));
     /// ```
-    pub fn as_list(&'m self) -> Option<&'m VariantList<'m, 'v>> {
+    pub fn as_list(&self) -> Option<&VariantList<'m, 'v>> {
         if let Variant::List(list) = self {
             Some(list)
         } else {
@@ -1308,7 +1308,7 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from("Hello");
     /// assert_eq!(None, v2.as_time_utc());
     /// ```
-    pub fn as_time_utc(&'m self) -> Option<NaiveTime> {
+    pub fn as_time_utc(&self) -> Option<NaiveTime> {
         if let Variant::Time(time) = self {
             Some(*time)
         } else {
