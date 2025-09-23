@@ -345,27 +345,19 @@ impl AvroSchema {
         Self { json_string }
     }
 
-    /// Deserializes and returns the `AvroSchema`.
-    ///
-    /// The returned schema borrows from `self`.
-    pub fn schema(&self) -> Result<Schema<'_>, ArrowError> {
+    pub(crate) fn schema(&self) -> Result<Schema<'_>, ArrowError> {
         serde_json::from_str(self.json_string.as_str())
             .map_err(|e| ArrowError::ParseError(format!("Invalid Avro schema JSON: {e}")))
     }
 
-    /// Returns the fingerprint of the schema.
-    pub fn fingerprint(&self, hash_type: FingerprintAlgorithm) -> Result<Fingerprint, ArrowError> {
-        Self::generate_fingerprint(&self.schema()?, hash_type)
-    }
-
-    /// Generates a fingerprint for the given `Schema` using the specified [`FingerprintAlgorithm`].
+    /// Returns the fingerprint of the schema, computed using the specified [`FingerprintAlgorithm`].
     ///
     /// The fingerprint is computed over the schema's Parsed Canonical Form
     /// as defined by the Avro specification. Depending on `hash_type`, this
     /// will return one of the supported [`Fingerprint`] variants:
     /// - [`Fingerprint::Rabin`] for [`FingerprintAlgorithm::Rabin`]
-    /// - [`Fingerprint::MD5`] for [`FingerprintAlgorithm::MD5`]
-    /// - [`Fingerprint::SHA256`] for [`FingerprintAlgorithm::SHA256`]
+    /// - `Fingerprint::MD5` for `FingerprintAlgorithm::MD5`
+    /// - `Fingerprint::SHA256` for `FingerprintAlgorithm::SHA256`
     ///
     /// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
     /// and will result in an error. If you intend to use a Schema Registry ID-based
@@ -375,18 +367,21 @@ impl AvroSchema {
     /// See also: <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
     ///
     /// # Errors
-    /// Returns an error if generating the canonical form of the schema fails,
-    /// or if `hash_type` is [`FingerprintAlgorithm::None`].
+    /// Returns an error if deserializing the schema fails, if generating the
+    /// canonical form of the schema fails, or if `hash_type` is [`FingerprintAlgorithm::None`].
     ///
     /// # Examples
-    /// ```no_run
+    /// ```
     /// use arrow_avro::schema::{AvroSchema, FingerprintAlgorithm};
     ///
     /// let avro = AvroSchema::new("\"string\"".to_string());
-    /// let schema = avro.schema().unwrap();
-    /// let fp = AvroSchema::generate_fingerprint(&schema, FingerprintAlgorithm::Rabin).unwrap();
+    /// let fp = avro.fingerprint(FingerprintAlgorithm::Rabin).unwrap();
     /// ```
-    pub fn generate_fingerprint(
+    pub fn fingerprint(&self, hash_type: FingerprintAlgorithm) -> Result<Fingerprint, ArrowError> {
+        Self::generate_fingerprint(&self.schema()?, hash_type)
+    }
+
+    pub(crate) fn generate_fingerprint(
         schema: &Schema,
         hash_type: FingerprintAlgorithm,
     ) -> Result<Fingerprint, ArrowError> {
@@ -432,7 +427,7 @@ impl AvroSchema {
     /// Avro specification.
     ///
     /// <https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas>
-    pub fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
+    pub(crate) fn generate_canonical_form(schema: &Schema) -> Result<String, ArrowError> {
         build_canonical(schema, None)
     }
 

@@ -178,7 +178,7 @@ impl ToPyArrow for DataType {
         let module = py.import("pyarrow")?;
         let class = module.getattr("DataType")?;
         let dtype = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(dtype.into())
+        Ok(dtype)
     }
 }
 
@@ -214,7 +214,7 @@ impl ToPyArrow for Field {
         let module = py.import("pyarrow")?;
         let class = module.getattr("Field")?;
         let dtype = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(dtype.into())
+        Ok(dtype)
     }
 }
 
@@ -250,7 +250,7 @@ impl ToPyArrow for Schema {
         let module = py.import("pyarrow")?;
         let class = module.getattr("Schema")?;
         let schema = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(schema.into())
+        Ok(schema)
     }
 }
 
