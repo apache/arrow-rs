@@ -112,7 +112,8 @@ mod tests {
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
     use parquet_variant::{
-        Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+        Variant, VariantBuilder, VariantBuilderExt, VariantDecimal16, VariantDecimal4,
+        VariantDecimal8,
     };
     use std::{sync::Arc, vec};
 
@@ -1262,24 +1263,25 @@ mod tests {
     fn test_cast_to_variant_list_view() {
         // Create a ListViewArray with some data
         let mut builder = ListViewBuilder::new(Int32Array::builder(0));
-        builder.append_value(&Int32Array::from(vec![Some(0), Some(1), Some(2)]));
+        builder.append_value(&Int32Array::from(vec![Some(0), None, Some(2)]));
         builder.append_value(&Int32Array::from(vec![Some(3), Some(4)]));
         builder.append_null();
+        builder.append_value(&Int32Array::from(vec![None, None]));
         let list_view_array = builder.finish();
 
         // Expected values
-        let (metadata1, value1) = {
+        let (metadata, value) = {
             let mut builder = VariantBuilder::new();
             let mut list = builder.new_list();
             list.append_value(0i32);
-            list.append_value(1i32);
+            list.append_null();
             list.append_value(2i32);
             list.finish();
             builder.finish()
         };
-        let variant1 = Variant::new(&metadata1, &value1);
+        let variant0 = Variant::new(&metadata, &value);
 
-        let (metadata2, value2) = {
+        let (metadata, value) = {
             let mut builder = VariantBuilder::new();
             let mut list = builder.new_list();
             list.append_value(3i32);
@@ -1287,11 +1289,21 @@ mod tests {
             list.finish();
             builder.finish()
         };
-        let variant2 = Variant::new(&metadata2, &value2);
+        let variant1 = Variant::new(&metadata, &value);
+
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_null();
+            list.append_null();
+            list.finish();
+            builder.finish()
+        };
+        let variant3 = Variant::new(&metadata, &value);
 
         run_test(
             Arc::new(list_view_array),
-            vec![Some(variant1), Some(variant2), None],
+            vec![Some(variant0), Some(variant1), None, Some(variant3)],
         );
     }
 
@@ -1300,7 +1312,7 @@ mod tests {
         // Create a ListViewArray with some data
         let mut builder = ListViewBuilder::new(Int32Array::builder(0));
         builder.append_value(&Int32Array::from(vec![Some(0), Some(1), Some(2)]));
-        builder.append_value(&Int32Array::from(vec![Some(3), Some(4)]));
+        builder.append_value(&Int32Array::from(vec![Some(3), None]));
         builder.append_null();
         let list_view_array = builder.finish();
 
@@ -1309,7 +1321,7 @@ mod tests {
             let mut builder = VariantBuilder::new();
             let mut list = builder.new_list();
             list.append_value(3i32);
-            list.append_value(4i32);
+            list.append_null();
             list.finish();
             builder.finish()
         };
@@ -1325,24 +1337,25 @@ mod tests {
     fn test_cast_to_variant_large_list_view() {
         // Create a LargeListViewArray with some data
         let mut builder = LargeListViewBuilder::new(Int64Array::builder(0));
-        builder.append_value(&Int64Array::from(vec![Some(0), Some(1), Some(2)]));
+        builder.append_value(&Int64Array::from(vec![Some(0), None, Some(2)]));
         builder.append_value(&Int64Array::from(vec![Some(3), Some(4)]));
         builder.append_null();
+        builder.append_value(&Int64Array::from(vec![None, None]));
         let large_list_view_array = builder.finish();
 
         // Expected values
-        let (metadata1, value1) = {
+        let (metadata, value) = {
             let mut builder = VariantBuilder::new();
             let mut list = builder.new_list();
             list.append_value(0i64);
-            list.append_value(1i64);
+            list.append_null();
             list.append_value(2i64);
             list.finish();
             builder.finish()
         };
-        let variant1 = Variant::new(&metadata1, &value1);
+        let variant0 = Variant::new(&metadata, &value);
 
-        let (metadata2, value2) = {
+        let (metadata, value) = {
             let mut builder = VariantBuilder::new();
             let mut list = builder.new_list();
             list.append_value(3i64);
@@ -1350,11 +1363,21 @@ mod tests {
             list.finish();
             builder.finish()
         };
-        let variant2 = Variant::new(&metadata2, &value2);
+        let variant1 = Variant::new(&metadata, &value);
+
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_null();
+            list.append_null();
+            list.finish();
+            builder.finish()
+        };
+        let variant3 = Variant::new(&metadata, &value);
 
         run_test(
             Arc::new(large_list_view_array),
-            vec![Some(variant1), Some(variant2), None],
+            vec![Some(variant0), Some(variant1), None, Some(variant3)],
         );
     }
 
@@ -1363,7 +1386,7 @@ mod tests {
         // Create a LargeListViewArray with some data
         let mut builder = LargeListViewBuilder::new(Int64Array::builder(0));
         builder.append_value(&Int64Array::from(vec![Some(0), Some(1), Some(2)]));
-        builder.append_value(&Int64Array::from(vec![Some(3), Some(4)]));
+        builder.append_value(&Int64Array::from(vec![Some(3), None]));
         builder.append_null();
         let large_list_view_array = builder.finish();
 
@@ -1372,7 +1395,7 @@ mod tests {
             let mut builder = VariantBuilder::new();
             let mut list = builder.new_list();
             list.append_value(3i64);
-            list.append_value(4i64);
+            list.append_null();
             list.finish();
             builder.finish()
         };
