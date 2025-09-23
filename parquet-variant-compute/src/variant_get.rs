@@ -1034,7 +1034,7 @@ mod test {
         ]);
 
         let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", Arc::new(typed_value), true)
             .with_field("value", Arc::new(values), true)
             .with_nulls(nulls)
@@ -1092,7 +1092,7 @@ mod test {
         .expect("should create fixed size binary array");
 
         let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", Arc::new(typed_value), true)
             .with_field("value", Arc::new(values), true)
             .with_nulls(nulls)
@@ -1137,7 +1137,7 @@ mod test {
         ]);
 
         let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", Arc::new(typed_value), true)
             .with_field("value", Arc::new(values), true)
             .with_nulls(nulls)
@@ -1182,7 +1182,7 @@ mod test {
         ]);
 
         let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", Arc::new(typed_value), true)
             .with_field("value", Arc::new(values), true)
             .with_nulls(nulls)
@@ -1227,7 +1227,7 @@ mod test {
         ]);
 
         let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), true)
+            .with_field("metadata", Arc::new(metadata), false)
             .with_field("typed_value", Arc::new(typed_value), true)
             .with_field("value", Arc::new(values), true)
             .with_nulls(nulls)
