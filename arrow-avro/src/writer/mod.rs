@@ -34,7 +34,9 @@ pub mod format;
 
 use crate::codec::AvroFieldBuilder;
 use crate::compression::CompressionCodec;
-use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+use crate::schema::{
+    AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY,
+};
 use crate::writer::encoder::{write_long, RecordEncoder, RecordEncoderBuilder};
 use crate::writer::format::{AvroBinaryFormat, AvroFormat, AvroOcfFormat};
 use arrow_array::RecordBatch;
@@ -48,6 +50,7 @@ pub struct WriterBuilder {
     schema: Schema,
     codec: Option<CompressionCodec>,
     capacity: usize,
+    fingerprint_strategy: Option<FingerprintStrategy>,
 }
 
 impl WriterBuilder {
@@ -57,7 +60,15 @@ impl WriterBuilder {
             schema,
             codec: None,
             capacity: 1024,
+            fingerprint_strategy: None,
         }
+    }
+
+    /// Set the fingerprinting strategy for the stream writer.
+    /// This determines the per-record prefix format.
+    pub fn with_fingerprint_strategy(mut self, strategy: FingerprintStrategy) -> Self {
+        self.fingerprint_strategy = Some(strategy);
+        self
     }
 
     /// Change the compression codec.
@@ -84,6 +95,22 @@ impl WriterBuilder {
             Some(json) => AvroSchema::new(json.clone()),
             None => AvroSchema::try_from(&self.schema)?,
         };
+
+        let maybe_fingerprint = if F::NEEDS_PREFIX {
+            match self.fingerprint_strategy {
+                Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(id)),
+                Some(strategy) => {
+                    Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?)
+                }
+                None => Some(
+                    avro_schema
+                        .fingerprint(FingerprintAlgorithm::from(FingerprintStrategy::Rabin))?,
+                ),
+            }
+        } else {
+            None
+        };
+
         let mut md = self.schema.metadata().clone();
         md.insert(
             SCHEMA_METADATA_KEY.to_string(),
@@ -92,7 +119,9 @@ impl WriterBuilder {
         let schema = Arc::new(Schema::new_with_metadata(self.schema.fields().clone(), md));
         format.start_stream(&mut writer, &schema, self.codec)?;
         let avro_root = AvroFieldBuilder::new(&avro_schema.schema()?).build()?;
-        let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref()).build()?;
+        let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref())
+            .with_fingerprint(maybe_fingerprint)
+            .build()?;
         Ok(Writer {
             writer,
             schema,
@@ -194,7 +223,8 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
     }
 
     fn write_stream(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
-        self.encoder.encode(&mut self.writer, batch)
+        self.encoder.encode(&mut self.writer, batch)?;
+        Ok(())
     }
 }
 
@@ -203,9 +233,9 @@ mod tests {
     use super::*;
     use crate::compression::CompressionCodec;
     use crate::reader::ReaderBuilder;
-    use crate::schema::{AvroSchema, SchemaStore};
+    use crate::schema::{AvroSchema, SchemaStore, CONFLUENT_MAGIC};
     use crate::test_util::arrow_test_data;
-    use arrow_array::{ArrayRef, BinaryArray, Int32Array, RecordBatch};
+    use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, IntervalUnit, Schema};
     use std::fs::File;
     use std::io::{BufReader, Cursor};
@@ -228,6 +258,73 @@ mod tests {
             vec![Arc::new(ids) as ArrayRef, Arc::new(names) as ArrayRef],
         )
         .expect("failed to build test RecordBatch")
+    }
+
+    #[test]
+    fn test_stream_writer_writes_prefix_per_row_rt() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef],
+        )?;
+        let buf: Vec<u8> = Vec::new();
+        let mut writer = AvroStreamWriter::new(buf, schema.clone())?;
+        writer.write(&batch)?;
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new(); // Rabin by default
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _fp = store.register(avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _consumed = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 2);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![10, 20]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_writer_with_id_fingerprint_rt() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+        let schema_id: u32 = 42;
+        let mut writer = WriterBuilder::new(schema.clone())
+            .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id))
+            .build::<_, AvroBinaryFormat>(Vec::new())?;
+        writer.write(&batch)?;
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _ = store.set(Fingerprint::Id(schema_id), avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _ = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 3);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
+        Ok(())
     }
 
     #[test]
@@ -413,6 +510,224 @@ mod tests {
             round_trip, original,
             "Round-trip batch mismatch for nested_lists.snappy.avro"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_simple_fixed_ocf() -> Result<(), ArrowError> {
+        let path = arrow_test_data("avro/simple_fixed.avro");
+        let rdr_file = File::open(&path).expect("open avro/simple_fixed.avro");
+        let mut reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build avro reader");
+        let schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&schema, &input_batches).expect("concat input");
+        let tmp = NamedTempFile::new().expect("create temp file");
+        let out_file = File::create(tmp.path()).expect("create temp avro");
+        let mut writer = AvroWriter::new(out_file, original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        drop(writer);
+        let rt_file = File::open(tmp.path()).expect("open round_trip avro");
+        let mut rt_reader = ReaderBuilder::new()
+            .build(BufReader::new(rt_file))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+        assert_eq!(round_trip, original);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "canonical_extension_types"))]
+    #[test]
+    fn test_round_trip_duration_and_uuid_ocf() -> Result<(), ArrowError> {
+        let in_file =
+            File::open("test/data/duration_uuid.avro").expect("open test/data/duration_uuid.avro");
+        let mut reader = ReaderBuilder::new()
+            .build(BufReader::new(in_file))
+            .expect("build reader for duration_uuid.avro");
+        let in_schema = reader.schema();
+        let has_mdn = in_schema.fields().iter().any(|f| {
+            matches!(
+                f.data_type(),
+                DataType::Interval(IntervalUnit::MonthDayNano)
+            )
+        });
+        assert!(
+            has_mdn,
+            "expected at least one Interval(MonthDayNano) field in duration_uuid.avro"
+        );
+        let has_uuid_fixed = in_schema
+            .fields()
+            .iter()
+            .any(|f| matches!(f.data_type(), DataType::FixedSizeBinary(16)));
+        assert!(
+            has_uuid_fixed,
+            "expected at least one FixedSizeBinary(16) (uuid) field in duration_uuid.avro"
+        );
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let input =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        let tmp = NamedTempFile::new().expect("create temp file");
+        {
+            let out_file = File::create(tmp.path()).expect("create temp avro");
+            let mut writer = AvroWriter::new(out_file, in_schema.as_ref().clone())?;
+            writer.write(&input)?;
+            writer.finish()?;
+        }
+        let rt_file = File::open(tmp.path()).expect("open round_trip avro");
+        let mut rt_reader = ReaderBuilder::new()
+            .build(BufReader::new(rt_file))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+        assert_eq!(round_trip, input);
+        Ok(())
+    }
+
+    // This test reads the same 'nonnullable.impala.avro' used by the reader tests,
+    // writes it back out with the writer (hitting Map encoding paths), then reads it
+    // again and asserts exact Arrow equivalence.
+    #[test]
+    fn test_nonnullable_impala_roundtrip_writer() -> Result<(), ArrowError> {
+        // Load source Avro with Map fields
+        let path = arrow_test_data("avro/nonnullable.impala.avro");
+        let rdr_file = File::open(&path).expect("open avro/nonnullable.impala.avro");
+        let mut reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for nonnullable.impala.avro");
+        // Collect all input batches and concatenate to a single RecordBatch
+        let in_schema = reader.schema();
+        // Sanity: ensure the file actually contains at least one Map field
+        let has_map = in_schema
+            .fields()
+            .iter()
+            .any(|f| matches!(f.data_type(), DataType::Map(_, _)));
+        assert!(
+            has_map,
+            "expected at least one Map field in avro/nonnullable.impala.avro"
+        );
+
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        // Write out using the OCF writer into an in-memory Vec<u8>
+        let buffer = Vec::<u8>::new();
+        let mut writer = AvroWriter::new(buffer, in_schema.as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let out_bytes = writer.into_inner();
+        // Read the produced bytes back with the Reader
+        let mut rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(out_bytes))
+            .expect("build reader for round-tripped in-memory OCF");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+        // Exact value fidelity (schema + data)
+        assert_eq!(
+            roundtrip, original,
+            "Round-trip Avro map data mismatch for nonnullable.impala.avro"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_decimals_via_writer() -> Result<(), ArrowError> {
+        // (file, resolve via ARROW_TEST_DATA?)
+        let files: [(&str, bool); 8] = [
+            ("avro/fixed_length_decimal.avro", true), // fixed-backed -> Decimal128(25,2)
+            ("avro/fixed_length_decimal_legacy.avro", true), // legacy fixed[8] -> Decimal64(13,2)
+            ("avro/int32_decimal.avro", true),        // bytes-backed -> Decimal32(4,2)
+            ("avro/int64_decimal.avro", true),        // bytes-backed -> Decimal64(10,2)
+            ("test/data/int256_decimal.avro", false), // bytes-backed -> Decimal256(76,2)
+            ("test/data/fixed256_decimal.avro", false), // fixed[32]-backed -> Decimal256(76,10)
+            ("test/data/fixed_length_decimal_legacy_32.avro", false), // legacy fixed[4] -> Decimal32(9,2)
+            ("test/data/int128_decimal.avro", false), // bytes-backed -> Decimal128(38,2)
+        ];
+        for (rel, in_test_data_dir) in files {
+            // Resolve path the same way as reader::test_decimal
+            let path: String = if in_test_data_dir {
+                arrow_test_data(rel)
+            } else {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(rel)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            // Read original file into a single RecordBatch for comparison
+            let f_in = File::open(&path).expect("open input avro");
+            let mut rdr = ReaderBuilder::new().build(BufReader::new(f_in))?;
+            let in_schema = rdr.schema();
+            let in_batches = rdr.collect::<Result<Vec<_>, _>>()?;
+            let original =
+                arrow::compute::concat_batches(&in_schema, &in_batches).expect("concat input");
+            // Write it out with the OCF writer (no special compression)
+            let tmp = NamedTempFile::new().expect("create temp file");
+            let out_path = tmp.into_temp_path();
+            let out_file = File::create(&out_path).expect("create temp avro");
+            let mut writer = AvroWriter::new(out_file, original.schema().as_ref().clone())?;
+            writer.write(&original)?;
+            writer.finish()?;
+            // Read back the file we just wrote and compare equality (schema + data)
+            let f_rt = File::open(&out_path).expect("open roundtrip avro");
+            let mut rt_rdr = ReaderBuilder::new().build(BufReader::new(f_rt))?;
+            let rt_schema = rt_rdr.schema();
+            let rt_batches = rt_rdr.collect::<Result<Vec<_>, _>>()?;
+            let roundtrip =
+                arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat rt");
+            assert_eq!(roundtrip, original, "decimal round-trip mismatch for {rel}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_roundtrip_uses_reader_fixture() -> Result<(), ArrowError> {
+        // Read the known-good enum file (same as reader::test_simple)
+        let path = arrow_test_data("avro/simple_enum.avro");
+        let rdr_file = File::open(&path).expect("open avro/simple_enum.avro");
+        let mut reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for simple_enum.avro");
+        // Concatenate all batches to one RecordBatch for a clean equality check
+        let in_schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        // Sanity: expect at least one Dictionary(Int32, Utf8) column (enum)
+        let has_enum_dict = in_schema.fields().iter().any(|f| {
+            matches!(
+                f.data_type(),
+                DataType::Dictionary(k, v) if **k == DataType::Int32 && **v == DataType::Utf8
+            )
+        });
+        assert!(
+            has_enum_dict,
+            "Expected at least one enum-mapped Dictionary<Int32, Utf8> field"
+        );
+        // Write with OCF writer into memory using the reader-provided Arrow schema.
+        // The writer will embed the Avro JSON from `avro.schema` metadata if present.
+        let buffer: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(buffer, in_schema.as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        // Read back and compare for exact equality (schema + data)
+        let mut rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("reader for round-trip");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+        assert_eq!(roundtrip, original, "Avro enum round-trip mismatch");
         Ok(())
     }
 }

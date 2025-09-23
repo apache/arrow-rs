@@ -96,65 +96,63 @@ pub unsafe fn decode<R: RunEndIndexType>(
     field: &SortField,
     validate_utf8: bool,
 ) -> Result<RunArray<R>, ArrowError> {
-    unsafe {
-        if rows.is_empty() {
-            let values = converter.convert_raw(&mut [], validate_utf8)?;
-            let run_ends_array = PrimitiveArray::<R>::new(ScalarBuffer::from(vec![]), None);
-            return RunArray::<R>::try_new(&run_ends_array, &values[0]);
-        }
-
-        // Decode each row's REE data and collect the decoded values
-        let mut decoded_values = Vec::new();
-        let mut run_ends = Vec::new();
-        let mut unique_row_indices = Vec::new();
-
-        // Process each row to extract its REE data (following decode_binary pattern)
-        let mut decoded_data = Vec::new();
-        for (idx, row) in rows.iter_mut().enumerate() {
-            decoded_data.clear();
-            // Extract the decoded value data from this row
-            let consumed = variable::decode_blocks(row, field.options, |block| {
-                decoded_data.extend_from_slice(block);
-            });
-
-            // Handle bit inversion for descending sort (following decode_binary pattern)
-            if field.options.descending {
-                decoded_data.iter_mut().for_each(|b| *b = !*b);
-            }
-
-            // Update the row to point past the consumed REE data
-            *row = &row[consumed..];
-
-            // Check if this decoded value is the same as the previous one to identify runs
-            let is_new_run =
-                idx == 0 || decoded_data != decoded_values[*unique_row_indices.last().unwrap()];
-
-            if is_new_run {
-                // This is a new unique value - end the previous run if any
-                if idx > 0 {
-                    run_ends.push(R::Native::usize_as(idx));
-                }
-                unique_row_indices.push(decoded_values.len());
-                decoded_values.push(decoded_data.clone());
-            }
-        }
-        // Add the final run end
-        run_ends.push(R::Native::usize_as(rows.len()));
-
-        // Convert the unique decoded values using the row converter
-        let mut unique_rows: Vec<&[u8]> = decoded_values.iter().map(|v| v.as_slice()).collect();
-        let values = if unique_rows.is_empty() {
-            converter.convert_raw(&mut [], validate_utf8)?
-        } else {
-            converter.convert_raw(&mut unique_rows, validate_utf8)?
-        };
-
-        // Create run ends array
-        let run_ends_array = PrimitiveArray::<R>::new(ScalarBuffer::from(run_ends), None);
-
-        // Create the RunEndEncodedArray
-        RunArray::<R>::try_new(&run_ends_array, &values[0])
+    if rows.is_empty() {
+        let values = unsafe { converter.convert_raw(&mut [], validate_utf8)? };
+        let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(vec![]), None)?;
+        return RunArray::<R>::try_new(&run_ends_array, &values[0]);
     }
+
+    // Decode each row's REE data and collect the decoded values
+    let mut decoded_values = Vec::new();
+    let mut run_ends = Vec::new();
+    let mut unique_row_indices = Vec::new();
+
+    // Process each row to extract its REE data (following decode_binary pattern)
+    let mut decoded_data = Vec::new();
+    for (idx, row) in rows.iter_mut().enumerate() {
+        decoded_data.clear();
+        // Extract the decoded value data from this row
+        let consumed = variable::decode_blocks(row, field.options, |block| {
+            decoded_data.extend_from_slice(block);
+        });
+
+        // Handle bit inversion for descending sort (following decode_binary pattern)
+        if field.options.descending {
+            decoded_data.iter_mut().for_each(|b| *b = !*b);
+        }
+
+        // Update the row to point past the consumed REE data
+        *row = &row[consumed..];
+
+        // Check if this decoded value is the same as the previous one to identify runs
+        let is_new_run =
+            idx == 0 || decoded_data != decoded_values[*unique_row_indices.last().unwrap()];
+
+        if is_new_run {
+            // This is a new unique value - end the previous run if any
+            if idx > 0 {
+                run_ends.push(R::Native::usize_as(idx));
+            }
+            unique_row_indices.push(decoded_values.len());
+            decoded_values.push(decoded_data.clone());
+        }
+    }
+    // Add the final run end
+    run_ends.push(R::Native::usize_as(rows.len()));
+
+    // Convert the unique decoded values using the row converter
+    let mut unique_rows: Vec<&[u8]> = decoded_values.iter().map(|v| v.as_slice()).collect();
+    let values = if unique_rows.is_empty() {
+        unsafe { converter.convert_raw(&mut [], validate_utf8)? }
+    } else {
+        unsafe { converter.convert_raw(&mut unique_rows, validate_utf8)? }
+    };
+
+    // Create run ends array
+    let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(run_ends), None)?;
+
+    // Create the RunEndEncodedArray
+    RunArray::<R>::try_new(&run_ends_array, &values[0])
 }
 
 #[cfg(test)]

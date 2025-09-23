@@ -18,7 +18,7 @@
 //! Avro Encoder for Arrow types.
 
 use crate::codec::{AvroDataType, AvroField, Codec};
-use crate::schema::Nullability;
+use crate::schema::{Fingerprint, Nullability, Prefix};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalDayTimeType,
@@ -33,6 +33,7 @@ use arrow_array::{
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit};
+use serde::Serialize;
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -363,6 +364,60 @@ impl<'a> FieldEncoder<'a> {
                     .ok_or_else(|| ArrowError::SchemaError("Expected FixedSizeBinaryArray".into()))?;
                 Encoder::Uuid(UuidEncoder(arr))
             }
+            FieldPlan::Map { values_nullability,
+                value_plan } => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<MapArray>()
+                    .ok_or_else(|| ArrowError::SchemaError("Expected MapArray".into()))?;
+                Encoder::Map(Box::new(MapEncoder::try_new(arr, *values_nullability, value_plan.as_ref())?))
+            }
+            FieldPlan::Enum { symbols} => match array.data_type() {
+                DataType::Dictionary(key_dt, value_dt) => {
+                    if **key_dt != DataType::Int32 || **value_dt != DataType::Utf8 {
+                        return Err(ArrowError::SchemaError(
+                            "Avro enum requires Dictionary<Int32, Utf8>".into(),
+                        ));
+                    }
+                    let dict = array
+                        .as_any()
+                        .downcast_ref::<DictionaryArray<Int32Type>>()
+                        .ok_or_else(|| {
+                            ArrowError::SchemaError("Expected DictionaryArray<Int32>".into())
+                        })?;
+
+                    let values = dict
+                        .values()
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or_else(|| {
+                            ArrowError::SchemaError("Dictionary values must be Utf8".into())
+                        })?;
+                    if values.len() != symbols.len() {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Enum symbol length {} != dictionary size {}",
+                            symbols.len(),
+                            values.len()
+                        )));
+                    }
+                    for i in 0..values.len() {
+                        if values.value(i) != symbols[i].as_str() {
+                            return Err(ArrowError::SchemaError(format!(
+                                "Enum symbol mismatch at {i}: schema='{}' dict='{}'",
+                                symbols[i],
+                                values.value(i)
+                            )));
+                        }
+                    }
+                    let keys = dict.keys();
+                    Encoder::Enum(EnumEncoder { keys })
+                }
+                other => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Avro enum site requires DataType::Dictionary, found: {other:?}"
+                    )))
+                }
+            }
             other => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Avro writer: {other:?} not yet supported",
@@ -443,6 +498,14 @@ enum FieldPlan {
     Decimal { size: Option<usize> },
     /// Avro UUID logical type (fixed)
     Uuid,
+    /// Avro map with value‑site nullability and nested plan
+    Map {
+        values_nullability: Option<Nullability>,
+        value_plan: Box<FieldPlan>,
+    },
+    /// Avro enum; maps to Arrow Dictionary<Int32, Utf8> with dictionary values
+    /// exactly equal and ordered as the Avro enum `symbols`.
+    Enum { symbols: Arc<[String]> },
 }
 
 #[derive(Debug, Clone)]
@@ -460,6 +523,7 @@ struct FieldBinding {
 pub struct RecordEncoderBuilder<'a> {
     avro_root: &'a AvroField,
     arrow_schema: &'a ArrowSchema,
+    fingerprint: Option<Fingerprint>,
 }
 
 impl<'a> RecordEncoderBuilder<'a> {
@@ -468,7 +532,13 @@ impl<'a> RecordEncoderBuilder<'a> {
         Self {
             avro_root,
             arrow_schema,
+            fingerprint: None,
         }
+    }
+
+    pub(crate) fn with_fingerprint(mut self, fingerprint: Option<Fingerprint>) -> Self {
+        self.fingerprint = fingerprint;
+        self
     }
 
     /// Build the `RecordEncoder` by walking the Avro **record** root in Avro order,
@@ -495,7 +565,10 @@ impl<'a> RecordEncoderBuilder<'a> {
                 )?,
             });
         }
-        Ok(RecordEncoder { columns })
+        Ok(RecordEncoder {
+            columns,
+            prefix: self.fingerprint.map(|fp| fp.make_prefix()),
+        })
     }
 }
 
@@ -507,6 +580,8 @@ impl<'a> RecordEncoderBuilder<'a> {
 #[derive(Debug, Clone)]
 pub struct RecordEncoder {
     columns: Vec<FieldBinding>,
+    /// Optional pre-built, variable-length prefix written before each record.
+    prefix: Option<Prefix>,
 }
 
 impl RecordEncoder {
@@ -540,9 +615,23 @@ impl RecordEncoder {
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
     pub fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
-        for row in 0..batch.num_rows() {
-            for encoder in column_encoders.iter_mut() {
-                encoder.encode(out, row)?;
+        let n = batch.num_rows();
+        match self.prefix {
+            Some(prefix) => {
+                for row in 0..n {
+                    out.write_all(prefix.as_slice())
+                        .map_err(|e| ArrowError::IoError(format!("write prefix: {e}"), e))?;
+                    for enc in column_encoders.iter_mut() {
+                        enc.encode(out, row)?;
+                    }
+                }
+            }
+            None => {
+                for row in 0..n {
+                    for enc in column_encoders.iter_mut() {
+                        enc.encode(out, row)?;
+                    }
+                }
             }
         }
         Ok(())
@@ -631,6 +720,54 @@ impl FieldPlan {
                     "Avro array maps to Arrow List/LargeList, found: {other:?}"
                 ))),
             },
+            Codec::Map(values_dt) => {
+                let entries_field = match arrow_field.data_type() {
+                    DataType::Map(entries, _sorted) => entries.as_ref(),
+                    other => {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Avro map maps to Arrow DataType::Map, found: {other:?}"
+                        )))
+                    }
+                };
+                let entries_struct_fields = match entries_field.data_type() {
+                    DataType::Struct(fs) => fs,
+                    other => {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Arrow Map entries must be Struct, found: {other:?}"
+                        )))
+                    }
+                };
+                let value_idx =
+                    find_map_value_field_index(entries_struct_fields).ok_or_else(|| {
+                        ArrowError::SchemaError("Map entries struct missing value field".into())
+                    })?;
+                let value_field = entries_struct_fields[value_idx].as_ref();
+                let value_plan = FieldPlan::build(values_dt.as_ref(), value_field)?;
+                Ok(FieldPlan::Map {
+                    values_nullability: values_dt.nullability(),
+                    value_plan: Box::new(value_plan),
+                })
+            }
+            Codec::Enum(symbols) => match arrow_field.data_type() {
+                DataType::Dictionary(key_dt, value_dt) => {
+                    if **key_dt != DataType::Int32 {
+                        return Err(ArrowError::SchemaError(
+                            "Avro enum requires Dictionary<Int32, Utf8>".into(),
+                        ));
+                    }
+                    if **value_dt != DataType::Utf8 {
+                        return Err(ArrowError::SchemaError(
+                            "Avro enum requires Dictionary<Int32, Utf8>".into(),
+                        ));
+                    }
+                    Ok(FieldPlan::Enum {
+                        symbols: symbols.clone(),
+                    })
+                }
+                other => Err(ArrowError::SchemaError(format!(
+                    "Avro enum maps to Arrow Dictionary<Int32, Utf8>, found: {other:?}"
+                ))),
+            },
             // decimal site (bytes or fixed(N)) with precision/scale validation
             Codec::Decimal(precision, scale_opt, fixed_size_opt) => {
                 let (ap, as_) = match arrow_field.data_type() {
@@ -700,6 +837,9 @@ enum Encoder<'a> {
     Decimal64(Decimal64Encoder<'a>),
     Decimal128(Decimal128Encoder<'a>),
     Decimal256(Decimal256Encoder<'a>),
+    /// Avro `enum` encoder: writes the key (int) as the enum index.
+    Enum(EnumEncoder<'a>),
+    Map(Box<MapEncoder<'a>>),
 }
 
 impl<'a> Encoder<'a> {
@@ -730,6 +870,8 @@ impl<'a> Encoder<'a> {
             Encoder::Decimal64(e) => (e).encode(out, idx),
             Encoder::Decimal128(e) => (e).encode(out, idx),
             Encoder::Decimal256(e) => (e).encode(out, idx),
+            Encoder::Map(e) => (e).encode(out, idx),
+            Encoder::Enum(e) => (e).encode(out, idx),
         }
     }
 }
@@ -795,6 +937,139 @@ impl<'a, O: OffsetSizeTrait> Utf8GenericEncoder<'a, O> {
 
 type Utf8Encoder<'a> = Utf8GenericEncoder<'a, i32>;
 type Utf8LargeEncoder<'a> = Utf8GenericEncoder<'a, i64>;
+
+/// Internal key array kind used by Map encoder.
+enum KeyKind<'a> {
+    Utf8(&'a GenericStringArray<i32>),
+    LargeUtf8(&'a GenericStringArray<i64>),
+}
+struct MapEncoder<'a> {
+    map: &'a MapArray,
+    keys: KeyKind<'a>,
+    values: FieldEncoder<'a>,
+    keys_offset: usize,
+    values_offset: usize,
+}
+
+impl<'a> MapEncoder<'a> {
+    fn try_new(
+        map: &'a MapArray,
+        values_nullability: Option<Nullability>,
+        value_plan: &FieldPlan,
+    ) -> Result<Self, ArrowError> {
+        let keys_arr = map.keys();
+        let keys_kind = match keys_arr.data_type() {
+            DataType::Utf8 => KeyKind::Utf8(keys_arr.as_string::<i32>()),
+            DataType::LargeUtf8 => KeyKind::LargeUtf8(keys_arr.as_string::<i64>()),
+            other => {
+                return Err(ArrowError::SchemaError(format!(
+                    "Avro map requires string keys; Arrow key type must be Utf8/LargeUtf8, found: {other:?}"
+                )))
+            }
+        };
+
+        let entries_struct_fields = match map.data_type() {
+            DataType::Map(entries, _) => match entries.data_type() {
+                DataType::Struct(fs) => fs,
+                other => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Arrow Map entries must be Struct, found: {other:?}"
+                    )))
+                }
+            },
+            _ => {
+                return Err(ArrowError::SchemaError(
+                    "Expected MapArray with DataType::Map".into(),
+                ))
+            }
+        };
+
+        let v_idx = find_map_value_field_index(entries_struct_fields).ok_or_else(|| {
+            ArrowError::SchemaError("Map entries struct missing value field".into())
+        })?;
+        let value_field = entries_struct_fields[v_idx].as_ref();
+
+        let values_enc = prepare_value_site_encoder(
+            map.values().as_ref(),
+            value_field,
+            values_nullability,
+            value_plan,
+        )?;
+
+        Ok(Self {
+            map,
+            keys: keys_kind,
+            values: values_enc,
+            keys_offset: keys_arr.offset(),
+            values_offset: map.values().offset(),
+        })
+    }
+
+    fn encode_map_entries<W, O>(
+        out: &mut W,
+        keys: &GenericStringArray<O>,
+        keys_offset: usize,
+        start: usize,
+        end: usize,
+        mut write_item: impl FnMut(&mut W, usize) -> Result<(), ArrowError>,
+    ) -> Result<(), ArrowError>
+    where
+        W: Write + ?Sized,
+        O: OffsetSizeTrait,
+    {
+        encode_blocked_range(out, start, end, |out, j| {
+            let j_key = j.saturating_sub(keys_offset);
+            write_len_prefixed(out, keys.value(j_key).as_bytes())?;
+            write_item(out, j)
+        })
+    }
+
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+        let offsets = self.map.offsets();
+        let start = offsets[idx] as usize;
+        let end = offsets[idx + 1] as usize;
+
+        let mut write_item = |out: &mut W, j: usize| {
+            let j_val = j.saturating_sub(self.values_offset);
+            self.values.encode(out, j_val)
+        };
+
+        match self.keys {
+            KeyKind::Utf8(arr) => MapEncoder::<'a>::encode_map_entries(
+                out,
+                arr,
+                self.keys_offset,
+                start,
+                end,
+                write_item,
+            ),
+            KeyKind::LargeUtf8(arr) => MapEncoder::<'a>::encode_map_entries(
+                out,
+                arr,
+                self.keys_offset,
+                start,
+                end,
+                write_item,
+            ),
+        }
+    }
+}
+
+/// Avro `enum` encoder for Arrow `DictionaryArray<Int32, Utf8>`.
+///
+/// Per Avro spec, an enum is encoded as an **int** equal to the
+/// zero-based position of the symbol in the schema’s `symbols` list.
+/// We validate at construction that the dictionary values equal the symbols,
+/// so we can directly write the key value here.
+struct EnumEncoder<'a> {
+    keys: &'a PrimitiveArray<Int32Type>,
+}
+impl EnumEncoder<'_> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, row: usize) -> Result<(), ArrowError> {
+        write_int(out, self.keys.value(row))
+    }
+}
+
 struct StructEncoder<'a> {
     encoders: Vec<FieldEncoder<'a>>,
 }
@@ -1315,6 +1590,25 @@ mod tests {
     }
 
     #[test]
+    fn enum_encoder_dictionary() {
+        // symbols: ["A","B","C"], keys [2,0,1]
+        let dict_values = StringArray::from(vec!["A", "B", "C"]);
+        let keys = Int32Array::from(vec![2, 0, 1]);
+        let dict =
+            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(dict_values) as ArrayRef).unwrap();
+        let symbols = Arc::<[String]>::from(
+            vec!["A".to_string(), "B".to_string(), "C".to_string()].into_boxed_slice(),
+        );
+        let plan = FieldPlan::Enum { symbols };
+        let got = encode_all(&dict, &plan, None);
+        let mut expected = Vec::new();
+        expected.extend(avro_long_bytes(2));
+        expected.extend(avro_long_bytes(0));
+        expected.extend(avro_long_bytes(1));
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
     fn decimal_bytes_and_fixed() {
         // Use Decimal128 with small positives and negatives
         let dec = Decimal128Array::from(vec![1i128, -1i128, 0i128])
@@ -1496,6 +1790,48 @@ mod tests {
             }
             other => panic!("expected InvalidArgumentError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn map_encoder_string_keys_int_values() {
+        // Build MapArray with two rows
+        // Row0: {"k1":1, "k2":2}
+        // Row1: {}
+        let keys = StringArray::from(vec!["k1", "k2"]);
+        let values = Int32Array::from(vec![1, 2]);
+        let entries_fields = Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+        ]);
+        let entries = StructArray::new(
+            entries_fields,
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+            None,
+        );
+        let offsets = arrow_buffer::OffsetBuffer::new(vec![0i32, 2, 2].into());
+        let map = MapArray::new(
+            Field::new("entries", entries.data_type().clone(), false).into(),
+            offsets,
+            entries,
+            None,
+            false,
+        );
+        let plan = FieldPlan::Map {
+            values_nullability: None,
+            value_plan: Box::new(FieldPlan::Scalar),
+        };
+        let got = encode_all(&map, &plan, None);
+        let mut expected = Vec::new();
+        // Row0: block 2 then pairs
+        expected.extend(avro_long_bytes(2));
+        expected.extend(avro_len_prefixed_bytes(b"k1"));
+        expected.extend(avro_long_bytes(1));
+        expected.extend(avro_len_prefixed_bytes(b"k2"));
+        expected.extend(avro_long_bytes(2));
+        expected.extend(avro_long_bytes(0));
+        // Row1: empty
+        expected.extend(avro_long_bytes(0));
+        assert_bytes_eq(&got, &expected);
     }
 
     #[test]

@@ -134,7 +134,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         NullBuffer::new(nulls.finish())
     });
 
-    let keys = PrimitiveArray::<K>::new(key_values.into(), nulls);
+    let keys = PrimitiveArray::<K>::try_new(key_values.into(), nulls)?;
     // Sanity check
     assert_eq!(keys.len(), output_len);
 

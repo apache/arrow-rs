@@ -95,11 +95,7 @@ pub fn variant_to_json(input: &ArrayRef) -> Result<StringArray, ArrowError> {
     let value_buffer = Buffer::from_vec(json_buffer);
     let null_buffer = NullBuffer::new(validity.finish());
 
-    Ok(StringArray::new(
-        offsets_buffer,
-        value_buffer,
-        Some(null_buffer),
-    ))
+    StringArray::try_new(offsets_buffer, value_buffer, Some(null_buffer))
 }
 
 #[cfg(test)]

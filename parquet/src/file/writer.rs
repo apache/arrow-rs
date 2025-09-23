@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains file writer API, and provides methods to write row groups and columns by
-//! using row group writers and column writers respectively.
+//! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
 use crate::format as parquet;
@@ -139,7 +138,14 @@ pub type OnCloseRowGroup<'a, W> = Box<
 // Serialized impl for file & row group writers
 
 /// Parquet file writer API.
-/// Provides methods to write row groups sequentially.
+///
+/// This is a low level API for writing Parquet files directly, and handles
+/// tracking the location of file structures such as row groups and column
+/// chunks, and writing the metadata and file footer.
+///
+/// Data is written to row groups using  [`SerializedRowGroupWriter`] and
+/// columns using [`SerializedColumnWriter`]. The `SerializedFileWriter` tracks
+/// where all the data is written, and assembles the final file metadata.
 ///
 /// The main workflow should be as following:
 /// - Create file writer, this will open a new file and potentially write some metadata.
@@ -221,11 +227,13 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Creates new row group from this file writer.
-    /// In case of IO error or Thrift error, returns `Err`.
     ///
-    /// There can be at most 2^15 row groups in a file; and row groups have
-    /// to be written sequentially. Every time the next row group is requested, the
-    /// previous row group must be finalised and closed using `RowGroupWriter::close` method.
+    /// Note: Parquet files are limited to at most 2^15 row groups in a file; and row groups must
+    /// be written sequentially.
+    ///
+    /// Every time the next row group is requested, the previous row group must
+    /// be finalised and closed using the [`SerializedRowGroupWriter::close`]
+    /// method or an error will be returned.
     pub fn next_row_group(&mut self) -> Result<SerializedRowGroupWriter<'_, W>> {
         self.assert_previous_writer_closed()?;
         let ordinal = self.row_group_index;
@@ -396,8 +404,8 @@ impl<W: Write + Send> SerializedFileWriter<W> {
 
     /// Writes the given buf bytes to the internal buffer.
     ///
-    /// This can be used to write raw data to an in-progress parquet file, for
-    ///  example, custom index structures or other payloads. Other parquet readers
+    /// This can be used to write raw data to an in-progress Parquet file, for
+    /// example, custom index structures or other payloads. Other Parquet readers
     /// will skip this data when reading the files.
     ///
     /// It's safe to use this method to write data to the underlying writer,
@@ -409,7 +417,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Returns a mutable reference to the underlying writer.
     ///
     /// **Warning**: if you write directly to this writer, you will skip
-    /// the `TrackedWrite` buffering and byte‐counting layers. That’ll cause
+    /// the `TrackedWrite` buffering and byte‐counting layers, which can cause
     /// the file footer’s recorded offsets and sizes to diverge from reality,
     /// resulting in an unreadable or corrupted Parquet file.
     ///
@@ -478,6 +486,7 @@ fn write_bloom_filters<W: Write + Send>(
 }
 
 /// Parquet row group writer API.
+///
 /// Provides methods to access column writers in an iterator-like fashion, order is
 /// guaranteed to match the order of schema leaves (column descriptors).
 ///
@@ -645,12 +654,20 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         })
     }
 
-    /// Append an encoded column chunk from another source without decoding it
+    /// Append an encoded column chunk from `reader` directly to the underlying
+    /// writer.
     ///
-    /// This can be used for efficiently concatenating or projecting parquet data,
-    /// or encoding parquet data to temporary in-memory buffers
+    /// This method can be used for efficiently concatenating or projecting
+    /// Parquet data, or encoding Parquet data to temporary in-memory buffers.
     ///
-    /// See [`Self::next_column`] for writing data that isn't already encoded
+    /// Arguments:
+    /// - `reader`: a [`ChunkReader`] containing the encoded column data
+    /// - `close`: the [`ColumnCloseResult`] metadata returned from closing
+    ///   the column writer that wrote the data in `reader`.
+    ///
+    /// See Also:
+    /// 1. [`get_column_writer`]  for creating writers that can encode data.
+    /// 2. [`Self::next_column`] for writing data that isn't already encoded
     pub fn append_column<R: ChunkReader>(
         &mut self,
         reader: &R,
