@@ -120,7 +120,7 @@ where
     }
 
     Ok(Arc::new(
-        PrimitiveArray::<T>::new(mutable_buffer.into(), null_bit_buffer)
+        PrimitiveArray::<T>::try_new(mutable_buffer.into(), null_bit_buffer)?
             .with_data_type(primitive_values.data_type().clone()),
     ))
 }
@@ -304,7 +304,7 @@ pub fn sort_to_indices(
         },
         t => {
             return Err(ArrowError::ComputeError(format!(
-                "Sort not supported for data type {t:?}"
+                "Sort not supported for data type {t}"
             )));
         }
     })

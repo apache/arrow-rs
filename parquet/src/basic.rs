@@ -1404,7 +1404,9 @@ impl From<Option<LogicalType>> for ConvertedType {
                     (16, false) => ConvertedType::UINT_16,
                     (32, false) => ConvertedType::UINT_32,
                     (64, false) => ConvertedType::UINT_64,
-                    t => panic!("Integer type {t:?} is not supported"),
+                    (bit_width, is_signed) => panic!(
+                        "Integer type bit_width={bit_width}, signed={is_signed} is not supported"
+                    ),
                 },
                 LogicalType::Json => ConvertedType::JSON,
                 LogicalType::Bson => ConvertedType::BSON,

@@ -562,7 +562,7 @@ pub struct WritableMetadataBuilder {
 
 impl WritableMetadataBuilder {
     /// Upsert field name to dictionary, return its ID
-    fn upsert_field_name(&mut self, field_name: &str) -> u32 {
+    pub fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
 
         if new_entry {
@@ -3441,7 +3441,7 @@ mod tests {
         let mut metadata = ReadOnlyMetadataBuilder::new(metadata);
         let mut builder2 = ValueBuilder::new();
         let state = ParentState::variant(&mut builder2, &mut metadata);
-        ValueBuilder::append_variant_bytes(state, variant1.clone());
+        ValueBuilder::append_variant_bytes(state, variant1);
         let value2 = builder2.into_inner();
 
         // The bytes should be identical, we merely copied them across.

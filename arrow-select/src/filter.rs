@@ -433,7 +433,7 @@ where
     let values = array.values();
     let values = filter(&values, &pred)?;
 
-    let run_ends = PrimitiveArray::<R>::new(new_run_ends.into(), None);
+    let run_ends = PrimitiveArray::<R>::try_new(new_run_ends.into(), None)?;
     RunArray::try_new(&run_ends, &values)
 }
 
@@ -845,7 +845,10 @@ fn filter_sparse_union(
         unreachable!()
     };
 
-    let type_ids = filter_primitive(&Int8Array::new(array.type_ids().clone(), None), predicate);
+    let type_ids = filter_primitive(
+        &Int8Array::try_new(array.type_ids().clone(), None)?,
+        predicate,
+    );
 
     let children = fields
         .iter()
