@@ -836,10 +836,14 @@ pub(crate) struct DictionaryPageHeader {
 }
 );
 
-// Statistics for the page header. This is separate because of the differing lifetime requirements
-// for page handling vs column chunk. Once we start writing column chunks this might need to be
-// revisited.
 thrift_struct!(
+/// Statistics for the page header.
+///
+/// This is a duplicate of the [`Statistics`] struct above. Because the page reader uses
+/// the [`Read`] API, we cannot read the min/max values as slices. This should not be
+/// a huge problem since this crate no longer reads the page header statistics by default.
+///
+/// [`Read`]: crate::parquet_thrift::ThriftReadInputProtocol
 pub(crate) struct PageStatistics {
    1: optional binary max;
    2: optional binary min;
