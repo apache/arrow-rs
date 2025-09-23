@@ -73,10 +73,17 @@ impl std::fmt::Debug for Field {
         } = self;
 
         let mut s = f.debug_struct("Field");
-        let s = s
-            .field("name", name)
-            .field("data_type", data_type)
-            .field("nullable", nullable);
+
+        if name != "item" {
+            // Keep it short when debug-formatting `DataType::List`
+            s.field("name", name);
+        }
+
+        s.field("data_type", data_type);
+
+        if *nullable {
+            s.field("nullable", nullable);
+        }
 
         if *dict_id != 0 {
             s.field("dict_id", dict_id);
@@ -951,13 +958,11 @@ mod test {
     #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
     fn test_debug_format_field() {
         // Make sure the `Debug` formatting of `Field` is readable and not too long
-        insta::assert_debug_snapshot!(Field::new("item", DataType::UInt8, false), @r#"
+        insta::assert_debug_snapshot!(Field::new("item", DataType::UInt8, false), @r"
         Field {
-            name: "item",
             data_type: UInt8,
-            nullable: false,
         }
-        "#);
+        ");
         insta::assert_debug_snapshot!(Field::new("column", DataType::LargeUtf8, true), @r#"
         Field {
             name: "column",

@@ -1180,14 +1180,12 @@ mod tests {
     #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
     fn test_debug_format_field() {
         // Make sure the `Debug` formatting of `DataType` is readable and not too long
-        insta::assert_debug_snapshot!(DataType::new_list(DataType::Int8, false), @r#"
+        insta::assert_debug_snapshot!(DataType::new_list(DataType::Int8, false), @r"
         List(
             Field {
-                name: "item",
                 data_type: Int8,
-                nullable: false,
             },
         )
-        "#);
+        ");
     }
 }
