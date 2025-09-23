@@ -639,7 +639,7 @@ impl WriterPropertiesBuilder {
     /// * If `Some`, must be greater than 0, otherwise will panic
     /// * If `None`, there's no effective limit.
     ///
-    /// [`Index`]: crate::file::page_index::index::Index
+    /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
