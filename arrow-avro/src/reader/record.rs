@@ -945,6 +945,11 @@ impl Decoder {
                 | Self::StringView(offsets, values)
                 | Self::BytesToString(offsets, values) => {
                     let data = buf.get_bytes()?;
+                    std::str::from_utf8(data)
+                        .map(|_| ())
+                        .map_err(|e| ArrowError::ParseError(format!(
+                            "bytes->string promotion: invalid UTF-8 ({e})"
+                        )));
                     offsets.push_length(data.len());
                     values.extend_from_slice(data);
                     Ok(())
@@ -1055,7 +1060,7 @@ impl Decoder {
                     other => {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Map entries field must be a Struct, got {other:?}"
-                        )))
+                        )));
                     }
                 };
                 let entries_struct =
@@ -1145,7 +1150,7 @@ struct UnionDecoder {
     offsets: Vec<i32>,
     branches: Vec<Decoder>,
     counts: Vec<i32>,
-    type_id_by_reader_idx: Vec<i8>,
+    reader_type_codes: Vec<i8>,
     null_branch: Option<usize>,
     default_emit_idx: usize,
     null_emit_idx: usize,
@@ -1160,7 +1165,7 @@ impl Default for UnionDecoder {
             offsets: Vec::new(),
             branches: Vec::new(),
             counts: Vec::new(),
-            type_id_by_reader_idx: Vec::new(),
+            reader_type_codes: Vec::new(),
             null_branch: None,
             default_emit_idx: 0,
             null_emit_idx: 0,
@@ -1202,7 +1207,7 @@ impl UnionDecoder {
             offsets: Vec::with_capacity(DEFAULT_CAPACITY),
             branches,
             counts: vec![0; branch_len],
-            type_id_by_reader_idx: reader_type_codes,
+            reader_type_codes,
             null_branch,
             default_emit_idx,
             null_emit_idx,
@@ -1253,7 +1258,11 @@ impl UnionDecoder {
                 "UnionDecoder::try_new cannot build writer-union to single; use UnionDecoderBuilder with a target"
                     .to_string(),
             )),
-            (false, false) => Ok(UnionReadPlan::Passthrough),
+            // (false, false) is invalid and should never be constructed by the resolver.
+            _ => Err(ArrowError::SchemaError(
+                "ResolvedUnion constructed for non-union sides; resolver should return None"
+                    .to_string(),
+            )),
         }
     }
 
@@ -1276,7 +1285,7 @@ impl UnionDecoder {
                 "Union branch index {reader_idx} out of range ({branches_len} branches)"
             )));
         };
-        self.type_ids.push(self.type_id_by_reader_idx[reader_idx]);
+        self.type_ids.push(self.reader_type_codes[reader_idx]);
         self.offsets.push(self.counts[reader_idx]);
         self.counts[reader_idx] += 1;
         Ok(reader_branch)
@@ -1351,12 +1360,10 @@ impl UnionDecoder {
             .iter_mut()
             .map(|d| d.flush(None))
             .collect::<Result<Vec<_>, _>>()?;
-        let type_ids_buf = flush_values(&mut self.type_ids).into_iter().collect();
-        let offsets_buf = flush_values(&mut self.offsets).into_iter().collect();
         let arr = UnionArray::try_new(
             self.fields.clone(),
-            type_ids_buf,
-            Some(offsets_buf),
+            flush_values(&mut self.type_ids).into_iter().collect(),
+            Some(flush_values(&mut self.offsets).into_iter().collect()),
             children,
         )
         .map_err(|e| ArrowError::ParseError(e.to_string()))?;
