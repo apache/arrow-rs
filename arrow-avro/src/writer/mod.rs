@@ -394,8 +394,8 @@ mod tests {
     use crate::reader::ReaderBuilder;
     use crate::schema::{AvroSchema, SchemaStore, CONFLUENT_MAGIC};
     use crate::test_util::arrow_test_data;
-    use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch};
-    use arrow_schema::{DataType, Field, IntervalUnit, Schema};
+    use arrow_array::{ArrayRef, BinaryArray, DurationSecondArray, Int32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
     use std::fs::File;
     use std::io::{BufReader, Cursor};
     use std::path::PathBuf;
@@ -887,6 +887,42 @@ mod tests {
         let roundtrip =
             arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
         assert_eq!(roundtrip, original, "Avro enum round-trip mismatch");
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_duration() -> Result<(), ArrowError> {
+        let original_schema = Arc::new(Schema::new(vec![Field::new(
+            "session_duration",
+            DataType::Duration(TimeUnit::Second),
+            false,
+        )]));
+
+        let array = Arc::new(DurationSecondArray::from(vec![
+            Some(3600),  // 1 hour in seconds
+            Some(-120),  // -2 minutes in seconds
+            Some(86400), // 1 day in seconds
+        ])) as ArrayRef;
+
+        let original_batch = RecordBatch::try_new(original_schema.clone(), vec![array])?;
+
+        let mut buffer = Vec::new();
+        let mut writer = AvroWriter::new(&mut buffer, (*original_schema).clone())?;
+
+        writer.write(&original_batch)?;
+        writer.finish()?;
+
+        let mut reader = ReaderBuilder::new().build(buffer.as_slice())?;
+        let roundtrip_schema = reader.schema();
+
+        let rt_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip_batch = arrow::compute::concat_batches(&roundtrip_schema, &rt_batches)?;
+
+        assert_eq!(
+            original_batch, roundtrip_batch,
+            "Duration round-trip failed"
+        );
+
         Ok(())
     }
 }

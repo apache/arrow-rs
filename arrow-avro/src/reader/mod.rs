@@ -1297,6 +1297,7 @@ mod test {
         SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
     };
     use crate::test_util::arrow_test_data;
+    use crate::writer::AvroWriter;
     use arrow::array::ArrayDataBuilder;
     use arrow_array::builder::{
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
@@ -1309,7 +1310,8 @@ mod test {
         i256, Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer,
     };
     use arrow_schema::{
-        ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, UnionFields, UnionMode,
+        ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit, UnionFields,
+        UnionMode,
     };
     use bytes::{Buf, BufMut, Bytes};
     use futures::executor::block_on;
@@ -4745,6 +4747,52 @@ mod test {
                 "Decoded RecordBatch does not match for {file} with batch size 3"
             );
         }
+    }
+
+    #[test]
+    fn test_long_with_duration_annotation() {
+        let _avro_schema_json = r#"
+        {
+            "type": "record",
+            "name": "TestEvents",
+            "fields": [
+                {
+                    "name": "event_duration",
+                    "type": "long",
+                    "arrowDurationUnit": "millisecond"
+                }
+            ]
+        }
+        "#;
+
+        let values = DurationMillisecondArray::from(vec![1000i64, 2000, 3000]);
+        let arrow_field = Field::new(
+            "event_duration",
+            DataType::Duration(TimeUnit::Millisecond),
+            false,
+        );
+        let arrow_schema = Arc::new(Schema::new(vec![arrow_field]));
+        let expected = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(values.clone()) as ArrayRef],
+        )
+        .unwrap();
+
+        // Write to in-memory OCF using the Avro writer
+        let buffer = Vec::<u8>::new();
+        let mut writer = AvroWriter::new(buffer, (*arrow_schema).clone()).unwrap();
+        writer.write(&expected).unwrap();
+        writer.finish().unwrap();
+        let bytes = writer.into_inner();
+
+        let mut reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build reader for in-memory OCF");
+        let out_schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let actual = arrow::compute::concat_batches(&out_schema, &batches).unwrap();
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
