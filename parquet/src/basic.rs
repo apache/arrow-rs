@@ -63,6 +63,10 @@ enum Type {
 //
 // Cannot use macros because of added field `None`
 
+// TODO(ets): Adding the `NONE` variant to this enum is a bit awkward. We should
+// look into removing it and using `Option<ConvertedType>` instead. Then all of this
+// handwritten code could go away.
+
 /// Common types (converted types) used by frameworks when using Parquet.
 ///
 /// This helps map between types in those frameworks to the base types in Parquet.
