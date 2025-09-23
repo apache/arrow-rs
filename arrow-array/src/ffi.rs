@@ -146,11 +146,11 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     if let Some(primitive) = data_type.primitive_width() {
         return match i {
             0 => Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
             ))),
             1 => Ok(primitive * 8),
             i => Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             ))),
         };
     }
@@ -159,7 +159,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Boolean, 1) => 1,
         (DataType::Boolean, _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         (DataType::FixedSizeBinary(num_bytes), 1) => *num_bytes as usize * u8::BITS as usize,
@@ -169,7 +169,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         },
         (DataType::FixedSizeBinary(_), _) | (DataType::FixedSizeList(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         },
         // Variable-size list and map have one i32 buffer.
@@ -179,12 +179,12 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Utf8, 2) | (DataType::Binary, 2) => u8::BITS as _,
         (DataType::List(_), _) | (DataType::Map(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         (DataType::Utf8, _) | (DataType::Binary, _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         // Variable-sized binaries: have two buffers.
@@ -193,7 +193,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) | (DataType::LargeList(_), 2)=> u8::BITS as _,
         (DataType::LargeUtf8, _) | (DataType::LargeBinary, _) | (DataType::LargeList(_), _)=> {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         // Variable-sized views: have 3 or more buffers.
@@ -209,24 +209,24 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Union(_, UnionMode::Dense), 1) => i32::BITS as _,
         (DataType::Union(_, UnionMode::Sparse), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         (DataType::Union(_, UnionMode::Dense), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 2 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
             )))
         }
         (_, 0) => {
             // We don't call this `bit_width` to compute buffer length for null buffer. If any types that don't have null buffer like
             // UnionArray, they should be handled above.
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
             )))
         }
         _ => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" is still not supported in Rust implementation"
+                "The datatype \"{data_type}\" is still not supported in Rust implementation"
             )))
         }
     })

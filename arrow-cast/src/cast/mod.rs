@@ -375,7 +375,7 @@ where
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
                     .div_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
             })?,
         }
     } else {
@@ -389,7 +389,7 @@ where
             false => array.try_unary::<_, D, _>(|v| {
                 v.as_()
                     .mul_checked(scale_factor)
-                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
             })?,
         }
     };
@@ -798,7 +798,7 @@ pub fn cast_with_options(
             UInt32 => dictionary_cast::<UInt32Type>(array, to_type, cast_options),
             UInt64 => dictionary_cast::<UInt64Type>(array, to_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from dictionary type {from_type:?} to {to_type:?} not supported",
+                "Casting from dictionary type {from_type} to {to_type} not supported",
             ))),
         },
         (_, Dictionary(index_type, value_type)) => match **index_type {
@@ -811,7 +811,7 @@ pub fn cast_with_options(
             UInt32 => cast_to_dictionary::<UInt32Type>(array, value_type, cast_options),
             UInt64 => cast_to_dictionary::<UInt64Type>(array, value_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from type {from_type:?} to dictionary type {to_type:?} not supported",
+                "Casting from type {from_type} to dictionary type {to_type} not supported",
             ))),
         },
         (List(_), List(to)) => cast_list_values::<i32>(array, to, cast_options),
@@ -1143,10 +1143,10 @@ pub fn cast_with_options(
             Ok(Arc::new(array) as ArrayRef)
         }
         (Struct(_), _) => Err(ArrowError::CastError(format!(
-            "Casting from {from_type:?} to {to_type:?} not supported"
+            "Casting from {from_type} to {to_type} not supported"
         ))),
         (_, Struct(_)) => Err(ArrowError::CastError(format!(
-            "Casting from {from_type:?} to {to_type:?} not supported"
+            "Casting from {from_type} to {to_type} not supported"
         ))),
         (_, Boolean) => match from_type {
             UInt8 => cast_numeric_to_bool::<UInt8Type>(array),
@@ -1164,7 +1164,7 @@ pub fn cast_with_options(
             Utf8 => cast_utf8_to_boolean::<i32>(array, cast_options),
             LargeUtf8 => cast_utf8_to_boolean::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
+                "Casting from {from_type} to {to_type} not supported",
             ))),
         },
         (Boolean, _) => match to_type {
@@ -1183,7 +1183,7 @@ pub fn cast_with_options(
             Utf8 => value_to_string::<i32>(array, cast_options),
             LargeUtf8 => value_to_string::<i64>(array, cast_options),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
+                "Casting from {from_type} to {to_type} not supported",
             ))),
         },
         (Utf8, _) => match to_type {
@@ -1245,7 +1245,7 @@ pub fn cast_with_options(
                 cast_string_to_month_day_nano_interval::<i32>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
+                "Casting from {from_type} to {to_type} not supported",
             ))),
         },
         (Utf8View, _) => match to_type {
@@ -1296,7 +1296,7 @@ pub fn cast_with_options(
                 cast_view_to_month_day_nano_interval(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
+                "Casting from {from_type} to {to_type} not supported",
             ))),
         },
         (LargeUtf8, _) => match to_type {
@@ -1362,7 +1362,7 @@ pub fn cast_with_options(
                 cast_string_to_month_day_nano_interval::<i64>(array, cast_options)
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
+                "Casting from {from_type} to {to_type} not supported",
             ))),
         },
         (Binary, _) => match to_type {
@@ -1380,7 +1380,7 @@ pub fn cast_with_options(
                 cast_binary_to_string::<i32>(array, cast_options)?.as_string::<i32>(),
             ))),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
+                "Casting from {from_type} to {to_type} not supported",
             ))),
         },
         (LargeBinary, _) => match to_type {
@@ -1399,7 +1399,7 @@ pub fn cast_with_options(
                 Ok(Arc::new(StringViewArray::from(array.as_string::<i64>())))
             }
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
+                "Casting from {from_type} to {to_type} not supported",
             ))),
         },
         (FixedSizeBinary(size), _) => match to_type {
@@ -1407,7 +1407,7 @@ pub fn cast_with_options(
             LargeBinary => cast_fixed_size_binary_to_binary::<i64>(array, *size),
             BinaryView => cast_fixed_size_binary_to_binary_view(array, *size),
             _ => Err(ArrowError::CastError(format!(
-                "Casting from {from_type:?} to {to_type:?} not supported",
+                "Casting from {from_type} to {to_type} not supported",
             ))),
         },
         (BinaryView, Binary) => cast_view_to_byte::<BinaryViewType, GenericBinaryType<i32>>(array),
@@ -1426,7 +1426,7 @@ pub fn cast_with_options(
             Ok(Arc::new(array.as_binary_view().clone().to_string_view()?) as ArrayRef)
         }
         (BinaryView, _) => Err(ArrowError::CastError(format!(
-            "Casting from {from_type:?} to {to_type:?} not supported",
+            "Casting from {from_type} to {to_type} not supported",
         ))),
         (from_type, Utf8View) if from_type.is_primitive() => {
             value_to_string_view(array, cast_options)
@@ -2160,7 +2160,7 @@ pub fn cast_with_options(
             cast_reinterpret_arrays::<Int32Type, IntervalYearMonthType>(array)
         }
         (_, _) => Err(ArrowError::CastError(format!(
-            "Casting from {from_type:?} to {to_type:?} not supported",
+            "Casting from {from_type} to {to_type} not supported",
         ))),
     }
 }
@@ -2201,7 +2201,7 @@ where
         LargeUtf8 => value_to_string::<i64>(array, cast_options),
         Null => Ok(new_null_array(to_type, array.len())),
         _ => Err(ArrowError::CastError(format!(
-            "Casting from {from_type:?} to {to_type:?} not supported"
+            "Casting from {from_type} to {to_type} not supported"
         ))),
     }
 }
@@ -2304,7 +2304,7 @@ where
         LargeUtf8 => cast_string_to_decimal::<D, i64>(array, *precision, *scale, cast_options),
         Null => Ok(new_null_array(to_type, array.len())),
         _ => Err(ArrowError::CastError(format!(
-            "Casting from {from_type:?} to {to_type:?} not supported"
+            "Casting from {from_type} to {to_type} not supported"
         ))),
     }
 }
@@ -2921,7 +2921,7 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal32(2, 2), &options);
-        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal32 of precision 2. Max is 99",
+        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal32 of precision 2. Max is 0.99",
                    result_unsafe.unwrap_err().to_string());
     }
 
@@ -2955,7 +2955,7 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal64(2, 2), &options);
-        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal64 of precision 2. Max is 99",
+        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal64 of precision 2. Max is 0.99",
                    result_unsafe.unwrap_err().to_string());
     }
 
@@ -2989,7 +2989,7 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal128(2, 2), &options);
-        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
+        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal128 of precision 2. Max is 0.99",
                    result_unsafe.unwrap_err().to_string());
     }
 
@@ -8648,8 +8648,12 @@ mod tests {
 
         let new_array_result = cast(&array, &new_type.clone());
         assert!(!can_cast_types(array.data_type(), &new_type));
-        assert!(
-            matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#)
+        let Err(ArrowError::CastError(t)) = new_array_result else {
+            panic!();
+        };
+        assert_eq!(
+            t,
+            r#"Casting from Map(Field { "entries": Struct(key Utf8, value nullable Utf8) }, false) to Map(Field { "entries": Struct(key Utf8, value Utf8) }, true) not supported"#
         );
     }
 
@@ -8695,8 +8699,12 @@ mod tests {
 
         let new_array_result = cast(&array, &new_type.clone());
         assert!(!can_cast_types(array.data_type(), &new_type));
-        assert!(
-            matches!(new_array_result, Err(ArrowError::CastError(t)) if t == r#"Casting from Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Interval(DayTime), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, false) to Map(Field { name: "entries", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Duration(Second), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, true) not supported"#)
+        let Err(ArrowError::CastError(t)) = new_array_result else {
+            panic!();
+        };
+        assert_eq!(
+            t,
+            r#"Casting from Map(Field { "entries": Struct(key Utf8, value nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct(key Utf8, value Duration(Second)) }, true) not supported"#
         );
     }
 
@@ -9045,7 +9053,7 @@ mod tests {
             },
         );
         let err = casted_array.unwrap_err().to_string();
-        let expected_error = "Invalid argument error: 110 is too large to store in a Decimal128 of precision 2. Max is 99";
+        let expected_error = "Invalid argument error: 1.10 is too large to store in a Decimal128 of precision 2. Max is 0.99";
         assert!(
             err.contains(expected_error),
             "did not find expected error '{expected_error}' in actual error '{err}'"
@@ -9076,11 +9084,8 @@ mod tests {
             },
         );
         let err = casted_array.unwrap_err().to_string();
-        let expected_error = "Invalid argument error: 110 is too large to store in a Decimal256 of precision 2. Max is 99";
-        assert!(
-            err.contains(expected_error),
-            "did not find expected error '{expected_error}' in actual error '{err}'"
-        );
+        let expected_error = "Invalid argument error: 1.10 is too large to store in a Decimal256 of precision 2. Max is 0.99";
+        assert_eq!(err, expected_error);
     }
 
     #[test]
@@ -9685,7 +9690,7 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 100000000000 is too large to store in a Decimal128 of precision 10. Max is 9999999999", err.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 1000.00000000 is too large to store in a Decimal128 of precision 10. Max is 99.99999999", err.unwrap_err().to_string());
     }
 
     #[test]
@@ -9768,7 +9773,7 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 100000000000 is too large to store in a Decimal256 of precision 10. Max is 9999999999", err.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 1000.00000000 is too large to store in a Decimal256 of precision 10. Max is 99.99999999", err.unwrap_err().to_string());
     }
 
     #[test]
@@ -10173,7 +10178,7 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal128 of precision 7. Max is 9999999", err.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 1234567.000 is too large to store in a Decimal128 of precision 7. Max is 9999.999", err.unwrap_err().to_string());
     }
 
     #[test]
@@ -10199,7 +10204,7 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1234567000 is too large to store in a Decimal256 of precision 7. Max is 9999999", err.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 1234567.000 is too large to store in a Decimal256 of precision 7. Max is 9999.999", err.unwrap_err().to_string());
     }
 
     /// helper function to test casting from duration to interval
@@ -10788,7 +10793,7 @@ mod tests {
         let to_type = DataType::Utf8;
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Struct([Field { name: "a", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) to Utf8 not supported"#,
+            r#"Cast error: Casting from Struct(a Boolean) to Utf8 not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -10799,7 +10804,7 @@ mod tests {
         let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
         let result = cast(&array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct([Field { name: "a", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) not supported"#,
+            r#"Cast error: Casting from Utf8 to Struct(a Boolean) not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -10839,7 +10844,7 @@ mod tests {
                 input_repr: 99999, // 9999.9
                 output_prec: 7,
                 output_scale: 6,
-                expected_output_repr: Err("Invalid argument error: 9999900000 is too large to store in a {} of precision 7. Max is 9999999".to_string()) // max is 9.999999
+                expected_output_repr: Err("Invalid argument error: 9999.900000 is too large to store in a {} of precision 7. Max is 9.999999".to_string()) // max is 9.999999
             },
             // increase precision, decrease scale, always infallible
             DecimalCastTestConfig {
@@ -10884,7 +10889,7 @@ mod tests {
                 input_repr: 9999999, // 99.99999
                 output_prec: 8,
                 output_scale: 7,
-                expected_output_repr: Err("Invalid argument error: 999999900 is too large to store in a {} of precision 8. Max is 99999999".to_string()) // max is 9.9999999
+                expected_output_repr: Err("Invalid argument error: 99.9999900 is too large to store in a {} of precision 8. Max is 9.9999999".to_string()) // max is 9.9999999
             },
             // decrease precision, decrease scale, safe, infallible
             DecimalCastTestConfig {
@@ -10911,7 +10916,7 @@ mod tests {
                 input_repr: 9999999, // 99.99999
                 output_prec: 4,
                 output_scale: 3,
-                expected_output_repr: Err("Invalid argument error: 100000 is too large to store in a {} of precision 4. Max is 9999".to_string()) // max is 9.999
+                expected_output_repr: Err("Invalid argument error: 100.000 is too large to store in a {} of precision 4. Max is 9.999".to_string()) // max is 9.999
             },
             // decrease precision, same scale, safe
             DecimalCastTestConfig {
@@ -10929,7 +10934,7 @@ mod tests {
                 input_repr: 9999999, // 99.99999
                 output_prec: 6,
                 output_scale: 5,
-                expected_output_repr: Err("Invalid argument error: 9999999 is too large to store in a {} of precision 6. Max is 999999".to_string()) // max is 9.99999
+                expected_output_repr: Err("Invalid argument error: 99.99999 is too large to store in a {} of precision 6. Max is 9.99999".to_string()) // max is 9.99999
             },
             // same precision, increase scale, safe
             DecimalCastTestConfig {
@@ -10947,7 +10952,7 @@ mod tests {
                 input_repr: 123456, // 12.3456
                 output_prec: 7,
                 output_scale: 6,
-                expected_output_repr: Err("Invalid argument error: 12345600 is too large to store in a {} of precision 7. Max is 9999999".to_string()) // max is 9.99999
+                expected_output_repr: Err("Invalid argument error: 12.345600 is too large to store in a {} of precision 7. Max is 9.999999".to_string()) // max is 9.99999
             },
             // same precision, decrease scale, infallible
             DecimalCastTestConfig {
@@ -11042,7 +11047,7 @@ mod tests {
                 input_repr: -12345,
                 output_prec: 6,
                 output_scale: 5,
-                expected_output_repr: Err("Invalid argument error: -1234500 is too small to store in a {} of precision 6. Min is -999999".to_string())
+                expected_output_repr: Err("Invalid argument error: -12.34500 is too small to store in a {} of precision 6. Min is -9.99999".to_string())
             },
         ];
 
@@ -11093,7 +11098,7 @@ mod tests {
                 output_prec: 6,
                 output_scale: 3,
                 expected_output_repr:
-                    Err("Invalid argument error: 1000000 is too large to store in a {} of precision 6. Max is 999999".to_string()),
+                    Err("Invalid argument error: 1000.000 is too large to store in a {} of precision 6. Max is 999.999".to_string()),
             },
         ];
         for t in test_cases {
@@ -11115,7 +11120,7 @@ mod tests {
         };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 123456789 is too large to store in a Decimal128 of precision 6. Max is 999999");
+                   "Invalid argument error: 1234567.89 is too large to store in a Decimal128 of precision 6. Max is 9999.99");
     }
 
     #[test]
@@ -11161,7 +11166,7 @@ mod tests {
         };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 1234568 is too large to store in a Decimal128 of precision 6. Max is 999999");
+                   "Invalid argument error: 12345.68 is too large to store in a Decimal128 of precision 6. Max is 9999.99");
     }
 
     #[test]
@@ -11178,7 +11183,7 @@ mod tests {
         };
         let result = cast_with_options(&array, &output_type, &options);
         assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 1234567890 is too large to store in a Decimal128 of precision 6. Max is 999999");
+                   "Invalid argument error: 1234567.890 is too large to store in a Decimal128 of precision 6. Max is 999.999");
     }
 
     #[test]
@@ -11193,9 +11198,9 @@ mod tests {
             safe: false,
             ..Default::default()
         };
-        let result = cast_with_options(&array, &output_type, &options);
-        assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 123456789 is too large to store in a Decimal256 of precision 6. Max is 999999");
+        let result = cast_with_options(&array, &output_type, &options).unwrap_err();
+        assert_eq!(result.to_string(),
+                   "Invalid argument error: 1234567.89 is too large to store in a Decimal256 of precision 6. Max is 9999.99");
     }
 
     #[test]
@@ -11233,5 +11238,32 @@ mod tests {
             2,
         )) as ArrayRef;
         assert_eq!(*fixed_array, *r);
+    }
+
+    #[test]
+    fn test_cast_decimal_error_output() {
+        let array = Int64Array::from(vec![1]);
+        let error = cast_with_options(
+            &array,
+            &DataType::Decimal32(1, 1),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid argument error: 1.0 is too large to store in a Decimal32 of precision 1. Max is 0.9");
+
+        let array = Int64Array::from(vec![-1]);
+        let error = cast_with_options(
+            &array,
+            &DataType::Decimal32(1, 1),
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid argument error: -1.0 is too small to store in a Decimal32 of precision 1. Min is -0.9");
     }
 }

@@ -1290,7 +1290,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let data_type = self.data_type();
 
-        write!(f, "PrimitiveArray<{data_type:?}>\n[\n")?;
+        write!(f, "PrimitiveArray<{data_type}>\n[\n")?;
         print_long_array(self, f, |array, index, f| match data_type {
             DataType::Date32 | DataType::Date64 => {
                 let v = self.value(index).to_i64().unwrap();
@@ -1299,7 +1299,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     None => {
                         write!(
                             f,
-                            "Cast error: Failed to convert {v} to temporal for {data_type:?}"
+                            "Cast error: Failed to convert {v} to temporal for {data_type}"
                         )
                     }
                 }
@@ -1311,7 +1311,7 @@ impl<T: ArrowPrimitiveType> std::fmt::Debug for PrimitiveArray<T> {
                     None => {
                         write!(
                             f,
-                            "Cast error: Failed to convert {v} to temporal for {data_type:?}"
+                            "Cast error: Failed to convert {v} to temporal for {data_type}"
                         )
                     }
                 }
@@ -1600,10 +1600,16 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Validates values in this array can be properly interpreted
     /// with the specified precision.
     pub fn validate_decimal_precision(&self, precision: u8) -> Result<(), ArrowError> {
+        if precision < self.scale() as u8 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Decimal precision {precision} is less than scale {}",
+                self.scale()
+            )));
+        }
         (0..self.len()).try_for_each(|idx| {
             if self.is_valid(idx) {
                 let decimal = unsafe { self.value_unchecked(idx) };
-                T::validate_decimal_precision(decimal, precision)
+                T::validate_decimal_precision(decimal, precision, self.scale())
             } else {
                 Ok(())
             }
@@ -2436,7 +2442,7 @@ mod tests {
         let result = arr.validate_decimal_precision(5);
         let error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
+            "Invalid argument error: 123.456 is too large to store in a Decimal128 of precision 5. Max is 99.999",
             error.to_string()
         );
 
@@ -2455,7 +2461,7 @@ mod tests {
         let result = arr.validate_decimal_precision(2);
         let error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 100 is too large to store in a Decimal128 of precision 2. Max is 99",
+            "Invalid argument error: 10.0 is too large to store in a Decimal128 of precision 2. Max is 9.9",
             error.to_string()
         );
     }
@@ -2541,7 +2547,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "-123223423432432 is too small to store in a Decimal128 of precision 5. Min is -99999"
+        expected = "-1232234234324.32 is too small to store in a Decimal128 of precision 5. Min is -999.99"
     )]
     fn test_decimal_array_with_precision_and_scale_out_of_range() {
         let arr = Decimal128Array::from_iter_values([12345, 456, 7890, -123223423432432])
