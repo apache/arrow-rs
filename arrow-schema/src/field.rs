@@ -950,6 +950,7 @@ mod test {
     #[test]
     #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
     fn test_debug_format_field() {
+        // Make sure the `Debug` formatting of `Field` is readable and not too long
         insta::assert_debug_snapshot!(Field::new("item", DataType::UInt8, false), @r#"
         Field {
             name: "item",
