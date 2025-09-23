@@ -120,22 +120,10 @@ variant_test_case!(31);
 // https://github.com/apache/arrow-rs/issues/8334
 variant_test_case!(32, "Unsupported typed_value type: Time64(Microsecond)");
 // https://github.com/apache/arrow-rs/issues/8331
-variant_test_case!(
-    33,
-    "Unsupported typed_value type: Timestamp(Nanosecond, Some(\"UTC\"))"
-);
-variant_test_case!(
-    34,
-    "Unsupported typed_value type: Timestamp(Nanosecond, Some(\"UTC\"))"
-);
-variant_test_case!(
-    35,
-    "Unsupported typed_value type: Timestamp(Nanosecond, None)"
-);
-variant_test_case!(
-    36,
-    "Unsupported typed_value type: Timestamp(Nanosecond, None)"
-);
+variant_test_case!(33, "Unsupported typed_value type: Timestamp(ns \"UTC\")");
+variant_test_case!(34, "Unsupported typed_value type: Timestamp(ns \"UTC\")");
+variant_test_case!(35, "Unsupported typed_value type: Timestamp(ns)");
+variant_test_case!(36, "Unsupported typed_value type: Timestamp(ns)");
 variant_test_case!(37);
 // https://github.com/apache/arrow-rs/issues/8336
 variant_test_case!(38, "Unsupported typed_value type: Struct(");
