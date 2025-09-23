@@ -142,32 +142,32 @@ fn visit_intervals(
     match geom.as_type() {
         GeometryType::Point(pt) => {
             if let Some(coord) = PointTrait::coord(pt) {
-                visit_coord(func, coord, n);
+                visit_coord(coord, n, func);
             }
         }
         GeometryType::LineString(ls) => {
-            visit_sequence(func, ls.coords(), n);
+            visit_sequence(ls.coords(), n, func);
         }
         GeometryType::Polygon(pl) => {
             if let Some(exterior) = pl.exterior() {
-                visit_sequence(&mut *func, exterior.coords(), n);
+                visit_sequence(exterior.coords(), n, func);
             }
 
             for interior in pl.interiors() {
-                visit_sequence(&mut *func, interior.coords(), n);
+                visit_sequence(interior.coords(), n, func);
             }
         }
         GeometryType::MultiPoint(multi_pt) => {
-            visit_collection(func, multi_pt.points(), target)?;
+            visit_collection(multi_pt.points(), target, func)?;
         }
         GeometryType::MultiLineString(multi_ls) => {
-            visit_collection(func, multi_ls.line_strings(), target)?;
+            visit_collection(multi_ls.line_strings(), target, func)?;
         }
         GeometryType::MultiPolygon(multi_pl) => {
-            visit_collection(func, multi_pl.polygons(), target)?;
+            visit_collection(multi_pl.polygons(), target, func)?;
         }
         GeometryType::GeometryCollection(collection) => {
-            visit_collection(func, collection.geometries(), target)?;
+            visit_collection(collection.geometries(), target, func)?;
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(
@@ -179,15 +179,15 @@ fn visit_intervals(
     Ok(())
 }
 
-fn visit_coord(func: &mut impl FnMut(Interval), coord: impl CoordTrait<T = f64>, n: usize) {
+fn visit_coord(coord: impl CoordTrait<T = f64>, n: usize, func: &mut impl FnMut(Interval)) {
     let val = unsafe { coord.nth_unchecked(n) };
     func((val, val).into());
 }
 
 fn visit_sequence(
-    func: &mut impl FnMut(Interval),
     coords: impl IntoIterator<Item = impl CoordTrait<T = f64>>,
     n: usize,
+    func: &mut impl FnMut(Interval),
 ) {
     let mut interval = Interval::empty();
     for coord in coords {
@@ -198,9 +198,9 @@ fn visit_sequence(
 }
 
 fn visit_collection(
-    func: &mut impl FnMut(Interval),
     collection: impl IntoIterator<Item = impl GeometryTrait<T = f64>>,
     target: char,
+    func: &mut impl FnMut(Interval),
 ) -> Result<(), ArrowError> {
     for geom in collection {
         visit_intervals(&geom, target, func)?;
