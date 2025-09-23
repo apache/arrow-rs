@@ -775,7 +775,7 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
         Some(19i32.to_le_bytes().as_slice())
     );
 
-    // TODO: statistics should be available without decryption when footer is plaintext
+    // TODO: statistics shouldn't be available without decryption when footer is plaintext
     //
     // Check column statistics are not available in plaintext footer
     let options = ArrowReaderOptions::default();

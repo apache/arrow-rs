@@ -694,6 +694,7 @@ impl MetadataObjectWriter {
         match &self.file_encryptor {
             Some(file_encryptor) => {
                 let unencrypted_row_groups = row_groups.clone();
+                // TODO: unencrypted_row_groups should not contain statistics for encrypted columns
                 let encrypted_row_groups = Self::encrypt_row_groups(row_groups, file_encryptor)?;
                 Ok((encrypted_row_groups, Some(unencrypted_row_groups)))
             }
