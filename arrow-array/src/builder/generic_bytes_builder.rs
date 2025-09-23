@@ -157,16 +157,8 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
             // Shifting all the offsets
             let shift: T::Offset = self.next_offset() - offsets[0];
 
-            // Creating intermediate offsets instead of pushing each offset is faster
-            // (even if we make MutableBuffer to avoid updating length on each push
-            //  and reserve the necessary capacity, it's still slower)
-            let mut intermediate = Vec::with_capacity(offsets.len() - 1);
-
-            for &offset in &offsets[1..] {
-                intermediate.push(offset + shift)
-            }
-
-            self.offsets_builder.extend_from_slice(&intermediate);
+            self.offsets_builder
+                .extend(offsets[1..].iter().map(|&offset| offset + shift));
         }
 
         // Append underlying values, starting from the first offset and ending at the last offset

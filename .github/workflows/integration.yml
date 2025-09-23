@@ -63,6 +63,7 @@ jobs:
       ARROW_INTEGRATION_CPP: ON
       ARROW_INTEGRATION_CSHARP: ON
       ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
+      ARCHERY_INTEGRATION_WITH_DOTNET: "1"
       ARCHERY_INTEGRATION_WITH_GO: "1"
       ARCHERY_INTEGRATION_WITH_JAVA: "1"
       ARCHERY_INTEGRATION_WITH_JS: "1"
@@ -97,7 +98,13 @@ jobs:
         uses: actions/checkout@v5
         with:
           path: rust
+          submodules: true
           fetch-depth: 0
+      - name: Checkout Arrow .NET
+        uses: actions/checkout@v5
+        with:
+          repository: apache/arrow-dotnet
+          path: dotnet
       - name: Checkout Arrow Go
         uses: actions/checkout@v5
         with:

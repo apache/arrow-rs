@@ -15,29 +15,73 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::codec::{AvroDataType, Codec, Nullability, Promotion, ResolutionInfo};
+use crate::codec::{
+    AvroDataType, AvroField, AvroLiteral, Codec, Promotion, ResolutionInfo, ResolvedRecord,
+};
 use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
-use crate::reader::header::Header;
-use crate::schema::*;
+use crate::schema::Nullability;
 use arrow_array::builder::{
-    ArrayBuilder, Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder,
-    PrimitiveBuilder,
+    Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder, StringViewBuilder,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_array::builder::{Decimal32Builder, Decimal64Builder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, IntervalUnit,
-    Schema as ArrowSchema, SchemaRef, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
+#[cfg(feature = "small_decimals")]
+use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::io::Read;
 use std::sync::Arc;
 use uuid::Uuid;
 
 const DEFAULT_CAPACITY: usize = 1024;
+
+/// Macro to decode a decimal payload for a given width and integer type.
+macro_rules! decode_decimal {
+    ($size:expr, $buf:expr, $builder:expr, $N:expr, $Int:ty) => {{
+        let bytes = read_decimal_bytes_be::<{ $N }>($buf, $size)?;
+        $builder.append_value(<$Int>::from_be_bytes(bytes));
+    }};
+}
+
+/// Macro to finish a decimal builder into an array with precision/scale and nulls.
+macro_rules! flush_decimal {
+    ($builder:expr, $precision:expr, $scale:expr, $nulls:expr, $ArrayTy:ty) => {{
+        let (_, vals, _) = $builder.finish().into_parts();
+        let dec = <$ArrayTy>::try_new(vals, $nulls)?
+            .with_precision_and_scale(*$precision as u8, $scale.unwrap_or(0) as i8)
+            .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+        Arc::new(dec) as ArrayRef
+    }};
+}
+
+/// Macro to append a default decimal value from two's-complement big-endian bytes
+/// into the corresponding decimal builder, with compile-time constructed error text.
+macro_rules! append_decimal_default {
+    ($lit:expr, $builder:expr, $N:literal, $Int:ty, $name:literal) => {{
+        match $lit {
+            AvroLiteral::Bytes(b) => {
+                let ext = sign_cast_to::<$N>(b)?;
+                let val = <$Int>::from_be_bytes(ext);
+                $builder.append_value(val);
+                Ok(())
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                concat!(
+                    "Default for ",
+                    $name,
+                    " must be bytes (two's-complement big-endian)"
+                )
+                .to_string(),
+            )),
+        }
+    }};
+}
 
 #[derive(Debug)]
 pub(crate) struct RecordDecoderBuilder<'a> {
@@ -70,15 +114,7 @@ pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
     use_utf8view: bool,
-    resolved: Option<ResolvedRuntime>,
-}
-
-#[derive(Debug)]
-struct ResolvedRuntime {
-    /// writer field index -> reader field index (or None if writer-only)
-    writer_to_reader: Arc<[Option<usize>]>,
-    /// per-writer-field skipper (Some only when writer-only)
-    skip_decoders: Vec<Option<Skipper>>,
+    projector: Option<Projector>,
 }
 
 impl RecordDecoder {
@@ -101,8 +137,6 @@ impl RecordDecoder {
     /// # Arguments
     /// * `data_type` - The Avro data type to decode.
     /// * `use_utf8view` - A flag indicating whether to use `Utf8View` for string types.
-    /// * `strict_mode` - A flag to enable strict decoding, returning an error if the data
-    ///   does not conform to the schema.
     ///
     /// # Errors
     /// This function will return an error if the provided `data_type` is not a `Record`.
@@ -119,14 +153,9 @@ impl RecordDecoder {
                     arrow_fields.push(avro_field.field());
                     encodings.push(Decoder::try_new(avro_field.data_type())?);
                 }
-                // If this record carries resolution metadata, prepare top-level runtime helpers
-                let resolved = match data_type.resolution.as_ref() {
+                let projector = match data_type.resolution.as_ref() {
                     Some(ResolutionInfo::Record(rec)) => {
-                        let skip_decoders = build_skip_decoders(&rec.skip_fields)?;
-                        Some(ResolvedRuntime {
-                            writer_to_reader: rec.writer_to_reader.clone(),
-                            skip_decoders,
-                        })
+                        Some(ProjectorBuilder::try_new(rec, reader_fields).build()?)
                     }
                     _ => None,
                 };
@@ -134,7 +163,7 @@ impl RecordDecoder {
                     schema: Arc::new(ArrowSchema::new(arrow_fields)),
                     fields: encodings,
                     use_utf8view,
-                    resolved,
+                    projector,
                 })
             }
             other => Err(ArrowError::ParseError(format!(
@@ -151,17 +180,10 @@ impl RecordDecoder {
     /// Decode `count` records from `buf`
     pub(crate) fn decode(&mut self, buf: &[u8], count: usize) -> Result<usize, ArrowError> {
         let mut cursor = AvroCursor::new(buf);
-        match self.resolved.as_mut() {
-            Some(runtime) => {
-                // Top-level resolved record: read writer fields in writer order,
-                // project into reader fields, and skip writer-only fields
+        match self.projector.as_mut() {
+            Some(proj) => {
                 for _ in 0..count {
-                    decode_with_resolution(
-                        &mut cursor,
-                        &mut self.fields,
-                        &runtime.writer_to_reader,
-                        &mut runtime.skip_decoders,
-                    )?;
+                    proj.project_record(&mut cursor, &mut self.fields)?;
                 }
             }
             None => {
@@ -186,24 +208,10 @@ impl RecordDecoder {
     }
 }
 
-fn decode_with_resolution(
-    buf: &mut AvroCursor<'_>,
-    encodings: &mut [Decoder],
-    writer_to_reader: &[Option<usize>],
-    skippers: &mut [Option<Skipper>],
-) -> Result<(), ArrowError> {
-    for (w_idx, (target, skipper_opt)) in writer_to_reader.iter().zip(skippers).enumerate() {
-        match (*target, skipper_opt.as_mut()) {
-            (Some(r_idx), _) => encodings[r_idx].decode(buf)?,
-            (None, Some(sk)) => sk.skip(buf)?,
-            (None, None) => {
-                return Err(ArrowError::SchemaError(format!(
-                    "No skipper available for writer-only field at index {w_idx}",
-                )));
-            }
-        }
-    }
-    Ok(())
+#[derive(Debug)]
+struct EnumResolution {
+    mapping: Arc<[i32]>,
+    default_index: i32,
 }
 
 #[derive(Debug)]
@@ -233,7 +241,7 @@ enum Decoder {
     /// String data encoded as UTF-8 bytes, but mapped to Arrow's StringViewArray
     StringView(OffsetBufferBuilder<i32>, Vec<u8>),
     Array(FieldRef, OffsetBufferBuilder<i32>, Box<Decoder>),
-    Record(Fields, Vec<Decoder>),
+    Record(Fields, Vec<Decoder>, Option<Projector>),
     Map(
         FieldRef,
         OffsetBufferBuilder<i32>,
@@ -242,19 +250,16 @@ enum Decoder {
         Box<Decoder>,
     ),
     Fixed(i32, Vec<u8>),
-    Enum(Vec<i32>, Arc<[String]>),
+    Enum(Vec<i32>, Arc<[String]>, Option<EnumResolution>),
     Duration(IntervalMonthDayNanoBuilder),
     Uuid(Vec<u8>),
+    #[cfg(feature = "small_decimals")]
+    Decimal32(usize, Option<usize>, Option<usize>, Decimal32Builder),
+    #[cfg(feature = "small_decimals")]
+    Decimal64(usize, Option<usize>, Option<usize>, Decimal64Builder),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
-    /// Resolved record that needs writer->reader projection and skipping writer-only fields
-    RecordResolved {
-        fields: Fields,
-        encodings: Vec<Decoder>,
-        writer_to_reader: Arc<[Option<usize>]>,
-        skip_decoders: Vec<Option<Skipper>>,
-    },
 }
 
 impl Decoder {
@@ -323,36 +328,43 @@ impl Decoder {
             (Codec::Decimal(precision, scale, size), _) => {
                 let p = *precision;
                 let s = *scale;
-                let sz = *size;
                 let prec = p as u8;
                 let scl = s.unwrap_or(0) as i8;
-                match (sz, p) {
-                    (Some(fixed_size), _) if fixed_size <= 16 => {
-                        let builder =
-                            Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
-                        Self::Decimal128(p, s, sz, builder)
-                    }
-                    (Some(fixed_size), _) if fixed_size <= 32 => {
-                        let builder =
-                            Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
-                        Self::Decimal256(p, s, sz, builder)
-                    }
-                    (Some(fixed_size), _) => {
+                #[cfg(feature = "small_decimals")]
+                {
+                    if p <= DECIMAL32_MAX_PRECISION as usize {
+                        let builder = Decimal32Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal32(p, s, *size, builder)
+                    } else if p <= DECIMAL64_MAX_PRECISION as usize {
+                        let builder = Decimal64Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal64(p, s, *size, builder)
+                    } else if p <= DECIMAL128_MAX_PRECISION as usize {
+                        let builder = Decimal128Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal128(p, s, *size, builder)
+                    } else if p <= DECIMAL256_MAX_PRECISION as usize {
+                        let builder = Decimal256Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal256(p, s, *size, builder)
+                    } else {
                         return Err(ArrowError::ParseError(format!(
-                            "Unsupported decimal size: {fixed_size:?}"
+                            "Decimal precision {p} exceeds maximum supported"
                         )));
                     }
-                    (None, p) if p <= DECIMAL128_MAX_PRECISION as usize => {
-                        let builder =
-                            Decimal128Builder::new().with_precision_and_scale(prec, scl)?;
-                        Self::Decimal128(p, s, sz, builder)
-                    }
-                    (None, p) if p <= DECIMAL256_MAX_PRECISION as usize => {
-                        let builder =
-                            Decimal256Builder::new().with_precision_and_scale(prec, scl)?;
-                        Self::Decimal256(p, s, sz, builder)
-                    }
-                    (None, _) => {
+                }
+                #[cfg(not(feature = "small_decimals"))]
+                {
+                    if p <= DECIMAL128_MAX_PRECISION as usize {
+                        let builder = Decimal128Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal128(p, s, *size, builder)
+                    } else if p <= DECIMAL256_MAX_PRECISION as usize {
+                        let builder = Decimal256Builder::with_capacity(DEFAULT_CAPACITY)
+                            .with_precision_and_scale(prec, scl)?;
+                        Self::Decimal256(p, s, *size, builder)
+                    } else {
                         return Err(ArrowError::ParseError(format!(
                             "Decimal precision {p} exceeds maximum supported"
                         )));
@@ -369,7 +381,14 @@ impl Decoder {
                 )
             }
             (Codec::Enum(symbols), _) => {
-                Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone())
+                let res = match data_type.resolution.as_ref() {
+                    Some(ResolutionInfo::EnumMapping(mapping)) => Some(EnumResolution {
+                        mapping: mapping.mapping.clone(),
+                        default_index: mapping.default_index,
+                    }),
+                    _ => None,
+                };
+                Self::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone(), res)
             }
             (Codec::Struct(fields), _) => {
                 let mut arrow_fields = Vec::with_capacity(fields.len());
@@ -379,17 +398,13 @@ impl Decoder {
                     arrow_fields.push(avro_field.field());
                     encodings.push(encoding);
                 }
-                if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
-                    let skip_decoders = build_skip_decoders(&rec.skip_fields)?;
-                    Self::RecordResolved {
-                        fields: arrow_fields.into(),
-                        encodings,
-                        writer_to_reader: rec.writer_to_reader.clone(),
-                        skip_decoders,
-                    }
-                } else {
-                    Self::Record(arrow_fields.into(), encodings)
-                }
+                let projector =
+                    if let Some(ResolutionInfo::Record(rec)) = data_type.resolution.as_ref() {
+                        Some(ProjectorBuilder::try_new(rec, fields).build()?)
+                    } else {
+                        None
+                    };
+                Self::Record(arrow_fields.into(), encodings, projector)
             }
             (Codec::Map(child), _) => {
                 let val_field = child.field_with_name("value");
@@ -411,6 +426,11 @@ impl Decoder {
                 )
             }
             (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (&Codec::Union(_, _, _), _) => {
+                return Err(ArrowError::NotYetImplemented(
+                    "Union type decoding is not yet supported".to_string(),
+                ))
+            }
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
@@ -451,24 +471,263 @@ impl Decoder {
             Self::Array(_, offsets, e) => {
                 offsets.push_length(0);
             }
-            Self::Record(_, e) => e.iter_mut().for_each(|e| e.append_null()),
+            Self::Record(_, e, _) => e.iter_mut().for_each(|e| e.append_null()),
             Self::Map(_, _koff, moff, _, _) => {
                 moff.push_length(0);
             }
             Self::Fixed(sz, accum) => {
                 accum.extend(std::iter::repeat_n(0u8, *sz as usize));
             }
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal32(_, _, _, builder) => builder.append_value(0),
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal64(_, _, _, builder) => builder.append_value(0),
             Self::Decimal128(_, _, _, builder) => builder.append_value(0),
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
-            Self::Enum(indices, _) => indices.push(0),
+            Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
             Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null();
             }
-            Self::RecordResolved { encodings, .. } => {
-                encodings.iter_mut().for_each(|e| e.append_null());
+        }
+    }
+
+    /// Append a single default literal into the decoder's buffers
+    fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), ArrowError> {
+        match self {
+            Self::Nullable(_, nb, inner) => {
+                if matches!(lit, AvroLiteral::Null) {
+                    nb.append(false);
+                    inner.append_null();
+                    Ok(())
+                } else {
+                    nb.append(true);
+                    inner.append_default(lit)
+                }
             }
+            Self::Null(count) => match lit {
+                AvroLiteral::Null => {
+                    *count += 1;
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Non-null default for null type".to_string(),
+                )),
+            },
+            Self::Boolean(b) => match lit {
+                AvroLiteral::Boolean(v) => {
+                    b.append(*v);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for boolean must be boolean".to_string(),
+                )),
+            },
+            Self::Int32(v) | Self::Date32(v) | Self::TimeMillis(v) => match lit {
+                AvroLiteral::Int(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for int32/date32/time-millis must be int".to_string(),
+                )),
+            },
+            Self::Int64(v)
+            | Self::Int32ToInt64(v)
+            | Self::TimeMicros(v)
+            | Self::TimestampMillis(_, v)
+            | Self::TimestampMicros(_, v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                AvroLiteral::Int(i) => {
+                    v.push(*i as i64);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for long/time-micros/timestamp must be long or int".to_string(),
+                )),
+            },
+            Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => match lit {
+                AvroLiteral::Float(f) => {
+                    v.push(*f);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for float must be float".to_string(),
+                )),
+            },
+            Self::Float64(v)
+            | Self::Int32ToFloat64(v)
+            | Self::Int64ToFloat64(v)
+            | Self::Float32ToFloat64(v) => match lit {
+                AvroLiteral::Double(f) => {
+                    v.push(*f);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for double must be double".to_string(),
+                )),
+            },
+            Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    offsets.push_length(b.len());
+                    values.extend_from_slice(b);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for bytes must be bytes".to_string(),
+                )),
+            },
+            Self::BytesToString(offsets, values)
+            | Self::String(offsets, values)
+            | Self::StringView(offsets, values) => match lit {
+                AvroLiteral::String(s) => {
+                    let b = s.as_bytes();
+                    offsets.push_length(b.len());
+                    values.extend_from_slice(b);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for string must be string".to_string(),
+                )),
+            },
+            Self::Uuid(values) => match lit {
+                AvroLiteral::String(s) => {
+                    let uuid = Uuid::try_parse(s).map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!("Invalid UUID default: {s} ({e})"))
+                    })?;
+                    values.extend_from_slice(uuid.as_bytes());
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for uuid must be string".to_string(),
+                )),
+            },
+            Self::Fixed(sz, accum) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != *sz as usize {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Fixed default length {} does not match size {sz}",
+                            b.len(),
+                        )));
+                    }
+                    accum.extend_from_slice(b);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for fixed must be bytes".to_string(),
+                )),
+            },
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal32(_, _, _, builder) => {
+                append_decimal_default!(lit, builder, 4, i32, "decimal32")
+            }
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal64(_, _, _, builder) => {
+                append_decimal_default!(lit, builder, 8, i64, "decimal64")
+            }
+            Self::Decimal128(_, _, _, builder) => {
+                append_decimal_default!(lit, builder, 16, i128, "decimal128")
+            }
+            Self::Decimal256(_, _, _, builder) => {
+                append_decimal_default!(lit, builder, 32, i256, "decimal256")
+            }
+            Self::Duration(builder) => match lit {
+                AvroLiteral::Bytes(b) => {
+                    if b.len() != 12 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Duration default must be exactly 12 bytes, got {}",
+                            b.len()
+                        )));
+                    }
+                    let months = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                    let days = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+                    let millis = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
+                    let nanos = (millis as i64) * 1_000_000;
+                    builder.append_value(IntervalMonthDayNano::new(
+                        months as i32,
+                        days as i32,
+                        nanos,
+                    ));
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for duration must be 12-byte little-endian months/days/millis"
+                        .to_string(),
+                )),
+            },
+            Self::Array(_, offsets, inner) => match lit {
+                AvroLiteral::Array(items) => {
+                    offsets.push_length(items.len());
+                    for item in items {
+                        inner.append_default(item)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for array must be an array literal".to_string(),
+                )),
+            },
+            Self::Map(_, koff, moff, kdata, valdec) => match lit {
+                AvroLiteral::Map(entries) => {
+                    moff.push_length(entries.len());
+                    for (k, v) in entries {
+                        let kb = k.as_bytes();
+                        koff.push_length(kb.len());
+                        kdata.extend_from_slice(kb);
+                        valdec.append_default(v)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for map must be a map/object literal".to_string(),
+                )),
+            },
+            Self::Enum(indices, symbols, _) => match lit {
+                AvroLiteral::Enum(sym) => {
+                    let pos = symbols.iter().position(|s| s == sym).ok_or_else(|| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "Enum default symbol {sym:?} not in reader symbols"
+                        ))
+                    })?;
+                    indices.push(pos as i32);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for enum must be a symbol".to_string(),
+                )),
+            },
+            Self::Record(field_meta, decoders, projector) => match lit {
+                AvroLiteral::Map(entries) => {
+                    for (i, dec) in decoders.iter_mut().enumerate() {
+                        let name = field_meta[i].name();
+                        if let Some(sub) = entries.get(name) {
+                            dec.append_default(sub)?;
+                        } else if let Some(proj) = projector.as_ref() {
+                            proj.project_default(dec, i)?;
+                        } else {
+                            dec.append_null();
+                        }
+                    }
+                    Ok(())
+                }
+                AvroLiteral::Null => {
+                    for (i, dec) in decoders.iter_mut().enumerate() {
+                        if let Some(proj) = projector.as_ref() {
+                            proj.project_default(dec, i)?;
+                        } else {
+                            dec.append_null();
+                        }
+                    }
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for record must be a map/object or null".to_string(),
+                )),
+            },
         }
     }
 
@@ -514,10 +773,13 @@ impl Decoder {
                 let total_items = read_blocks(buf, |cursor| encoding.decode(cursor))?;
                 off.push_length(total_items);
             }
-            Self::Record(_, encodings) => {
+            Self::Record(_, encodings, None) => {
                 for encoding in encodings {
                     encoding.decode(buf)?;
                 }
+            }
+            Self::Record(_, encodings, Some(proj)) => {
+                proj.project_record(buf, encodings)?;
             }
             Self::Map(_, koff, moff, kdata, valdec) => {
                 let newly_added = read_blocks(buf, |cur| {
@@ -532,28 +794,37 @@ impl Decoder {
                 let fx = buf.get_fixed(*sz as usize)?;
                 accum.extend_from_slice(fx);
             }
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal32(_, _, size, builder) => {
+                decode_decimal!(size, buf, builder, 4, i32);
+            }
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal64(_, _, size, builder) => {
+                decode_decimal!(size, buf, builder, 8, i64);
+            }
             Self::Decimal128(_, _, size, builder) => {
-                let raw = if let Some(s) = size {
-                    buf.get_fixed(*s)?
-                } else {
-                    buf.get_bytes()?
-                };
-                let ext = sign_extend_to::<16>(raw)?;
-                let val = i128::from_be_bytes(ext);
-                builder.append_value(val);
+                decode_decimal!(size, buf, builder, 16, i128);
             }
             Self::Decimal256(_, _, size, builder) => {
-                let raw = if let Some(s) = size {
-                    buf.get_fixed(*s)?
-                } else {
-                    buf.get_bytes()?
-                };
-                let ext = sign_extend_to::<32>(raw)?;
-                let val = i256::from_be_bytes(ext);
-                builder.append_value(val);
+                decode_decimal!(size, buf, builder, 32, i256);
             }
-            Self::Enum(indices, _) => {
+            Self::Enum(indices, _, None) => {
                 indices.push(buf.get_int()?);
+            }
+            Self::Enum(indices, _, Some(res)) => {
+                let raw = buf.get_int()?;
+                let resolved = usize::try_from(raw)
+                    .ok()
+                    .and_then(|idx| res.mapping.get(idx).copied())
+                    .filter(|&idx| idx >= 0)
+                    .unwrap_or(res.default_index);
+                if resolved >= 0 {
+                    indices.push(resolved);
+                } else {
+                    return Err(ArrowError::ParseError(format!(
+                        "Enum symbol index {raw} not resolvable and no default provided",
+                    )));
+                }
             }
             Self::Duration(builder) => {
                 let b = buf.get_fixed(12)?;
@@ -576,14 +847,6 @@ impl Decoder {
                     encoding.append_null();
                 }
                 nb.append(is_not_null);
-            }
-            Self::RecordResolved {
-                encodings,
-                writer_to_reader,
-                skip_decoders,
-                ..
-            } => {
-                decode_with_resolution(buf, encodings, writer_to_reader, skip_decoders)?;
             }
         }
         Ok(())
@@ -626,17 +889,17 @@ impl Decoder {
             Self::StringToBytes(offsets, values) | Self::Binary(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
-                Arc::new(BinaryArray::new(offsets, values, nulls))
+                Arc::new(BinaryArray::try_new(offsets, values, nulls)?)
             }
             Self::BytesToString(offsets, values) | Self::String(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
-                Arc::new(StringArray::new(offsets, values, nulls))
+                Arc::new(StringArray::try_new(offsets, values, nulls)?)
             }
             Self::StringView(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values);
-                let array = StringArray::new(offsets, values.into(), nulls.clone());
+                let array = StringArray::try_new(offsets, values.into(), nulls.clone())?;
                 let values: Vec<&str> = (0..array.len())
                     .map(|i| {
                         if array.is_valid(i) {
@@ -651,21 +914,21 @@ impl Decoder {
             Self::Array(field, offsets, values) => {
                 let values = values.flush(None)?;
                 let offsets = flush_offsets(offsets);
-                Arc::new(ListArray::new(field.clone(), offsets, values, nulls))
+                Arc::new(ListArray::try_new(field.clone(), offsets, values, nulls)?)
             }
-            Self::Record(fields, encodings) => {
+            Self::Record(fields, encodings, _) => {
                 let arrays = encodings
                     .iter_mut()
                     .map(|x| x.flush(None))
                     .collect::<Result<Vec<_>, _>>()?;
-                Arc::new(StructArray::new(fields.clone(), arrays, nulls))
+                Arc::new(StructArray::try_new(fields.clone(), arrays, nulls)?)
             }
             Self::Map(map_field, k_off, m_off, kdata, valdec) => {
                 let moff = flush_offsets(m_off);
                 let koff = flush_offsets(k_off);
                 let kd = flush_values(kdata).into();
                 let val_arr = valdec.flush(None)?;
-                let key_arr = StringArray::new(koff, kd, None);
+                let key_arr = StringArray::try_new(koff, kd, None)?;
                 if key_arr.len() != val_arr.len() {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Map keys length ({}) != map values length ({})",
@@ -691,8 +954,9 @@ impl Decoder {
                     }
                 };
                 let entries_struct =
-                    StructArray::new(entries_fields, vec![Arc::new(key_arr), val_arr], None);
-                let map_arr = MapArray::new(map_field.clone(), moff, entries_struct, nulls, false);
+                    StructArray::try_new(entries_fields, vec![Arc::new(key_arr), val_arr], None)?;
+                let map_arr =
+                    MapArray::try_new(map_field.clone(), moff, entries_struct, nulls, false)?;
                 Arc::new(map_arr)
             }
             Self::Fixed(sz, accum) => {
@@ -706,43 +970,26 @@ impl Decoder {
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(arr)
             }
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal32(precision, scale, _, builder) => {
+                flush_decimal!(builder, precision, scale, nulls, Decimal32Array)
+            }
+            #[cfg(feature = "small_decimals")]
+            Self::Decimal64(precision, scale, _, builder) => {
+                flush_decimal!(builder, precision, scale, nulls, Decimal64Array)
+            }
             Self::Decimal128(precision, scale, _, builder) => {
-                let (_, vals, _) = builder.finish().into_parts();
-                let scl = scale.unwrap_or(0);
-                let dec = Decimal128Array::new(vals, nulls)
-                    .with_precision_and_scale(*precision as u8, scl as i8)
-                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                Arc::new(dec)
+                flush_decimal!(builder, precision, scale, nulls, Decimal128Array)
             }
             Self::Decimal256(precision, scale, _, builder) => {
-                let (_, vals, _) = builder.finish().into_parts();
-                let scl = scale.unwrap_or(0);
-                let dec = Decimal256Array::new(vals, nulls)
-                    .with_precision_and_scale(*precision as u8, scl as i8)
-                    .map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                Arc::new(dec)
+                flush_decimal!(builder, precision, scale, nulls, Decimal256Array)
             }
-            Self::Enum(indices, symbols) => {
-                let keys = flush_primitive::<Int32Type>(indices, nulls);
-                let values = Arc::new(StringArray::from(
-                    symbols.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                ));
-                Arc::new(DictionaryArray::try_new(keys, values)?)
-            }
+            Self::Enum(indices, symbols, _) => flush_dict(indices, symbols, nulls)?,
             Self::Duration(builder) => {
                 let (_, vals, _) = builder.finish().into_parts();
                 let vals = IntervalMonthDayNanoArray::try_new(vals, nulls)
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(vals)
-            }
-            Self::RecordResolved {
-                fields, encodings, ..
-            } => {
-                let arrays = encodings
-                    .iter_mut()
-                    .map(|x| x.flush(None))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Arc::new(StructArray::new(fields.clone(), arrays, nulls))
             }
         })
     }
@@ -764,6 +1011,21 @@ fn skip_blocks(
         move |c| skip_item(c),
         NegativeBlockBehavior::SkipBySize,
     )
+}
+
+#[inline]
+fn flush_dict(
+    indices: &mut Vec<i32>,
+    symbols: &[String],
+    nulls: Option<NullBuffer>,
+) -> Result<ArrayRef, ArrowError> {
+    let keys = flush_primitive::<Int32Type>(indices, nulls);
+    let values = Arc::new(StringArray::from_iter_values(
+        symbols.iter().map(|s| s.as_str()),
+    ));
+    DictionaryArray::try_new(keys, values)
+        .map_err(|e| ArrowError::ParseError(e.to_string()))
+        .map(|arr| Arc::new(arr) as ArrayRef)
 }
 
 #[inline]
@@ -790,8 +1052,6 @@ fn process_blockwise(
         match block_count.cmp(&0) {
             Ordering::Equal => break,
             Ordering::Less => {
-                // If block_count is negative, read the absolute value of count,
-                // then read the block size as a long and discard
                 let count = (-block_count) as usize;
                 // A negative count is followed by a long of the size in bytes
                 let size_in_bytes = buf.get_long()? as usize;
@@ -810,7 +1070,6 @@ fn process_blockwise(
                 total += count;
             }
             Ordering::Greater => {
-                // If block_count is positive, decode that many items
                 let count = block_count as usize;
                 for _ in 0..count {
                     on_item(buf)?;
@@ -840,29 +1099,191 @@ fn flush_primitive<T: ArrowPrimitiveType>(
     PrimitiveArray::new(flush_values(values).into(), nulls)
 }
 
-/// Sign extends a byte slice to a fixed-size array of N bytes.
-/// This is done by filling the leading bytes with 0x00 for positive numbers
-/// or 0xFF for negative numbers.
 #[inline]
-fn sign_extend_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
-    if raw.len() > N {
-        return Err(ArrowError::ParseError(format!(
-            "Cannot extend a slice of length {} to {} bytes.",
-            raw.len(),
-            N
-        )));
+fn read_decimal_bytes_be<const N: usize>(
+    buf: &mut AvroCursor<'_>,
+    size: &Option<usize>,
+) -> Result<[u8; N], ArrowError> {
+    match size {
+        Some(n) if *n == N => {
+            let raw = buf.get_fixed(N)?;
+            let mut arr = [0u8; N];
+            arr.copy_from_slice(raw);
+            Ok(arr)
+        }
+        Some(n) => {
+            let raw = buf.get_fixed(*n)?;
+            sign_cast_to::<N>(raw)
+        }
+        None => {
+            let raw = buf.get_bytes()?;
+            sign_cast_to::<N>(raw)
+        }
     }
-    let mut arr = [0u8; N];
-    let pad_len = N - raw.len();
-    // Determine the byte to use for padding based on the sign bit of the raw data.
-    let extension_byte = if raw.is_empty() || (raw[0] & 0x80 == 0) {
-        0x00
-    } else {
-        0xFF
-    };
-    arr[..pad_len].fill(extension_byte);
-    arr[pad_len..].copy_from_slice(raw);
-    Ok(arr)
+}
+
+/// Sign-extend or (when larger) validate-and-truncate a big-endian two's-complement
+/// integer into exactly `N` bytes. This matches Avro's decimal binary encoding:
+/// the payload is a big-endian two's-complement integer, and when narrowing it must
+/// be representable without changing sign or value.
+///
+/// If `raw.len() < N`, the value is sign-extended.
+/// If `raw.len() > N`, all truncated leading bytes must match the sign-extension byte
+/// and the MSB of the first kept byte must match the sign (to avoid silent overflow).
+#[inline]
+fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
+    let len = raw.len();
+    // Fast path: exact width, just copy
+    if len == N {
+        let mut out = [0u8; N];
+        out.copy_from_slice(raw);
+        return Ok(out);
+    }
+    // Determine sign byte from MSB of first byte (empty => positive)
+    let first = raw.first().copied().unwrap_or(0u8);
+    let sign_byte = if (first & 0x80) == 0 { 0x00 } else { 0xFF };
+    // Pre-fill with sign byte to support sign extension
+    let mut out = [sign_byte; N];
+    if len > N {
+        // Validate truncation: all dropped leading bytes must equal sign_byte,
+        // and the MSB of the first kept byte must match the sign.
+        let extra = len - N;
+        // Any non-sign byte in the truncated prefix indicates overflow
+        if raw[..extra].iter().any(|&b| b != sign_byte) {
+            return Err(ArrowError::ParseError(format!(
+                "Decimal value with {} bytes cannot be represented in {} bytes without overflow",
+                len, N
+            )));
+        }
+        if N > 0 {
+            let first_kept = raw[extra];
+            let sign_bit_mismatch = ((first_kept ^ sign_byte) & 0x80) != 0;
+            if sign_bit_mismatch {
+                return Err(ArrowError::ParseError(format!(
+                    "Decimal value with {} bytes cannot be represented in {} bytes without overflow",
+                    len, N
+                )));
+            }
+        }
+        out.copy_from_slice(&raw[extra..]);
+        return Ok(out);
+    }
+    out[N - len..].copy_from_slice(raw);
+    Ok(out)
+}
+
+#[derive(Debug)]
+struct Projector {
+    writer_to_reader: Arc<[Option<usize>]>,
+    skip_decoders: Vec<Option<Skipper>>,
+    field_defaults: Vec<Option<AvroLiteral>>,
+    default_injections: Arc<[(usize, AvroLiteral)]>,
+}
+
+#[derive(Debug)]
+struct ProjectorBuilder<'a> {
+    rec: &'a ResolvedRecord,
+    reader_fields: Arc<[AvroField]>,
+}
+
+impl<'a> ProjectorBuilder<'a> {
+    #[inline]
+    fn try_new(rec: &'a ResolvedRecord, reader_fields: &Arc<[AvroField]>) -> Self {
+        Self {
+            rec,
+            reader_fields: reader_fields.clone(),
+        }
+    }
+
+    #[inline]
+    fn build(self) -> Result<Projector, ArrowError> {
+        let reader_fields = self.reader_fields;
+        let mut field_defaults: Vec<Option<AvroLiteral>> = Vec::with_capacity(reader_fields.len());
+        for avro_field in reader_fields.as_ref() {
+            if let Some(ResolutionInfo::DefaultValue(lit)) =
+                avro_field.data_type().resolution.as_ref()
+            {
+                field_defaults.push(Some(lit.clone()));
+            } else {
+                field_defaults.push(None);
+            }
+        }
+        let mut default_injections: Vec<(usize, AvroLiteral)> =
+            Vec::with_capacity(self.rec.default_fields.len());
+        for &idx in self.rec.default_fields.as_ref() {
+            let lit = field_defaults
+                .get(idx)
+                .and_then(|lit| lit.clone())
+                .unwrap_or(AvroLiteral::Null);
+            default_injections.push((idx, lit));
+        }
+        let mut skip_decoders: Vec<Option<Skipper>> =
+            Vec::with_capacity(self.rec.skip_fields.len());
+        for datatype in self.rec.skip_fields.as_ref() {
+            let skipper = match datatype {
+                Some(datatype) => Some(Skipper::from_avro(datatype)?),
+                None => None,
+            };
+            skip_decoders.push(skipper);
+        }
+        Ok(Projector {
+            writer_to_reader: self.rec.writer_to_reader.clone(),
+            skip_decoders,
+            field_defaults,
+            default_injections: default_injections.into(),
+        })
+    }
+}
+
+impl Projector {
+    #[inline]
+    fn project_default(&self, decoder: &mut Decoder, index: usize) -> Result<(), ArrowError> {
+        // SAFETY: `index` is obtained by listing the reader's record fields (i.e., from
+        // `decoders.iter_mut().enumerate()`), and `field_defaults` was built in
+        // `ProjectorBuilder::build` to have exactly one element per reader field.
+        // Therefore, `index < self.field_defaults.len()` always holds here, so
+        // `self.field_defaults[index]` cannot panic. We only take an immutable reference
+        // via `.as_ref()`, and `self` is borrowed immutably.
+        if let Some(default_literal) = self.field_defaults[index].as_ref() {
+            decoder.append_default(default_literal)
+        } else {
+            decoder.append_null();
+            Ok(())
+        }
+    }
+
+    #[inline]
+    fn project_record(
+        &mut self,
+        buf: &mut AvroCursor<'_>,
+        encodings: &mut [Decoder],
+    ) -> Result<(), ArrowError> {
+        debug_assert_eq!(
+            self.writer_to_reader.len(),
+            self.skip_decoders.len(),
+            "internal invariant: mapping and skipper lists must have equal length"
+        );
+        for (i, (mapping, skipper_opt)) in self
+            .writer_to_reader
+            .iter()
+            .zip(self.skip_decoders.iter_mut())
+            .enumerate()
+        {
+            match (mapping, skipper_opt.as_mut()) {
+                (Some(reader_index), _) => encodings[*reader_index].decode(buf)?,
+                (None, Some(skipper)) => skipper.skip(buf)?,
+                (None, None) => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "No skipper available for writer-only field at index {i}",
+                    )));
+                }
+            }
+        }
+        for (reader_index, lit) in self.default_injections.as_ref() {
+            encodings[*reader_index].append_default(lit)?;
+        }
+        Ok(())
+    }
 }
 
 /// Lightweight skipper for non‑projected writer fields
@@ -1015,24 +1436,13 @@ impl Skipper {
     }
 }
 
-#[inline]
-fn build_skip_decoders(
-    skip_fields: &[Option<AvroDataType>],
-) -> Result<Vec<Option<Skipper>>, ArrowError> {
-    skip_fields
-        .iter()
-        .map(|opt| opt.as_ref().map(Skipper::from_avro).transpose())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codec::AvroField;
-    use arrow_array::{
-        cast::AsArray, Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
-        IntervalMonthDayNanoArray, ListArray, MapArray, StringArray, StructArray,
-    };
+    use crate::schema::{PrimitiveType, Schema, TypeName};
+    use arrow_array::cast::AsArray;
+    use indexmap::IndexMap;
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -1478,7 +1888,7 @@ mod tests {
 
     #[test]
     fn test_decimal_decoding_fixed256() {
-        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(32)));
+        let dt = avro_from_codec(Codec::Decimal(50, Some(2), Some(32)));
         let mut decoder = Decoder::try_new(&dt).unwrap();
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1505,7 +1915,7 @@ mod tests {
 
     #[test]
     fn test_decimal_decoding_fixed128() {
-        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(16)));
+        let dt = avro_from_codec(Codec::Decimal(28, Some(2), Some(16)));
         let mut decoder = Decoder::try_new(&dt).unwrap();
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -1529,6 +1939,79 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_decoding_fixed32_from_32byte_fixed_storage() {
+        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(32)));
+        let mut decoder = Decoder::try_new(&dt).unwrap();
+        let row1 = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x30, 0x39,
+        ];
+        let row2 = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0x85,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&row1);
+        data.extend_from_slice(&row2);
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let arr = decoder.flush(None).unwrap();
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+    }
+
+    #[test]
+    fn test_decimal_decoding_fixed32_from_16byte_fixed_storage() {
+        let dt = avro_from_codec(Codec::Decimal(5, Some(2), Some(16)));
+        let mut decoder = Decoder::try_new(&dt).unwrap();
+        let row1 = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x30, 0x39,
+        ];
+        let row2 = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0x85,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&row1);
+        data.extend_from_slice(&row2);
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+
+        let arr = decoder.flush(None).unwrap();
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec.len(), 2);
+            assert_eq!(dec.value_as_string(0), "123.45");
+            assert_eq!(dec.value_as_string(1), "-1.23");
+        }
+    }
+
+    #[test]
     fn test_decimal_decoding_bytes_with_nulls() {
         let dt = avro_from_codec(Codec::Decimal(4, Some(1), None));
         let inner = Decoder::try_new(&dt).unwrap();
@@ -1544,21 +2027,34 @@ mod tests {
         data.extend_from_slice(&encode_avro_int(0));
         data.extend_from_slice(&encode_avro_bytes(&[0xFB, 0x2E]));
         let mut cursor = AvroCursor::new(&data);
-        decoder.decode(&mut cursor).unwrap(); // row1
-        decoder.decode(&mut cursor).unwrap(); // row2
-        decoder.decode(&mut cursor).unwrap(); // row3
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
         let arr = decoder.flush(None).unwrap();
-        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        assert_eq!(dec_arr.len(), 3);
-        assert!(dec_arr.is_valid(0));
-        assert!(!dec_arr.is_valid(1));
-        assert!(dec_arr.is_valid(2));
-        assert_eq!(dec_arr.value_as_string(0), "123.4");
-        assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "123.4");
+            assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "123.4");
+            assert_eq!(dec_arr.value_as_string(2), "-123.4");
+        }
     }
 
     #[test]
-    fn test_decimal_decoding_bytes_with_nulls_fixed_size() {
+    fn test_decimal_decoding_bytes_with_nulls_fixed_size_narrow_result() {
         let dt = avro_from_codec(Codec::Decimal(6, Some(2), Some(16)));
         let inner = Decoder::try_new(&dt).unwrap();
         let mut decoder = Decoder::Nullable(
@@ -1585,13 +2081,26 @@ mod tests {
         decoder.decode(&mut cursor).unwrap();
         decoder.decode(&mut cursor).unwrap();
         let arr = decoder.flush(None).unwrap();
-        let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-        assert_eq!(dec_arr.len(), 3);
-        assert!(dec_arr.is_valid(0));
-        assert!(!dec_arr.is_valid(1));
-        assert!(dec_arr.is_valid(2));
-        assert_eq!(dec_arr.value_as_string(0), "1234.56");
-        assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        #[cfg(feature = "small_decimals")]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal32Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "1234.56");
+            assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        }
+        #[cfg(not(feature = "small_decimals"))]
+        {
+            let dec_arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            assert_eq!(dec_arr.len(), 3);
+            assert!(dec_arr.is_valid(0));
+            assert!(!dec_arr.is_valid(1));
+            assert!(dec_arr.is_valid(2));
+            assert_eq!(dec_arr.value_as_string(0), "1234.56");
+            assert_eq!(dec_arr.value_as_string(2), "-1234.56");
+        }
     }
 
     #[test]
@@ -1612,7 +2121,6 @@ mod tests {
             .as_any()
             .downcast_ref::<DictionaryArray<Int32Type>>()
             .unwrap();
-
         assert_eq!(dict_array.len(), 3);
         let values = dict_array
             .values()
@@ -1761,10 +2269,111 @@ mod tests {
         assert_eq!(int_array.value(1), 42); // row3 value is 42
     }
 
+    #[test]
+    fn test_enum_mapping_reordered_symbols() {
+        let reader_symbols: Arc<[String]> =
+            vec!["B".to_string(), "C".to_string(), "A".to_string()].into();
+        let mapping: Arc<[i32]> = Arc::from(vec![2, 0, 1]);
+        let default_index: i32 = -1;
+        let mut dec = Decoder::Enum(
+            Vec::with_capacity(DEFAULT_CAPACITY),
+            reader_symbols.clone(),
+            Some(EnumResolution {
+                mapping,
+                default_index,
+            }),
+        );
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&encode_avro_int(1));
+        data.extend_from_slice(&encode_avro_int(2));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        dec.decode(&mut cur).unwrap();
+        dec.decode(&mut cur).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let dict = arr
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let expected_keys = Int32Array::from(vec![2, 0, 1]);
+        assert_eq!(dict.keys(), &expected_keys);
+        let values = dict
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(0), "B");
+        assert_eq!(values.value(1), "C");
+        assert_eq!(values.value(2), "A");
+    }
+
+    #[test]
+    fn test_enum_mapping_unknown_symbol_and_out_of_range_fall_back_to_default() {
+        let reader_symbols: Arc<[String]> = vec!["A".to_string(), "B".to_string()].into();
+        let default_index: i32 = 1;
+        let mapping: Arc<[i32]> = Arc::from(vec![0, 1]);
+        let mut dec = Decoder::Enum(
+            Vec::with_capacity(DEFAULT_CAPACITY),
+            reader_symbols.clone(),
+            Some(EnumResolution {
+                mapping,
+                default_index,
+            }),
+        );
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_int(0));
+        data.extend_from_slice(&encode_avro_int(1));
+        data.extend_from_slice(&encode_avro_int(99));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        dec.decode(&mut cur).unwrap();
+        dec.decode(&mut cur).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let dict = arr
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let expected_keys = Int32Array::from(vec![0, 1, 1]);
+        assert_eq!(dict.keys(), &expected_keys);
+        let values = dict
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(0), "A");
+        assert_eq!(values.value(1), "B");
+    }
+
+    #[test]
+    fn test_enum_mapping_unknown_symbol_without_default_errors() {
+        let reader_symbols: Arc<[String]> = vec!["A".to_string()].into();
+        let default_index: i32 = -1; // indicates no default at type-level
+        let mapping: Arc<[i32]> = Arc::from(vec![-1]);
+        let mut dec = Decoder::Enum(
+            Vec::with_capacity(DEFAULT_CAPACITY),
+            reader_symbols,
+            Some(EnumResolution {
+                mapping,
+                default_index,
+            }),
+        );
+        let data = encode_avro_int(0);
+        let mut cur = AvroCursor::new(&data);
+        let err = dec
+            .decode(&mut cur)
+            .expect_err("expected decode error for unresolved enum without default");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not resolvable") && msg.contains("no default"),
+            "unexpected error message: {msg}"
+        );
+    }
+
     fn make_record_resolved_decoder(
         reader_fields: &[(&str, DataType, bool)],
         writer_to_reader: Vec<Option<usize>>,
-        mut skip_decoders: Vec<Option<super::Skipper>>,
+        skip_decoders: Vec<Option<Skipper>>,
     ) -> Decoder {
         let mut field_refs: Vec<FieldRef> = Vec::with_capacity(reader_fields.len());
         let mut encodings: Vec<Decoder> = Vec::with_capacity(reader_fields.len());
@@ -1781,12 +2390,16 @@ mod tests {
             encodings.push(enc);
         }
         let fields: Fields = field_refs.into();
-        Decoder::RecordResolved {
+        Decoder::Record(
             fields,
             encodings,
-            writer_to_reader: Arc::from(writer_to_reader),
-            skip_decoders,
-        }
+            Some(Projector {
+                writer_to_reader: Arc::from(writer_to_reader),
+                skip_decoders,
+                field_defaults: vec![None; reader_fields.len()],
+                default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
+            }),
+        )
     }
 
     #[test]
@@ -1951,5 +2564,446 @@ mod tests {
         assert_eq!(id.len(), 2);
         assert_eq!(id.value(0), 5);
         assert_eq!(id.value(1), 7);
+    }
+
+    fn make_record_decoder_with_projector_defaults(
+        reader_fields: &[(&str, DataType, bool)],
+        field_defaults: Vec<Option<AvroLiteral>>,
+        default_injections: Vec<(usize, AvroLiteral)>,
+        writer_to_reader_len: usize,
+    ) -> Decoder {
+        assert_eq!(
+            field_defaults.len(),
+            reader_fields.len(),
+            "field_defaults must have one entry per reader field"
+        );
+        let mut field_refs: Vec<FieldRef> = Vec::with_capacity(reader_fields.len());
+        let mut encodings: Vec<Decoder> = Vec::with_capacity(reader_fields.len());
+        for (name, dt, nullable) in reader_fields {
+            field_refs.push(Arc::new(ArrowField::new(*name, dt.clone(), *nullable)));
+            let enc = match dt {
+                DataType::Int32 => Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY)),
+                DataType::Int64 => Decoder::Int64(Vec::with_capacity(DEFAULT_CAPACITY)),
+                DataType::Utf8 => Decoder::String(
+                    OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                    Vec::with_capacity(DEFAULT_CAPACITY),
+                ),
+                other => panic!("Unsupported test field type in helper: {other:?}"),
+            };
+            encodings.push(enc);
+        }
+        let fields: Fields = field_refs.into();
+        let skip_decoders: Vec<Option<Skipper>> =
+            (0..writer_to_reader_len).map(|_| None::<Skipper>).collect();
+        let projector = Projector {
+            writer_to_reader: Arc::from(vec![None; writer_to_reader_len]),
+            skip_decoders,
+            field_defaults,
+            default_injections: Arc::from(default_injections),
+        };
+        Decoder::Record(fields, encodings, Some(projector))
+    }
+
+    #[test]
+    fn test_default_append_int32_and_int64_from_int_and_long() {
+        let mut d_i32 = Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_i32.append_default(&AvroLiteral::Int(42)).unwrap();
+        let arr = d_i32.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a.value(0), 42);
+        let mut d_i64 = Decoder::Int64(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_i64.append_default(&AvroLiteral::Int(5)).unwrap();
+        d_i64.append_default(&AvroLiteral::Long(7)).unwrap();
+        let arr64 = d_i64.flush(None).unwrap();
+        let a64 = arr64.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(a64.len(), 2);
+        assert_eq!(a64.value(0), 5);
+        assert_eq!(a64.value(1), 7);
+    }
+
+    #[test]
+    fn test_default_append_floats_and_doubles() {
+        let mut d_f32 = Decoder::Float32(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_f32.append_default(&AvroLiteral::Float(1.5)).unwrap();
+        let arr32 = d_f32.flush(None).unwrap();
+        let a = arr32.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(a.value(0), 1.5);
+        let mut d_f64 = Decoder::Float64(Vec::with_capacity(DEFAULT_CAPACITY));
+        d_f64.append_default(&AvroLiteral::Double(2.25)).unwrap();
+        let arr64 = d_f64.flush(None).unwrap();
+        let b = arr64.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(b.value(0), 2.25);
+    }
+
+    #[test]
+    fn test_default_append_string_and_bytes() {
+        let mut d_str = Decoder::String(
+            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+            Vec::with_capacity(DEFAULT_CAPACITY),
+        );
+        d_str
+            .append_default(&AvroLiteral::String("hi".into()))
+            .unwrap();
+        let s_arr = d_str.flush(None).unwrap();
+        let arr = s_arr.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(arr.value(0), "hi");
+        let mut d_bytes = Decoder::Binary(
+            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+            Vec::with_capacity(DEFAULT_CAPACITY),
+        );
+        d_bytes
+            .append_default(&AvroLiteral::Bytes(vec![1, 2, 3]))
+            .unwrap();
+        let b_arr = d_bytes.flush(None).unwrap();
+        let barr = b_arr.as_any().downcast_ref::<BinaryArray>().unwrap();
+        assert_eq!(barr.value(0), &[1, 2, 3]);
+        let mut d_str_err = Decoder::String(
+            OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+            Vec::with_capacity(DEFAULT_CAPACITY),
+        );
+        let err = d_str_err
+            .append_default(&AvroLiteral::Bytes(vec![0x61, 0x62]))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Default for string must be string"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_default_append_nullable_int32_null_and_value() {
+        let inner = Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY));
+        let mut dec = Decoder::Nullable(
+            Nullability::NullFirst,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(inner),
+        );
+        dec.append_default(&AvroLiteral::Null).unwrap();
+        dec.append_default(&AvroLiteral::Int(11)).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let a = arr.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(a.len(), 2);
+        assert!(a.is_null(0));
+        assert_eq!(a.value(1), 11);
+    }
+
+    #[test]
+    fn test_default_append_array_of_ints() {
+        let list_dt = avro_from_codec(Codec::List(Arc::new(avro_from_codec(Codec::Int32))));
+        let mut d = Decoder::try_new(&list_dt).unwrap();
+        let items = vec![
+            AvroLiteral::Int(1),
+            AvroLiteral::Int(2),
+            AvroLiteral::Int(3),
+        ];
+        d.append_default(&AvroLiteral::Array(items)).unwrap();
+        let arr = d.flush(None).unwrap();
+        let list = arr.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.value_length(0), 3);
+        let vals = list.values().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(vals.values(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_default_append_map_string_to_int() {
+        let map_dt = avro_from_codec(Codec::Map(Arc::new(avro_from_codec(Codec::Int32))));
+        let mut d = Decoder::try_new(&map_dt).unwrap();
+        let mut m: IndexMap<String, AvroLiteral> = IndexMap::new();
+        m.insert("k1".to_string(), AvroLiteral::Int(10));
+        m.insert("k2".to_string(), AvroLiteral::Int(20));
+        d.append_default(&AvroLiteral::Map(m)).unwrap();
+        let arr = d.flush(None).unwrap();
+        let map = arr.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.value_length(0), 2);
+        let binding = map.value(0);
+        let entries = binding.as_any().downcast_ref::<StructArray>().unwrap();
+        let k = entries
+            .column_by_name("key")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let v = entries
+            .column_by_name("value")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let keys: std::collections::HashSet<&str> = (0..k.len()).map(|i| k.value(i)).collect();
+        assert_eq!(keys, ["k1", "k2"].into_iter().collect());
+        let vals: std::collections::HashSet<i32> = (0..v.len()).map(|i| v.value(i)).collect();
+        assert_eq!(vals, [10, 20].into_iter().collect());
+    }
+
+    #[test]
+    fn test_default_append_enum_by_symbol() {
+        let symbols: Arc<[String]> = vec!["A".into(), "B".into(), "C".into()].into();
+        let mut d = Decoder::Enum(Vec::with_capacity(DEFAULT_CAPACITY), symbols.clone(), None);
+        d.append_default(&AvroLiteral::Enum("B".into())).unwrap();
+        let arr = d.flush(None).unwrap();
+        let dict = arr
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(dict.len(), 1);
+        let expected = Int32Array::from(vec![1]);
+        assert_eq!(dict.keys(), &expected);
+        let values = dict
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(values.value(1), "B");
+    }
+
+    #[test]
+    fn test_default_append_uuid_and_type_error() {
+        let mut d = Decoder::Uuid(Vec::with_capacity(DEFAULT_CAPACITY));
+        let uuid_str = "123e4567-e89b-12d3-a456-426614174000";
+        d.append_default(&AvroLiteral::String(uuid_str.into()))
+            .unwrap();
+        let arr_ref = d.flush(None).unwrap();
+        let arr = arr_ref
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(arr.value_length(), 16);
+        assert_eq!(arr.len(), 1);
+        let mut d2 = Decoder::Uuid(Vec::with_capacity(DEFAULT_CAPACITY));
+        let err = d2
+            .append_default(&AvroLiteral::Bytes(vec![0u8; 16]))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Default for uuid must be string"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_default_append_fixed_and_length_mismatch() {
+        let mut d = Decoder::Fixed(4, Vec::with_capacity(DEFAULT_CAPACITY));
+        d.append_default(&AvroLiteral::Bytes(vec![1, 2, 3, 4]))
+            .unwrap();
+        let arr_ref = d.flush(None).unwrap();
+        let arr = arr_ref
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(arr.value_length(), 4);
+        assert_eq!(arr.value(0), &[1, 2, 3, 4]);
+        let mut d_err = Decoder::Fixed(4, Vec::with_capacity(DEFAULT_CAPACITY));
+        let err = d_err
+            .append_default(&AvroLiteral::Bytes(vec![1, 2, 3]))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Fixed default length"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_default_append_duration_and_length_validation() {
+        let dt = avro_from_codec(Codec::Interval);
+        let mut d = Decoder::try_new(&dt).unwrap();
+        let mut bytes = Vec::with_capacity(12);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        d.append_default(&AvroLiteral::Bytes(bytes)).unwrap();
+        let arr_ref = d.flush(None).unwrap();
+        let arr = arr_ref
+            .as_any()
+            .downcast_ref::<IntervalMonthDayNanoArray>()
+            .unwrap();
+        assert_eq!(arr.len(), 1);
+        let v = arr.value(0);
+        assert_eq!(v.months, 1);
+        assert_eq!(v.days, 2);
+        assert_eq!(v.nanoseconds, 3_000_000);
+        let mut d_err = Decoder::try_new(&avro_from_codec(Codec::Interval)).unwrap();
+        let err = d_err
+            .append_default(&AvroLiteral::Bytes(vec![0u8; 11]))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Duration default must be exactly 12 bytes"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_default_append_decimal256_from_bytes() {
+        let dt = avro_from_codec(Codec::Decimal(50, Some(2), Some(32)));
+        let mut d = Decoder::try_new(&dt).unwrap();
+        let pos: [u8; 32] = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x30, 0x39,
+        ];
+        d.append_default(&AvroLiteral::Bytes(pos.to_vec())).unwrap();
+        let neg: [u8; 32] = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0x85,
+        ];
+        d.append_default(&AvroLiteral::Bytes(neg.to_vec())).unwrap();
+        let arr = d.flush(None).unwrap();
+        let dec = arr.as_any().downcast_ref::<Decimal256Array>().unwrap();
+        assert_eq!(dec.len(), 2);
+        assert_eq!(dec.value_as_string(0), "123.45");
+        assert_eq!(dec.value_as_string(1), "-1.23");
+    }
+
+    #[test]
+    fn test_record_append_default_map_missing_fields_uses_projector_field_defaults() {
+        let field_defaults = vec![None, Some(AvroLiteral::String("hi".into()))];
+        let mut rec = make_record_decoder_with_projector_defaults(
+            &[("a", DataType::Int32, false), ("b", DataType::Utf8, false)],
+            field_defaults,
+            vec![],
+            0,
+        );
+        let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
+        map.insert("a".to_string(), AvroLiteral::Int(7));
+        rec.append_default(&AvroLiteral::Map(map)).unwrap();
+        let arr = rec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let a = s
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let b = s
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(a.value(0), 7);
+        assert_eq!(b.value(0), "hi");
+    }
+
+    #[test]
+    fn test_record_append_default_null_uses_projector_field_defaults() {
+        let field_defaults = vec![
+            Some(AvroLiteral::Int(5)),
+            Some(AvroLiteral::String("x".into())),
+        ];
+        let mut rec = make_record_decoder_with_projector_defaults(
+            &[("a", DataType::Int32, false), ("b", DataType::Utf8, false)],
+            field_defaults,
+            vec![],
+            0,
+        );
+        rec.append_default(&AvroLiteral::Null).unwrap();
+        let arr = rec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let a = s
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let b = s
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(a.value(0), 5);
+        assert_eq!(b.value(0), "x");
+    }
+
+    #[test]
+    fn test_record_append_default_missing_fields_without_projector_defaults_yields_type_nulls_or_empties(
+    ) {
+        let fields = vec![("a", DataType::Int32, true), ("b", DataType::Utf8, true)];
+        let mut field_refs: Vec<FieldRef> = Vec::new();
+        let mut encoders: Vec<Decoder> = Vec::new();
+        for (name, dt, nullable) in &fields {
+            field_refs.push(Arc::new(ArrowField::new(*name, dt.clone(), *nullable)));
+        }
+        let enc_a = Decoder::Nullable(
+            Nullability::NullSecond,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY))),
+        );
+        let enc_b = Decoder::Nullable(
+            Nullability::NullSecond,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(Decoder::String(
+                OffsetBufferBuilder::new(DEFAULT_CAPACITY),
+                Vec::with_capacity(DEFAULT_CAPACITY),
+            )),
+        );
+        encoders.push(enc_a);
+        encoders.push(enc_b);
+        let projector = Projector {
+            writer_to_reader: Arc::from(vec![]),
+            skip_decoders: vec![],
+            field_defaults: vec![None, None], // no defaults -> append_null
+            default_injections: Arc::from(Vec::<(usize, AvroLiteral)>::new()),
+        };
+        let mut rec = Decoder::Record(field_refs.into(), encoders, Some(projector));
+        let mut map: IndexMap<String, AvroLiteral> = IndexMap::new();
+        map.insert("a".to_string(), AvroLiteral::Int(9));
+        rec.append_default(&AvroLiteral::Map(map)).unwrap();
+        let arr = rec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let a = s
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let b = s
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(a.is_valid(0));
+        assert_eq!(a.value(0), 9);
+        assert!(b.is_null(0));
+    }
+
+    #[test]
+    fn test_projector_default_injection_when_writer_lacks_fields() {
+        let defaults = vec![None, None];
+        let injections = vec![
+            (0, AvroLiteral::Int(99)),
+            (1, AvroLiteral::String("alice".into())),
+        ];
+        let mut rec = make_record_decoder_with_projector_defaults(
+            &[
+                ("id", DataType::Int32, false),
+                ("name", DataType::Utf8, false),
+            ],
+            defaults,
+            injections,
+            0,
+        );
+        rec.decode(&mut AvroCursor::new(&[])).unwrap();
+        let arr = rec.flush(None).unwrap();
+        let s = arr.as_any().downcast_ref::<StructArray>().unwrap();
+        let id = s
+            .column_by_name("id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let name = s
+            .column_by_name("name")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(id.value(0), 99);
+        assert_eq!(name.value(0), "alice");
     }
 }

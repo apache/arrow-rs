@@ -18,7 +18,7 @@
 //! Module for parsing JSON strings as Variant
 
 use arrow_schema::ArrowError;
-use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
+use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
 use serde_json::{Number, Value};
 
 /// Converts a JSON string to Variant using a [`VariantBuilderExt`], such as
@@ -120,35 +120,13 @@ fn append_json(json: &Value, builder: &mut impl VariantBuilderExt) -> Result<(),
         Value::Object(obj) => {
             let mut obj_builder = builder.try_new_object()?;
             for (key, value) in obj.iter() {
-                let mut field_builder = ObjectFieldBuilder {
-                    key,
-                    builder: &mut obj_builder,
-                };
+                let mut field_builder = ObjectFieldBuilder::new(key, &mut obj_builder);
                 append_json(value, &mut field_builder)?;
             }
             obj_builder.finish();
         }
     };
     Ok(())
-}
-
-struct ObjectFieldBuilder<'o, 'v, 's> {
-    key: &'s str,
-    builder: &'o mut ObjectBuilder<'v>,
-}
-
-impl VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_> {
-    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        self.builder.insert(self.key, value);
-    }
-
-    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
-        self.builder.try_new_list(self.key)
-    }
-
-    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
-        self.builder.try_new_object(self.key)
-    }
 }
 
 #[cfg(test)]
