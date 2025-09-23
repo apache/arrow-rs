@@ -34,7 +34,9 @@ pub mod format;
 
 use crate::codec::AvroFieldBuilder;
 use crate::compression::CompressionCodec;
-use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+use crate::schema::{
+    AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY,
+};
 use crate::writer::encoder::{write_long, RecordEncoder, RecordEncoderBuilder};
 use crate::writer::format::{AvroBinaryFormat, AvroFormat, AvroOcfFormat};
 use arrow_array::RecordBatch;
@@ -48,6 +50,7 @@ pub struct WriterBuilder {
     schema: Schema,
     codec: Option<CompressionCodec>,
     capacity: usize,
+    fingerprint_strategy: Option<FingerprintStrategy>,
 }
 
 impl WriterBuilder {
@@ -57,7 +60,15 @@ impl WriterBuilder {
             schema,
             codec: None,
             capacity: 1024,
+            fingerprint_strategy: None,
         }
+    }
+
+    /// Set the fingerprinting strategy for the stream writer.
+    /// This determines the per-record prefix format.
+    pub fn with_fingerprint_strategy(mut self, strategy: FingerprintStrategy) -> Self {
+        self.fingerprint_strategy = Some(strategy);
+        self
     }
 
     /// Change the compression codec.
@@ -84,6 +95,22 @@ impl WriterBuilder {
             Some(json) => AvroSchema::new(json.clone()),
             None => AvroSchema::try_from(&self.schema)?,
         };
+
+        let maybe_fingerprint = if F::NEEDS_PREFIX {
+            match self.fingerprint_strategy {
+                Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(id)),
+                Some(strategy) => {
+                    Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?)
+                }
+                None => Some(
+                    avro_schema
+                        .fingerprint(FingerprintAlgorithm::from(FingerprintStrategy::Rabin))?,
+                ),
+            }
+        } else {
+            None
+        };
+
         let mut md = self.schema.metadata().clone();
         md.insert(
             SCHEMA_METADATA_KEY.to_string(),
@@ -92,7 +119,9 @@ impl WriterBuilder {
         let schema = Arc::new(Schema::new_with_metadata(self.schema.fields().clone(), md));
         format.start_stream(&mut writer, &schema, self.codec)?;
         let avro_root = AvroFieldBuilder::new(&avro_schema.schema()?).build()?;
-        let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref()).build()?;
+        let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref())
+            .with_fingerprint(maybe_fingerprint)
+            .build()?;
         Ok(Writer {
             writer,
             schema,
@@ -194,7 +223,8 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
     }
 
     fn write_stream(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
-        self.encoder.encode(&mut self.writer, batch)
+        self.encoder.encode(&mut self.writer, batch)?;
+        Ok(())
     }
 }
 
@@ -203,9 +233,9 @@ mod tests {
     use super::*;
     use crate::compression::CompressionCodec;
     use crate::reader::ReaderBuilder;
-    use crate::schema::{AvroSchema, SchemaStore};
+    use crate::schema::{AvroSchema, SchemaStore, CONFLUENT_MAGIC};
     use crate::test_util::arrow_test_data;
-    use arrow_array::{ArrayRef, BinaryArray, Int32Array, RecordBatch};
+    use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, IntervalUnit, Schema};
     use std::fs::File;
     use std::io::{BufReader, Cursor};
@@ -228,6 +258,73 @@ mod tests {
             vec![Arc::new(ids) as ArrayRef, Arc::new(names) as ArrayRef],
         )
         .expect("failed to build test RecordBatch")
+    }
+
+    #[test]
+    fn test_stream_writer_writes_prefix_per_row_rt() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef],
+        )?;
+        let buf: Vec<u8> = Vec::new();
+        let mut writer = AvroStreamWriter::new(buf, schema.clone())?;
+        writer.write(&batch)?;
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new(); // Rabin by default
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _fp = store.register(avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _consumed = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 2);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![10, 20]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_writer_with_id_fingerprint_rt() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+        let schema_id: u32 = 42;
+        let mut writer = WriterBuilder::new(schema.clone())
+            .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id))
+            .build::<_, AvroBinaryFormat>(Vec::new())?;
+        writer.write(&batch)?;
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _ = store.set(Fingerprint::Id(schema_id), avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _ = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 3);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
+        Ok(())
     }
 
     #[test]

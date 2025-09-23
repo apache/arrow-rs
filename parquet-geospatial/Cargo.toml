@@ -16,21 +16,22 @@
 # under the License.
 
 [package]
-name = "gen"
-description = "Code generation for arrow-flight"
+name = "parquet-geospatial"
+# This package is still in development and thus the version does
+# not follow the versions of the rest of the crates in this repo.
 version = "0.1.0"
-edition = { workspace = true }
-rust-version = { workspace = true }
-authors = { workspace = true }
+license = { workspace = true }
+description = "Apache Parquet Geometry and Geography implementation in Rust"
 homepage = { workspace = true }
 repository = { workspace = true }
-license = { workspace = true }
-publish = false
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = { workspace = true }
+keywords = ["arrow", "parquet", "geometry", "geography"]
+readme = "README.md"
+edition = { workspace = true }
+rust-version = { workspace = true }
 
 [dependencies]
-# Pin specific version of the tonic-build dependencies to avoid auto-generated
-# (and checked in) arrow.flight.protocol.rs from changing
-prost-build = { version = "0.14.1", default-features = false }
-tonic-prost-build = { version = "0.14.1", default-features = false }
+
+[lib]
+name = "parquet_geospatial"
+bench = false

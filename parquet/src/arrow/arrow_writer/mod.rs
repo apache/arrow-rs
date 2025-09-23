@@ -408,6 +408,7 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Create a new row group writer and return its column writers.
+    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
     pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         self.flush()?;
         let in_progress = self
@@ -417,6 +418,7 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Append the given column chunks to the file as a new row group.
+    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
     pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
         let mut row_group_writer = self.writer.next_row_group()?;
         for chunk in chunks {
@@ -424,6 +426,15 @@ impl<W: Write + Send> ArrowWriter<W> {
         }
         row_group_writer.close()?;
         Ok(())
+    }
+
+    /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
+    /// This can be useful to provide more control over how files are written.
+    pub fn into_serialized_writer(
+        mut self,
+    ) -> Result<(SerializedFileWriter<W>, ArrowRowGroupWriterFactory)> {
+        self.flush()?;
+        Ok((self.writer, self.row_group_writer_factory))
     }
 }
 
@@ -620,6 +631,9 @@ impl PageWriter for ArrowPageWriter {
 pub struct ArrowLeafColumn(ArrayLevels);
 
 /// Computes the [`ArrowLeafColumn`] for a potentially nested [`ArrayRef`]
+///
+/// This function can be used along with [`get_column_writers`] to encode
+/// individual columns in parallel. See example on [`ArrowColumnWriter`]
 pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
     let levels = calculate_array_levels(array, field)?;
     Ok(levels.into_iter().map(ArrowLeafColumn).collect())
@@ -850,7 +864,8 @@ impl ArrowRowGroupWriter {
     }
 }
 
-struct ArrowRowGroupWriterFactory {
+/// Factory that creates new column writers for each row group in the Parquet file.
+pub struct ArrowRowGroupWriterFactory {
     schema: SchemaDescriptor,
     arrow_schema: SchemaRef,
     props: WriterPropertiesPtr,
@@ -905,9 +920,15 @@ impl ArrowRowGroupWriterFactory {
         let writers = get_column_writers(&self.schema, &self.props, &self.arrow_schema)?;
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
+
+    /// Create column writers for a new row group.
+    pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+        let rg_writer = self.create_row_group_writer(row_group_index)?;
+        Ok(rg_writer.writers)
+    }
 }
 
-/// Returns the [`ArrowColumnWriter`] for a given schema
+/// Returns [`ArrowColumnWriter`]s for each column in a given schema
 pub fn get_column_writers(
     parquet: &SchemaDescriptor,
     props: &WriterPropertiesPtr,
@@ -951,7 +972,7 @@ fn get_column_writers_with_encryptor(
     Ok(writers)
 }
 
-/// Gets [`ArrowColumnWriter`] instances for different data types
+/// Creates [`ArrowColumnWriter`] instances
 struct ArrowColumnWriterFactory {
     #[cfg(feature = "encryption")]
     row_group_index: usize,
@@ -1007,7 +1028,8 @@ impl ArrowColumnWriterFactory {
         Ok(Box::<ArrowPageWriter>::default())
     }
 
-    /// Gets the [`ArrowColumnWriter`] for the given `data_type`
+    /// Gets an [`ArrowColumnWriter`] for the given `data_type`, appending the
+    /// output ColumnDesc to `leaves` and the column writers to `out`
     fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,
@@ -1015,6 +1037,7 @@ impl ArrowColumnWriterFactory {
         leaves: &mut Iter<'_, ColumnDescPtr>,
         out: &mut Vec<ArrowColumnWriter>,
     ) -> Result<()> {
+        // Instantiate writers for normal columns
         let col = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
             let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
@@ -1025,6 +1048,7 @@ impl ArrowColumnWriterFactory {
             })
         };
 
+        // Instantiate writers for byte arrays (e.g. Utf8,  Binary, etc)
         let bytes = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
             let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
@@ -1079,7 +1103,7 @@ impl ArrowColumnWriterFactory {
             }
             _ => return Err(ParquetError::NYI(
                 format!(
-                    "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
+                    "Attempting to write an Arrow type {data_type} to parquet that is not yet implemented"
                 )
             ))
         }
