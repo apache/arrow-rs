@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -92,7 +91,7 @@ use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 ///
 /// [`Schema.fbs`]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
 /// [the physical memory layout of Apache Arrow]: https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataType {
     /// Null type
@@ -482,27 +481,6 @@ pub enum UnionMode {
     Sparse,
     /// Dense union layout
     Dense,
-}
-
-impl fmt::Display for DataType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self {
-            DataType::Struct(fields) => {
-                write!(f, "Struct(")?;
-                if !fields.is_empty() {
-                    let fields_str = fields
-                        .iter()
-                        .map(|f| format!("{} {}", f.name(), f.data_type()))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    write!(f, "{fields_str}")?;
-                }
-                write!(f, ")")?;
-                Ok(())
-            }
-            _ => write!(f, "{self:?}"),
-        }
-    }
 }
 
 /// Parses `str` into a `DataType`.

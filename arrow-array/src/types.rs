@@ -25,7 +25,7 @@ use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
 use arrow_buffer::{i256, Buffer, OffsetBuffer};
 use arrow_data::decimal::{
-    is_validate_decimal256_precision, is_validate_decimal32_precision,
+    format_decimal_str, is_validate_decimal256_precision, is_validate_decimal32_precision,
     is_validate_decimal64_precision, is_validate_decimal_precision, validate_decimal256_precision,
     validate_decimal32_precision, validate_decimal64_precision, validate_decimal_precision,
 };
@@ -1335,7 +1335,11 @@ pub trait DecimalType:
     fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String;
 
     /// Validates that `value` contains no more than `precision` decimal digits
-    fn validate_decimal_precision(value: Self::Native, precision: u8) -> Result<(), ArrowError>;
+    fn validate_decimal_precision(
+        value: Self::Native,
+        precision: u8,
+        scale: i8,
+    ) -> Result<(), ArrowError>;
 
     /// Determines whether `value` contains no more than `precision` decimal digits
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool;
@@ -1398,8 +1402,8 @@ impl DecimalType for Decimal32Type {
         format_decimal_str(&value.to_string(), precision as usize, scale)
     }
 
-    fn validate_decimal_precision(num: i32, precision: u8) -> Result<(), ArrowError> {
-        validate_decimal32_precision(num, precision)
+    fn validate_decimal_precision(num: i32, precision: u8, scale: i8) -> Result<(), ArrowError> {
+        validate_decimal32_precision(num, precision, scale)
     }
 
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
@@ -1432,8 +1436,8 @@ impl DecimalType for Decimal64Type {
         format_decimal_str(&value.to_string(), precision as usize, scale)
     }
 
-    fn validate_decimal_precision(num: i64, precision: u8) -> Result<(), ArrowError> {
-        validate_decimal64_precision(num, precision)
+    fn validate_decimal_precision(num: i64, precision: u8, scale: i8) -> Result<(), ArrowError> {
+        validate_decimal64_precision(num, precision, scale)
     }
 
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
@@ -1466,8 +1470,8 @@ impl DecimalType for Decimal128Type {
         format_decimal_str(&value.to_string(), precision as usize, scale)
     }
 
-    fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
-        validate_decimal_precision(num, precision)
+    fn validate_decimal_precision(num: i128, precision: u8, scale: i8) -> Result<(), ArrowError> {
+        validate_decimal_precision(num, precision, scale)
     }
 
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
@@ -1500,8 +1504,8 @@ impl DecimalType for Decimal256Type {
         format_decimal_str(&value.to_string(), precision as usize, scale)
     }
 
-    fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {
-        validate_decimal256_precision(num, precision)
+    fn validate_decimal_precision(num: i256, precision: u8, scale: i8) -> Result<(), ArrowError> {
+        validate_decimal256_precision(num, precision, scale)
     }
 
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
@@ -1516,29 +1520,6 @@ impl ArrowPrimitiveType for Decimal256Type {
 }
 
 impl primitive::PrimitiveTypeSealed for Decimal256Type {}
-
-fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
-    let (sign, rest) = match value_str.strip_prefix('-') {
-        Some(stripped) => ("-", stripped),
-        None => ("", value_str),
-    };
-    let bound = precision.min(rest.len()) + sign.len();
-    let value_str = &value_str[0..bound];
-
-    if scale == 0 {
-        value_str.to_string()
-    } else if scale < 0 {
-        let padding = value_str.len() + scale.unsigned_abs() as usize;
-        format!("{value_str:0<padding$}")
-    } else if rest.len() > scale as usize {
-        // Decimal separator is in the middle of the string
-        let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
-        format!("{whole}.{decimal}")
-    } else {
-        // String has to be padded
-        format!("{}0.{:0>width$}", sign, rest, width = scale as usize)
-    }
-}
 
 /// Crate private types for Byte Arrays
 ///

@@ -53,7 +53,7 @@ macro_rules! decode_decimal {
 macro_rules! flush_decimal {
     ($builder:expr, $precision:expr, $scale:expr, $nulls:expr, $ArrayTy:ty) => {{
         let (_, vals, _) = $builder.finish().into_parts();
-        let dec = <$ArrayTy>::new(vals, $nulls)
+        let dec = <$ArrayTy>::try_new(vals, $nulls)?
             .with_precision_and_scale(*$precision as u8, $scale.unwrap_or(0) as i8)
             .map_err(|e| ArrowError::ParseError(e.to_string()))?;
         Arc::new(dec) as ArrayRef
@@ -426,6 +426,11 @@ impl Decoder {
                 )
             }
             (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
+            (&Codec::Union(_, _, _), _) => {
+                return Err(ArrowError::NotYetImplemented(
+                    "Union type decoding is not yet supported".to_string(),
+                ))
+            }
         };
         Ok(match data_type.nullability() {
             Some(nullability) => Self::Nullable(
@@ -884,17 +889,17 @@ impl Decoder {
             Self::StringToBytes(offsets, values) | Self::Binary(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
-                Arc::new(BinaryArray::new(offsets, values, nulls))
+                Arc::new(BinaryArray::try_new(offsets, values, nulls)?)
             }
             Self::BytesToString(offsets, values) | Self::String(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values).into();
-                Arc::new(StringArray::new(offsets, values, nulls))
+                Arc::new(StringArray::try_new(offsets, values, nulls)?)
             }
             Self::StringView(offsets, values) => {
                 let offsets = flush_offsets(offsets);
                 let values = flush_values(values);
-                let array = StringArray::new(offsets, values.into(), nulls.clone());
+                let array = StringArray::try_new(offsets, values.into(), nulls.clone())?;
                 let values: Vec<&str> = (0..array.len())
                     .map(|i| {
                         if array.is_valid(i) {
@@ -909,21 +914,21 @@ impl Decoder {
             Self::Array(field, offsets, values) => {
                 let values = values.flush(None)?;
                 let offsets = flush_offsets(offsets);
-                Arc::new(ListArray::new(field.clone(), offsets, values, nulls))
+                Arc::new(ListArray::try_new(field.clone(), offsets, values, nulls)?)
             }
             Self::Record(fields, encodings, _) => {
                 let arrays = encodings
                     .iter_mut()
                     .map(|x| x.flush(None))
                     .collect::<Result<Vec<_>, _>>()?;
-                Arc::new(StructArray::new(fields.clone(), arrays, nulls))
+                Arc::new(StructArray::try_new(fields.clone(), arrays, nulls)?)
             }
             Self::Map(map_field, k_off, m_off, kdata, valdec) => {
                 let moff = flush_offsets(m_off);
                 let koff = flush_offsets(k_off);
                 let kd = flush_values(kdata).into();
                 let val_arr = valdec.flush(None)?;
-                let key_arr = StringArray::new(koff, kd, None);
+                let key_arr = StringArray::try_new(koff, kd, None)?;
                 if key_arr.len() != val_arr.len() {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Map keys length ({}) != map values length ({})",
@@ -949,8 +954,9 @@ impl Decoder {
                     }
                 };
                 let entries_struct =
-                    StructArray::new(entries_fields, vec![Arc::new(key_arr), val_arr], None);
-                let map_arr = MapArray::new(map_field.clone(), moff, entries_struct, nulls, false);
+                    StructArray::try_new(entries_fields, vec![Arc::new(key_arr), val_arr], None)?;
+                let map_arr =
+                    MapArray::try_new(map_field.clone(), moff, entries_struct, nulls, false)?;
                 Arc::new(map_arr)
             }
             Self::Fixed(sz, accum) => {

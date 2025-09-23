@@ -638,7 +638,7 @@ impl ArrowReaderMetadata {
         for (field1, field2) in field_iter {
             if field1.data_type() != field2.data_type() {
                 errors.push(format!(
-                    "data type mismatch for field {}: requested {:?} but found {:?}",
+                    "data type mismatch for field {}: requested {} but found {}",
                     field1.name(),
                     field1.data_type(),
                     field2.data_type()
@@ -2296,7 +2296,7 @@ mod tests {
         let batch = record_reader.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 1);
 
-        let expected_schema = Schema::new(Fields::from(vec![Field::new(
+        let expected_schema = Schema::new(vec![Field::new(
             "my_map",
             ArrowDataType::Map(
                 Arc::new(Field::new(
@@ -2310,7 +2310,7 @@ mod tests {
                 false,
             ),
             true,
-        )]));
+        )]);
         assert_eq!(batch.schema().as_ref(), &expected_schema);
 
         assert_eq!(batch.num_rows(), 1);
@@ -3107,11 +3107,11 @@ mod tests {
 
         let reader = builder.with_projection(mask).build().unwrap();
 
-        let expected_schema = Schema::new(Fields::from(vec![Field::new(
+        let expected_schema = Schema::new(vec![Field::new(
             "group",
             ArrowDataType::Struct(vec![Field::new("leaf", ArrowDataType::Int32, false)].into()),
             true,
-        )]));
+        )]);
 
         let batch = reader.into_iter().next().unwrap().unwrap();
         assert_eq!(batch.schema().as_ref(), &expected_schema);
@@ -3186,7 +3186,7 @@ mod tests {
                     "Parquet argument error: Parquet error: encountered non UTF-8 data";
                 assert!(
                     err.to_string().contains(expected_err),
-                    "data type: {data_type:?}, expected: {expected_err}, got: {err}"
+                    "data type: {data_type}, expected: {expected_err}, got: {err}"
                 );
             }
         }
@@ -3225,7 +3225,7 @@ mod tests {
                     "Parquet argument error: Parquet error: encountered non UTF-8 data";
                 assert!(
                     err.to_string().contains(expected_err),
-                    "data type: {data_type:?}, expected: {expected_err}, got: {err}"
+                    "data type: {data_type}, expected: {expected_err}, got: {err}"
                 );
             }
         }
@@ -3678,8 +3678,8 @@ mod tests {
                 ),
             ])),
             "Arrow: Incompatible supplied Arrow schema: data type mismatch for field nested: \
-            requested Struct([Field { name: \"nested1_valid\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"nested1_invalid\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]) \
-            but found Struct([Field { name: \"nested1_valid\", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"nested1_invalid\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }])",
+            requested Struct(nested1_valid Utf8, nested1_invalid Int32) \
+            but found Struct(nested1_valid Utf8, nested1_invalid Int64)",
         );
     }
 

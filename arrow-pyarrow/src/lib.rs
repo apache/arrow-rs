@@ -95,17 +95,17 @@ pub trait FromPyArrow: Sized {
 /// Create a new PyArrow object from a arrow-rs type.
 pub trait ToPyArrow {
     /// Convert the implemented type into a Python object without consuming it.
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject>;
+    fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
 }
 
 /// Convert an arrow-rs type into a PyArrow object.
 pub trait IntoPyArrow {
     /// Convert the implemented type into a Python object while consuming it.
-    fn into_pyarrow(self, py: Python) -> PyResult<PyObject>;
+    fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
 }
 
 impl<T: ToPyArrow> IntoPyArrow for T {
-    fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
+    fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.to_pyarrow(py)
     }
 }
@@ -172,13 +172,13 @@ impl FromPyArrow for DataType {
 }
 
 impl ToPyArrow for DataType {
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("DataType")?;
         let dtype = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(dtype.into())
+        Ok(dtype)
     }
 }
 
@@ -208,13 +208,13 @@ impl FromPyArrow for Field {
 }
 
 impl ToPyArrow for Field {
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("Field")?;
         let dtype = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(dtype.into())
+        Ok(dtype)
     }
 }
 
@@ -244,13 +244,13 @@ impl FromPyArrow for Schema {
 }
 
 impl ToPyArrow for Schema {
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let c_schema = FFI_ArrowSchema::try_from(self).map_err(to_py_err)?;
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("Schema")?;
         let schema = class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
-        Ok(schema.into())
+        Ok(schema)
     }
 }
 
@@ -303,7 +303,7 @@ impl FromPyArrow for ArrayData {
 }
 
 impl ToPyArrow for ArrayData {
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let array = FFI_ArrowArray::new(self);
         let schema = FFI_ArrowSchema::try_from(self.data_type()).map_err(to_py_err)?;
 
@@ -316,7 +316,7 @@ impl ToPyArrow for ArrayData {
                 addr_of!(schema) as Py_uintptr_t,
             ),
         )?;
-        Ok(array.unbind())
+        Ok(array)
     }
 }
 
@@ -328,12 +328,12 @@ impl<T: FromPyArrow> FromPyArrow for Vec<T> {
 }
 
 impl<T: ToPyArrow> ToPyArrow for Vec<T> {
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let values = self
             .iter()
             .map(|v| v.to_pyarrow(py))
             .collect::<PyResult<Vec<_>>>()?;
-        Ok(PyList::new(py, values)?.unbind().into())
+        Ok(PyList::new(py, values)?.into_any())
     }
 }
 
@@ -412,12 +412,12 @@ impl FromPyArrow for RecordBatch {
 }
 
 impl ToPyArrow for RecordBatch {
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+    fn to_pyarrow<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         // Workaround apache/arrow#37669 by returning RecordBatchIterator
         let reader = RecordBatchIterator::new(vec![Ok(self.clone())], self.schema());
         let reader: Box<dyn RecordBatchReader + Send> = Box::new(reader);
         let py_reader = reader.into_pyarrow(py)?;
-        py_reader.call_method0(py, "read_next_batch")
+        py_reader.call_method0("read_next_batch")
     }
 }
 
@@ -463,7 +463,7 @@ impl FromPyArrow for ArrowArrayStreamReader {
 impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
     // We can't implement `ToPyArrow` for `T: RecordBatchReader + Send` because
     // there is already a blanket implementation for `T: ToPyArrow`.
-    fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
+    fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let mut stream = FFI_ArrowArrayStream::new(self);
 
         let stream_ptr = (&mut stream) as *mut FFI_ArrowArrayStream;
@@ -472,13 +472,13 @@ impl IntoPyArrow for Box<dyn RecordBatchReader + Send> {
         let args = PyTuple::new(py, [stream_ptr as Py_uintptr_t])?;
         let reader = class.call_method1("_import_from_c", args)?;
 
-        Ok(PyObject::from(reader))
+        Ok(reader)
     }
 }
 
 /// Convert a [`ArrowArrayStreamReader`] into a `pyarrow.RecordBatchReader`.
 impl IntoPyArrow for ArrowArrayStreamReader {
-    fn into_pyarrow(self, py: Python) -> PyResult<PyObject> {
+    fn into_pyarrow<'py>(self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let boxed: Box<dyn RecordBatchReader + Send> = Box::new(self);
         boxed.into_pyarrow(py)
     }
@@ -506,10 +506,7 @@ impl<'py, T: IntoPyArrow> IntoPyObject<'py> for PyArrowType<T> {
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, PyErr> {
-        match self.0.into_pyarrow(py) {
-            Ok(obj) => Result::Ok(obj.into_bound(py)),
-            Err(err) => Result::Err(err),
-        }
+        self.0.into_pyarrow(py)
     }
 }
 

@@ -34,6 +34,7 @@ rust-version = { workspace = true }
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
 half = { version = "2.1", default-features = false }
+indexmap = "2.10.0"
 parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
 chrono = { workspace = true }

@@ -42,17 +42,17 @@ pub(crate) fn cast_map_values(
     let key_array = cast_with_options(from.keys(), key_field.data_type(), cast_options)?;
     let value_array = cast_with_options(from.values(), value_field.data_type(), cast_options)?;
 
-    Ok(Arc::new(MapArray::new(
+    Ok(Arc::new(MapArray::try_new(
         entries_field.clone(),
         from.offsets().clone(),
-        StructArray::new(
+        StructArray::try_new(
             Fields::from(vec![key_field, value_field]),
             vec![key_array, value_array],
             from.entries().nulls().cloned(),
-        ),
+        )?,
         from.nulls().cloned(),
         to_ordered,
-    )))
+    )?))
 }
 
 /// Gets the key field from the entries of a map.  For all other types returns None.
