@@ -74,6 +74,9 @@ impl ExtensionType for VariantType {
     }
 }
 
+/// A [`Cow`]-like representation of a [`Variant`] value returned by [`VariantArray::value`], which
+/// may use owned or borrowed value bytes depending on how the underlying variant was shredded. We
+/// cannot "just" use [`Cow`] because of the special lifetime management that [`Variant`] requires.
 pub enum VariantArrayValue<'m, 'v> {
     Borrowed(Variant<'m, 'v>),
     Owned {
@@ -83,15 +86,23 @@ pub enum VariantArrayValue<'m, 'v> {
 }
 
 impl<'m, 'v> VariantArrayValue<'m, 'v> {
+    /// Creates a new instance that borrows from a normal [`Variant`] value.
     pub fn borrowed(value: Variant<'m, 'v>) -> Self {
         Self::Borrowed(value)
     }
+
+    /// Creates a new instance that wraps owned bytes that can be converted to a [`Variant`] value.
     pub fn owned(metadata_bytes: &'m [u8], value_bytes: Vec<u8>) -> Self {
         Self::Owned {
             metadata: VariantMetadata::new(metadata_bytes),
             value_bytes,
         }
     }
+
+    /// Consumes this variant value, passing the result to a `visitor` function.
+    ///
+    /// The visitor idiom is helpful because a variant value based on owned bytes cannot outlive
+    /// self.
     pub fn consume<R>(self, visitor: impl FnOnce(Variant<'_, '_>) -> R) -> R {
         match self {
             VariantArrayValue::Borrowed(v) => visitor(v),
@@ -101,6 +112,7 @@ impl<'m, 'v> VariantArrayValue<'m, 'v> {
             } => visitor(Variant::new_with_metadata(metadata, &value_bytes)),
         }
     }
+
     // internal helper for when we don't want to pay the extra clone
     fn as_variant_cow(&self) -> Cow<'_, Variant<'m, '_>> {
         match self {
@@ -111,24 +123,44 @@ impl<'m, 'v> VariantArrayValue<'m, 'v> {
             } => Cow::Owned(Variant::new_with_metadata(metadata.clone(), value_bytes)),
         }
     }
+
+    /// Returns a [`Variant`] instance for this value.
     pub fn as_variant(&self) -> Variant<'m, '_> {
         self.as_variant_cow().into_owned()
     }
+
+    /// Returns the variant metadata that backs this value.
     pub fn metadata(&self) -> &VariantMetadata<'m> {
         match self {
             VariantArrayValue::Borrowed(v) => v.metadata(),
             VariantArrayValue::Owned { metadata, .. } => metadata,
         }
     }
+
+    /// Extracts the underlying [`VariantObject`], if this is a variant object.
+    ///
+    /// See also [`Variant::as_object`].
     pub fn as_object(&self) -> Option<VariantObject<'m, '_>> {
         self.as_variant_cow().as_object().cloned()
     }
+
+    /// Extracts the underlying [`VariantList`], if this is a variant array.
+    ///
+    /// See also [`Variant::as_list`].
     pub fn as_list(&self) -> Option<VariantList<'m, '_>> {
         self.as_variant_cow().as_list().cloned()
     }
+
+    /// Extracts the value of the named variant object field, if this is a variant object.
+    ///
+    /// See also [`Variant::get_object_field`].
     pub fn get_object_field<'s>(&'s self, field_name: &str) -> Option<Variant<'m, 's>> {
         self.as_variant_cow().get_object_field(field_name)
     }
+
+    /// Extracts the value of the variant array element at `index`, if this is a variant object.
+    ///
+    /// See also [`Variant::get_list_element`].
     pub fn get_list_element(&self, index: usize) -> Option<Variant<'m, '_>> {
         self.as_variant_cow().get_list_element(index)
     }
@@ -140,6 +172,8 @@ impl<'m, 'v> From<Variant<'m, 'v>> for VariantArrayValue<'m, 'v> {
     }
 }
 
+// By providing PartialEq for all three combinations, we avoid changing a lot of unit test code that
+// relies on comparisons.
 impl PartialEq for VariantArrayValue<'_, '_> {
     fn eq(&self, other: &VariantArrayValue<'_, '_>) -> bool {
         self.as_variant_cow().as_ref() == other.as_variant_cow().as_ref()
@@ -158,9 +192,10 @@ impl PartialEq<VariantArrayValue<'_, '_>> for Variant<'_, '_> {
     }
 }
 
+// Make it transparent -- looks just like the underlying value it proxies
 impl std::fmt::Debug for VariantArrayValue<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_variant_cow().fmt(f)
+        self.as_variant_cow().as_ref().fmt(f)
     }
 }
 
