@@ -240,8 +240,10 @@ impl IPCBufferDecoder {
     }
 
     unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
-        self.decoder = self.decoder.with_skip_validation(skip_validation);
-        self
+        unsafe {
+            self.decoder = self.decoder.with_skip_validation(skip_validation);
+            self
+        }
     }
 
     fn num_batches(&self) -> usize {

@@ -378,7 +378,7 @@ async fn save_uploaded_chunks(
             ipc::MessageHeader::Schema => {
                 return Err(Status::internal(
                     "Not expecting a schema when messages are read",
-                ))
+                ));
             }
             ipc::MessageHeader::RecordBatch => {
                 send_app_metadata(&mut response_tx, &data.app_metadata).await?;

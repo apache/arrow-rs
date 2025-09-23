@@ -34,7 +34,7 @@ use super::{
     SqlInfo, TicketStatementQuery,
 };
 use crate::{
-    flight_service_server::FlightService, gen::PollInfo, Action, ActionType, Criteria, Empty,
+    flight_service_server::FlightService, r#gen::PollInfo, Action, ActionType, Criteria, Empty,
     FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult,
     SchemaResult, Ticket,
 };
@@ -628,7 +628,7 @@ where
                 self.get_flight_info_catalogs(token, request).await
             }
             Command::CommandGetDbSchemas(token) => {
-                return self.get_flight_info_schemas(token, request).await
+                return self.get_flight_info_schemas(token, request).await;
             }
             Command::CommandGetTables(token) => self.get_flight_info_tables(token, request).await,
             Command::CommandGetTableTypes(token) => {
@@ -879,7 +879,7 @@ where
             let stmt = self
                 .do_action_create_prepared_statement(cmd, request)
                 .await?;
-            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -921,7 +921,7 @@ where
                 Status::invalid_argument("Unable to unpack ActionBeginTransactionRequest.")
             })?;
             let stmt = self.do_action_begin_transaction(cmd, request).await?;
-            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -946,7 +946,7 @@ where
                     Status::invalid_argument("Unable to unpack ActionBeginSavepointRequest.")
                 })?;
             let stmt = self.do_action_begin_savepoint(cmd, request).await?;
-            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));
@@ -971,7 +971,7 @@ where
                     Status::invalid_argument("Unable to unpack ActionCancelQueryRequest.")
                 })?;
             let stmt = self.do_action_cancel_query(cmd, request).await?;
-            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+            let output = futures::stream::iter(vec![Ok(super::super::r#gen::Result {
                 body: stmt.as_any().encode_to_vec().into(),
             })]);
             return Ok(Response::new(Box::pin(output)));

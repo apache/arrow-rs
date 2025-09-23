@@ -283,28 +283,30 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &T::Native {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
+        unsafe {
+            let end = *self.value_offsets().get_unchecked(i + 1);
+            let start = *self.value_offsets().get_unchecked(i);
 
-        // Soundness
-        // pointer alignment & location is ensured by RawPtrBox
-        // buffer bounds/offset is ensured by the value_offset invariants
+            // Soundness
+            // pointer alignment & location is ensured by RawPtrBox
+            // buffer bounds/offset is ensured by the value_offset invariants
 
-        // Safety of `to_isize().unwrap()`
-        // `start` and `end` are &OffsetSize, which is a generic type that implements the
-        // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
-        // both of which should cleanly cast to isize on an architecture that supports
-        // 32/64-bit offsets
-        let b = std::slice::from_raw_parts(
-            self.value_data
-                .as_ptr()
-                .offset(start.to_isize().unwrap_unchecked()),
-            (end - start).to_usize().unwrap_unchecked(),
-        );
+            // Safety of `to_isize().unwrap()`
+            // `start` and `end` are &OffsetSize, which is a generic type that implements the
+            // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
+            // both of which should cleanly cast to isize on an architecture that supports
+            // 32/64-bit offsets
+            let b = std::slice::from_raw_parts(
+                self.value_data
+                    .as_ptr()
+                    .offset(start.to_isize().unwrap_unchecked()),
+                (end - start).to_usize().unwrap_unchecked(),
+            );
 
-        // SAFETY:
-        // ArrayData is valid
-        T::Native::from_bytes_unchecked(b)
+            // SAFETY:
+            // ArrayData is valid
+            T::Native::from_bytes_unchecked(b)
+        }
     }
 
     /// Returns the element at index `i`
@@ -509,7 +511,7 @@ impl<'a, T: ByteArrayType> ArrayAccessor for &'a GenericByteArray<T> {
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        GenericByteArray::value_unchecked(self, index)
+        unsafe { GenericByteArray::value_unchecked(self, index) }
     }
 }
 
@@ -603,14 +605,23 @@ mod tests {
         let nulls = NullBuffer::new_null(3);
         let err =
             StringArray::try_new(offsets.clone(), data.clone(), Some(nulls.clone())).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for StringArray, expected 2 got 3");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for StringArray, expected 2 got 3"
+        );
 
         let err = BinaryArray::try_new(offsets.clone(), data.clone(), Some(nulls)).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for BinaryArray, expected 2 got 3");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for BinaryArray, expected 2 got 3"
+        );
 
         let non_utf8_data = Buffer::from_slice_ref(b"he\xFFloworld");
         let err = StringArray::try_new(offsets.clone(), non_utf8_data.clone(), None).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 2");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 2"
+        );
 
         BinaryArray::new(offsets, non_utf8_data, None);
 

@@ -2250,9 +2250,9 @@ mod tests {
             false,
         )]));
 
-        let gen = IpcDataGenerator {};
+        let r#gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
-        gen.schema_to_bytes_with_dictionary_tracker(
+        r#gen.schema_to_bytes_with_dictionary_tracker(
             &schema,
             &mut dict_tracker,
             &IpcWriteOptions::default(),
@@ -2260,7 +2260,8 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
-        gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
+        r#gen
+            .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
         // The encoder will assign dict IDs itself to ensure uniqueness and ignore the dict ID in the schema
@@ -2293,9 +2294,9 @@ mod tests {
             false,
         )]));
 
-        let gen = IpcDataGenerator {};
+        let r#gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
-        gen.schema_to_bytes_with_dictionary_tracker(
+        r#gen.schema_to_bytes_with_dictionary_tracker(
             &schema,
             &mut dict_tracker,
             &IpcWriteOptions::default(),
@@ -2303,7 +2304,8 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
-        gen.encoded_batch(&batch, &mut dict_tracker, &Default::default())
+        r#gen
+            .encoded_batch(&batch, &mut dict_tracker, &Default::default())
             .unwrap();
 
         assert!(dict_tracker.written.contains_key(&0));

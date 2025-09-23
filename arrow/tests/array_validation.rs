@@ -1097,5 +1097,8 @@ fn test_sliced_array_child() {
     };
 
     let err = data.validate_values().unwrap_err();
-    assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    assert_eq!(
+        err.to_string(),
+        "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2"
+    );
 }

@@ -68,21 +68,23 @@ unsafe impl Sync for FFI_ArrowArray {}
 
 // callback used to drop [FFI_ArrowArray] when it is exported
 unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
-    if array.is_null() {
-        return;
-    }
-    let array = &mut *array;
+    unsafe {
+        if array.is_null() {
+            return;
+        }
+        let array = &mut *array;
 
-    // take ownership of `private_data`, therefore dropping it`
-    let private = Box::from_raw(array.private_data as *mut ArrayPrivateData);
-    for child in private.children.iter() {
-        let _ = Box::from_raw(*child);
-    }
-    if !private.dictionary.is_null() {
-        let _ = Box::from_raw(private.dictionary);
-    }
+        // take ownership of `private_data`, therefore dropping it`
+        let private = Box::from_raw(array.private_data as *mut ArrayPrivateData);
+        for child in private.children.iter() {
+            let _ = Box::from_raw(*child);
+        }
+        if !private.dictionary.is_null() {
+            let _ = Box::from_raw(private.dictionary);
+        }
 
-    array.release = None;
+        array.release = None;
+    }
 }
 
 /// Aligns the provided `nulls` to the provided `data_offset`
@@ -222,7 +224,7 @@ impl FFI_ArrowArray {
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
     pub unsafe fn from_raw(array: *mut FFI_ArrowArray) -> Self {
-        std::ptr::replace(array, Self::empty())
+        unsafe { std::ptr::replace(array, Self::empty()) }
     }
 
     /// create an empty `FFI_ArrowArray`, which can be used to import data into

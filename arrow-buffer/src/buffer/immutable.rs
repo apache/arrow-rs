@@ -172,7 +172,7 @@ impl Buffer {
         len: usize,
         owner: Arc<dyn Allocation>,
     ) -> Self {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len))
+        unsafe { Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len)) }
     }
 
     /// Auxiliary method to create a new Buffer
@@ -181,12 +181,14 @@ impl Buffer {
         len: usize,
         deallocation: Deallocation,
     ) -> Self {
-        let bytes = Bytes::new(ptr, len, deallocation);
-        let ptr = bytes.as_ptr();
-        Buffer {
-            ptr,
-            data: Arc::new(bytes),
-            length: len,
+        unsafe {
+            let bytes = Bytes::new(ptr, len, deallocation);
+            let ptr = bytes.as_ptr();
+            Buffer {
+                ptr,
+                data: Arc::new(bytes),
+                length: len,
+            }
         }
     }
 
@@ -561,7 +563,7 @@ impl Buffer {
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
     ) -> Self {
-        MutableBuffer::from_trusted_len_iter(iterator).into()
+        unsafe { MutableBuffer::from_trusted_len_iter(iterator).into() }
     }
 
     /// Creates a [`Buffer`] from an [`Iterator`] with a trusted (upper) length or errors
@@ -578,7 +580,7 @@ impl Buffer {
     >(
         iterator: I,
     ) -> Result<Self, E> {
-        Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into())
+        unsafe { Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into()) }
     }
 }
 

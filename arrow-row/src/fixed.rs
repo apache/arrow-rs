@@ -438,25 +438,27 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
     data_type: DataType,
     options: SortOptions,
 ) -> ArrayData {
-    let len = rows.len();
+    unsafe {
+        let len = rows.len();
 
-    let mut values = BufferBuilder::<T>::new(len);
-    let (null_count, nulls) = decode_nulls(rows);
+        let mut values = BufferBuilder::<T>::new(len);
+        let (null_count, nulls) = decode_nulls(rows);
 
-    for row in rows {
-        let i = split_off(row, T::ENCODED_LEN);
-        let value = T::Encoded::from_slice(&i[1..], options.descending);
-        values.append(T::decode(value));
+        for row in rows {
+            let i = split_off(row, T::ENCODED_LEN);
+            let value = T::Encoded::from_slice(&i[1..], options.descending);
+            values.append(T::decode(value));
+        }
+
+        let builder = ArrayDataBuilder::new(data_type)
+            .len(len)
+            .null_count(null_count)
+            .add_buffer(values.finish())
+            .null_bit_buffer(Some(nulls));
+
+        // SAFETY: Buffers correct length
+        builder.build_unchecked()
     }
-
-    let builder = ArrayDataBuilder::new(data_type)
-        .len(len)
-        .null_count(null_count)
-        .add_buffer(values.finish())
-        .null_bit_buffer(Some(nulls));
-
-    // SAFETY: Buffers correct length
-    builder.build_unchecked()
 }
 
 /// Decodes a `PrimitiveArray` from rows

@@ -458,11 +458,13 @@ impl MutableBuffer {
     /// Caller must ensure that the capacity()-len()>=`size_of<T>`()
     #[inline]
     pub unsafe fn push_unchecked<T: ToByteSlice>(&mut self, item: T) {
-        let additional = std::mem::size_of::<T>();
-        let src = item.to_byte_slice().as_ptr();
-        let dst = self.data.as_ptr().add(self.len);
-        std::ptr::copy_nonoverlapping(src, dst, additional);
-        self.len += additional;
+        unsafe {
+            let additional = std::mem::size_of::<T>();
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
+            self.len += additional;
+        }
     }
 
     /// Extends the buffer by `additional` bytes equal to `0u8`, incrementing its capacity if needed.
@@ -629,27 +631,29 @@ impl MutableBuffer {
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
     ) -> Self {
-        let item_size = std::mem::size_of::<T>();
-        let (_, upper) = iterator.size_hint();
-        let upper = upper.expect("from_trusted_len_iter requires an upper limit");
-        let len = upper * item_size;
+        unsafe {
+            let item_size = std::mem::size_of::<T>();
+            let (_, upper) = iterator.size_hint();
+            let upper = upper.expect("from_trusted_len_iter requires an upper limit");
+            let len = upper * item_size;
 
-        let mut buffer = MutableBuffer::new(len);
+            let mut buffer = MutableBuffer::new(len);
 
-        let mut dst = buffer.data.as_ptr();
-        for item in iterator {
-            // note how there is no reserve here (compared with `extend_from_iter`)
-            let src = item.to_byte_slice().as_ptr();
-            std::ptr::copy_nonoverlapping(src, dst, item_size);
-            dst = dst.add(item_size);
+            let mut dst = buffer.data.as_ptr();
+            for item in iterator {
+                // note how there is no reserve here (compared with `extend_from_iter`)
+                let src = item.to_byte_slice().as_ptr();
+                std::ptr::copy_nonoverlapping(src, dst, item_size);
+                dst = dst.add(item_size);
+            }
+            assert_eq!(
+                dst.offset_from(buffer.data.as_ptr()) as usize,
+                len,
+                "Trusted iterator length was not accurately reported"
+            );
+            buffer.len = len;
+            buffer
         }
-        assert_eq!(
-            dst.offset_from(buffer.data.as_ptr()) as usize,
-            len,
-            "Trusted iterator length was not accurately reported"
-        );
-        buffer.len = len;
-        buffer
     }
 
     /// Creates a [`MutableBuffer`] from a boolean [`Iterator`] with a trusted (upper) length.
@@ -691,33 +695,37 @@ impl MutableBuffer {
     >(
         iterator: I,
     ) -> Result<Self, E> {
-        let item_size = std::mem::size_of::<T>();
-        let (_, upper) = iterator.size_hint();
-        let upper = upper.expect("try_from_trusted_len_iter requires an upper limit");
-        let len = upper * item_size;
+        unsafe {
+            let item_size = std::mem::size_of::<T>();
+            let (_, upper) = iterator.size_hint();
+            let upper = upper.expect("try_from_trusted_len_iter requires an upper limit");
+            let len = upper * item_size;
 
-        let mut buffer = MutableBuffer::new(len);
+            let mut buffer = MutableBuffer::new(len);
 
-        let mut dst = buffer.data.as_ptr();
-        for item in iterator {
-            let item = item?;
-            // note how there is no reserve here (compared with `extend_from_iter`)
-            let src = item.to_byte_slice().as_ptr();
-            std::ptr::copy_nonoverlapping(src, dst, item_size);
-            dst = dst.add(item_size);
+            let mut dst = buffer.data.as_ptr();
+            for item in iterator {
+                let item = item?;
+                // note how there is no reserve here (compared with `extend_from_iter`)
+                let src = item.to_byte_slice().as_ptr();
+                std::ptr::copy_nonoverlapping(src, dst, item_size);
+                dst = dst.add(item_size);
+            }
+            // try_from_trusted_len_iter is instantiated a lot, so we extract part of it into a less
+            // generic method to reduce compile time
+            unsafe fn finalize_buffer(dst: *mut u8, buffer: &mut MutableBuffer, len: usize) {
+                unsafe {
+                    assert_eq!(
+                        dst.offset_from(buffer.data.as_ptr()) as usize,
+                        len,
+                        "Trusted iterator length was not accurately reported"
+                    );
+                    buffer.len = len;
+                }
+            }
+            finalize_buffer(dst, &mut buffer, len);
+            Ok(buffer)
         }
-        // try_from_trusted_len_iter is instantiated a lot, so we extract part of it into a less
-        // generic method to reduce compile time
-        unsafe fn finalize_buffer(dst: *mut u8, buffer: &mut MutableBuffer, len: usize) {
-            assert_eq!(
-                dst.offset_from(buffer.data.as_ptr()) as usize,
-                len,
-                "Trusted iterator length was not accurately reported"
-            );
-            buffer.len = len;
-        }
-        finalize_buffer(dst, &mut buffer, len);
-        Ok(buffer)
     }
 }
 

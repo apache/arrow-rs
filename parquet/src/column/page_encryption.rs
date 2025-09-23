@@ -103,7 +103,7 @@ impl PageEncryptor {
                 return Err(general_err!(
                     "Unsupported page type for page header encryption: {:?}",
                     page_header.type_
-                ))
+                ));
             }
         };
         let aad = create_module_aad(

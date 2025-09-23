@@ -607,7 +607,7 @@ mod lz4_raw_codec {
                 None => {
                     return Err(ParquetError::General(
                         "LZ4RawCodec unsupported without uncompress_size".into(),
-                    ))
+                    ));
                 }
             };
             output_buf.resize(offset + required_len, 0);
@@ -746,7 +746,7 @@ mod lz4_hadoop_codec {
                 None => {
                     return Err(ParquetError::General(
                         "LZ4HadoopCodec unsupported without uncompress_size".into(),
-                    ))
+                    ));
                 }
             };
             output_buf.resize(output_len + required_len, 0);

@@ -345,20 +345,22 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
     options: SortOptions,
     validate_utf8: bool,
 ) -> GenericStringArray<I> {
-    let decoded = decode_binary::<I>(rows, options);
+    unsafe {
+        let decoded = decode_binary::<I>(rows, options);
 
-    if validate_utf8 {
-        return GenericStringArray::from(decoded);
+        if validate_utf8 {
+            return GenericStringArray::from(decoded);
+        }
+
+        let builder = decoded
+            .into_data()
+            .into_builder()
+            .data_type(GenericStringArray::<I>::DATA_TYPE);
+
+        // SAFETY:
+        // Row data must have come from a valid UTF-8 array
+        GenericStringArray::from(builder.build_unchecked())
     }
-
-    let builder = decoded
-        .into_data()
-        .into_builder()
-        .data_type(GenericStringArray::<I>::DATA_TYPE);
-
-    // SAFETY:
-    // Row data must have come from a valid UTF-8 array
-    GenericStringArray::from(builder.build_unchecked())
 }
 
 /// Decodes a string view array from `rows` with the provided `options`
@@ -371,6 +373,8 @@ pub unsafe fn decode_string_view(
     options: SortOptions,
     validate_utf8: bool,
 ) -> StringViewArray {
-    let view = decode_binary_view_inner(rows, options, validate_utf8);
-    view.to_string_view_unchecked()
+    unsafe {
+        let view = decode_binary_view_inner(rows, options, validate_utf8);
+        view.to_string_view_unchecked()
+    }
 }

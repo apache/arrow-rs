@@ -59,7 +59,7 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid physical type for fixed length byte array reader - {}",
                 t
-            ))
+            ));
         }
     };
     match &data_type {
@@ -117,7 +117,7 @@ pub fn make_fixed_len_byte_array_reader(
             return Err(general_err!(
                 "invalid data type for fixed length byte array reader - {}",
                 data_type
-            ))
+            ));
         }
     }
 
@@ -394,7 +394,7 @@ impl ColumnValueDecoder for ValueDecoder {
                 return Err(general_err!(
                     "unsupported encoding for fixed length byte array: {}",
                     encoding
-                ))
+                ));
             }
         });
         Ok(())

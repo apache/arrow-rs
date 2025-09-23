@@ -18,7 +18,7 @@
 use crate::{
     decode::FlightRecordBatchStream,
     flight_service_client::FlightServiceClient,
-    gen::{CancelFlightInfoRequest, CancelFlightInfoResult, RenewFlightEndpointRequest},
+    r#gen::{CancelFlightInfoRequest, CancelFlightInfoResult, RenewFlightEndpointRequest},
     trailers::extract_lazy_trailers,
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, PollInfo, PutResult, Ticket,

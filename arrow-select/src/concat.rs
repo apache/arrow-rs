@@ -549,7 +549,10 @@ mod tests {
             &PrimitiveArray::<Int32Type>::from(vec![Some(-1), Some(2), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32).");
+        assert_eq!(
+            re.unwrap_err().to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32)."
+        );
     }
 
     #[test]
@@ -572,7 +575,10 @@ mod tests {
             &PrimitiveArray::<Float32Type>::from(vec![Some(1.0), Some(2.0), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32).");
+        assert_eq!(
+            re.unwrap_err().to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32)."
+        );
     }
 
     #[test]
@@ -596,7 +602,10 @@ mod tests {
             &PrimitiveArray::<Float64Type>::from(vec![Some(1.0), Some(2.0), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).");
+        assert_eq!(
+            re.unwrap_err().to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...)."
+        );
     }
 
     #[test]
@@ -622,7 +631,10 @@ mod tests {
             &BooleanArray::from(vec![Some(true), Some(false), None]),
         ]);
 
-        assert_eq!(re.unwrap_err().to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...).");
+        assert_eq!(
+            re.unwrap_err().to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int64, Utf8, Int32, Int8, Int16, UInt8, UInt16, UInt32, UInt64, Float32, ...)."
+        );
     }
 
     #[test]
@@ -1316,7 +1328,10 @@ mod tests {
         .unwrap();
 
         let error = concat_batches(&schema1, [&batch1, &batch2]).unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Utf8).");
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: It is not possible to concatenate arrays of different data types (Int32, Utf8)."
+        );
     }
 
     #[test]
@@ -1487,7 +1502,6 @@ mod tests {
         K: ArrowDictionaryKeyType,
         V: Sync + Send + 'static,
         &'a V: ArrayAccessor + IntoIterator,
-
         <&'a V as ArrayAccessor>::Item: Default + Clone + PartialEq + Debug + Ord,
         <&'a V as IntoIterator>::Item: Clone + PartialEq + Debug + Ord,
     {

@@ -260,12 +260,12 @@ impl StreamDecoder {
                         t => {
                             return Err(ArrowError::IpcError(format!(
                                 "Message type unsupported by StreamDecoder: {t:?}"
-                            )))
+                            )));
                         }
                     }
                 }
                 DecoderState::Finished => {
-                    return Err(ArrowError::IpcError("Unexpected EOS".to_string()))
+                    return Err(ArrowError::IpcError("Unexpected EOS".to_string()));
                 }
             }
         }

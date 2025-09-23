@@ -322,7 +322,10 @@ mod tests {
 
         // `multiply` overflows on this case.
         let err = mul(&a, &b).unwrap_err();
-        assert_eq!(err.to_string(), "Arithmetic overflow: Overflow happened on: 123456789000000000000000000 * 10000000000000000000");
+        assert_eq!(
+            err.to_string(),
+            "Arithmetic overflow: Overflow happened on: 123456789000000000000000000 * 10000000000000000000"
+        );
 
         // Avoid overflow by reducing the scale.
         let result = multiply_fixed_point(&a, &b, 28).unwrap();

@@ -43,14 +43,14 @@ impl MapArrayDecoder {
             DataType::Map(_, true) => {
                 return Err(ArrowError::NotYetImplemented(
                     "Decoding MapArray with sorted fields".to_string(),
-                ))
+                ));
             }
             DataType::Map(f, _) => match f.data_type() {
                 DataType::Struct(fields) if fields.len() == 2 => fields,
                 d => {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "MapArray must contain struct with two fields, got {d}"
-                    )))
+                    )));
                 }
             },
             _ => unreachable!(),

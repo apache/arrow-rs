@@ -143,7 +143,7 @@ impl OffsetSizeBytes {
             _ => {
                 return Err(ArrowError::InvalidArgumentError(
                     "offset_size_minus_one must be 0–3".to_string(),
-                ))
+                ));
             }
         };
         Ok(result)

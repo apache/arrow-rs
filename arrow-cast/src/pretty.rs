@@ -60,7 +60,7 @@ use crate::display::{ArrayFormatter, FormatOptions};
 /// | 5 | e |
 /// +---+---+"#);
 /// ```
-pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowError> {
+pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display + use<>, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
     pretty_format_batches_with_options(results, &options)
 }
@@ -92,7 +92,7 @@ pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display, Ar
 pub fn pretty_format_batches_with_schema(
     schema: SchemaRef,
     results: &[RecordBatch],
-) -> Result<impl Display, ArrowError> {
+) -> Result<impl Display + use<>, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
     create_table(Some(schema), results, &options)
 }
@@ -130,7 +130,7 @@ pub fn pretty_format_batches_with_schema(
 pub fn pretty_format_batches_with_options(
     results: &[RecordBatch],
     options: &FormatOptions,
-) -> Result<impl Display, ArrowError> {
+) -> Result<impl Display + use<>, ArrowError> {
     create_table(None, results, options)
 }
 
@@ -142,7 +142,7 @@ pub fn pretty_format_batches_with_options(
 pub fn pretty_format_columns(
     col_name: &str,
     results: &[ArrayRef],
-) -> Result<impl Display, ArrowError> {
+) -> Result<impl Display + use<>, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
     pretty_format_columns_with_options(col_name, results, &options)
 }
@@ -154,7 +154,7 @@ pub fn pretty_format_columns_with_options(
     col_name: &str,
     results: &[ArrayRef],
     options: &FormatOptions,
-) -> Result<impl Display, ArrowError> {
+) -> Result<impl Display + use<>, ArrowError> {
     create_column(col_name, results, options)
 }
 
