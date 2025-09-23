@@ -1119,7 +1119,7 @@ impl DispatchLookupTable {
         for map in promotion_map {
             match *map {
                 Some((idx, promo)) => {
-                    debug_assert!(idx <= i8::MAX as usize);
+                    let idx: i8 = idx.try_into().map_err(|e| ...)?;
                     to_reader.push(idx as i8);
                     promotion.push(promo);
                 }
