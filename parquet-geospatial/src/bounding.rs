@@ -102,35 +102,25 @@ impl Bounder {
     }
 
     pub fn update(&mut self, geom: &impl GeometryTrait<T = f64>) -> Result<(), ArrowError> {
-        // TODO: geometry type
-        update_dimension_bounds(geom, "x", &mut |x| self.update_x(x))?;
-        update_dimension_bounds(geom, "y", &mut |y| self.update_y(y))?;
-        update_dimension_bounds(geom, "z", &mut |z| self.update_z(z))?;
-        update_dimension_bounds(geom, "m", &mut |m| self.update_m(m))?;
+        let geometry_type = geometry_type(geom)?;
+        self.geometry_types.insert(geometry_type);
+
+        visit_intervals(geom, 'x', &mut |x| self.update_x(&x))?;
+        visit_intervals(geom, 'y', &mut |y| self.y.update_interval(&y))?;
+        visit_intervals(geom, 'z', &mut |z| self.z.update_interval(&z))?;
+        visit_intervals(geom, 'm', &mut |m| self.m.update_interval(&m))?;
+
         Ok(())
     }
 
-    pub fn update_x(&mut self, x: impl Into<Interval>) {
-        let x: Interval = x.into();
+    fn update_x(&mut self, x: &Interval) {
         if x.hi() < self.wraparound_hint.mid() {
-            self.x_left.update_interval(&x);
+            self.x_left.update_interval(x);
         } else if x.lo() > self.wraparound_hint.mid() {
-            self.x_right.update_interval(&x);
+            self.x_right.update_interval(x);
         } else {
-            self.x_mid.update_interval(&x);
+            self.x_mid.update_interval(x);
         }
-    }
-
-    pub fn update_y(&mut self, y: impl Into<Interval>) {
-        self.y.update_interval(&y.into());
-    }
-
-    pub fn update_z(&mut self, z: impl Into<Interval>) {
-        self.z.update_interval(&z.into());
-    }
-
-    pub fn update_m(&mut self, m: impl Into<Interval>) {
-        self.m.update_interval(&m.into());
     }
 
     pub fn update_geometry_types(&mut self, geometry_type: i32) {
@@ -138,9 +128,9 @@ impl Bounder {
     }
 }
 
-fn update_dimension_bounds(
+fn visit_intervals(
     geom: &impl GeometryTrait<T = f64>,
-    target: &str,
+    target: char,
     updater: &mut impl FnMut(Interval),
 ) -> Result<(), ArrowError> {
     let n = if let Some(n) = dimension_index(geom.dim(), target) {
@@ -152,32 +142,32 @@ fn update_dimension_bounds(
     match geom.as_type() {
         GeometryType::Point(pt) => {
             if let Some(coord) = PointTrait::coord(pt) {
-                update_coord(updater, coord, n);
+                visit_coord(updater, coord, n);
             }
         }
         GeometryType::LineString(ls) => {
-            update_sequence(updater, ls.coords(), n);
+            visit_sequence(updater, ls.coords(), n);
         }
         GeometryType::Polygon(pl) => {
             if let Some(exterior) = pl.exterior() {
-                update_sequence(&mut *updater, exterior.coords(), n);
+                visit_sequence(&mut *updater, exterior.coords(), n);
             }
 
             for interior in pl.interiors() {
-                update_sequence(&mut *updater, interior.coords(), n);
+                visit_sequence(&mut *updater, interior.coords(), n);
             }
         }
         GeometryType::MultiPoint(multi_pt) => {
-            update_collection(updater, multi_pt.points(), target)?;
+            visit_collection(updater, multi_pt.points(), target)?;
         }
         GeometryType::MultiLineString(multi_ls) => {
-            update_collection(updater, multi_ls.line_strings(), target)?;
+            visit_collection(updater, multi_ls.line_strings(), target)?;
         }
         GeometryType::MultiPolygon(multi_pl) => {
-            update_collection(updater, multi_pl.polygons(), target)?;
+            visit_collection(updater, multi_pl.polygons(), target)?;
         }
         GeometryType::GeometryCollection(collection) => {
-            update_collection(updater, collection.geometries(), target)?;
+            visit_collection(updater, collection.geometries(), target)?;
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(
@@ -189,12 +179,12 @@ fn update_dimension_bounds(
     Ok(())
 }
 
-fn update_coord(updater: &mut impl FnMut(Interval), coord: impl CoordTrait<T = f64>, n: usize) {
+fn visit_coord(updater: &mut impl FnMut(Interval), coord: impl CoordTrait<T = f64>, n: usize) {
     let val = unsafe { coord.nth_unchecked(n) };
     updater((val, val).into());
 }
 
-fn update_sequence(
+fn visit_sequence(
     updater: &mut impl FnMut(Interval),
     coords: impl IntoIterator<Item = impl CoordTrait<T = f64>>,
     n: usize,
@@ -207,30 +197,61 @@ fn update_sequence(
     updater(interval);
 }
 
-fn update_collection(
+fn visit_collection(
     updater: &mut impl FnMut(Interval),
     collection: impl IntoIterator<Item = impl GeometryTrait<T = f64>>,
-    target: &str,
+    target: char,
 ) -> Result<(), ArrowError> {
     for geom in collection {
-        update_dimension_bounds(&geom, target, updater)?;
+        visit_intervals(&geom, target, updater)?;
     }
 
     Ok(())
 }
 
-fn dimension_index(dim: Dimensions, target: &str) -> Option<usize> {
+fn geometry_type(geom: &impl GeometryTrait<T = f64>) -> Result<i32, ArrowError> {
+    let dimension_type = match geom.dim() {
+        Dimensions::Xy => 0,
+        Dimensions::Xyz => 1000,
+        Dimensions::Xym => 2000,
+        Dimensions::Xyzm => 3000,
+        Dimensions::Unknown(_) => {
+            return Err(ArrowError::InvalidArgumentError(
+                "Unsupported dimensions".to_string(),
+            ))
+        }
+    };
+
+    let geometry_type = match geom.as_type() {
+        GeometryType::Point(_) => 1,
+        GeometryType::LineString(_) => 2,
+        GeometryType::Polygon(_) => 3,
+        GeometryType::MultiPoint(_) => 4,
+        GeometryType::MultiLineString(_) => 5,
+        GeometryType::MultiPolygon(_) => 6,
+        GeometryType::GeometryCollection(_) => 7,
+        _ => {
+            return Err(ArrowError::InvalidArgumentError(
+                "GeometryType not supported for dimension bounds".to_string(),
+            ))
+        }
+    };
+
+    Ok(dimension_type + geometry_type)
+}
+
+fn dimension_index(dim: Dimensions, target: char) -> Option<usize> {
     match target {
-        "x" => return Some(0),
-        "y" => return Some(1),
+        'x' => return Some(0),
+        'y' => return Some(1),
         _ => {}
     }
 
     match (dim, target) {
-        (geo_traits::Dimensions::Xyz, "z") => Some(2),
-        (geo_traits::Dimensions::Xym, "m") => Some(2),
-        (geo_traits::Dimensions::Xyzm, "z") => Some(2),
-        (geo_traits::Dimensions::Xyzm, "m") => Some(3),
+        (geo_traits::Dimensions::Xyz, 'z') => Some(2),
+        (geo_traits::Dimensions::Xym, 'm') => Some(2),
+        (geo_traits::Dimensions::Xyzm, 'z') => Some(2),
+        (geo_traits::Dimensions::Xyzm, 'm') => Some(3),
         (_, _) => None,
     }
 }
@@ -258,6 +279,77 @@ mod test {
     }
 
     #[test]
+    pub fn test_geometry_types() {
+        let empties = [
+            "POINT EMPTY",
+            "LINESTRING EMPTY",
+            "POLYGON EMPTY",
+            "MULTIPOINT EMPTY",
+            "MULTILINESTRING EMPTY",
+            "MULTIPOLYGON EMPTY",
+            "GEOMETRYCOLLECTION EMPTY",
+        ];
+
+        assert_eq!(
+            wkt_bounds(empties, Interval::empty())
+                .unwrap()
+                .geometry_types(),
+            vec![1, 2, 3, 4, 5, 6, 7]
+        );
+
+        let empties_z = [
+            "POINT Z EMPTY",
+            "LINESTRING Z EMPTY",
+            "POLYGON Z EMPTY",
+            "MULTIPOINT Z EMPTY",
+            "MULTILINESTRING Z EMPTY",
+            "MULTIPOLYGON Z EMPTY",
+            "GEOMETRYCOLLECTION Z EMPTY",
+        ];
+
+        assert_eq!(
+            wkt_bounds(empties_z, Interval::empty())
+                .unwrap()
+                .geometry_types(),
+            vec![1001, 1002, 1003, 1004, 1005, 1006, 1007]
+        );
+
+        let empties_m = [
+            "POINT M EMPTY",
+            "LINESTRING M EMPTY",
+            "POLYGON M EMPTY",
+            "MULTIPOINT M EMPTY",
+            "MULTILINESTRING M EMPTY",
+            "MULTIPOLYGON M EMPTY",
+            "GEOMETRYCOLLECTION M EMPTY",
+        ];
+
+        assert_eq!(
+            wkt_bounds(empties_m, Interval::empty())
+                .unwrap()
+                .geometry_types(),
+            vec![2001, 2002, 2003, 2004, 2005, 2006, 2007]
+        );
+
+        let empties_zm = [
+            "POINT ZM EMPTY",
+            "LINESTRING ZM EMPTY",
+            "POLYGON ZM EMPTY",
+            "MULTIPOINT ZM EMPTY",
+            "MULTILINESTRING ZM EMPTY",
+            "MULTIPOLYGON ZM EMPTY",
+            "GEOMETRYCOLLECTION ZM EMPTY",
+        ];
+
+        assert_eq!(
+            wkt_bounds(empties_zm, Interval::empty())
+                .unwrap()
+                .geometry_types(),
+            vec![3001, 3002, 3003, 3004, 3005, 3006, 3007]
+        );
+    }
+
+    #[test]
     pub fn test_bounds_empty() {
         let empties = [
             "POINT EMPTY",
@@ -270,7 +362,6 @@ mod test {
         ];
 
         let bounds = wkt_bounds(empties, Interval::empty()).unwrap();
-        assert!(bounds.geometry_types().is_empty());
         assert!(bounds.x().is_empty());
         assert!(bounds.y().is_empty());
         assert!(bounds.z().is_empty());
@@ -278,7 +369,6 @@ mod test {
 
         // With wraparound, still empty
         let bounds = wkt_bounds(empties, (-180, 180)).unwrap();
-        assert!(bounds.geometry_types().is_empty());
         assert!(bounds.x().is_empty());
         assert!(bounds.y().is_empty());
         assert!(bounds.z().is_empty());
@@ -289,7 +379,7 @@ mod test {
     pub fn test_bounds_wrap_basic() {
         let geoms = ["POINT (-170 0)", "POINT (170 0)"];
 
-        // No wraparound
+        // No wraparound because it was disabled
         let bounds = wkt_bounds(geoms, Interval::empty()).unwrap();
         assert_eq!(bounds.x(), (-170, 170).into());
 
