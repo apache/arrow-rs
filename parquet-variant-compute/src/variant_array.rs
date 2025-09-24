@@ -800,17 +800,11 @@ fn typed_value_to_variant<'a>(
             let date = Date32Type::to_naive_date(value);
             Variant::from(date)
         }
-        DataType::FixedSizeBinary(binary_len) => {
+        // 16-byte FixedSizeBinary is always UUID; all others illegal.
+        DataType::FixedSizeBinary(16) => {
             let array = typed_value.as_fixed_size_binary();
-            // Try to treat 16 byte FixedSizeBinary as UUID
             let value = array.value(index);
-            if *binary_len == 16 {
-                if let Ok(uuid) = Uuid::from_slice(value) {
-                    return Variant::from(uuid);
-                }
-            }
-            let value = array.value(index);
-            Variant::from(value)
+            Uuid::from_slice(value).map_or(Variant::Null, Variant::from)
         }
         DataType::BinaryView => {
             let array = typed_value.as_binary_view();

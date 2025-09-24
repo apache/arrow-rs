@@ -297,13 +297,13 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, FixedSizeBinaryArray,
-        Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-        StringArray, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Float16Array,
+        Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
+        StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
-    use arrow::datatypes::DataType::{Int16, Int32, Int64, UInt16, UInt32, UInt64, UInt8};
+    use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow_schema::{DataType, Field, FieldRef, Fields};
     use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
 
@@ -439,26 +439,6 @@ mod test {
     }
 
     #[test]
-    fn get_variant_partially_shredded_uint8_as_variant() {
-        numeric_partially_shredded_test!(u8, partially_shredded_uint8_variant_array);
-    }
-
-    #[test]
-    fn get_variant_partially_shredded_uint16_as_variant() {
-        numeric_partially_shredded_test!(u16, partially_shredded_uint16_variant_array);
-    }
-
-    #[test]
-    fn get_variant_partially_shredded_uint32_as_variant() {
-        numeric_partially_shredded_test!(u32, partially_shredded_uint32_variant_array);
-    }
-
-    #[test]
-    fn get_variant_partially_shredded_uint64_as_variant() {
-        numeric_partially_shredded_test!(u64, partially_shredded_uint64_variant_array);
-    }
-
-    #[test]
     fn get_variant_partially_shredded_float16_as_variant() {
         numeric_partially_shredded_test!(half::f16, partially_shredded_float16_variant_array);
     }
@@ -488,23 +468,6 @@ mod test {
         assert!(!result.is_valid(1));
         assert_eq!(result.value(2), Variant::from("n/a"));
         assert_eq!(result.value(3), Variant::from(false));
-    }
-
-    #[test]
-    fn get_variant_partially_shredded_fixed_size_binary_as_variant() {
-        let array = partially_shredded_fixed_size_binary_variant_array();
-        let options = GetOptions::new();
-        let result = variant_get(&array, options).unwrap();
-
-        // expect the result is a VariantArray
-        let result = VariantArray::try_new(&result).unwrap();
-        assert_eq!(result.len(), 4);
-
-        // Expect the values are the same as the original values
-        assert_eq!(result.value(0), Variant::from(&[1u8, 2u8, 3u8][..]));
-        assert!(!result.is_valid(1));
-        assert_eq!(result.value(2), Variant::from("n/a"));
-        assert_eq!(result.value(3), Variant::from(&[4u8, 5u8, 6u8][..]));
     }
 
     #[test]
@@ -646,26 +609,6 @@ mod test {
     }
 
     #[test]
-    fn get_variant_perfectly_shredded_uint8_as_variant() {
-        numeric_perfectly_shredded_test!(u8, perfectly_shredded_uint8_variant_array);
-    }
-
-    #[test]
-    fn get_variant_perfectly_shredded_uint16_as_variant() {
-        numeric_perfectly_shredded_test!(u16, perfectly_shredded_uint16_variant_array);
-    }
-
-    #[test]
-    fn get_variant_perfectly_shredded_uint32_as_variant() {
-        numeric_perfectly_shredded_test!(u32, perfectly_shredded_uint32_variant_array);
-    }
-
-    #[test]
-    fn get_variant_perfectly_shredded_uint64_as_variant() {
-        numeric_perfectly_shredded_test!(u64, perfectly_shredded_uint64_variant_array);
-    }
-
-    #[test]
     fn get_variant_perfectly_shredded_float16_as_variant() {
         numeric_perfectly_shredded_test!(half::f16, perfectly_shredded_float16_variant_array);
     }
@@ -749,34 +692,6 @@ mod test {
         Int64Array::from(vec![Some(1), Some(2), Some(3)])
     );
 
-    perfectly_shredded_to_arrow_primitive_test!(
-        get_variant_perfectly_shredded_uint8_as_int8,
-        UInt8,
-        perfectly_shredded_uint8_variant_array,
-        UInt8Array::from(vec![Some(1), Some(2), Some(3)])
-    );
-
-    perfectly_shredded_to_arrow_primitive_test!(
-        get_variant_perfectly_shredded_uint16_as_uint16,
-        UInt16,
-        perfectly_shredded_uint16_variant_array,
-        UInt16Array::from(vec![Some(1), Some(2), Some(3)])
-    );
-
-    perfectly_shredded_to_arrow_primitive_test!(
-        get_variant_perfectly_shredded_uint32_as_uint32,
-        UInt32,
-        perfectly_shredded_uint32_variant_array,
-        UInt32Array::from(vec![Some(1), Some(2), Some(3)])
-    );
-
-    perfectly_shredded_to_arrow_primitive_test!(
-        get_variant_perfectly_shredded_uint64_as_uint64,
-        UInt64,
-        perfectly_shredded_uint64_variant_array,
-        UInt64Array::from(vec![Some(1), Some(2), Some(3)])
-    );
-
     /// Return a VariantArray that represents a perfectly "shredded" variant
     /// for the given typed value.
     ///
@@ -834,26 +749,6 @@ mod test {
         perfectly_shredded_int64_variant_array,
         Int64Array,
         i64
-    );
-    numeric_perfectly_shredded_variant_array_fn!(
-        perfectly_shredded_uint8_variant_array,
-        UInt8Array,
-        u8
-    );
-    numeric_perfectly_shredded_variant_array_fn!(
-        perfectly_shredded_uint16_variant_array,
-        UInt16Array,
-        u16
-    );
-    numeric_perfectly_shredded_variant_array_fn!(
-        perfectly_shredded_uint32_variant_array,
-        UInt32Array,
-        u32
-    );
-    numeric_perfectly_shredded_variant_array_fn!(
-        perfectly_shredded_uint64_variant_array,
-        UInt64Array,
-        u64
     );
     numeric_perfectly_shredded_variant_array_fn!(
         perfectly_shredded_float16_variant_array,
@@ -964,26 +859,6 @@ mod test {
         i64
     );
     numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_uint8_variant_array,
-        UInt8Array,
-        u8
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_uint16_variant_array,
-        UInt16Array,
-        u16
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_uint32_variant_array,
-        UInt32Array,
-        u32
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_uint64_variant_array,
-        UInt64Array,
-        u64
-    );
-    numeric_partially_shredded_variant_array_fn!(
         partially_shredded_float16_variant_array,
         Float16Array,
         half::f16
@@ -1032,64 +907,6 @@ mod test {
             None,        // row 2 is a string, so no typed value
             Some(false), // row 3 is shredded, so it has a value
         ]);
-
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), true)
-            .with_field("typed_value", Arc::new(typed_value), true)
-            .with_field("value", Arc::new(values), true)
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(struct_array)
-    }
-
-    /// Return a VariantArray that represents a partially "shredded" variant for fixed size binary
-    fn partially_shredded_fixed_size_binary_variant_array() -> ArrayRef {
-        let (metadata, string_value) = {
-            let mut builder = parquet_variant::VariantBuilder::new();
-            builder.append_value("n/a");
-            builder.finish()
-        };
-
-        // Create the null buffer for the overall array
-        let nulls = NullBuffer::from(vec![
-            true,  // row 0 non null
-            false, // row 1 is null
-            true,  // row 2 non null
-            true,  // row 3 non null
-        ]);
-
-        // metadata is the same for all rows
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-
-        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-        // about why row1 is an empty but non null, value.
-        let values = BinaryViewArray::from(vec![
-            None,                // row 0 is shredded, so no value
-            Some(b"" as &[u8]),  // row 1 is null, so empty value
-            Some(&string_value), // copy the string value "N/A"
-            None,                // row 3 is shredded, so no value
-        ]);
-
-        // Create fixed size binary array with 3-byte values
-        let data = vec![
-            1u8, 2u8, 3u8, // row 0 is shredded
-            0u8, 0u8, 0u8, // row 1 is null (value doesn't matter)
-            0u8, 0u8, 0u8, // row 2 is a string (value doesn't matter)
-            4u8, 5u8, 6u8, // row 3 is shredded
-        ];
-        let typed_value_nulls = arrow::buffer::NullBuffer::from(vec![
-            true,  // row 0 has value
-            false, // row 1 is null
-            false, // row 2 is string
-            true,  // row 3 has value
-        ]);
-        let typed_value = FixedSizeBinaryArray::try_new(
-            3, // byte width
-            arrow::buffer::Buffer::from(data),
-            Some(typed_value_nulls),
-        )
-        .expect("should create fixed size binary array");
 
         let struct_array = StructArrayBuilder::new()
             .with_field("metadata", Arc::new(metadata), true)
