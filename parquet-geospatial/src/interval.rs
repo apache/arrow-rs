@@ -277,12 +277,22 @@ impl IntervalTrait for Interval {
     }
 }
 
+/// 1D Interval that may or may not wrap around
+///
+/// Concrete implementation that handles both the wraparound and regular
+/// interval case. This is separated from the [Interval] because the
+/// [Interval] is faster and most operations will use it directly (invoking
+/// this struct when it is specifically required).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WraparoundInterval {
     inner: Interval,
 }
 
 impl WraparoundInterval {
+    /// Splits this interval into exactly two non-wraparound intervals
+    ///
+    /// If this interval does not wrap around, one of these intervals will
+    /// be empty.
     fn split(&self) -> (Interval, Interval) {
         if self.is_wraparound() {
             (
