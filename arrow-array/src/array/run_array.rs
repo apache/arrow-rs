@@ -18,17 +18,23 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::{
+    builder::StringRunBuilder,
+    cast::AsArray,
+    make_array,
+    run_iterator::RunArrayIter,
+    types::{
+        Date32Type, Date64Type, Decimal128Type, Decimal256Type, DurationNanosecondType,
+        Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+        RunEndIndexType, Time32MillisecondType, Time64NanosecondType, TimestampMicrosecondType,
+        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    },
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, BooleanArray, Int16Array, Int32Array,
+    Int64Array, PrimitiveArray, StringArray,
+};
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
-
-use crate::{
-    builder::StringRunBuilder,
-    make_array,
-    run_iterator::RunArrayIter,
-    types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
-    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
-};
 
 /// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
 ///
@@ -250,6 +256,26 @@ impl<R: RunEndIndexType> RunArray<R> {
             run_ends: self.run_ends.slice(offset, length),
             values: self.values.clone(),
         }
+    }
+
+    /// Expands the REE array to its logical form
+    pub fn expand_to_logical<T: ArrowPrimitiveType>(&self) -> Result<Box<dyn Array>, ArrowError>
+    where
+        T::Native: Default,
+    {
+        let typed_ree = self.downcast::<PrimitiveArray<T>>().ok_or_else(|| {
+            ArrowError::InvalidArgumentError("Failed to downcast to typed REE".to_string())
+        })?;
+
+        let mut builder = PrimitiveArray::<T>::builder(typed_ree.len());
+        for i in 0..typed_ree.len() {
+            if typed_ree.is_null(i) {
+                builder.append_null();
+            } else {
+                builder.append_value(typed_ree.value(i));
+            }
+        }
+        Ok(Box::new(builder.finish()))
     }
 }
 
@@ -528,6 +554,141 @@ pub struct TypedRunArray<'a, R: RunEndIndexType, V> {
     values: &'a V,
 }
 
+/// Unwraps a REE array into a logical array
+pub fn ree_to_expanded_array(array: &dyn Array) -> Option<Box<dyn Array>> {
+    match array.data_type() {
+        arrow_schema::DataType::RunEndEncoded(run_ends_field, _) => {
+            match run_ends_field.data_type() {
+                arrow_schema::DataType::Int16 => array
+                    .as_run_opt::<Int16Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int16Type>().ok()),
+                arrow_schema::DataType::Int32 => array
+                    .as_run_opt::<Int32Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int32Type>().ok()),
+                arrow_schema::DataType::Int64 => array
+                    .as_run_opt::<Int64Type>()
+                    .and_then(|ree| ree.expand_to_logical::<Int64Type>().ok()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Generate a boolean array that indicates if two run arrays are equal
+pub fn ree_distinct(
+    lhs: &AnyRunArray,
+    rhs: &AnyRunArray,
+    size: usize,
+    flag: bool,
+) -> Option<BooleanArray> {
+    // Iterate through both run arrays and compare their logical indices
+    // we know that the run arrays of the exact same size.
+    let lhs_vals = lhs.values();
+    let rhs_vals = rhs.values();
+    if lhs_vals.data_type() != rhs_vals.data_type() {
+        return None;
+    }
+    match lhs_vals.data_type() {
+        // Integer types
+        DataType::Int8 => ree_distinct_primitive::<Int8Type>(lhs, rhs, size, flag),
+        DataType::Int16 => ree_distinct_primitive::<Int16Type>(lhs, rhs, size, flag),
+        DataType::Int32 => ree_distinct_primitive::<Int32Type>(lhs, rhs, size, flag),
+        DataType::Int64 => ree_distinct_primitive::<Int64Type>(lhs, rhs, size, flag),
+        DataType::UInt8 => ree_distinct_primitive::<UInt8Type>(lhs, rhs, size, flag),
+        DataType::UInt16 => ree_distinct_primitive::<UInt16Type>(lhs, rhs, size, flag),
+        DataType::UInt32 => ree_distinct_primitive::<UInt32Type>(lhs, rhs, size, flag),
+        DataType::UInt64 => ree_distinct_primitive::<UInt64Type>(lhs, rhs, size, flag),
+
+        // Floating point
+        DataType::Float32 => ree_distinct_primitive::<Float32Type>(lhs, rhs, size, flag),
+        DataType::Float64 => ree_distinct_primitive::<Float64Type>(lhs, rhs, size, flag),
+
+        // Temporal
+        DataType::Date32 => ree_distinct_primitive::<Date32Type>(lhs, rhs, size, flag),
+        DataType::Date64 => ree_distinct_primitive::<Date64Type>(lhs, rhs, size, flag),
+        DataType::Timestamp(_, _) => {
+            ree_distinct_primitive::<TimestampMicrosecondType>(lhs, rhs, size, flag)
+        }
+        DataType::Time32(_) => {
+            ree_distinct_primitive::<Time32MillisecondType>(lhs, rhs, size, flag)
+        }
+        DataType::Time64(_) => ree_distinct_primitive::<Time64NanosecondType>(lhs, rhs, size, flag),
+        DataType::Duration(_) => {
+            ree_distinct_primitive::<DurationNanosecondType>(lhs, rhs, size, flag)
+        }
+        DataType::Interval(_) => {
+            ree_distinct_primitive::<IntervalDayTimeType>(lhs, rhs, size, flag)
+        }
+
+        // Decimals
+        DataType::Decimal128(_, _) => {
+            ree_distinct_primitive::<Decimal128Type>(lhs, rhs, size, flag)
+        }
+        DataType::Decimal256(_, _) => {
+            ree_distinct_primitive::<Decimal256Type>(lhs, rhs, size, flag)
+        }
+        // Strings arent a primitive type, so we need to handle them separately
+        DataType::Utf8 => ree_distinct_string(lhs, rhs, size, flag),
+
+        // Not yet supported or complex
+        _ => None,
+    }
+}
+
+fn ree_distinct_primitive<T: ArrowPrimitiveType>(
+    lhs: &AnyRunArray,
+    rhs: &AnyRunArray,
+    size: usize,
+    flag: bool,
+) -> Option<BooleanArray> {
+    let lhs_vals = lhs.values().as_any().downcast_ref::<PrimitiveArray<T>>()?;
+    let rhs_vals = rhs.values().as_any().downcast_ref::<PrimitiveArray<T>>()?;
+    let mut builder = BooleanBufferBuilder::new(size);
+    for i in 0..size {
+        let li = lhs.get_physical_index(i);
+        let ri = rhs.get_physical_index(i);
+
+        let mut is_same = match (lhs_vals.is_null(li), rhs_vals.is_null(ri)) {
+            (true, true) => true,
+            (true, false) | (false, true) => false, // If one is null, result depends on flag
+            (false, false) => lhs_vals.value(li) == rhs_vals.value(ri),
+        };
+        if flag {
+            is_same = !is_same;
+        }
+        builder.append(is_same);
+    }
+    Some(BooleanArray::from(builder.finish()))
+}
+
+fn ree_distinct_string(
+    lhs: &AnyRunArray,
+    rhs: &AnyRunArray,
+    size: usize,
+    flag: bool,
+) -> Option<BooleanArray> {
+    let lhs_vals = lhs.values().as_any().downcast_ref::<StringArray>()?;
+    let rhs_vals = rhs.values().as_any().downcast_ref::<StringArray>()?;
+
+    let mut builder = BooleanBufferBuilder::new(size);
+    for i in 0..size {
+        let li = lhs.get_physical_index(i);
+        let ri = rhs.get_physical_index(i);
+
+        let mut is_same = match (lhs_vals.is_null(li), rhs_vals.is_null(ri)) {
+            (true, true) => true,
+            (true, false) | (false, true) => false,
+            (false, false) => lhs_vals.value(li) == rhs_vals.value(ri),
+        };
+        if flag {
+            is_same = !is_same;
+        }
+        builder.append(is_same);
+    }
+    Some(BooleanArray::from(builder.finish()))
+}
+
 // Manually implement `Clone` to avoid `V: Clone` type constraint
 impl<R: RunEndIndexType, V> Clone for TypedRunArray<'_, R, V> {
     fn clone(&self) -> Self {
@@ -657,6 +818,82 @@ where
 
     fn into_iter(self) -> Self::IntoIter {
         RunArrayIter::new(self)
+    }
+}
+
+/// An AnyRunArray is a wrapper around a RunArray that can be used to aggregate over a RunEndEncodedArray
+/// This is used to avoid the need to downcast the RunEndEncodedArray to a specific type
+pub enum AnyRunArray<'a> {
+    /// A RunArray with Int64 run ends  
+    Int64(&'a RunArray<Int64Type>),
+    /// A RunArray with Int32 run ends
+    Int32(&'a RunArray<Int32Type>),
+    /// A RunArray with Int16 run ends  
+    Int16(&'a RunArray<Int16Type>),
+}
+
+impl<'a> AnyRunArray<'a> {
+    /// Creates a new [`AnyRunArray`] from a [`dyn Array`]
+    pub fn new(array: &'a dyn Array, run_ends_type: DataType) -> Option<Self> {
+        match run_ends_type {
+            DataType::Int64 => Some(AnyRunArray::Int64(array.as_run_opt::<Int64Type>().unwrap())),
+            DataType::Int32 => Some(AnyRunArray::Int32(array.as_run_opt::<Int32Type>().unwrap())),
+            DataType::Int16 => Some(AnyRunArray::Int16(array.as_run_opt::<Int16Type>().unwrap())),
+            _ => None,
+        }
+    }
+
+    /// Returns the run ends of this [`AnyRunArray`]
+    pub fn run_ends(&self) -> Arc<dyn Array> {
+        match self {
+            AnyRunArray::Int64(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int64Array::from_iter_values(values.iter().copied()))
+            }
+            AnyRunArray::Int32(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int32Array::from_iter_values(values.iter().copied()))
+            }
+            AnyRunArray::Int16(array) => {
+                let values = array.run_ends().values();
+                Arc::new(Int16Array::from_iter_values(values.iter().copied()))
+            }
+        }
+    }
+
+    /// Returns the values of this [`AnyRunArray`]
+    pub fn values(&self) -> &ArrayRef {
+        match self {
+            AnyRunArray::Int64(array) => array.values(),
+            AnyRunArray::Int32(array) => array.values(),
+            AnyRunArray::Int16(array) => array.values(),
+        }
+    }
+    /// Returns the run end value at the given index
+    pub fn run_ends_value(&self, i: usize) -> usize {
+        match self {
+            AnyRunArray::Int64(array) => array.run_ends().values()[i].as_usize(),
+            AnyRunArray::Int32(array) => array.run_ends().values()[i].as_usize(),
+            AnyRunArray::Int16(array) => array.run_ends().values()[i].as_usize(),
+        }
+    }
+
+    /// Returns the length of run ends array
+    pub fn run_ends_len(&self) -> usize {
+        match self {
+            AnyRunArray::Int64(array) => array.values().len(),
+            AnyRunArray::Int32(array) => array.values().len(),
+            AnyRunArray::Int16(array) => array.values().len(),
+        }
+    }
+
+    /// Returns the physical index for the given logical index
+    pub fn get_physical_index(&self, logical_index: usize) -> usize {
+        match self {
+            AnyRunArray::Int64(array) => array.get_physical_index(logical_index),
+            AnyRunArray::Int32(array) => array.get_physical_index(logical_index),
+            AnyRunArray::Int16(array) => array.get_physical_index(logical_index),
+        }
     }
 }
 

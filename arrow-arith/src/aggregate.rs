@@ -583,6 +583,37 @@ where
 
             Some(sum)
         }
+        DataType::RunEndEncoded(run_field, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return None;
+            }
+            let ree = match run_field.data_type() {
+                DataType::Int64 => AnyRunArray::new(&array, DataType::Int64),
+                DataType::Int32 => AnyRunArray::new(&array, DataType::Int32),
+                DataType::Int16 => AnyRunArray::new(&array, DataType::Int16),
+                _ => return None,
+            };
+            if let Some(ree) = ree {
+                let mut sum = T::default_value();
+
+                let values = ree.values();
+                let values_array = values.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+                let values_data = values_array.values();
+                let mut prev_end = 0;
+                for i in 0..ree.run_ends_len() {
+                    let end = ree.run_ends_value(i);
+                    let run_length = end - prev_end;
+                    let run_length_native = T::Native::from_usize(run_length).unwrap();
+                    sum = sum.add_wrapping(values_data[i].mul_wrapping(run_length_native));
+                    prev_end = end;
+                }
+                Some(sum)
+            } else {
+                None
+            }
+        }
         _ => sum::<T>(as_primitive_array(&array)),
     }
 }
@@ -618,6 +649,41 @@ where
                 })?;
 
             Ok(Some(sum))
+        }
+        DataType::RunEndEncoded(run_field, _) => {
+            let null_count = array.null_count();
+
+            if null_count == array.len() {
+                return Ok(None);
+            }
+
+            let ree = match run_field.data_type() {
+                DataType::Int64 => AnyRunArray::new(&array, DataType::Int64),
+                DataType::Int32 => AnyRunArray::new(&array, DataType::Int32),
+                DataType::Int16 => AnyRunArray::new(&array, DataType::Int16),
+                _ => return Ok(None),
+            };
+
+            if let Some(ree) = ree {
+                let mut sum = T::default_value();
+
+                let values = ree.values();
+                let values_array = values.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+                let values_data = values_array.values();
+
+                let mut prev_end = 0;
+                for i in 0..ree.run_ends_len() {
+                    let end = ree.run_ends_value(i);
+                    let run_length = end - prev_end;
+                    let run_length_native = T::Native::from_usize(run_length).unwrap();
+                    sum = sum.add_checked(values_data[i].mul_checked(run_length_native)?)?;
+                    prev_end = end;
+                }
+
+                Ok(Some(sum))
+            } else {
+                Ok(None)
+            }
         }
         _ => sum_checked::<T>(as_primitive_array(&array)),
     }
@@ -655,6 +721,7 @@ where
 {
     match array.data_type() {
         DataType::Dictionary(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
+        DataType::RunEndEncoded(_, _) => min_max_helper::<T::Native, _, _>(array, cmp),
         _ => m(as_primitive_array(&array)),
     }
 }
@@ -1747,5 +1814,131 @@ mod tests {
 
         sum_checked(&a).expect_err("overflow should be detected");
         sum_array_checked::<Int32Type, _>(&a).expect_err("overflow should be detected");
+    }
+    mod ree_aggregation {
+        use super::*;
+        use arrow_array::types::{Float64Type, Int32Type, Int64Type};
+        use arrow_array::{Float64Array, Int32Array, Int64Array, RunArray};
+
+        #[test]
+        fn test_ree_sum_array_basic() {
+            // REE array: [10, 10, 20, 30, 30,30] (logical length 6)
+            let run_ends = Int32Array::from(vec![2, 3, 6]);
+            let values = Int32Array::from(vec![10, 20, 30]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+
+            let result = sum_array::<Int32Type, _>(typed_array);
+            assert_eq!(result, Some(130)); // 10+10+20+30+30+30 = 130
+        }
+
+        #[test]
+        fn test_ree_sum_array_with_nulls() {
+            // REE array with nulls: [10, NULL, 20, NULL, 30]
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![Some(10), None, Some(20), None, Some(30)]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+            let result = sum_array::<Int32Type, _>(typed_array);
+            assert_eq!(result, Some(60)); // 10+20+30 = 60 (nulls ignored)
+        }
+
+        #[test]
+        fn test_ree_sum_array_with_only_nulls() {
+            // REE array: [None, None, None, None, None] (logical length 5)
+            let run_ends = Int32Array::from(vec![1, 2, 3, 4, 5]);
+            let values = Int32Array::from(vec![None, None, None, None, None]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+            let result = sum_array::<Int32Type, _>(typed_array);
+            assert_eq!(result, Some(0)); // 0
+        }
+
+        #[test]
+        fn test_ree_sum_array_large_values() {
+            // REE array with large values: [1000, 1000, 2000, 3000, 3000]
+            let run_ends = Int64Array::from(vec![2, 3, 5]);
+            let values = Int64Array::from(vec![1000, 2000, 3000]);
+            let run_array = RunArray::<Int64Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int64Array>().unwrap();
+            let result = sum_array::<Int64Type, _>(typed_array);
+            assert_eq!(result, Some(10000)); // 1000+1000+2000+3000+3000 = 10000
+        }
+
+        #[test]
+        fn test_ree_sum_checked_array_basic() {
+            // REE array: [5, 5, 10, 15, 15] (logical length 5)
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![5, 10, 15]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+            let result = sum_array_checked::<Int32Type, _>(typed_array);
+            assert_eq!(result.unwrap(), Some(50)); // 5+5+10+15+15 = 50
+        }
+
+        #[test]
+        fn test_ree_sum_checked_array_overflow() {
+            // REE array that will cause overflow: [i32::MAX, i32::MAX, 1]
+            let run_ends = Int32Array::from(vec![2, 3]);
+            let values = Int32Array::from(vec![i32::MAX, 1]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+            let result = sum_array_checked::<Int32Type, _>(typed_array);
+            assert!(result.is_err()); // Should detect overflow
+        }
+
+        #[test]
+        fn test_ree_min_array_basic() {
+            // REE array: [30, 30, 10, 20, 20] (logical length 5)
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![30, 10, 20]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+            let result = min_array::<Int32Type, _>(typed_array);
+            assert_eq!(result, Some(10)); // min(30, 30, 10, 20, 20) = 10
+        }
+
+        #[test]
+        fn test_ree_min_array_float() {
+            // REE array with floats: [5.5, 5.5, 2.1, 8.9, 8.9]
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Float64Array::from(vec![5.5, 2.1, 8.9]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Float64Array>().unwrap();
+            let result = min_array::<Float64Type, _>(typed_array);
+            assert_eq!(result, Some(2.1)); // min(5.5, 5.5, 2.1, 8.9, 8.9) = 2.1
+        }
+
+        #[test]
+        fn test_ree_max_array_basic() {
+            // REE array: [10, 10, 30, 20, 20] (logical length 5)
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Int32Array::from(vec![10, 30, 20]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Int32Array>().unwrap();
+            let result = max_array::<Int32Type, _>(typed_array);
+            assert_eq!(result, Some(30)); // max(10, 10, 30, 20, 20) = 30
+        }
+
+        #[test]
+        fn test_ree_max_array_float() {
+            // REE array with floats: [2.1, 2.1, 8.9, 5.5, 5.5]
+            let run_ends = Int32Array::from(vec![2, 3, 5]);
+            let values = Float64Array::from(vec![2.1, 8.9, 5.5]);
+            let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+            let typed_array = run_array.downcast::<Float64Array>().unwrap();
+            let result = max_array::<Float64Type, _>(typed_array);
+            assert_eq!(result, Some(8.9)); // max(2.1, 2.1, 8.9, 5.5, 5.5) = 8.9
+        }
     }
 }
