@@ -267,7 +267,7 @@ fn create_random_decimal_array(field: &Field, size: usize, null_density: f32) ->
             ))
         }
         _ => Err(ArrowError::InvalidArgumentError(format!(
-            "Cannot create decimal array for field {field:?}"
+            "Cannot create decimal array for field {field}"
         ))),
     }
 }
@@ -298,7 +298,7 @@ fn create_random_list_array(
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create list array for field {field:?}"
+                "Cannot create list array for field {field}"
             )))
         }
     };
@@ -336,7 +336,7 @@ fn create_random_struct_array(
         DataType::Struct(fields) => fields,
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot create struct array for field {field:?}"
+                "Cannot create struct array for field {field}"
             )))
         }
     };

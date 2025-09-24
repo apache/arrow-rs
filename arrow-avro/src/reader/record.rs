@@ -17,13 +17,11 @@
 
 use crate::codec::{
     AvroDataType, AvroField, AvroLiteral, Codec, Promotion, ResolutionInfo, ResolvedRecord,
+    ResolvedUnion,
 };
-use crate::reader::block::{Block, BlockDecoder};
 use crate::reader::cursor::AvroCursor;
 use crate::schema::Nullability;
-use arrow_array::builder::{
-    Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder, StringViewBuilder,
-};
+use arrow_array::builder::{Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder};
 #[cfg(feature = "small_decimals")]
 use arrow_array::builder::{Decimal32Builder, Decimal64Builder};
 use arrow_array::types::*;
@@ -31,12 +29,13 @@ use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    UnionFields, UnionMode, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 #[cfg(feature = "small_decimals")]
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use std::cmp::Ordering;
 use std::sync::Arc;
+use strum_macros::AsRefStr;
 use uuid::Uuid;
 
 const DEFAULT_CAPACITY: usize = 1024;
@@ -214,7 +213,7 @@ struct EnumResolution {
     default_index: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, AsRefStr)]
 enum Decoder {
     Null(usize),
     Boolean(BooleanBufferBuilder),
@@ -259,11 +258,30 @@ enum Decoder {
     Decimal64(usize, Option<usize>, Option<usize>, Decimal64Builder),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
+    Union(UnionDecoder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
 }
 
 impl Decoder {
     fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
+        if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
+            if info.writer_is_union && !info.reader_is_union {
+                let mut clone = data_type.clone();
+                clone.resolution = None; // Build target base decoder without Union resolution
+                let target = Box::new(Self::try_new_internal(&clone)?);
+                let decoder = Self::Union(
+                    UnionDecoderBuilder::new()
+                        .with_resolved_union(info.clone())
+                        .with_target(target)
+                        .build()?,
+                );
+                return Ok(decoder);
+            }
+        }
+        Self::try_new_internal(data_type)
+    }
+
+    fn try_new_internal(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         // Extract just the Promotion (if any) to simplify pattern matching
         let promotion = match data_type.resolution.as_ref() {
             Some(ResolutionInfo::Promotion(p)) => Some(p),
@@ -426,10 +444,43 @@ impl Decoder {
                 )
             }
             (Codec::Uuid, _) => Self::Uuid(Vec::with_capacity(DEFAULT_CAPACITY)),
-            (&Codec::Union(_, _, _), _) => {
+            (Codec::Union(encodings, fields, UnionMode::Dense), _) => {
+                let decoders = encodings
+                    .iter()
+                    .map(Self::try_new_internal)
+                    .collect::<Result<Vec<_>, _>>()?;
+                if fields.len() != decoders.len() {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Union has {} fields but {} decoders",
+                        fields.len(),
+                        decoders.len()
+                    )));
+                }
+                // Proactive guard: if a user provides a union with more branches than
+                // a 32-bit Avro index can address, fail fast with a clear message.
+                let branch_count = decoders.len();
+                let max_addr = (i32::MAX as usize) + 1;
+                if branch_count > max_addr {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Union has {branch_count} branches, which exceeds the maximum addressable \
+                         branches by an Avro int tag ({} + 1).",
+                        i32::MAX
+                    )));
+                }
+                let mut builder = UnionDecoderBuilder::new()
+                    .with_fields(fields.clone())
+                    .with_branches(decoders);
+                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
+                    if info.reader_is_union {
+                        builder = builder.with_resolved_union(info.clone());
+                    }
+                }
+                Self::Union(builder.build()?)
+            }
+            (Codec::Union(_, _, _), _) => {
                 return Err(ArrowError::NotYetImplemented(
-                    "Union type decoding is not yet supported".to_string(),
-                ))
+                    "Sparse Arrow unions are not yet supported".to_string(),
+                ));
             }
         };
         Ok(match data_type.nullability() {
@@ -443,7 +494,7 @@ impl Decoder {
     }
 
     /// Append a null record
-    fn append_null(&mut self) {
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         match self {
             Self::Null(count) => *count += 1,
             Self::Boolean(b) => b.append(false),
@@ -468,10 +519,14 @@ impl Decoder {
             Self::Uuid(v) => {
                 v.extend([0; 16]);
             }
-            Self::Array(_, offsets, e) => {
+            Self::Array(_, offsets, _) => {
                 offsets.push_length(0);
             }
-            Self::Record(_, e, _) => e.iter_mut().for_each(|e| e.append_null()),
+            Self::Record(_, e, _) => {
+                for encoding in e.iter_mut() {
+                    encoding.append_null();
+                }
+            }
             Self::Map(_, _koff, moff, _, _) => {
                 moff.push_length(0);
             }
@@ -486,11 +541,13 @@ impl Decoder {
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
             Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
+            Self::Union(u) => u.append_null()?,
             Self::Nullable(_, null_buffer, inner) => {
                 null_buffer.append(false);
                 inner.append_null();
             }
         }
+        Ok(())
     }
 
     /// Append a single default literal into the decoder's buffers
@@ -499,8 +556,7 @@ impl Decoder {
             Self::Nullable(_, nb, inner) => {
                 if matches!(lit, AvroLiteral::Null) {
                     nb.append(false);
-                    inner.append_null();
-                    Ok(())
+                    inner.append_null()
                 } else {
                     nb.append(true);
                     inner.append_default(lit)
@@ -700,6 +756,7 @@ impl Decoder {
                     "Default for enum must be a symbol".to_string(),
                 )),
             },
+            Self::Union(u) => u.append_default(lit),
             Self::Record(field_meta, decoders, projector) => match lit {
                 AvroLiteral::Map(entries) => {
                     for (i, dec) in decoders.iter_mut().enumerate() {
@@ -834,6 +891,7 @@ impl Decoder {
                 let nanos = (millis as i64) * 1_000_000;
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
+            Self::Union(u) => u.decode(buf)?,
             Self::Nullable(order, nb, encoding) => {
                 let branch = buf.read_vlq()?;
                 let is_not_null = match *order {
@@ -850,6 +908,64 @@ impl Decoder {
             }
         }
         Ok(())
+    }
+
+    fn decode_with_promotion(
+        &mut self,
+        buf: &mut AvroCursor<'_>,
+        promotion: Promotion,
+    ) -> Result<(), ArrowError> {
+        macro_rules! promote_numeric_to {
+            ($variant:ident, $getter:ident, $to:ty) => {{
+                match self {
+                    Self::$variant(v) => {
+                        let x = buf.$getter()?;
+                        v.push(x as $to);
+                        Ok(())
+                    }
+                    other => Err(ArrowError::ParseError(format!(
+                        "Promotion {promotion} target mismatch: expected {}, got {}",
+                        stringify!($variant),
+                        <Self as ::std::convert::AsRef<str>>::as_ref(other)
+                    ))),
+                }
+            }};
+        }
+        match promotion {
+            Promotion::Direct => self.decode(buf),
+            Promotion::IntToLong => promote_numeric_to!(Int64, get_int, i64),
+            Promotion::IntToFloat => promote_numeric_to!(Float32, get_int, f32),
+            Promotion::IntToDouble => promote_numeric_to!(Float64, get_int, f64),
+            Promotion::LongToFloat => promote_numeric_to!(Float32, get_long, f32),
+            Promotion::LongToDouble => promote_numeric_to!(Float64, get_long, f64),
+            Promotion::FloatToDouble => promote_numeric_to!(Float64, get_float, f64),
+            Promotion::StringToBytes => match self {
+                Self::Binary(offsets, values) | Self::StringToBytes(offsets, values) => {
+                    let data = buf.get_bytes()?;
+                    offsets.push_length(data.len());
+                    values.extend_from_slice(data);
+                    Ok(())
+                }
+                other => Err(ArrowError::ParseError(format!(
+                    "Promotion {promotion} target mismatch: expected bytes (Binary/StringToBytes), got {}",
+                    <Self as AsRef<str>>::as_ref(other)
+                ))),
+            },
+            Promotion::BytesToString => match self {
+                Self::String(offsets, values)
+                | Self::StringView(offsets, values)
+                | Self::BytesToString(offsets, values) => {
+                    let data = buf.get_bytes()?;
+                    offsets.push_length(data.len());
+                    values.extend_from_slice(data);
+                    Ok(())
+                }
+                other => Err(ArrowError::ParseError(format!(
+                    "Promotion {promotion} target mismatch: expected string (String/StringView/BytesToString), got {}",
+                    <Self as AsRef<str>>::as_ref(other)
+                ))),
+            },
+        }
     }
 
     /// Flush decoded records to an [`ArrayRef`]
@@ -950,7 +1066,7 @@ impl Decoder {
                     other => {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Map entries field must be a Struct, got {other:?}"
-                        )))
+                        )));
                     }
                 };
                 let entries_struct =
@@ -991,7 +1107,376 @@ impl Decoder {
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(vals)
             }
+            Self::Union(u) => u.flush(nulls)?,
         })
+    }
+}
+
+// A lookup table for resolving fields between writer and reader schemas during record projection.
+#[derive(Debug)]
+struct DispatchLookupTable {
+    // Maps each reader field index `r` to the corresponding writer field index.
+    //
+    // Semantics:
+    // - `to_reader[r] >= 0`: The value is an index into the writer's fields. The value from
+    //   the writer field is decoded, and `promotion[r]` is applied.
+    // - `to_reader[r] == NO_SOURCE` (-1): No matching writer field exists. The reader field's
+    //   default value is used.
+    //
+    // Representation (`i8`):
+    // `i8` is used for a dense, cache-friendly dispatch table, consistent with Arrow's use of
+    // `i8` for union type IDs. This requires that writer field indices do not exceed `i8::MAX`.
+    //
+    // Invariants:
+    // - `to_reader.len() == promotion.len()` and matches the reader field count.
+    // - If `to_reader[r] == NO_SOURCE`, `promotion[r]` is ignored.
+    to_reader: Box<[i8]>,
+    // For each reader field `r`, specifies the `Promotion` to apply to the writer's value.
+    //
+    // This is used when a writer field's type can be promoted to a reader field's type
+    // (e.g., `Int` to `Long`). It is ignored if `to_reader[r] == NO_SOURCE`.
+    promotion: Box<[Promotion]>,
+}
+
+// Sentinel used in `DispatchLookupTable::to_reader` to mark
+// "no matching writer field".
+const NO_SOURCE: i8 = -1;
+
+impl DispatchLookupTable {
+    fn from_writer_to_reader(
+        promotion_map: &[Option<(usize, Promotion)>],
+    ) -> Result<Self, ArrowError> {
+        let mut to_reader = Vec::with_capacity(promotion_map.len());
+        let mut promotion = Vec::with_capacity(promotion_map.len());
+        for map in promotion_map {
+            match *map {
+                Some((idx, promo)) => {
+                    let idx_i8 = i8::try_from(idx).map_err(|_| {
+                        ArrowError::SchemaError(format!(
+                            "Reader branch index {idx} exceeds i8 range (max {})",
+                            i8::MAX
+                        ))
+                    })?;
+                    to_reader.push(idx_i8);
+                    promotion.push(promo);
+                }
+                None => {
+                    to_reader.push(NO_SOURCE);
+                    promotion.push(Promotion::Direct);
+                }
+            }
+        }
+        Ok(Self {
+            to_reader: to_reader.into_boxed_slice(),
+            promotion: promotion.into_boxed_slice(),
+        })
+    }
+
+    // Resolve a writer branch index to (reader_idx, promotion)
+    #[inline]
+    fn resolve(&self, writer_index: usize) -> Option<(usize, Promotion)> {
+        let reader_index = *self.to_reader.get(writer_index)?;
+        (reader_index >= 0).then(|| (reader_index as usize, self.promotion[writer_index]))
+    }
+}
+
+#[derive(Debug)]
+struct UnionDecoder {
+    fields: UnionFields,
+    type_ids: Vec<i8>,
+    offsets: Vec<i32>,
+    branches: Vec<Decoder>,
+    counts: Vec<i32>,
+    reader_type_codes: Vec<i8>,
+    null_branch: Option<usize>,
+    default_emit_idx: usize,
+    null_emit_idx: usize,
+    plan: UnionReadPlan,
+}
+
+impl Default for UnionDecoder {
+    fn default() -> Self {
+        Self {
+            fields: UnionFields::empty(),
+            type_ids: Vec::new(),
+            offsets: Vec::new(),
+            branches: Vec::new(),
+            counts: Vec::new(),
+            reader_type_codes: Vec::new(),
+            null_branch: None,
+            default_emit_idx: 0,
+            null_emit_idx: 0,
+            plan: UnionReadPlan::Passthrough,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum UnionReadPlan {
+    ReaderUnion {
+        lookup_table: DispatchLookupTable,
+    },
+    FromSingle {
+        reader_idx: usize,
+        promotion: Promotion,
+    },
+    ToSingle {
+        target: Box<Decoder>,
+        lookup_table: DispatchLookupTable,
+    },
+    Passthrough,
+}
+
+impl UnionDecoder {
+    fn try_new(
+        fields: UnionFields,
+        branches: Vec<Decoder>,
+        resolved: Option<ResolvedUnion>,
+    ) -> Result<Self, ArrowError> {
+        let reader_type_codes = fields.iter().map(|(tid, _)| tid).collect::<Vec<i8>>();
+        let null_branch = branches.iter().position(|b| matches!(b, Decoder::Null(_)));
+        let default_emit_idx = 0;
+        let null_emit_idx = null_branch.unwrap_or(default_emit_idx);
+        let branch_len = branches.len().max(reader_type_codes.len());
+        // Guard against impractically large unions that cannot be indexed by an Avro int
+        let max_addr = (i32::MAX as usize) + 1;
+        if branches.len() > max_addr {
+            return Err(ArrowError::SchemaError(format!(
+                "Reader union has {} branches, which exceeds the maximum addressable \
+                 branches by an Avro int tag ({} + 1).",
+                branches.len(),
+                i32::MAX
+            )));
+        }
+        Ok(Self {
+            fields,
+            type_ids: Vec::with_capacity(DEFAULT_CAPACITY),
+            offsets: Vec::with_capacity(DEFAULT_CAPACITY),
+            branches,
+            counts: vec![0; branch_len],
+            reader_type_codes,
+            null_branch,
+            default_emit_idx,
+            null_emit_idx,
+            plan: Self::plan_from_resolved(resolved)?,
+        })
+    }
+
+    fn try_new_from_writer_union(
+        info: ResolvedUnion,
+        target: Box<Decoder>,
+    ) -> Result<Self, ArrowError> {
+        // This constructor is only for writer-union to single-type resolution
+        debug_assert!(info.writer_is_union && !info.reader_is_union);
+        let lookup_table = DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
+        Ok(Self {
+            plan: UnionReadPlan::ToSingle {
+                target,
+                lookup_table,
+            },
+            ..Self::default()
+        })
+    }
+
+    fn plan_from_resolved(resolved: Option<ResolvedUnion>) -> Result<UnionReadPlan, ArrowError> {
+        let Some(info) = resolved else {
+            return Ok(UnionReadPlan::Passthrough);
+        };
+        match (info.writer_is_union, info.reader_is_union) {
+            (true, true) => {
+                let lookup_table =
+                    DispatchLookupTable::from_writer_to_reader(&info.writer_to_reader)?;
+                Ok(UnionReadPlan::ReaderUnion { lookup_table })
+            }
+            (false, true) => {
+                let Some(&(reader_idx, promotion)) =
+                    info.writer_to_reader.first().and_then(Option::as_ref)
+                else {
+                    return Err(ArrowError::SchemaError(
+                        "Writer type does not match any reader union branch".to_string(),
+                    ));
+                };
+                Ok(UnionReadPlan::FromSingle {
+                    reader_idx,
+                    promotion,
+                })
+            }
+            (true, false) => Err(ArrowError::InvalidArgumentError(
+                "UnionDecoder::try_new cannot build writer-union to single; use UnionDecoderBuilder with a target"
+                    .to_string(),
+            )),
+            // (false, false) is invalid and should never be constructed by the resolver.
+            _ => Err(ArrowError::SchemaError(
+                "ResolvedUnion constructed for non-union sides; resolver should return None"
+                    .to_string(),
+            )),
+        }
+    }
+
+    #[inline]
+    fn read_tag(buf: &mut AvroCursor<'_>) -> Result<usize, ArrowError> {
+        // Avro unions are encoded by first writing the zero-based branch index.
+        // In Avro 1.11.1 this is specified as an *int*; older specs said *long*,
+        // but both use zig-zag varint encoding, so decoding as long is compatible
+        // with either form and widely used in practice.
+        let raw = buf.get_long()?;
+        if raw < 0 {
+            return Err(ArrowError::ParseError(format!(
+                "Negative union branch index {raw}"
+            )));
+        }
+        usize::try_from(raw).map_err(|_| {
+            ArrowError::ParseError(format!(
+                "Union branch index {raw} does not fit into usize on this platform ({}-bit)",
+                (usize::BITS as usize)
+            ))
+        })
+    }
+
+    #[inline]
+    fn emit_to(&mut self, reader_idx: usize) -> Result<&mut Decoder, ArrowError> {
+        let branches_len = self.branches.len();
+        let Some(reader_branch) = self.branches.get_mut(reader_idx) else {
+            return Err(ArrowError::ParseError(format!(
+                "Union branch index {reader_idx} out of range ({branches_len} branches)"
+            )));
+        };
+        self.type_ids.push(self.reader_type_codes[reader_idx]);
+        self.offsets.push(self.counts[reader_idx]);
+        self.counts[reader_idx] += 1;
+        Ok(reader_branch)
+    }
+
+    #[inline]
+    fn on_decoder<F>(&mut self, fallback_idx: usize, action: F) -> Result<(), ArrowError>
+    where
+        F: FnOnce(&mut Decoder) -> Result<(), ArrowError>,
+    {
+        if let UnionReadPlan::ToSingle { target, .. } = &mut self.plan {
+            return action(target);
+        }
+        let reader_idx = match &self.plan {
+            UnionReadPlan::FromSingle { reader_idx, .. } => *reader_idx,
+            _ => fallback_idx,
+        };
+        self.emit_to(reader_idx).and_then(action)
+    }
+
+    fn append_null(&mut self) -> Result<(), ArrowError> {
+        self.on_decoder(self.null_emit_idx, |decoder| decoder.append_null())
+    }
+
+    fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), ArrowError> {
+        self.on_decoder(self.default_emit_idx, |decoder| decoder.append_default(lit))
+    }
+
+    fn decode(&mut self, buf: &mut AvroCursor<'_>) -> Result<(), ArrowError> {
+        let (reader_idx, promotion) = match &mut self.plan {
+            UnionReadPlan::Passthrough => (Self::read_tag(buf)?, Promotion::Direct),
+            UnionReadPlan::ReaderUnion { lookup_table } => {
+                let idx = Self::read_tag(buf)?;
+                lookup_table.resolve(idx).ok_or_else(|| {
+                    ArrowError::ParseError(format!(
+                        "Union branch index {idx} not resolvable by reader schema"
+                    ))
+                })?
+            }
+            UnionReadPlan::FromSingle {
+                reader_idx,
+                promotion,
+            } => (*reader_idx, *promotion),
+            UnionReadPlan::ToSingle {
+                target,
+                lookup_table,
+            } => {
+                let idx = Self::read_tag(buf)?;
+                return match lookup_table.resolve(idx) {
+                    Some((_, promotion)) => target.decode_with_promotion(buf, promotion),
+                    None => Err(ArrowError::ParseError(format!(
+                        "Writer union branch {idx} does not resolve to reader type"
+                    ))),
+                };
+            }
+        };
+        let decoder = self.emit_to(reader_idx)?;
+        decoder.decode_with_promotion(buf, promotion)
+    }
+
+    fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
+        if let UnionReadPlan::ToSingle { target, .. } = &mut self.plan {
+            return target.flush(nulls);
+        }
+        debug_assert!(
+            nulls.is_none(),
+            "UnionArray does not accept a validity bitmap; \
+                     nulls should have been materialized as a Null child during decode"
+        );
+        let children = self
+            .branches
+            .iter_mut()
+            .map(|d| d.flush(None))
+            .collect::<Result<Vec<_>, _>>()?;
+        let arr = UnionArray::try_new(
+            self.fields.clone(),
+            flush_values(&mut self.type_ids).into_iter().collect(),
+            Some(flush_values(&mut self.offsets).into_iter().collect()),
+            children,
+        )
+        .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+        Ok(Arc::new(arr))
+    }
+}
+
+#[derive(Debug, Default)]
+struct UnionDecoderBuilder {
+    fields: Option<UnionFields>,
+    branches: Option<Vec<Decoder>>,
+    resolved: Option<ResolvedUnion>,
+    target: Option<Box<Decoder>>,
+}
+
+impl UnionDecoderBuilder {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_fields(mut self, fields: UnionFields) -> Self {
+        self.fields = Some(fields);
+        self
+    }
+
+    fn with_branches(mut self, branches: Vec<Decoder>) -> Self {
+        self.branches = Some(branches);
+        self
+    }
+
+    fn with_resolved_union(mut self, resolved_union: ResolvedUnion) -> Self {
+        self.resolved = Some(resolved_union);
+        self
+    }
+
+    fn with_target(mut self, target: Box<Decoder>) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    fn build(self) -> Result<UnionDecoder, ArrowError> {
+        match (self.resolved, self.fields, self.branches, self.target) {
+            (resolved, Some(fields), Some(branches), None) => {
+                UnionDecoder::try_new(fields, branches, resolved)
+            }
+            (Some(info), None, None, Some(target))
+                if info.writer_is_union && !info.reader_is_union =>
+            {
+                UnionDecoder::try_new_from_writer_union(info, target)
+            }
+            _ => Err(ArrowError::InvalidArgumentError(
+                "Invalid UnionDecoderBuilder configuration: expected either \
+                 (fields + branches + resolved) with no target for reader-unions, or \
+                 (resolved + target) with no fields/branches for writer-union to single."
+                    .to_string(),
+            )),
+        }
     }
 }
 
@@ -1247,8 +1732,7 @@ impl Projector {
         if let Some(default_literal) = self.field_defaults[index].as_ref() {
             decoder.append_default(default_literal)
         } else {
-            decoder.append_null();
-            Ok(())
+            decoder.append_null()
         }
     }
 
@@ -1314,6 +1798,7 @@ enum Skipper {
     List(Box<Skipper>),
     Map(Box<Skipper>),
     Struct(Vec<Skipper>),
+    Union(Vec<Skipper>),
     Nullable(Nullability, Box<Skipper>),
 }
 
@@ -1344,6 +1829,23 @@ impl Skipper {
             ),
             Codec::Map(values) => Self::Map(Box::new(Skipper::from_avro(values)?)),
             Codec::Interval => Self::DurationFixed12,
+            Codec::Union(encodings, _, _) => {
+                let max_addr = (i32::MAX as usize) + 1;
+                if encodings.len() > max_addr {
+                    return Err(ArrowError::SchemaError(format!(
+                        "Writer union has {} branches, which exceeds the maximum addressable \
+                         branches by an Avro int tag ({} + 1).",
+                        encodings.len(),
+                        i32::MAX
+                    )));
+                }
+                Self::Union(
+                    encodings
+                        .iter()
+                        .map(Skipper::from_avro)
+                        .collect::<Result<_, _>>()?,
+                )
+            }
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Skipper not implemented for codec {:?}",
@@ -1421,6 +1923,28 @@ impl Skipper {
                 }
                 Ok(())
             }
+            Self::Union(encodings) => {
+                // Union tag must be ZigZag-decoded
+                let raw = buf.get_long()?;
+                if raw < 0 {
+                    return Err(ArrowError::ParseError(format!(
+                        "Negative union branch index {raw}"
+                    )));
+                }
+                let idx: usize = usize::try_from(raw).map_err(|_| {
+                    ArrowError::ParseError(format!(
+                        "Union branch index {raw} does not fit into usize on this platform ({}-bit)",
+                        (usize::BITS as usize)
+                    ))
+                })?;
+                let Some(encoding) = encodings.get_mut(idx) else {
+                    return Err(ArrowError::ParseError(format!(
+                        "Union branch index {idx} out of range for skipper ({} branches)",
+                        encodings.len()
+                    )));
+                };
+                encoding.skip(buf)
+            }
             Self::Nullable(order, inner) => {
                 let branch = buf.read_vlq()?;
                 let is_not_null = match *order {
@@ -1486,6 +2010,142 @@ mod tests {
         let field =
             AvroField::resolve_from_writer_and_reader(&ws, &rs, use_utf8view, false).unwrap();
         Decoder::try_new(field.data_type()).unwrap()
+    }
+
+    #[test]
+    fn test_union_resolution_writer_union_reader_union_reorder_and_promotion_dense() {
+        let ws = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
+        ]);
+        let rs = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
+        ]);
+        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
+        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+        let mut rec1 = encode_avro_long(0);
+        rec1.extend(encode_avro_int(7));
+        let mut cur1 = AvroCursor::new(&rec1);
+        dec.decode(&mut cur1).unwrap();
+        let mut rec2 = encode_avro_long(1);
+        rec2.extend(encode_avro_bytes("abc".as_bytes()));
+        let mut cur2 = AvroCursor::new(&rec2);
+        dec.decode(&mut cur2).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let ua = arr
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("dense union output");
+        assert_eq!(
+            ua.type_id(0),
+            1,
+            "first value must select reader 'long' branch"
+        );
+        assert_eq!(ua.value_offset(0), 0);
+        assert_eq!(
+            ua.type_id(1),
+            0,
+            "second value must select reader 'string' branch"
+        );
+        assert_eq!(ua.value_offset(1), 0);
+        let long_child = ua.child(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(long_child.len(), 1);
+        assert_eq!(long_child.value(0), 7);
+        let str_child = ua.child(0).as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(str_child.len(), 1);
+        assert_eq!(str_child.value(0), "abc");
+    }
+
+    #[test]
+    fn test_union_resolution_writer_union_reader_nonunion_promotion_int_to_long() {
+        let ws = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
+        ]);
+        let rs = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
+        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
+        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+        let mut data = encode_avro_long(0);
+        data.extend(encode_avro_int(5));
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let out = arr.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out.value(0), 5);
+    }
+
+    #[test]
+    fn test_union_resolution_writer_union_reader_nonunion_mismatch_errors() {
+        let ws = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
+        ]);
+        let rs = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
+        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
+        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+        let mut data = encode_avro_long(1);
+        data.extend(encode_avro_bytes("z".as_bytes()));
+        let mut cur = AvroCursor::new(&data);
+        let res = dec.decode(&mut cur);
+        assert!(
+            res.is_err(),
+            "expected error when writer union branch does not resolve to reader non-union type"
+        );
+    }
+
+    #[test]
+    fn test_union_resolution_writer_nonunion_reader_union_selects_matching_branch() {
+        let ws = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
+        let rs = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
+        ]);
+        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
+        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+        let data = encode_avro_int(6);
+        let mut cur = AvroCursor::new(&data);
+        dec.decode(&mut cur).unwrap();
+        let arr = dec.flush(None).unwrap();
+        let ua = arr
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("dense union output");
+        assert_eq!(ua.len(), 1);
+        assert_eq!(
+            ua.type_id(0),
+            1,
+            "must resolve to reader 'long' branch (type_id 1)"
+        );
+        assert_eq!(ua.value_offset(0), 0);
+        let long_child = ua.child(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(long_child.len(), 1);
+        assert_eq!(long_child.value(0), 6);
+        let str_child = ua.child(0).as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(str_child.len(), 0, "string branch must be empty");
+    }
+
+    #[test]
+    fn test_union_resolution_writer_union_reader_union_unmapped_branch_errors() {
+        let ws = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Int)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Boolean)),
+        ]);
+        let rs = Schema::Union(vec![
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
+            Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
+        ]);
+        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
+        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+        let mut data = encode_avro_long(1);
+        data.push(1);
+        let mut cur = AvroCursor::new(&data);
+        let res = dec.decode(&mut cur);
+        assert!(
+            res.is_err(),
+            "expected error for unmapped writer 'boolean' branch"
+        );
     }
 
     #[test]
@@ -2566,6 +3226,182 @@ mod tests {
         assert_eq!(id.value(1), 7);
     }
 
+    fn make_dense_union_avro(
+        children: Vec<(Codec, &'_ str, DataType)>,
+        type_ids: Vec<i8>,
+    ) -> AvroDataType {
+        let mut avro_children: Vec<AvroDataType> = Vec::with_capacity(children.len());
+        let mut fields: Vec<arrow_schema::Field> = Vec::with_capacity(children.len());
+        for (codec, name, dt) in children.into_iter() {
+            avro_children.push(AvroDataType::new(codec, Default::default(), None));
+            fields.push(arrow_schema::Field::new(name, dt, true));
+        }
+        let union_fields = UnionFields::new(type_ids, fields);
+        let union_codec = Codec::Union(avro_children.into(), union_fields, UnionMode::Dense);
+        AvroDataType::new(union_codec, Default::default(), None)
+    }
+
+    #[test]
+    fn test_union_dense_two_children_custom_type_ids() {
+        let union_dt = make_dense_union_avro(
+            vec![
+                (Codec::Int32, "i", DataType::Int32),
+                (Codec::Utf8, "s", DataType::Utf8),
+            ],
+            vec![2, 5],
+        );
+        let mut dec = Decoder::try_new(&union_dt).unwrap();
+        let mut r1 = Vec::new();
+        r1.extend_from_slice(&encode_avro_long(0));
+        r1.extend_from_slice(&encode_avro_int(7));
+        let mut r2 = Vec::new();
+        r2.extend_from_slice(&encode_avro_long(1));
+        r2.extend_from_slice(&encode_avro_bytes(b"x"));
+        let mut r3 = Vec::new();
+        r3.extend_from_slice(&encode_avro_long(0));
+        r3.extend_from_slice(&encode_avro_int(-1));
+        dec.decode(&mut AvroCursor::new(&r1)).unwrap();
+        dec.decode(&mut AvroCursor::new(&r2)).unwrap();
+        dec.decode(&mut AvroCursor::new(&r3)).unwrap();
+        let array = dec.flush(None).unwrap();
+        let ua = array
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("expected UnionArray");
+        assert_eq!(ua.len(), 3);
+        assert_eq!(ua.type_id(0), 2);
+        assert_eq!(ua.type_id(1), 5);
+        assert_eq!(ua.type_id(2), 2);
+        assert_eq!(ua.value_offset(0), 0);
+        assert_eq!(ua.value_offset(1), 0);
+        assert_eq!(ua.value_offset(2), 1);
+        let int_child = ua
+            .child(2)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int child");
+        assert_eq!(int_child.len(), 2);
+        assert_eq!(int_child.value(0), 7);
+        assert_eq!(int_child.value(1), -1);
+        let str_child = ua
+            .child(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string child");
+        assert_eq!(str_child.len(), 1);
+        assert_eq!(str_child.value(0), "x");
+    }
+
+    #[test]
+    fn test_union_dense_with_null_and_string_children() {
+        let union_dt = make_dense_union_avro(
+            vec![
+                (Codec::Null, "n", DataType::Null),
+                (Codec::Utf8, "s", DataType::Utf8),
+            ],
+            vec![42, 7],
+        );
+        let mut dec = Decoder::try_new(&union_dt).unwrap();
+        let r1 = encode_avro_long(0);
+        let mut r2 = Vec::new();
+        r2.extend_from_slice(&encode_avro_long(1));
+        r2.extend_from_slice(&encode_avro_bytes(b"abc"));
+        let r3 = encode_avro_long(0);
+        dec.decode(&mut AvroCursor::new(&r1)).unwrap();
+        dec.decode(&mut AvroCursor::new(&r2)).unwrap();
+        dec.decode(&mut AvroCursor::new(&r3)).unwrap();
+        let array = dec.flush(None).unwrap();
+        let ua = array
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("expected UnionArray");
+        assert_eq!(ua.len(), 3);
+        assert_eq!(ua.type_id(0), 42);
+        assert_eq!(ua.type_id(1), 7);
+        assert_eq!(ua.type_id(2), 42);
+        assert_eq!(ua.value_offset(0), 0);
+        assert_eq!(ua.value_offset(1), 0);
+        assert_eq!(ua.value_offset(2), 1);
+        let null_child = ua
+            .child(42)
+            .as_any()
+            .downcast_ref::<NullArray>()
+            .expect("null child");
+        assert_eq!(null_child.len(), 2);
+        let str_child = ua
+            .child(7)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("string child");
+        assert_eq!(str_child.len(), 1);
+        assert_eq!(str_child.value(0), "abc");
+    }
+
+    #[test]
+    fn test_union_decode_negative_branch_index_errors() {
+        let union_dt = make_dense_union_avro(
+            vec![
+                (Codec::Int32, "i", DataType::Int32),
+                (Codec::Utf8, "s", DataType::Utf8),
+            ],
+            vec![0, 1],
+        );
+        let mut dec = Decoder::try_new(&union_dt).unwrap();
+        let row = encode_avro_long(-1); // decodes back to -1
+        let err = dec
+            .decode(&mut AvroCursor::new(&row))
+            .expect_err("expected error for negative branch index");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Negative union branch index"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_union_decode_out_of_range_branch_index_errors() {
+        let union_dt = make_dense_union_avro(
+            vec![
+                (Codec::Int32, "i", DataType::Int32),
+                (Codec::Utf8, "s", DataType::Utf8),
+            ],
+            vec![10, 11],
+        );
+        let mut dec = Decoder::try_new(&union_dt).unwrap();
+        let row = encode_avro_long(2);
+        let err = dec
+            .decode(&mut AvroCursor::new(&row))
+            .expect_err("expected error for out-of-range branch index");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("out of range"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_union_sparse_mode_not_supported() {
+        let children: Vec<AvroDataType> = vec![
+            AvroDataType::new(Codec::Int32, Default::default(), None),
+            AvroDataType::new(Codec::Utf8, Default::default(), None),
+        ];
+        let uf = UnionFields::new(
+            vec![1, 3],
+            vec![
+                arrow_schema::Field::new("i", DataType::Int32, true),
+                arrow_schema::Field::new("s", DataType::Utf8, true),
+            ],
+        );
+        let codec = Codec::Union(children.into(), uf, UnionMode::Sparse);
+        let dt = AvroDataType::new(codec, Default::default(), None);
+        let err = Decoder::try_new(&dt).expect_err("sparse union should not be supported");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Sparse Arrow unions are not yet supported"),
+            "unexpected error message: {msg}"
+        );
+    }
+
     fn make_record_decoder_with_projector_defaults(
         reader_fields: &[(&str, DataType, bool)],
         field_defaults: Vec<Option<AvroLiteral>>,
@@ -3005,5 +3841,44 @@ mod tests {
             .unwrap();
         assert_eq!(id.value(0), 99);
         assert_eq!(name.value(0), "alice");
+    }
+
+    #[test]
+    fn union_type_ids_are_not_child_indexes() {
+        let encodings: Vec<AvroDataType> =
+            vec![avro_from_codec(Codec::Int32), avro_from_codec(Codec::Utf8)];
+        let fields: UnionFields = [
+            (42_i8, Arc::new(ArrowField::new("a", DataType::Int32, true))),
+            (7_i8, Arc::new(ArrowField::new("b", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect();
+        let dt = avro_from_codec(Codec::Union(
+            encodings.into(),
+            fields.clone(),
+            UnionMode::Dense,
+        ));
+        let mut dec = Decoder::try_new(&dt).expect("decoder");
+        let mut b1 = encode_avro_long(1);
+        b1.extend(encode_avro_bytes("hi".as_bytes()));
+        dec.decode(&mut AvroCursor::new(&b1)).expect("decode b1");
+        let mut b0 = encode_avro_long(0);
+        b0.extend(encode_avro_int(5));
+        dec.decode(&mut AvroCursor::new(&b0)).expect("decode b0");
+        let arr = dec.flush(None).expect("flush");
+        let ua = arr.as_any().downcast_ref::<UnionArray>().expect("union");
+        assert_eq!(ua.len(), 2);
+        assert_eq!(ua.type_id(0), 7, "type id must come from UnionFields");
+        assert_eq!(ua.type_id(1), 42, "type id must come from UnionFields");
+        assert_eq!(ua.value_offset(0), 0);
+        assert_eq!(ua.value_offset(1), 0);
+        let utf8_child = ua.child(7).as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(utf8_child.len(), 1);
+        assert_eq!(utf8_child.value(0), "hi");
+        let int_child = ua.child(42).as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int_child.len(), 1);
+        assert_eq!(int_child.value(0), 5);
+        let type_ids: Vec<i8> = fields.iter().map(|(tid, _)| tid).collect();
+        assert_eq!(type_ids, vec![42_i8, 7_i8]);
     }
 }

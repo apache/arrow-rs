@@ -1056,10 +1056,19 @@ fn test_string_data_from_foreign() {
 
 #[test]
 fn test_decimal_full_validation() {
+    let array = Decimal128Array::from(vec![123456_i128])
+        .with_precision_and_scale(5, 2)
+        .unwrap();
+    let error = array.validate_decimal_precision(5).unwrap_err();
+    assert_eq!(
+        "Invalid argument error: 1234.56 is too large to store in a Decimal128 of precision 5. Max is 999.99",
+        error.to_string()
+    );
+
     let array = Decimal128Array::from(vec![123456_i128]);
     let error = array.validate_decimal_precision(5).unwrap_err();
     assert_eq!(
-        "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
+        "Invalid argument error: Decimal precision 5 is less than scale 10",
         error.to_string()
     );
 }
