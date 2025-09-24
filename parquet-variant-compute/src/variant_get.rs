@@ -297,12 +297,6 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray
-    };
-    use std::sync::Arc;
-
-    use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, Date32Array,
         Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
         StringArray, StructArray
@@ -317,7 +311,6 @@ mod test {
     use arrow_schema::{DataType, Field, FieldRef, Fields};
     use chrono::DateTime;
     use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
-    use std::sync::Arc;
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
@@ -990,7 +983,7 @@ mod test {
                 None, // row 2 is a string, so no typed value
                 Some(<$primitive_type>::try_from(100u8).unwrap()), // row 3 is shredded, so it has a value
             ]));
-        }
+        };
     }
 
     macro_rules! partially_shredded_variant_array_gen {
@@ -1079,14 +1072,14 @@ mod test {
         ])
     });
 
-    partially_shredded_variant_array_gen!(partially_shredded_utf8_variant_array, ||
+    partially_shredded_variant_array_gen!(partially_shredded_utf8_variant_array, || {
         StringArray::from(vec![
             Some("hello"), // row 0 is shredded
             None,          // row 1 is null
             None,          // row 2 is a string
             Some("world"), // row 3 is shredded
         ])
-    );
+    });
 
     partially_shredded_variant_array_gen!(partially_shredded_date32_variant_array, || {
         Date32Array::from(vec![
@@ -1096,50 +1089,6 @@ mod test {
             Some(20340), // row 3 is shredded, 2025-09-09
         ])
     });
-    // /// Return a VariantArray that represents a partially "shredded" variant for Date32
-    // fn partially_shredded_date32_variant_array() -> ArrayRef {
-    //     let (metadata, string_value) = {
-    //         let mut builder = parquet_variant::VariantBuilder::new();
-    //         builder.append_value("n/a");
-    //         builder.finish()
-    //     };
-    //
-    //     // Create the null buffer for the overall array
-    //     let nulls = NullBuffer::from(vec![
-    //         true,  // row 0 non null
-    //         false, // row 1 is null
-    //         true,  // row 2 non null
-    //         true,  // row 3 non null
-    //     ]);
-    //
-    //     // metadata is the same for all rows
-    //     let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-    //
-    //     // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-    //     // about why row1 is an empty but non null, value.
-    //     let values = BinaryViewArray::from(vec![
-    //         None,                // row 0 is shredded, so no value
-    //         Some(b"" as &[u8]),  // row 1 is null, so empty value
-    //         Some(&string_value), // copy the string value "N/A"
-    //         None,                // row 3 is shredded, so no value
-    //     ]);
-    //
-    //     let typed_value = Date32Array::from(vec![
-    //         Some(20348), // row 0 is shredded, 2025-09-17
-    //         None,        // row 1 is null
-    //         None,        // row 2 is a string, not a date
-    //         Some(20340), // row 3 is shredded, 2025-09-09
-    //     ]);
-    //
-    //     let struct_array = StructArrayBuilder::new()
-    //         .with_field("metadata", Arc::new(metadata), false)
-    //         .with_field("typed_value", Arc::new(typed_value), true)
-    //         .with_field("value", Arc::new(values), true)
-    //         .with_nulls(nulls)
-    //         .build();
-    //
-    //     Arc::new(struct_array)
-    // }
 
     /// Return a VariantArray that represents an "all null" variant
     /// for the following example (3 null values):
