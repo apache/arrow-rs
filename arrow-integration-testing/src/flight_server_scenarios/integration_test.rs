@@ -144,7 +144,12 @@ impl FlightService for FlightServiceImpl {
             .enumerate()
             .flat_map(|(counter, batch)| {
                 let (encoded_dictionaries, encoded_batch) = data_gen
-                    .encoded_batch(batch, &mut dictionary_tracker, &options)
+                    .encode(
+                        batch,
+                        &mut dictionary_tracker,
+                        &options,
+                        &mut Default::default(),
+                    )
                     .expect("DictionaryTracker configured above to not error on replacement");
 
                 let dictionary_flight_data = encoded_dictionaries.into_iter().map(Into::into);

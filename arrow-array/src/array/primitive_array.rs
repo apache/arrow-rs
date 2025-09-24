@@ -1600,10 +1600,16 @@ impl<T: DecimalType + ArrowPrimitiveType> PrimitiveArray<T> {
     /// Validates values in this array can be properly interpreted
     /// with the specified precision.
     pub fn validate_decimal_precision(&self, precision: u8) -> Result<(), ArrowError> {
+        if precision < self.scale() as u8 {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Decimal precision {precision} is less than scale {}",
+                self.scale()
+            )));
+        }
         (0..self.len()).try_for_each(|idx| {
             if self.is_valid(idx) {
                 let decimal = unsafe { self.value_unchecked(idx) };
-                T::validate_decimal_precision(decimal, precision)
+                T::validate_decimal_precision(decimal, precision, self.scale())
             } else {
                 Ok(())
             }
@@ -2093,7 +2099,7 @@ mod tests {
         let arr: PrimitiveArray<TimestampMillisecondType> =
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000]);
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, None)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
+            "PrimitiveArray<Timestamp(ms)>\n[\n  2018-12-31T00:00:00,\n  2018-12-31T00:00:00,\n  1921-01-02T00:00:00,\n]",
             format!("{arr:?}")
         );
     }
@@ -2104,7 +2110,7 @@ mod tests {
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
                 .with_timezone_utc();
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"+00:00\"))>\n[\n  2018-12-31T00:00:00+00:00,\n  2018-12-31T00:00:00+00:00,\n  1921-01-02T00:00:00+00:00,\n]",
+            "PrimitiveArray<Timestamp(ms, \"+00:00\")>\n[\n  2018-12-31T00:00:00+00:00,\n  2018-12-31T00:00:00+00:00,\n  1921-01-02T00:00:00+00:00,\n]",
             format!("{arr:?}")
         );
     }
@@ -2116,7 +2122,7 @@ mod tests {
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
                 .with_timezone("Asia/Taipei".to_string());
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
+            "PrimitiveArray<Timestamp(ms, \"Asia/Taipei\")>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
             format!("{arr:?}")
         );
     }
@@ -2131,7 +2137,7 @@ mod tests {
         println!("{arr:?}");
 
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"Asia/Taipei\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n]",
+            "PrimitiveArray<Timestamp(ms, \"Asia/Taipei\")>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'Asia/Taipei'),\n]",
             format!("{arr:?}")
         );
     }
@@ -2142,7 +2148,7 @@ mod tests {
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
                 .with_timezone("+08:00".to_string());
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"+08:00\"))>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
+            "PrimitiveArray<Timestamp(ms, \"+08:00\")>\n[\n  2018-12-31T08:00:00+08:00,\n  2018-12-31T08:00:00+08:00,\n  1921-01-02T08:00:00+08:00,\n]",
             format!("{arr:?}")
         );
     }
@@ -2153,7 +2159,7 @@ mod tests {
             TimestampMillisecondArray::from(vec![1546214400000, 1546214400000, -1546214400000])
                 .with_timezone("xxx".to_string());
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"xxx\"))>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'xxx'),\n]",
+            "PrimitiveArray<Timestamp(ms, \"xxx\")>\n[\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  2018-12-31T00:00:00 (Unknown Time Zone 'xxx'),\n  1921-01-02T00:00:00 (Unknown Time Zone 'xxx'),\n]",
             format!("{arr:?}")
         );
     }
@@ -2169,7 +2175,7 @@ mod tests {
         ])
         .with_timezone("America/Denver".to_string());
         assert_eq!(
-            "PrimitiveArray<Timestamp(Millisecond, Some(\"America/Denver\"))>\n[\n  2022-03-13T01:59:59-07:00,\n  2022-03-13T03:00:00-06:00,\n  2022-11-06T00:59:59-06:00,\n  2022-11-06T01:00:00-06:00,\n]",
+            "PrimitiveArray<Timestamp(ms, \"America/Denver\")>\n[\n  2022-03-13T01:59:59-07:00,\n  2022-03-13T03:00:00-06:00,\n  2022-11-06T00:59:59-06:00,\n  2022-11-06T01:00:00-06:00,\n]",
             format!("{arr:?}")
         );
     }
@@ -2187,7 +2193,7 @@ mod tests {
     fn test_time32second_fmt_debug() {
         let arr: PrimitiveArray<Time32SecondType> = vec![7201, 60054].into();
         assert_eq!(
-            "PrimitiveArray<Time32(Second)>\n[\n  02:00:01,\n  16:40:54,\n]",
+            "PrimitiveArray<Time32(s)>\n[\n  02:00:01,\n  16:40:54,\n]",
             format!("{arr:?}")
         );
     }
@@ -2197,8 +2203,8 @@ mod tests {
         // chrono::NaiveDatetime::from_timestamp_opt returns None while input is invalid
         let arr: PrimitiveArray<Time32SecondType> = vec![-7201, -60054].into();
         assert_eq!(
-        "PrimitiveArray<Time32(Second)>\n[\n  Cast error: Failed to convert -7201 to temporal for Time32(Second),\n  Cast error: Failed to convert -60054 to temporal for Time32(Second),\n]",
-            // "PrimitiveArray<Time32(Second)>\n[\n  null,\n  null,\n]",
+        "PrimitiveArray<Time32(s)>\n[\n  Cast error: Failed to convert -7201 to temporal for Time32(s),\n  Cast error: Failed to convert -60054 to temporal for Time32(s),\n]",
+            // "PrimitiveArray<Time32(s)>\n[\n  null,\n  null,\n]",
             format!("{arr:?}")
         )
     }
@@ -2208,7 +2214,7 @@ mod tests {
         // replicate the issue from https://github.com/apache/arrow-datafusion/issues/3832
         let arr: PrimitiveArray<TimestampMicrosecondType> = vec![9065525203050843594].into();
         assert_eq!(
-            "PrimitiveArray<Timestamp(Microsecond, None)>\n[\n  null,\n]",
+            "PrimitiveArray<Timestamp(µs)>\n[\n  null,\n]",
             format!("{arr:?}")
         )
     }
@@ -2436,7 +2442,7 @@ mod tests {
         let result = arr.validate_decimal_precision(5);
         let error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
+            "Invalid argument error: 123.456 is too large to store in a Decimal128 of precision 5. Max is 99.999",
             error.to_string()
         );
 
@@ -2455,7 +2461,7 @@ mod tests {
         let result = arr.validate_decimal_precision(2);
         let error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 100 is too large to store in a Decimal128 of precision 2. Max is 99",
+            "Invalid argument error: 10.0 is too large to store in a Decimal128 of precision 2. Max is 9.9",
             error.to_string()
         );
     }
@@ -2541,7 +2547,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "-123223423432432 is too small to store in a Decimal128 of precision 5. Min is -99999"
+        expected = "-1232234234324.32 is too small to store in a Decimal128 of precision 5. Min is -999.99"
     )]
     fn test_decimal_array_with_precision_and_scale_out_of_range() {
         let arr = Decimal128Array::from_iter_values([12345, 456, 7890, -123223423432432])
@@ -2849,7 +2855,7 @@ mod tests {
         ]
         .into();
         let debug_str = format!("{array:?}");
-        assert_eq!("PrimitiveArray<Time32(Second)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(Second),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400 to temporal for Time32(Second),\n  Cast error: Failed to convert 86401 to temporal for Time32(Second),\n  null,\n]",
+        assert_eq!("PrimitiveArray<Time32(s)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(s),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400 to temporal for Time32(s),\n  Cast error: Failed to convert 86401 to temporal for Time32(s),\n  null,\n]",
     debug_str
     );
     }
@@ -2866,7 +2872,7 @@ mod tests {
         ]
         .into();
         let debug_str = format!("{array:?}");
-        assert_eq!("PrimitiveArray<Time32(Millisecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(Millisecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000 to temporal for Time32(Millisecond),\n  Cast error: Failed to convert 86401000 to temporal for Time32(Millisecond),\n  null,\n]",
+        assert_eq!("PrimitiveArray<Time32(ms)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(ms),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000 to temporal for Time32(ms),\n  Cast error: Failed to convert 86401000 to temporal for Time32(ms),\n  null,\n]",
             debug_str
         );
     }
@@ -2884,7 +2890,7 @@ mod tests {
         .into();
         let debug_str = format!("{array:?}");
         assert_eq!(
-        "PrimitiveArray<Time64(Nanosecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Nanosecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000000 to temporal for Time64(Nanosecond),\n  Cast error: Failed to convert 86401000000000 to temporal for Time64(Nanosecond),\n  null,\n]",
+        "PrimitiveArray<Time64(ns)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(ns),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000000 to temporal for Time64(ns),\n  Cast error: Failed to convert 86401000000000 to temporal for Time64(ns),\n  null,\n]",
             debug_str
         );
     }
@@ -2901,7 +2907,7 @@ mod tests {
         ]
         .into();
         let debug_str = format!("{array:?}");
-        assert_eq!("PrimitiveArray<Time64(Microsecond)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(Microsecond),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000 to temporal for Time64(Microsecond),\n  Cast error: Failed to convert 86401000000 to temporal for Time64(Microsecond),\n  null,\n]", debug_str);
+        assert_eq!("PrimitiveArray<Time64(µs)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(µs),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000 to temporal for Time64(µs),\n  Cast error: Failed to convert 86401000000 to temporal for Time64(µs),\n  null,\n]", debug_str);
     }
 
     #[test]
