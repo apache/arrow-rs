@@ -25,9 +25,11 @@ use arrow::datatypes::{
     Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
 };
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
 use parquet_variant::Uuid;
 use parquet_variant::Variant;
+
+use std::borrow::Cow;
 use std::sync::Arc;
 
 /// Arrow Variant [`ExtensionType`].
@@ -862,36 +864,106 @@ fn typed_value_to_variant<'a>(
 ///
 /// So cast them to get the right type.
 fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
-    let new_type = rewrite_to_view_types(array.data_type());
-    cast(array, &new_type)
+    let new_type = canonicalize_and_verify_data_type(array.data_type())?;
+    cast(array, new_type.as_ref())
 }
 
+fn is_valid_variant_decimal(p: &u8, s: &i8, max_precision: u8) -> bool {
+    *p <= max_precision && (0..=*p as i8).contains(s)
+}
 /// replaces all instances of Binary with BinaryView in a DataType
-fn rewrite_to_view_types(data_type: &DataType) -> DataType {
-    match data_type {
-        // Unsigned integers are not allowed at all
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-            panic!("Illegal shredded value type: {data_type:?}");
-        }
-        // UUID maps to 16-byte fixed-size binary; no other width is allowed
-        DataType::FixedSizeBinary(n) if *n != 16 => {
-            panic!("Illegal shredded value type: {data_type:?}");
-        }
-        DataType::Binary => DataType::BinaryView,
-        DataType::List(field) => DataType::List(rewrite_field_type(field)),
-        DataType::Struct(fields) => {
-            DataType::Struct(fields.iter().map(rewrite_field_type).collect())
-        }
-        _ => data_type.clone(),
+fn canonicalize_and_verify_data_type(
+    data_type: &DataType,
+) -> Result<Cow<'_, DataType>, ArrowError> {
+    use DataType::*;
+
+    // helper macros
+    macro_rules! fail {
+        () => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Illegal shredded value type: {data_type}"
+            )))
+        };
     }
+    macro_rules! borrow {
+        () => {
+            Cow::Borrowed(data_type)
+        };
+    }
+
+    let new_data_type = match data_type {
+        // Primitive arrow types that have a direct variant counterpart are allowed
+        Null | Boolean => borrow!(),
+        Int8 | Int16 | Int32 | Int64 | Float32 | Float64 => borrow!(),
+
+        // Unsigned integers are not allowed at all
+        UInt8 | UInt16 | UInt32 | UInt64 | Float16 => fail!(),
+
+        // Most decimal types are allowed, with restrictions on precision and scale
+        Decimal32(p, s) if is_valid_variant_decimal(p, s, 9) => borrow!(),
+        Decimal64(p, s) if is_valid_variant_decimal(p, s, 18) => borrow!(),
+        Decimal128(p, s) if is_valid_variant_decimal(p, s, 38) => borrow!(),
+        Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
+
+        // Only micro and nano timestamps are supported
+        Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, _) => borrow!(),
+        Timestamp(TimeUnit::Millisecond | TimeUnit::Second, _) => fail!(),
+
+        // Only 32-bit dates and 64-bit microsecond time are supported.
+        Date32 | Time64(TimeUnit::Microsecond) => borrow!(),
+        Date64 | Time32(_) | Time64(_) | Duration(_) | Interval(_) => fail!(),
+
+        // Binary and string are allowed
+        Binary => Cow::Owned(DataType::BinaryView),
+        BinaryView | Utf8 => borrow!(),
+
+        // UUID maps to 16-byte fixed-size binary; no other width is allowed
+        FixedSizeBinary(16) => borrow!(),
+        FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
+
+        // We can _possibly_ support (some of) these some day?
+        LargeBinary | LargeUtf8 | Utf8View | ListView(_) | LargeList(_) | LargeListView(_) => {
+            fail!()
+        }
+
+        // Lists and struct are supported, maps and unions are not
+        List(field) => match canonicalize_and_verify_field(field)? {
+            Cow::Borrowed(_) => borrow!(),
+            Cow::Owned(new_field) => Cow::Owned(DataType::List(new_field)),
+        },
+        Struct(fields) => {
+            // Avoid allocation unless at least one field was rewritten
+            let mut new_fields = std::collections::HashMap::new();
+            for (i, field) in fields.iter().enumerate() {
+                if let Cow::Owned(new_field) = canonicalize_and_verify_field(field)? {
+                    new_fields.insert(i, new_field);
+                }
+            }
+
+            if new_fields.is_empty() {
+                borrow!()
+            } else {
+                let new_fields = fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, field)| new_fields.remove(&i).unwrap_or_else(|| field.clone()));
+                Cow::Owned(DataType::Struct(new_fields.collect()))
+            }
+        }
+        Map(..) | Union(..) => fail!(),
+
+        // We can _possibly_ support (some of) these some day?
+        Dictionary(..) | RunEndEncoded(..) => fail!(),
+    };
+    Ok(new_data_type)
 }
 
-fn rewrite_field_type(field: impl AsRef<Field>) -> Arc<Field> {
-    let field = field.as_ref();
-    let new_field = field
-        .clone()
-        .with_data_type(rewrite_to_view_types(field.data_type()));
-    Arc::new(new_field)
+fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field>>, ArrowError> {
+    let Cow::Owned(new_data_type) = canonicalize_and_verify_data_type(field.data_type())? else {
+        return Ok(Cow::Borrowed(field));
+    };
+    let new_field = field.as_ref().clone().with_data_type(new_data_type);
+    Ok(Cow::Owned(Arc::new(new_field)))
 }
 
 #[cfg(test)]
