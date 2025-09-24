@@ -161,10 +161,15 @@ impl GeometryBounder {
 
     fn update_x(&mut self, x: &Interval) {
         if x.hi() < self.wraparound_hint.mid() {
+            // If the x interval is completely to the left of the midpoint, merge it
+            // with x_left
             self.x_left.update_interval(x);
         } else if x.lo() > self.wraparound_hint.mid() {
+            // If the x interval is completely to the right of the midpoint, merge it
+            // with x_right
             self.x_right.update_interval(x);
         } else {
+            // Otherwise, merge it with x_mid
             self.x_mid.update_interval(x);
         }
     }
@@ -525,6 +530,10 @@ mod test {
         let bounds = wkt_bounds(["MULTIPOLYGON (((0 0, 0 1, 1 0, 0 0)))"]).unwrap();
         assert_eq!(bounds.x(), (0, 1).into());
         assert_eq!(bounds.y(), (0, 1).into());
+
+        let bounds = wkt_bounds(["GEOMETRYCOLLECTION (POINT (0 1), POINT (2 3))"]).unwrap();
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
     }
 
     #[test]
