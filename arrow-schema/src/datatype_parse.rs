@@ -851,7 +851,7 @@ mod test {
                 r#"Timestamp(ns, "+00:00"")"#,
                 r#"parsing "+00:00"" as double quoted string: escaped double quote isn't supported"#,
             ),
-            ("Timestamp(Nanosecond, ", "Error finding next token"),
+            ("Timestamp(ns, ", "Error finding next token"),
             (
                 "Float32 Float32",
                 "trailing content after parsing 'Float32'",

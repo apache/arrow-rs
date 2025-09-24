@@ -118,7 +118,7 @@ variant_test_case!(29, "Unsupported typed_value type: Decimal128(38, 9)");
 variant_test_case!(30);
 variant_test_case!(31);
 // https://github.com/apache/arrow-rs/issues/8334
-variant_test_case!(32, "Unsupported typed_value type: Time64(Microsecond)");
+variant_test_case!(32, "Unsupported typed_value type: Time64(µs)");
 // https://github.com/apache/arrow-rs/issues/8331
 variant_test_case!(33, "Unsupported typed_value type: Timestamp(ns \"UTC\")");
 variant_test_case!(34, "Unsupported typed_value type: Timestamp(ns \"UTC\")");
