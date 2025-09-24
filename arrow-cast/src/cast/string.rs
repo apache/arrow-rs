@@ -378,16 +378,18 @@ pub(crate) fn cast_binary_view_to_string_view(
 ) -> Result<ArrayRef, ArrowError> {
     let array = array.as_binary_view();
 
-    match array.clone().to_string_view() {
-        Ok(result) => Ok(Arc::new(result)),
-        Err(error) => match cast_options.safe {
-            true => {
-                let mut builder = StringViewBuilder::with_capacity(array.len());
-                extend_valid_utf8(&mut builder, array.iter());
-                Ok(Arc::new(builder.finish()))
-            }
-            false => Err(error),
-        },
+    if cast_options.safe {
+        // When safe=true, skip the fast path to avoid double UTF-8 validation
+        // and go directly to the fallback that handles invalid UTF-8 gracefully
+        let mut builder = StringViewBuilder::with_capacity(array.len());
+        extend_valid_utf8(&mut builder, array.iter());
+        Ok(Arc::new(builder.finish()))
+    } else {
+        // When safe=false, use the fast path and let it fail on invalid UTF-8
+        array
+            .clone()
+            .to_string_view()
+            .map(|result| Arc::new(result) as ArrayRef)
     }
 }
 
