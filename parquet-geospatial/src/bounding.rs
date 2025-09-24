@@ -25,8 +25,14 @@ use geo_traits::{
 
 use crate::interval::{Interval, IntervalTrait, WraparoundInterval};
 
+/// Geometry bounder
+///
+/// Utility to accumulate statistics for geometries as they are written.
+/// This bounder is designed to output statistics accumulated according
+/// to the Parquet specification such that the output can be written to
+/// Parquet statistics with minimal modification.
 #[derive(Debug)]
-pub struct Bounder {
+pub struct GeometryBounder {
     x_left: Interval,
     x_mid: Interval,
     x_right: Interval,
@@ -37,7 +43,8 @@ pub struct Bounder {
     wraparound_hint: Interval,
 }
 
-impl Bounder {
+impl GeometryBounder {
+    /// Create a new, empty bounder that represents empty input
     pub fn empty() -> Self {
         Self {
             x_left: Interval::empty(),
@@ -51,6 +58,19 @@ impl Bounder {
         }
     }
 
+    /// Set the hint to use for generation of potential wraparound xmin/xmax output
+    ///
+    /// Usually this value should be set to (-180, 180), as wraparound is primarily
+    /// targeted at lon/lat coordinate systems where collections of features with
+    /// components at the very far left and very far right of the coordinate system
+    /// are actually very close to each other.
+    ///
+    /// It is safe to set this value even when the actual coordinate system of the
+    /// input is unknown: if the input has coordinate values that are outside the
+    /// range of the wraparound hint, wraparound xmin/xmax values will not be
+    /// generated. If the input has coordinate values that are well inside of the
+    /// range of the wraparound hint, the wraparound xmin/xmax value will be
+    /// substantially wider than the non-wraparound version and will not be returned.
     pub fn with_wraparound_hint(self, wraparound_hint: impl Into<Interval>) -> Self {
         Self {
             wraparound_hint: wraparound_hint.into(),
@@ -58,6 +78,12 @@ impl Bounder {
         }
     }
 
+    /// Calculate the final xmin and xmax for geometries encountered by this bounder
+    ///
+    /// The interval returned may wraparound if a hint was set and the input
+    /// encountered by this bounder were exclusively at the far left and far right
+    /// of the input range. See [IntervalTrait] for an in-depth description of
+    /// wraparound intervals.
     pub fn x(&self) -> WraparoundInterval {
         let out_all = Interval::empty()
             .merge_interval(&self.x_left)
@@ -83,18 +109,26 @@ impl Bounder {
         WraparoundInterval::new(self.x_right.lo(), self.x_left.hi())
     }
 
+    /// Calculate the final ymin and ymax for geometries encountered by this bounder
     pub fn y(&self) -> Interval {
         self.y
     }
 
+    /// Calculate the final zmin and zmax for geometries encountered by this bounder
     pub fn z(&self) -> Interval {
         self.z
     }
 
+    /// Calculate the final mmin and mmax values for geometries encountered by this bounder
     pub fn m(&self) -> Interval {
         self.m
     }
 
+    /// Calculate the final geometry type set
+    ///
+    /// Returns a copy of the unique geometry type/dimension combinations encountered
+    /// by this bounder. These identifiers are ISO WKB identifiers (e.g., 1001
+    /// for PointZ). The output is always returned sorted.
     pub fn geometry_types(&self) -> Vec<i32> {
         let mut out = self.geometry_types.iter().cloned().collect::<Vec<_>>();
         out.sort();
@@ -122,18 +156,20 @@ impl Bounder {
             self.x_mid.update_interval(x);
         }
     }
-
-    pub fn update_geometry_types(&mut self, geometry_type: i32) {
-        self.geometry_types.insert(geometry_type);
-    }
 }
 
+/// Visit contiguous intervals for a given dimension within a [GeometryTrait]
+///
+/// Here, contiguous intervals refers to intervals that must not be separated
+/// by wraparound bounding. Point components of a geometry are visited as
+/// degenerate intervals of a single value; linestring or polygon ring components
+/// are visited as single intervals.
 fn visit_intervals(
     geom: &impl GeometryTrait<T = f64>,
-    target: char,
+    dimension: char,
     func: &mut impl FnMut(Interval),
 ) -> Result<(), ArrowError> {
-    let n = if let Some(n) = dimension_index(geom.dim(), target) {
+    let n = if let Some(n) = dimension_index(geom.dim(), dimension) {
         n
     } else {
         return Ok(());
@@ -142,7 +178,7 @@ fn visit_intervals(
     match geom.as_type() {
         GeometryType::Point(pt) => {
             if let Some(coord) = PointTrait::coord(pt) {
-                visit_coord(coord, n, func);
+                visit_point(coord, n, func);
             }
         }
         GeometryType::LineString(ls) => {
@@ -158,16 +194,16 @@ fn visit_intervals(
             }
         }
         GeometryType::MultiPoint(multi_pt) => {
-            visit_collection(multi_pt.points(), target, func)?;
+            visit_collection(multi_pt.points(), dimension, func)?;
         }
         GeometryType::MultiLineString(multi_ls) => {
-            visit_collection(multi_ls.line_strings(), target, func)?;
+            visit_collection(multi_ls.line_strings(), dimension, func)?;
         }
         GeometryType::MultiPolygon(multi_pl) => {
-            visit_collection(multi_pl.polygons(), target, func)?;
+            visit_collection(multi_pl.polygons(), dimension, func)?;
         }
         GeometryType::GeometryCollection(collection) => {
-            visit_collection(collection.geometries(), target, func)?;
+            visit_collection(collection.geometries(), dimension, func)?;
         }
         _ => {
             return Err(ArrowError::InvalidArgumentError(
@@ -179,11 +215,19 @@ fn visit_intervals(
     Ok(())
 }
 
-fn visit_coord(coord: impl CoordTrait<T = f64>, n: usize, func: &mut impl FnMut(Interval)) {
+/// Visit a point
+///
+/// Points can be separated by wraparound bounding even if they occur within
+/// the same feature, so we visit them as individual degenerate intervals.
+fn visit_point(coord: impl CoordTrait<T = f64>, n: usize, func: &mut impl FnMut(Interval)) {
     let val = unsafe { coord.nth_unchecked(n) };
     func((val, val).into());
 }
 
+/// Visit contiguous sequences
+///
+/// Sequences (e.g., linestrings or polygon rings) must always be considered
+/// together (i.e., are never separated by wraparound bounding).
 fn visit_sequence(
     coords: impl IntoIterator<Item = impl CoordTrait<T = f64>>,
     n: usize,
@@ -197,6 +241,7 @@ fn visit_sequence(
     func(interval);
 }
 
+/// Visit intervals in a collection of geometries
 fn visit_collection(
     collection: impl IntoIterator<Item = impl GeometryTrait<T = f64>>,
     target: char,
@@ -267,15 +312,15 @@ mod test {
 
     fn wkt_bounds(
         wkt_values: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Result<Bounder, ArrowError> {
+    ) -> Result<GeometryBounder, ArrowError> {
         wkt_bounds_with_wraparound(wkt_values, Interval::empty())
     }
 
     fn wkt_bounds_with_wraparound(
         wkt_values: impl IntoIterator<Item = impl AsRef<str>>,
         wraparound: impl Into<Interval>,
-    ) -> Result<Bounder, ArrowError> {
-        let mut bounder = Bounder::empty().with_wraparound_hint(wraparound);
+    ) -> Result<GeometryBounder, ArrowError> {
+        let mut bounder = GeometryBounder::empty().with_wraparound_hint(wraparound);
         for wkt_value in wkt_values {
             let wkt: Wkt = Wkt::from_str(wkt_value.as_ref())
                 .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
