@@ -23,7 +23,6 @@ use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
     Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
@@ -353,37 +352,20 @@ impl VariantArray {
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
     pub fn value(&self, index: usize) -> Variant<'_, '_> {
-        match &self.shredding_state {
-            ShreddingState::Unshredded { value, .. } => {
-                // Unshredded case
+        let typed_value = self.typed_value_field();
+        let value = self.value_field();
+        match (typed_value, value) {
+            // Always prefer typed_value, if available
+            (Some(typed_value), value) if typed_value.is_valid(index) => {
+                typed_value_to_variant(typed_value, value, index)
+            }
+            // Otherwise fall back to value, if available
+            (_, Some(value)) if value.is_valid(index) => {
                 Variant::new(self.metadata.value(index), value.value(index))
             }
-            ShreddingState::Typed { typed_value, .. } => {
-                // Typed case (formerly PerfectlyShredded)
-                if typed_value.is_null(index) {
-                    Variant::Null
-                } else {
-                    typed_value_to_variant(typed_value, index)
-                }
-            }
-            ShreddingState::PartiallyShredded {
-                value, typed_value, ..
-            } => {
-                // PartiallyShredded case (formerly ImperfectlyShredded)
-                if typed_value.is_null(index) {
-                    Variant::new(self.metadata.value(index), value.value(index))
-                } else {
-                    typed_value_to_variant(typed_value, index)
-                }
-            }
-            ShreddingState::AllNull => {
-                // AllNull case: neither value nor typed_value fields exist
-                // NOTE: This handles the case where neither value nor typed_value fields exist.
-                // For top-level variants, this returns Variant::Null (JSON null).
-                // For shredded object fields, this technically should indicate SQL NULL,
-                // but the current API cannot distinguish these contexts.
-                Variant::Null
-            }
+            // It is technically invalid for neither value nor typed_value fields to be available,
+            // but the spec specifically requires readers to return Variant::Null in this case.
+            _ => Variant::Null,
         }
     }
 
@@ -796,8 +778,17 @@ impl StructArrayBuilder {
 }
 
 /// returns the non-null element at index as a Variant
-fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '_> {
-    match typed_value.data_type() {
+fn typed_value_to_variant<'a>(
+    typed_value: &'a ArrayRef,
+    value: Option<&BinaryViewArray>,
+    index: usize,
+) -> Variant<'a, 'a> {
+    let data_type = typed_value.data_type();
+    if value.is_some_and(|v| !matches!(data_type, DataType::Struct(_)) && v.is_valid(index)) {
+        // Only a partially shredded struct is allowed to have values for both columns
+        panic!("Invalid variant, conflicting value and typed_value");
+    }
+    match data_type {
         DataType::Boolean => {
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
@@ -843,18 +834,6 @@ fn typed_value_to_variant(typed_value: &ArrayRef, index: usize) -> Variant<'_, '
         DataType::Int64 => {
             primitive_conversion_single_value!(Int64Type, typed_value, index)
         }
-        DataType::UInt8 => {
-            primitive_conversion_single_value!(UInt8Type, typed_value, index)
-        }
-        DataType::UInt16 => {
-            primitive_conversion_single_value!(UInt16Type, typed_value, index)
-        }
-        DataType::UInt32 => {
-            primitive_conversion_single_value!(UInt32Type, typed_value, index)
-        }
-        DataType::UInt64 => {
-            primitive_conversion_single_value!(UInt64Type, typed_value, index)
-        }
         DataType::Float16 => {
             primitive_conversion_single_value!(Float16Type, typed_value, index)
         }
@@ -898,6 +877,14 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError>
 /// replaces all instances of Binary with BinaryView in a DataType
 fn rewrite_to_view_types(data_type: &DataType) -> DataType {
     match data_type {
+        // Unsigned integers are not allowed at all
+        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+            panic!("Illegal shredded value type: {data_type:?}");
+        }
+        // UUID maps to 16-byte fixed-size binary; no other width is allowed
+        DataType::FixedSizeBinary(n) if *n != 16 => {
+            panic!("Illegal shredded value type: {data_type:?}");
+        }
         DataType::Binary => DataType::BinaryView,
         DataType::List(field) => DataType::List(rewrite_field_type(field)),
         DataType::Struct(fields) => {
