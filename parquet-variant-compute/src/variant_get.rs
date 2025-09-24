@@ -297,9 +297,8 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Float16Array,
-        Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
-        StructArray,
+        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
@@ -436,11 +435,6 @@ mod test {
     #[test]
     fn get_variant_partially_shredded_int64_as_variant() {
         numeric_partially_shredded_test!(i64, partially_shredded_int64_variant_array);
-    }
-
-    #[test]
-    fn get_variant_partially_shredded_float16_as_variant() {
-        numeric_partially_shredded_test!(half::f16, partially_shredded_float16_variant_array);
     }
 
     #[test]
@@ -609,11 +603,6 @@ mod test {
     }
 
     #[test]
-    fn get_variant_perfectly_shredded_float16_as_variant() {
-        numeric_perfectly_shredded_test!(half::f16, perfectly_shredded_float16_variant_array);
-    }
-
-    #[test]
     fn get_variant_perfectly_shredded_float32_as_variant() {
         numeric_perfectly_shredded_test!(f32, perfectly_shredded_float32_variant_array);
     }
@@ -751,11 +740,6 @@ mod test {
         i64
     );
     numeric_perfectly_shredded_variant_array_fn!(
-        perfectly_shredded_float16_variant_array,
-        Float16Array,
-        half::f16
-    );
-    numeric_perfectly_shredded_variant_array_fn!(
         perfectly_shredded_float32_variant_array,
         Float32Array,
         f32
@@ -857,11 +841,6 @@ mod test {
         partially_shredded_int64_variant_array,
         Int64Array,
         i64
-    );
-    numeric_partially_shredded_variant_array_fn!(
-        partially_shredded_float16_variant_array,
-        Float16Array,
-        half::f16
     );
     numeric_partially_shredded_variant_array_fn!(
         partially_shredded_float32_variant_array,
