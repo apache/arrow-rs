@@ -50,10 +50,16 @@ pub(crate) fn add_extension_type(arrow_field: Field, parquet_type: &Type) -> Fie
 #[cfg(feature = "variant_experimental")]
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
     use parquet_variant_compute::VariantType;
-    if field.extension_type_name()? == VariantType::NAME {
-        return Some(LogicalType::Variant);
-    };
-    None
+    // Check the name (= quick and cheap) and only try_extension_type if the name matches
+    // to avoid unnecessary String allocations in ArrowError
+    if field.extension_type_name()? != VariantType::NAME {
+        return None;
+    }
+    match field.try_extension_type::<VariantType>() {
+        Ok(VariantType) => Some(LogicalType::Variant),
+        // Given check above, this should not error, but if it does ignore
+        Err(_e) => None,
+    }
 }
 
 #[cfg(not(feature = "variant_experimental"))]
