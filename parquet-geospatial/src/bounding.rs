@@ -22,6 +22,7 @@ use geo_traits::{
     CoordTrait, Dimensions, GeometryCollectionTrait, GeometryTrait, GeometryType, LineStringTrait,
     MultiLineStringTrait, MultiPointTrait, MultiPolygonTrait, PointTrait, PolygonTrait,
 };
+use wkb::reader::Wkb;
 
 use crate::interval::{Interval, IntervalTrait, WraparoundInterval};
 
@@ -135,7 +136,18 @@ impl GeometryBounder {
         out
     }
 
-    pub fn update(&mut self, geom: &impl GeometryTrait<T = f64>) -> Result<(), ArrowError> {
+    /// Update this bounder with one WKB-encoded geometry
+    ///
+    /// Parses and accumulates the bounds of one WKB-encoded geometry. This function
+    /// will error for invalid WKB input; however, clients may wish to ignore such
+    /// an error for the purposes of writing statistics.
+    pub fn update_wkb(&mut self, wkb: &[u8]) -> Result<(), ArrowError> {
+        let wkb = Wkb::try_new(wkb).map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+        self.update_geometry(&wkb)?;
+        Ok(())
+    }
+
+    fn update_geometry(&mut self, geom: &impl GeometryTrait<T = f64>) -> Result<(), ArrowError> {
         let geometry_type = geometry_type(geom)?;
         self.geometry_types.insert(geometry_type);
 
@@ -324,9 +336,22 @@ mod test {
         for wkt_value in wkt_values {
             let wkt: Wkt = Wkt::from_str(wkt_value.as_ref())
                 .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
-            bounder.update(&wkt)?;
+            bounder.update_geometry(&wkt)?;
         }
         Ok(bounder)
+    }
+
+    #[test]
+    fn test_wkb() {
+        let wkt: Wkt = Wkt::from_str("LINESTRING (0 1, 2 3)").unwrap();
+        let mut wkb = Vec::new();
+        wkb::writer::write_geometry(&mut wkb, &wkt, &Default::default()).unwrap();
+
+        let mut bounds = GeometryBounder::empty();
+        bounds.update_wkb(&wkb).unwrap();
+
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
     }
 
     #[test]
