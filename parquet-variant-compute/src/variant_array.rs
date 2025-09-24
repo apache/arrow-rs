@@ -868,9 +868,11 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError>
     cast(array, new_type.as_ref())
 }
 
+/// Validates whether a given arrow decimal is a valid variant decimal
 fn is_valid_variant_decimal(p: &u8, s: &i8, max_precision: u8) -> bool {
     *p <= max_precision && (0..=*p as i8).contains(s)
 }
+
 /// replaces all instances of Binary with BinaryView in a DataType
 fn canonicalize_and_verify_data_type(
     data_type: &DataType,
@@ -913,7 +915,8 @@ fn canonicalize_and_verify_data_type(
         Date32 | Time64(TimeUnit::Microsecond) => borrow!(),
         Date64 | Time32(_) | Time64(_) | Duration(_) | Interval(_) => fail!(),
 
-        // Binary and string are allowed
+        // Binary and string are allowed.
+        // NOTE: We force Binary to BinaryView because that's what the parquet reader returns.
         Binary => Cow::Owned(DataType::BinaryView),
         BinaryView | Utf8 => borrow!(),
 
