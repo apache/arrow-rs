@@ -33,7 +33,7 @@ use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
 /// # Examples
 /// ```
 /// # use parquet::file::metadata::FooterTail;
-/// // a non encrypted footer with 28 bytes of metadaa
+/// // a non encrypted footer with 28 bytes of metadata
 /// let last_8_bytes: [u8; 8] = [0x1C, 0x00, 0x00, 0x00, b'P', b'A', b'R', b'1'];
 /// let footer_tail = FooterTail::try_from(last_8_bytes).unwrap();
 /// assert_eq!(footer_tail.metadata_length(), 28);
