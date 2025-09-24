@@ -4905,7 +4905,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(Second) type");
+            assert_eq!(
+                err.to_string(),
+                "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(s) type"
+            );
         }
     }
 
@@ -4947,7 +4950,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(Millisecond) type");
+            assert_eq!(
+                err.to_string(),
+                "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(ms) type"
+            );
         }
     }
 
@@ -4981,7 +4987,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of Time64(Microsecond) type");
+            assert_eq!(
+                err.to_string(),
+                "Cast error: Cannot cast string 'Not a valid time' to value of Time64(µs) type"
+            );
         }
     }
 
@@ -5015,7 +5024,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of Time64(Nanosecond) type");
+            assert_eq!(
+                err.to_string(),
+                "Cast error: Cannot cast string 'Not a valid time' to value of Time64(ns) type"
+            );
         }
     }
 
@@ -8704,7 +8716,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct(key Utf8, value nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct(key Utf8, value Duration(Second)) }, true) not supported"#
+            r#"Casting from Map(Field { "entries": Struct(key Utf8, value nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct(key Utf8, value Duration(s)) }, true) not supported"#
         );
     }
 
