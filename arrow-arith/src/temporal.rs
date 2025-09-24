@@ -649,7 +649,7 @@ impl ExtractDatePartExt for PrimitiveArray<DurationNanosecondType> {
 
 macro_rules! return_compute_error_with {
     ($msg:expr, $param:expr) => {
-        return { Err(ArrowError::ComputeError(format!("{}: {:?}", $msg, $param))) }
+        return { Err(ArrowError::ComputeError(format!("{}: {}", $msg, $param))) }
     };
 }
 
