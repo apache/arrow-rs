@@ -352,9 +352,7 @@ impl VariantArray {
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
     pub fn value(&self, index: usize) -> Variant<'_, '_> {
-        let typed_value = self.typed_value_field();
-        let value = self.value_field();
-        match (typed_value, value) {
+        match (self.typed_value_field(), self.value_field()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
                 typed_value_to_variant(typed_value, value, index)
@@ -800,7 +798,7 @@ fn typed_value_to_variant<'a>(
             let date = Date32Type::to_naive_date(value);
             Variant::from(date)
         }
-        // 16-byte FixedSizeBinary is always UUID; all others illegal.
+        // 16-byte FixedSizeBinary is always UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
             let array = typed_value.as_fixed_size_binary();
             let value = array.value(index);
