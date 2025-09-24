@@ -804,6 +804,44 @@ async fn test_float_16() {
 }
 
 #[tokio::test]
+async fn test_float_16_total_order() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float16TotalOrder,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float16Array::from(vec![
+            f16::from_f32(-5.),
+            f16::from_f32(-4.),
+            f16::from_f32(0.),
+            f16::from_f32(5.),
+        ])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float16Array::from(vec![
+            f16::from_f32(-1.),
+            f16::from_f32(0.),
+            f16::from_f32(4.),
+            f16::from_f32(9.),
+        ])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
 async fn test_float_32() {
     // This creates a parquet files of 1 column named f
     let reader = TestReader {
@@ -833,6 +871,34 @@ async fn test_float_32() {
 }
 
 #[tokio::test]
+async fn test_float_32_total_order() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float32TotalOrder,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float32Array::from(vec![-5., -4., 0., 5.0])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float32Array::from(vec![-1., 0., 4., 9.])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
 async fn test_float_64() {
     // This creates a parquet files of 1 column named f
     let reader = TestReader {
@@ -853,6 +919,34 @@ async fn test_float_64() {
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        column_name: "f",
+        check: Check::Both,
+    }
+    .run();
+}
+
+#[tokio::test]
+async fn test_float_64_total_order() {
+    // This creates a parquet files of 1 column named f
+    let reader = TestReader {
+        scenario: Scenario::Float64TotalOrder,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // mins are [-5, -4, 0, 5]
+        expected_min: Arc::new(Float64Array::from(vec![-5., -4., 0., 5.0])),
+        // maxes are [-1, 0, 4, 9]
+        expected_max: Arc::new(Float64Array::from(vec![-1., 0., 4., 9.])),
+        // nulls are [0, 0, 0, 0]
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
+        // row counts are [5, 5, 5, 5]
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
         expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
         expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "f",
