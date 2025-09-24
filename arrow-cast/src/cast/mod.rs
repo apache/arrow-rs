@@ -6401,9 +6401,7 @@ mod tests {
             cast_with_options(&binary_view_array, &DataType::Utf8View, &safe_options).unwrap();
         assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
 
-        let values: Vec<_> = string_view_array.as_string_view()
-            .iter()
-            .collect();
+        let values: Vec<_> = string_view_array.as_string_view().iter().collect();
 
         assert_eq!(values, vec![Some("valid"), None, Some("utf8"), None]);
     }
