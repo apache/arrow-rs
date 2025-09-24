@@ -265,7 +265,13 @@ mod test {
 
     use super::*;
 
-    pub fn wkt_bounds(
+    fn wkt_bounds(
+        wkt_values: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Bounder, ArrowError> {
+        wkt_bounds_with_wraparound(wkt_values, Interval::empty())
+    }
+
+    fn wkt_bounds_with_wraparound(
         wkt_values: impl IntoIterator<Item = impl AsRef<str>>,
         wraparound: impl Into<Interval>,
     ) -> Result<Bounder, ArrowError> {
@@ -279,7 +285,7 @@ mod test {
     }
 
     #[test]
-    pub fn test_geometry_types() {
+    fn test_geometry_types() {
         let empties = [
             "POINT EMPTY",
             "LINESTRING EMPTY",
@@ -291,9 +297,7 @@ mod test {
         ];
 
         assert_eq!(
-            wkt_bounds(empties, Interval::empty())
-                .unwrap()
-                .geometry_types(),
+            wkt_bounds(empties).unwrap().geometry_types(),
             vec![1, 2, 3, 4, 5, 6, 7]
         );
 
@@ -308,9 +312,7 @@ mod test {
         ];
 
         assert_eq!(
-            wkt_bounds(empties_z, Interval::empty())
-                .unwrap()
-                .geometry_types(),
+            wkt_bounds(empties_z).unwrap().geometry_types(),
             vec![1001, 1002, 1003, 1004, 1005, 1006, 1007]
         );
 
@@ -325,9 +327,7 @@ mod test {
         ];
 
         assert_eq!(
-            wkt_bounds(empties_m, Interval::empty())
-                .unwrap()
-                .geometry_types(),
+            wkt_bounds(empties_m).unwrap().geometry_types(),
             vec![2001, 2002, 2003, 2004, 2005, 2006, 2007]
         );
 
@@ -342,15 +342,13 @@ mod test {
         ];
 
         assert_eq!(
-            wkt_bounds(empties_zm, Interval::empty())
-                .unwrap()
-                .geometry_types(),
+            wkt_bounds(empties_zm).unwrap().geometry_types(),
             vec![3001, 3002, 3003, 3004, 3005, 3006, 3007]
         );
     }
 
     #[test]
-    pub fn test_bounds_empty() {
+    fn test_bounds_empty() {
         let empties = [
             "POINT EMPTY",
             "LINESTRING EMPTY",
@@ -361,14 +359,14 @@ mod test {
             "GEOMETRYCOLLECTION EMPTY",
         ];
 
-        let bounds = wkt_bounds(empties, Interval::empty()).unwrap();
+        let bounds = wkt_bounds(empties).unwrap();
         assert!(bounds.x().is_empty());
         assert!(bounds.y().is_empty());
         assert!(bounds.z().is_empty());
         assert!(bounds.m().is_empty());
 
         // With wraparound, still empty
-        let bounds = wkt_bounds(empties, (-180, 180)).unwrap();
+        let bounds = wkt_bounds_with_wraparound(empties, (-180, 180)).unwrap();
         assert!(bounds.x().is_empty());
         assert!(bounds.y().is_empty());
         assert!(bounds.z().is_empty());
@@ -376,31 +374,128 @@ mod test {
     }
 
     #[test]
-    pub fn test_bounds_wrap_basic() {
+    fn test_bounds_coord() {
+        let bounds = wkt_bounds(["POINT (0 1)", "POINT (2 3)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
+        assert!(bounds.z().is_empty());
+        assert!(bounds.m().is_empty());
+
+        let bounds = wkt_bounds(["POINT Z (0 1 2)", "POINT Z (3 4 5)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 3).into());
+        assert_eq!(bounds.y(), (1, 4).into());
+        assert_eq!(bounds.z(), (2, 5).into());
+        assert!(bounds.m().is_empty());
+
+        let bounds = wkt_bounds(["POINT M (0 1 2)", "POINT M (3 4 5)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 3).into());
+        assert_eq!(bounds.y(), (1, 4).into());
+        assert!(bounds.z().is_empty());
+        assert_eq!(bounds.m(), (2, 5).into());
+
+        let bounds = wkt_bounds(["POINT ZM (0 1 2 3)", "POINT ZM (4 5 6 7)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 4).into());
+        assert_eq!(bounds.y(), (1, 5).into());
+        assert_eq!(bounds.z(), (2, 6).into());
+        assert_eq!(bounds.m(), (3, 7).into());
+    }
+
+    #[test]
+    fn test_bounds_sequence() {
+        let bounds = wkt_bounds(["LINESTRING (0 1, 2 3)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
+        assert!(bounds.z().is_empty());
+        assert!(bounds.m().is_empty());
+
+        let bounds = wkt_bounds(["LINESTRING Z (0 1 2, 3 4 5)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 3).into());
+        assert_eq!(bounds.y(), (1, 4).into());
+        assert_eq!(bounds.z(), (2, 5).into());
+        assert!(bounds.m().is_empty());
+
+        let bounds = wkt_bounds(["LINESTRING M (0 1 2, 3 4 5)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 3).into());
+        assert_eq!(bounds.y(), (1, 4).into());
+        assert!(bounds.z().is_empty());
+        assert_eq!(bounds.m(), (2, 5).into());
+
+        let bounds = wkt_bounds(["LINESTRING ZM (0 1 2 3, 4 5 6 7)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 4).into());
+        assert_eq!(bounds.y(), (1, 5).into());
+        assert_eq!(bounds.z(), (2, 6).into());
+        assert_eq!(bounds.m(), (3, 7).into());
+    }
+
+    #[test]
+    fn test_bounds_geometry_type() {
+        let bounds = wkt_bounds(["POINT (0 1)", "POINT (2 3)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
+
+        let bounds = wkt_bounds(["LINESTRING (0 1, 2 3)"]).unwrap();
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
+
+        // Normally interiors are supposed to be inside the exterior; however, we
+        // include a poorly formed polygon just to make sure they are considered
+        let bounds =
+            wkt_bounds(["POLYGON ((0 0, 0 1, 1 0, 0 0), (10 10, 10 11, 11 10, 10 10))"]).unwrap();
+        assert_eq!(bounds.x(), (0, 11).into());
+        assert_eq!(bounds.y(), (0, 11).into());
+
+        let bounds = wkt_bounds(["MULTIPOINT ((0 1), (2 3))"]).unwrap();
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
+
+        let bounds = wkt_bounds(["MULTILINESTRING ((0 1, 2 3))"]).unwrap();
+        assert_eq!(bounds.x(), (0, 2).into());
+        assert_eq!(bounds.y(), (1, 3).into());
+
+        let bounds = wkt_bounds(["MULTIPOLYGON (((0 0, 0 1, 1 0, 0 0)))"]).unwrap();
+        assert_eq!(bounds.x(), (0, 1).into());
+        assert_eq!(bounds.y(), (0, 1).into());
+    }
+
+    #[test]
+    fn test_bounds_wrap_basic() {
         let geoms = ["POINT (-170 0)", "POINT (170 0)"];
 
         // No wraparound because it was disabled
-        let bounds = wkt_bounds(geoms, Interval::empty()).unwrap();
+        let bounds = wkt_bounds_with_wraparound(geoms, Interval::empty()).unwrap();
         assert_eq!(bounds.x(), (-170, 170).into());
 
         // Wraparound that can't happen because something is covering
         // the midpoint.
         let mut geoms_with_mid = geoms.to_vec();
         geoms_with_mid.push("LINESTRING (-10 0, 10 0)");
-        let bounds = wkt_bounds(geoms_with_mid, (-180, 180)).unwrap();
+        let bounds = wkt_bounds_with_wraparound(geoms_with_mid, (-180, 180)).unwrap();
         assert_eq!(bounds.x(), (-170, 170).into());
 
         // Wraparound where the wrapped box is *not* better
-        let bounds = wkt_bounds(geoms, (-1000, 1000)).unwrap();
+        let bounds = wkt_bounds_with_wraparound(geoms, (-1000, 1000)).unwrap();
         assert_eq!(bounds.x(), (-170, 170).into());
 
         // Wraparound where the wrapped box is inappropriate because it is
         // outside the wrap hint
-        let bounds = wkt_bounds(geoms, (-10, 10)).unwrap();
+        let bounds = wkt_bounds_with_wraparound(geoms, (-10, 10)).unwrap();
         assert_eq!(bounds.x(), (-170, 170).into());
 
         // Wraparound where the wrapped box *is* better
-        let bounds = wkt_bounds(geoms, (-180, 180)).unwrap();
+        let bounds = wkt_bounds_with_wraparound(geoms, (-180, 180)).unwrap();
         assert_eq!(bounds.x(), (170, -170).into());
+    }
+
+    #[test]
+    fn test_bounds_wrap_multipart() {
+        let fiji = "MULTIPOLYGON (
+        ((-180 -15.51, -180 -19.78, -178.61 -21.14, -178.02 -18.22, -178.57 -16.04, -180 -15.51)),
+        ((180 -15.51, 177.98 -16.25, 176.67 -17.14, 177.83 -19.31, 180 -19.78, 180 -15.51))
+        )";
+
+        let bounds = wkt_bounds_with_wraparound([fiji], (-180, 180)).unwrap();
+        assert!(bounds.x().is_wraparound());
+        assert_eq!(bounds.x(), (176.67, -178.02).into());
+        assert_eq!(bounds.y(), (-21.14, -15.51).into());
     }
 }
