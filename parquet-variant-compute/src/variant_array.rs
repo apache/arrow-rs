@@ -798,11 +798,11 @@ fn typed_value_to_variant<'a>(
             let date = Date32Type::to_naive_date(value);
             Variant::from(date)
         }
-        // 16-byte FixedSizeBinary is always UUID; all other sizes are illegal.
+        // 16-byte FixedSizeBinary is alway corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
             let array = typed_value.as_fixed_size_binary();
             let value = array.value(index);
-            Uuid::from_slice(value).map_or(Variant::Null, Variant::from)
+            Uuid::from_slice(value).unwrap().into() // unwrap is safe: slice is always 16 bytes
         }
         DataType::BinaryView => {
             let array = typed_value.as_binary_view();
