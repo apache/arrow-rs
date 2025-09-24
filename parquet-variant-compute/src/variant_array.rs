@@ -22,11 +22,14 @@ use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Date32Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
 };
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
-use parquet_variant::{Uuid, Variant, VariantList, VariantMetadata, VariantObject};
+use parquet_variant::{
+    ListBuilder, ObjectBuilder, ObjectFieldBuilder, ParentState, ReadOnlyMetadataBuilder, Uuid,
+    ValueBuilder, Variant, VariantBuilderExt, VariantList, VariantMetadata, VariantObject,
+};
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -90,9 +93,9 @@ impl<'m, 'v> VariantArrayValue<'m, 'v> {
     }
 
     /// Creates a new instance that wraps owned bytes that can be converted to a [`Variant`] value.
-    pub fn owned(metadata_bytes: &'m [u8], value_bytes: Vec<u8>) -> Self {
+    pub fn owned(metadata: VariantMetadata<'m>, value_bytes: Vec<u8>) -> Self {
         Self::Owned {
-            metadata: VariantMetadata::new(metadata_bytes),
+            metadata,
             value_bytes,
         }
     }
@@ -481,7 +484,16 @@ impl VariantArray {
         match (self.typed_value_field(), self.value_field()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
-                typed_value_to_variant(typed_value, value, index)
+                let metadata = VariantMetadata::new(self.metadata.value(index));
+                let mut builder = SingleValueVariantBuilder::new(metadata.clone());
+                let Err(err) =
+                    typed_value_to_variant(typed_value, value, index, &metadata, &mut builder)
+                else {
+                    let value_bytes = builder.into_bytes();
+                    return VariantArrayValue::owned(metadata.clone(), value_bytes);
+                };
+                debug_assert!(false, "typed_value_to_variant failed: {err}");
+                Variant::Null.into()
             }
             // Otherwise fall back to value, if available
             (_, Some(value)) if value.is_valid(index) => {
@@ -901,65 +913,119 @@ impl StructArrayBuilder {
     }
 }
 
+/// A simple wrapper that provides VariantBuilderExt for building a single variant value
+///
+/// This is used specifically by VariantArray::value to build a single variant from shredded data
+/// without the complexity of array-level state management.
+struct SingleValueVariantBuilder<'m> {
+    value_builder: ValueBuilder,
+    metadata_builder: ReadOnlyMetadataBuilder<'m>,
+}
+
+impl<'m> SingleValueVariantBuilder<'m> {
+    fn new(metadata: VariantMetadata<'m>) -> Self {
+        Self {
+            value_builder: ValueBuilder::new(),
+            metadata_builder: ReadOnlyMetadataBuilder::new(metadata),
+        }
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.value_builder.into_inner()
+    }
+
+    fn parent_state(&mut self) -> ParentState<'_, ()> {
+        ParentState::variant(&mut self.value_builder, &mut self.metadata_builder)
+    }
+}
+
+impl VariantBuilderExt for SingleValueVariantBuilder<'_> {
+    type State<'a>
+        = ()
+    where
+        Self: 'a;
+
+    fn append_null(&mut self) {
+        self.value_builder.append_null();
+    }
+
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        ValueBuilder::append_variant_bytes(self.parent_state(), value.into());
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
+        Ok(ListBuilder::new(self.parent_state(), false))
+    }
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
+        Ok(ObjectBuilder::new(self.parent_state(), false))
+    }
+}
+
 /// returns the non-null element at index as a Variant
-fn typed_value_to_variant<'a>(
-    typed_value: &'a ArrayRef,
+fn typed_value_to_variant(
+    typed_value: &ArrayRef,
     value: Option<&BinaryViewArray>,
     index: usize,
-) -> VariantArrayValue<'a, 'a> {
-    let data_type = typed_value.data_type();
-    if value.is_some_and(|v| !matches!(data_type, DataType::Struct(_)) && v.is_valid(index)) {
-        // Only a partially shredded struct is allowed to have values for both columns
-        panic!("Invalid variant, conflicting value and typed_value");
-    }
-    let value = match data_type {
+    metadata: &VariantMetadata,
+    builder: &mut impl VariantBuilderExt,
+) -> Result<(), ArrowError> {
+    match typed_value.data_type() {
         DataType::Boolean => {
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
-            Variant::from(value)
+            builder.append_value(value);
         }
         DataType::Date32 => {
             let array = typed_value.as_primitive::<Date32Type>();
             let value = array.value(index);
             let date = Date32Type::to_naive_date(value);
-            Variant::from(date)
+            builder.append_value(date);
         }
         // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
             let array = typed_value.as_fixed_size_binary();
             let value = array.value(index);
-            Uuid::from_slice(value).unwrap().into() // unwrap is safe: slice is always 16 bytes
+            let value = Uuid::from_slice(value).unwrap(); // unwrap safety: slice is always 16 bytes
+            builder.append_value(value);
         }
         DataType::BinaryView => {
             let array = typed_value.as_binary_view();
             let value = array.value(index);
-            Variant::from(value)
+            builder.append_value(value);
         }
         DataType::Utf8 => {
             let array = typed_value.as_string::<i32>();
             let value = array.value(index);
-            Variant::from(value)
+            builder.append_value(value);
         }
         DataType::Int8 => {
-            primitive_conversion_single_value!(Int8Type, typed_value, index)
+            let variant = primitive_conversion_single_value!(Int8Type, typed_value, index);
+            builder.append_value(variant);
         }
         DataType::Int16 => {
-            primitive_conversion_single_value!(Int16Type, typed_value, index)
+            let variant = primitive_conversion_single_value!(Int16Type, typed_value, index);
+            builder.append_value(variant);
         }
         DataType::Int32 => {
-            primitive_conversion_single_value!(Int32Type, typed_value, index)
+            let variant = primitive_conversion_single_value!(Int32Type, typed_value, index);
+            builder.append_value(variant);
         }
         DataType::Int64 => {
-            primitive_conversion_single_value!(Int64Type, typed_value, index)
-        }
-        DataType::Float16 => {
-            primitive_conversion_single_value!(Float16Type, typed_value, index)
+            let variant = primitive_conversion_single_value!(Int64Type, typed_value, index);
+            builder.append_value(variant);
         }
         DataType::Float32 => {
-            primitive_conversion_single_value!(Float32Type, typed_value, index)
+            let variant = primitive_conversion_single_value!(Float32Type, typed_value, index);
+            builder.append_value(variant);
         }
         DataType::Float64 => {
-            primitive_conversion_single_value!(Float64Type, typed_value, index)
+            let variant = primitive_conversion_single_value!(Float64Type, typed_value, index);
+            builder.append_value(variant);
+        }
+        DataType::Struct(_) => {
+            // Return directly in order to bypass the partial shredding check below
+            return struct_typed_value_to_variant(typed_value, value, index, metadata, builder);
         }
         // todo other types here (note this is very similar to cast_to_variant.rs)
         // so it would be great to figure out how to share this code
@@ -972,10 +1038,82 @@ fn typed_value_to_variant<'a>(
                 "Unsupported typed_value type: {}",
                 typed_value.data_type()
             );
-            Variant::Null
+            builder.append_value(Variant::Null);
         }
-    };
-    value.into()
+    }
+
+    // Only a partially shredded struct is allowed to have values for both columns
+    if value.is_some_and(|v| v.is_valid(index)) {
+        return Err(ArrowError::InvalidArgumentError(
+            "Invalid variant, conflicting value and typed_value".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Handles reconstruction of variant objects from shredded struct data
+fn struct_typed_value_to_variant(
+    typed_value: &ArrayRef,
+    value: Option<&BinaryViewArray>,
+    index: usize,
+    metadata: &VariantMetadata,
+    builder: &mut impl VariantBuilderExt,
+) -> Result<(), ArrowError> {
+    let struct_array = typed_value.as_struct();
+    let mut obj_builder = builder.try_new_object()?;
+
+    // Track all shredded field names -- we must ignore them when processing value fields below.
+    let mut shredded_field_names = std::collections::HashSet::new();
+    for (field_name, field_array) in struct_array
+        .column_names()
+        .iter()
+        .zip(struct_array.columns())
+    {
+        shredded_field_names.insert(*field_name);
+        let field_shredded_array = ShreddedVariantFieldArray::try_new(field_array.as_ref())?;
+        let shredding_state = field_shredded_array.shredding_state();
+        let value_field = shredding_state.value_field();
+        let typed_value_field = shredding_state.typed_value_field();
+
+        match (typed_value_field, value_field) {
+            (Some(typed_value), value) if typed_value.is_valid(index) => {
+                // Handle typed value with optional value column
+                let mut field_builder = ObjectFieldBuilder::new(field_name, &mut obj_builder);
+                typed_value_to_variant(typed_value, value, index, metadata, &mut field_builder)?;
+            }
+            (_, Some(value)) if value.is_valid(index) => {
+                // Handle unshredded value only
+                // TODO: Add raw byte append capability to VariantBuilderExt to avoid bytes -> variant -> bytes conversion
+                let variant_bytes = value.value(index);
+                let field_variant = Variant::new_with_metadata(metadata.clone(), variant_bytes);
+                obj_builder.insert_bytes(field_name, field_variant);
+            }
+            // Skip missing or invalid fields
+            _ => {}
+        }
+    }
+
+    // Add fields from the value column if present (with collision detection)
+    if let Some(value_array) = value {
+        if value_array.is_valid(index) {
+            let variant_bytes = value_array.value(index);
+            let field_variant = Variant::new_with_metadata(metadata.clone(), variant_bytes);
+            let Variant::Object(obj) = field_variant else {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Invalid variant, non-object value with shredded fields".to_string(),
+                ));
+            };
+            for (obj_field_name, obj_field_value) in obj.iter() {
+                if !shredded_field_names.contains(obj_field_name) {
+                    obj_builder.insert_bytes(obj_field_name, obj_field_value);
+                }
+            }
+        }
+    }
+
+    obj_builder.finish();
+    Ok(())
 }
 
 /// Workaround for lack of direct support for BinaryArray
