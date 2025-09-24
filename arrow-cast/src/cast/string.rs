@@ -376,7 +376,7 @@ pub(crate) fn cast_binary_view_to_string_view(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    let array = array.as_any().downcast_ref::<BinaryViewArray>().unwrap();
+    let array = array.as_binary_view();
 
     match array.clone().to_string_view() {
         Ok(result) => Ok(Arc::new(result)),
