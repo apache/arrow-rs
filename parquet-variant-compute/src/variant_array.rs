@@ -628,7 +628,7 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 /// | value    | typed_value  | Meaning |
 /// |----------|--------------|---------|
 /// | NULL     | NULL         | The value is missing; only valid for shredded object fields |
-/// | non-NULL | NULL         | The value is present and may be any type, including [`Variant::null`] |
+/// | non-NULL | NULL         | The value is present and may be any type, including [`Variant::Null`] |
 /// | NULL     | non-NULL     | The value is present and is the shredded type |
 /// | non-NULL | non-NULL     | The value is present and is a partially shredded object |
 ///
@@ -638,7 +638,7 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 /// | value  | typed_value  | Meaning |
 /// |--------|-------------|---------|
 /// | --     | --          | **Missing**: The value is always missing; only valid for shredded object fields |
-/// | exists | --          | **Unshredded**: If present, the value may be any type, including [`Variant::null`]
+/// | exists | --          | **Unshredded**: If present, the value may be any type, including [`Variant::Null`]
 /// | --     | exists      | **Perfectly shredded**: If present, the value is always the shredded type |
 /// | exists | exists      | **Imperfectly shredded**: The value might (not) be present and might (not) be the shredded type |
 ///
