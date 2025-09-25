@@ -124,6 +124,10 @@ pub(crate) fn follow_shredded_path_element(
                 return Ok(missing_path_step());
             };
 
+            let Some(typed_array) = struct_array.column_by_name("typed_value") else {
+                return Ok(missing_path_step())
+            };
+
             // Build the list of indices to take
             let mut take_indices = Vec::with_capacity(list_array.len());
             for i in 0..list_array.len() {
@@ -141,15 +145,7 @@ pub(crate) fn follow_shredded_path_element(
             let index_array = UInt32Array::from(take_indices);
 
             // Use Arrow compute kernel to gather elements
-            let taken = take(struct_array, &index_array, None)?;
-
-            let typed_array = taken
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .unwrap()
-                .column_by_name("typed_value")
-                .unwrap()
-                .clone();
+            let taken = take(typed_array, &index_array, None)?;
 
             let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(
                 EMPTY_VARIANT_METADATA_BYTES,
@@ -158,10 +154,9 @@ pub(crate) fn follow_shredded_path_element(
 
             let struct_array = &StructArrayBuilder::new()
                 .with_field("metadata", Arc::new(metadata_array), false)
-                .with_field("typed_value", typed_array, true)
+                .with_field("typed_value", taken, true)
                 .build();
 
-            // let state = ShreddingState::new(None, Some(Arc::new(taken)));
             Ok(ShreddedPathStep::Success(struct_array.into()))
         }
     }
