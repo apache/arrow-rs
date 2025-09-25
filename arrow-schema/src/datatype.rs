@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -92,7 +91,7 @@ use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 ///
 /// [`Schema.fbs`]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
 /// [the physical memory layout of Apache Arrow]: https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataType {
     /// Null type
@@ -455,6 +454,17 @@ pub enum TimeUnit {
     Nanosecond,
 }
 
+impl std::fmt::Display for TimeUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TimeUnit::Second => write!(f, "s"),
+            TimeUnit::Millisecond => write!(f, "ms"),
+            TimeUnit::Microsecond => write!(f, "µs"),
+            TimeUnit::Nanosecond => write!(f, "ns"),
+        }
+    }
+}
+
 /// YEAR_MONTH, DAY_TIME, MONTH_DAY_NANO interval in SQL style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -482,27 +492,6 @@ pub enum UnionMode {
     Sparse,
     /// Dense union layout
     Dense,
-}
-
-impl fmt::Display for DataType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self {
-            DataType::Struct(fields) => {
-                write!(f, "Struct(")?;
-                if !fields.is_empty() {
-                    let fields_str = fields
-                        .iter()
-                        .map(|f| format!("{} {}", f.name(), f.data_type()))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    write!(f, "{fields_str}")?;
-                }
-                write!(f, ")")?;
-                Ok(())
-            }
-            _ => write!(f, "{self:?}"),
-        }
-    }
 }
 
 /// Parses `str` into a `DataType`.
@@ -1196,5 +1185,18 @@ mod tests {
     fn test_from_str() {
         let data_type: DataType = "UInt64".parse().unwrap();
         assert_eq!(data_type, DataType::UInt64);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
+    fn test_debug_format_field() {
+        // Make sure the `Debug` formatting of `DataType` is readable and not too long
+        insta::assert_debug_snapshot!(DataType::new_list(DataType::Int8, false), @r"
+        List(
+            Field {
+                data_type: Int8,
+            },
+        )
+        ");
     }
 }

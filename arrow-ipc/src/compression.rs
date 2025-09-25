@@ -22,6 +22,41 @@ use arrow_schema::ArrowError;
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 
+/// Additional context that may be needed for compression.
+///
+/// In the case of zstd, this will contain the zstd context, which can be reused between subsequent
+/// compression calls to avoid the performance overhead of initialising a new context for every
+/// compression.
+pub struct CompressionContext {
+    #[cfg(feature = "zstd")]
+    compressor: zstd::bulk::Compressor<'static>,
+}
+
+// the reason we allow derivable_impls here is because when zstd feature is not enabled, this
+// becomes derivable. however with zstd feature want to be explicit about the compression level.
+#[allow(clippy::derivable_impls)]
+impl Default for CompressionContext {
+    fn default() -> Self {
+        CompressionContext {
+            // safety: `new` here will only return error here if using an invalid compression level
+            #[cfg(feature = "zstd")]
+            compressor: zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)
+                .expect("can use default compression level"),
+        }
+    }
+}
+
+impl std::fmt::Debug for CompressionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut ds = f.debug_struct("CompressionContext");
+
+        #[cfg(feature = "zstd")]
+        ds.field("compressor", &"zstd::bulk::Compressor");
+
+        ds.finish()
+    }
+}
+
 /// Represents compressing a ipc stream using a particular compression algorithm
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionCodec {
@@ -58,6 +93,7 @@ impl CompressionCodec {
         &self,
         input: &[u8],
         output: &mut Vec<u8>,
+        context: &mut CompressionContext,
     ) -> Result<usize, ArrowError> {
         let uncompressed_data_len = input.len();
         let original_output_len = output.len();
@@ -67,7 +103,7 @@ impl CompressionCodec {
         } else {
             // write compressed data directly into the output buffer
             output.extend_from_slice(&uncompressed_data_len.to_le_bytes());
-            self.compress(input, output)?;
+            self.compress(input, output, context)?;
 
             let compression_len = output.len() - original_output_len;
             if compression_len > uncompressed_data_len {
@@ -115,10 +151,15 @@ impl CompressionCodec {
 
     /// Compress the data in input buffer and write to output buffer
     /// using the specified compression
-    fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
+    fn compress(
+        &self,
+        input: &[u8],
+        output: &mut Vec<u8>,
+        context: &mut CompressionContext,
+    ) -> Result<(), ArrowError> {
         match self {
             CompressionCodec::Lz4Frame => compress_lz4(input, output),
-            CompressionCodec::Zstd => compress_zstd(input, output),
+            CompressionCodec::Zstd => compress_zstd(input, output, context),
         }
     }
 
@@ -175,17 +216,23 @@ fn decompress_lz4(_input: &[u8], _decompressed_size: usize) -> Result<Vec<u8>, A
 }
 
 #[cfg(feature = "zstd")]
-fn compress_zstd(input: &[u8], output: &mut Vec<u8>) -> Result<(), ArrowError> {
-    use std::io::Write;
-    let mut encoder = zstd::Encoder::new(output, 0)?;
-    encoder.write_all(input)?;
-    encoder.finish()?;
+fn compress_zstd(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    context: &mut CompressionContext,
+) -> Result<(), ArrowError> {
+    let result = context.compressor.compress(input)?;
+    output.extend_from_slice(&result);
     Ok(())
 }
 
 #[cfg(not(feature = "zstd"))]
 #[allow(clippy::ptr_arg)]
-fn compress_zstd(_input: &[u8], _output: &mut Vec<u8>) -> Result<(), ArrowError> {
+fn compress_zstd(
+    _input: &[u8],
+    _output: &mut Vec<u8>,
+    _context: &mut CompressionContext,
+) -> Result<(), ArrowError> {
     Err(ArrowError::InvalidArgumentError(
         "zstd IPC compression requires the zstd feature".to_string(),
     ))
@@ -227,7 +274,9 @@ mod tests {
         let input_bytes = b"hello lz4";
         let codec = super::CompressionCodec::Lz4Frame;
         let mut output_bytes: Vec<u8> = Vec::new();
-        codec.compress(input_bytes, &mut output_bytes).unwrap();
+        codec
+            .compress(input_bytes, &mut output_bytes, &mut Default::default())
+            .unwrap();
         let result = codec
             .decompress(output_bytes.as_slice(), input_bytes.len())
             .unwrap();
@@ -240,7 +289,9 @@ mod tests {
         let input_bytes = b"hello zstd";
         let codec = super::CompressionCodec::Zstd;
         let mut output_bytes: Vec<u8> = Vec::new();
-        codec.compress(input_bytes, &mut output_bytes).unwrap();
+        codec
+            .compress(input_bytes, &mut output_bytes, &mut Default::default())
+            .unwrap();
         let result = codec
             .decompress(output_bytes.as_slice(), input_bytes.len())
             .unwrap();

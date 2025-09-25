@@ -40,7 +40,7 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = ["arrow"]
 edition = "2021"
-rust-version = "1.84"
+rust-version = "1.85"
 publish = false
 
 
@@ -48,4 +48,4 @@ publish = false
 # Note no dependency on arrow, to ensure arrow-pyarrow can be used by itself
 arrow-array = { path = "../arrow-array" }
 arrow-pyarrow = { path = "../arrow-pyarrow" }
-pyo3 = { version = "0.25", default-features = false }
+pyo3 = { version = "0.26.0", default-features = false }

@@ -29,6 +29,8 @@ use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
 use indexmap::IndexMap;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::fmt::Display;
 use std::sync::Arc;
 use strum_macros::AsRefStr;
 
@@ -115,6 +117,22 @@ pub(crate) enum Promotion {
     StringToBytes,
     /// Promotes `bytes` to a `string`.
     BytesToString,
+}
+
+impl Display for Promotion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Direct => write!(formatter, "Direct"),
+            Self::IntToLong => write!(formatter, "Int->Long"),
+            Self::IntToFloat => write!(formatter, "Int->Float"),
+            Self::IntToDouble => write!(formatter, "Int->Double"),
+            Self::LongToFloat => write!(formatter, "Long->Float"),
+            Self::LongToDouble => write!(formatter, "Long->Double"),
+            Self::FloatToDouble => write!(formatter, "Float->Double"),
+            Self::StringToBytes => write!(formatter, "String->Bytes"),
+            Self::BytesToString => write!(formatter, "Bytes->String"),
+        }
+    }
 }
 
 /// Information required to resolve a writer union against a reader union (or single type).
