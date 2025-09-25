@@ -467,6 +467,29 @@ impl VariantArray {
     ///
     /// # Panics
     /// * if the index is out of bounds
+    /// * if variant construction failed
+    ///
+    /// If this is a shredded variant but has no value at the shredded location, it
+    /// will return [`Variant::Null`].
+    ///
+    /// # Performance Note
+    ///
+    /// This is certainly not the most efficient way to access values in a
+    /// `VariantArray`, but it is useful for testing and debugging.
+    ///
+    /// Note: Does not do deep validation of the [`Variant`], so it is up to the
+    /// caller to ensure that the metadata and value were constructed correctly.
+    pub fn value(&self, index: usize) -> VariantArrayValue<'_, '_> {
+        self.try_value(index).unwrap()
+    }
+
+    /// Try to return the [`Variant`] instance stored at the given row
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// * if the index is out of bounds
     /// * if the array value is null
     ///
     /// If this is a shredded variant but has no value at the shredded location, it
@@ -480,29 +503,27 @@ impl VariantArray {
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn value(&self, index: usize) -> VariantArrayValue<'_, '_> {
-        match (self.typed_value_field(), self.value_field()) {
+    pub fn try_value(&self, index: usize) -> Result<VariantArrayValue<'_, '_>, ArrowError> {
+        let value = match (self.typed_value_field(), self.value_field()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
                 let metadata = VariantMetadata::new(self.metadata.value(index));
                 let mut builder = SingleValueVariantBuilder::new(metadata.clone());
-                let Err(err) =
-                    typed_value_to_variant(typed_value, value, index, &metadata, &mut builder)
-                else {
-                    let value_bytes = builder.into_bytes();
-                    return VariantArrayValue::owned(metadata.clone(), value_bytes);
-                };
-                debug_assert!(false, "typed_value_to_variant failed: {err}");
-                Variant::Null.into()
+                typed_value_to_variant(typed_value, value, index, &metadata, &mut builder)?;
+                return Ok(VariantArrayValue::owned(
+                    metadata.clone(),
+                    builder.into_bytes(),
+                ));
             }
             // Otherwise fall back to value, if available
             (_, Some(value)) if value.is_valid(index) => {
-                Variant::new(self.metadata.value(index), value.value(index)).into()
+                Variant::new(self.metadata.value(index), value.value(index))
             }
             // It is technically invalid for neither value nor typed_value fields to be available,
             // but the spec specifically requires readers to return Variant::Null in this case.
-            _ => Variant::Null.into(),
-        }
+            _ => Variant::Null,
+        };
+        Ok(value.into())
     }
 
     /// Return a reference to the metadata field of the [`StructArray`]
