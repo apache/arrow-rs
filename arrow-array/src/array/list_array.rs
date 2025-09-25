@@ -37,7 +37,9 @@ use std::sync::Arc;
 /// [`LargeBinaryArray`]: crate::array::LargeBinaryArray
 /// [`StringArray`]: crate::array::StringArray
 /// [`LargeStringArray`]: crate::array::LargeStringArray
-pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
+pub trait OffsetSizeTrait:
+    ArrowNativeType + std::ops::AddAssign + Integer + num::CheckedAdd
+{
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
     /// Prefix for the offset size
