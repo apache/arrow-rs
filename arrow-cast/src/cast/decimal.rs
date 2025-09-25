@@ -488,8 +488,7 @@ where
                     parse_string_to_decimal_native::<T>(v, scale as usize)
                         .map_err(|_| {
                             ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
+                                "Cannot cast string '{v}' to value of {} type",
                                 T::DATA_TYPE,
                             ))
                         })

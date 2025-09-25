@@ -454,6 +454,17 @@ pub enum TimeUnit {
     Nanosecond,
 }
 
+impl std::fmt::Display for TimeUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TimeUnit::Second => write!(f, "s"),
+            TimeUnit::Millisecond => write!(f, "ms"),
+            TimeUnit::Microsecond => write!(f, "µs"),
+            TimeUnit::Nanosecond => write!(f, "ns"),
+        }
+    }
+}
+
 /// YEAR_MONTH, DAY_TIME, MONTH_DAY_NANO interval in SQL style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -1174,5 +1185,18 @@ mod tests {
     fn test_from_str() {
         let data_type: DataType = "UInt64".parse().unwrap();
         assert_eq!(data_type, DataType::UInt64);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
+    fn test_debug_format_field() {
+        // Make sure the `Debug` formatting of `DataType` is readable and not too long
+        insta::assert_debug_snapshot!(DataType::new_list(DataType::Int8, false), @r"
+        List(
+            Field {
+                data_type: Int8,
+            },
+        )
+        ");
     }
 }
