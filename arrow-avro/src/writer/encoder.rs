@@ -272,7 +272,7 @@ impl<'a> FieldEncoder<'a> {
                     )),
                 }
                 #[cfg(not(feature = "avro_custom_types"))]
-                DataType::Duration(tu) => Encoder::Long(LongEncoder(array.as_primitive::<Int64Type>())),
+                DataType::Duration(_) => Encoder::Long(LongEncoder(array.as_primitive::<Int64Type>())),
                 #[cfg(feature = "avro_custom_types")]
                 DataType::Duration(tu) => {
                     match tu {

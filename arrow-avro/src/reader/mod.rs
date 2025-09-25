@@ -4749,51 +4749,51 @@ mod test {
         }
     }
 
-    // #[test]
-    // fn test_long_with_duration_annotation() {
-    //     let _avro_schema_json = r#"
-    //     {
-    //         "type": "record",
-    //         "name": "TestEvents",
-    //         "fields": [
-    //             {
-    //                 "name": "event_duration",
-    //                 "type": "long",
-    //                 "arrowDurationUnit": "millisecond"
-    //             }
-    //         ]
-    //     }
-    //     "#;
-    //
-    //     let values = DurationMillisecondArray::from(vec![1000i64, 2000, 3000]);
-    //     let arrow_field = Field::new(
-    //         "event_duration",
-    //         DataType::Duration(TimeUnit::Millisecond),
-    //         false,
-    //     );
-    //     let arrow_schema = Arc::new(Schema::new(vec![arrow_field]));
-    //     let expected = RecordBatch::try_new(
-    //         arrow_schema.clone(),
-    //         vec![Arc::new(values.clone()) as ArrayRef],
-    //     )
-    //     .unwrap();
-    //
-    //     // Write to in-memory OCF using the Avro writer
-    //     let buffer = Vec::<u8>::new();
-    //     let mut writer = AvroWriter::new(buffer, (*arrow_schema).clone()).unwrap();
-    //     writer.write(&expected).unwrap();
-    //     writer.finish().unwrap();
-    //     let bytes = writer.into_inner();
-    //
-    //     let mut reader = ReaderBuilder::new()
-    //         .build(Cursor::new(bytes))
-    //         .expect("build reader for in-memory OCF");
-    //     let out_schema = reader.schema();
-    //     let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
-    //     let actual = arrow::compute::concat_batches(&out_schema, &batches).unwrap();
-    //
-    //     assert_eq!(actual, expected);
-    // }
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_read_duration_annotations_from_file() {
+        let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test/data/duration_logical_types.avro")
+            .to_string_lossy()
+            .into_owned();
+
+        let actual_batch = read_file(&file_path, 24, false);
+
+        let expected_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "duration_time_nanos",
+                DataType::Duration(TimeUnit::Nanosecond),
+                false,
+            ),
+            Field::new(
+                "duration_time_micros",
+                DataType::Duration(TimeUnit::Microsecond),
+                false,
+            ),
+            Field::new(
+                "duration_time_millis",
+                DataType::Duration(TimeUnit::Millisecond),
+                false,
+            ),
+            Field::new(
+                "duration_time_seconds",
+                DataType::Duration(TimeUnit::Second),
+                false,
+            ),
+        ]));
+
+        assert_eq!(
+            actual_batch.schema(),
+            expected_schema,
+            "Decoded schema with duration annotations does not match expected schema"
+        );
+
+        assert_eq!(
+            actual_batch.num_rows(),
+            24,
+            "Expected to read 24 rows from the file"
+        );
+    }
 
     #[test]
     fn test_dict_pages_offset_zero() {
