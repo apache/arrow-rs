@@ -20,10 +20,10 @@ use std::{io::Read, ops::Range};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{FooterTail, ParquetMetaData};
 use crate::file::page_index::index_reader::acc_range;
 use crate::file::reader::ChunkReader;
-use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
+use crate::file::FOOTER_SIZE;
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
@@ -98,26 +98,6 @@ impl From<bool> for PageIndexPolicy {
             true => Self::Required,
             false => Self::Skip,
         }
-    }
-}
-
-/// Describes how the footer metadata is stored
-///
-/// This is parsed from the last 8 bytes of the Parquet file
-pub struct FooterTail {
-    metadata_length: usize,
-    encrypted_footer: bool,
-}
-
-impl FooterTail {
-    /// The length of the footer metadata in bytes
-    pub fn metadata_length(&self) -> usize {
-        self.metadata_length
-    }
-
-    /// Whether the footer metadata is encrypted
-    pub fn is_encrypted_footer(&self) -> bool {
-        self.encrypted_footer
     }
 }
 
@@ -721,39 +701,15 @@ impl ParquetMetaDataReader {
         }
     }
 
-    /// Decodes the end of the Parquet footer
-    ///
-    /// There are 8 bytes at the end of the Parquet footer with the following layout:
-    /// * 4 bytes for the metadata length
-    /// * 4 bytes for the magic bytes 'PAR1' or 'PARE' (encrypted footer)
-    ///
-    /// ```text
-    /// +-----+------------------+
-    /// | len | 'PAR1' or 'PARE' |
-    /// +-----+------------------+
-    /// ```
+    /// Decodes a [`FooterTail`] from the provided 8-byte slice.
     pub fn decode_footer_tail(slice: &[u8; FOOTER_SIZE]) -> Result<FooterTail> {
-        let magic = &slice[4..];
-        let encrypted_footer = if magic == PARQUET_MAGIC_ENCR_FOOTER {
-            true
-        } else if magic == PARQUET_MAGIC {
-            false
-        } else {
-            return Err(general_err!("Invalid Parquet file. Corrupt footer"));
-        };
-        // get the metadata length from the footer
-        let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
-        Ok(FooterTail {
-            // u32 won't be larger than usize in most cases
-            metadata_length: metadata_len as usize,
-            encrypted_footer,
-        })
+        FooterTail::try_new(slice)
     }
 
     /// Decodes the Parquet footer, returning the metadata length in bytes
     #[deprecated(since = "54.3.0", note = "Use decode_footer_tail instead")]
     pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
-        Self::decode_footer_tail(slice).map(|f| f.metadata_length)
+        Self::decode_footer_tail(slice).map(|f| f.metadata_length())
     }
 
     /// Decodes [`ParquetMetaData`] from the provided bytes.

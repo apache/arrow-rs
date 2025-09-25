@@ -90,6 +90,7 @@
 //!
 //!                         * Same name, different struct
 //! ```
+mod footer_tail;
 mod memory;
 mod parser;
 mod push_decoder;
@@ -129,8 +130,9 @@ use crate::{
     data_type::private::ParquetValueType, file::page_index::offset_index::OffsetIndexMetaData,
 };
 
+pub use footer_tail::FooterTail;
 pub use push_decoder::ParquetMetaDataPushDecoder;
-pub use reader::{FooterTail, PageIndexPolicy, ParquetMetaDataReader};
+pub use reader::{PageIndexPolicy, ParquetMetaDataReader};
 use std::io::Write;
 use std::ops::Range;
 use std::sync::Arc;
