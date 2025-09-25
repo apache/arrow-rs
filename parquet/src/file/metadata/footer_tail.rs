@@ -49,7 +49,7 @@ use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
 /// assert_eq!(footer_tail.is_encrypted_footer(), true);
 /// ```
 ///
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FooterTail {
     metadata_length: usize,
     encrypted_footer: bool,
