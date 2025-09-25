@@ -776,8 +776,6 @@ impl MetadataObjectWriter {
                 }
                 let ciphertext = column_encryptor.encrypt(&buffer, &aad)?;
 
-                // TODO: remember to not serialize column meta data if encrypted_column_metadata
-                // is Some
                 column_chunk.encrypted_column_metadata = Some(ciphertext);
             }
         }
