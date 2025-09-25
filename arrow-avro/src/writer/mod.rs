@@ -892,7 +892,7 @@ mod tests {
     }
 
     #[test]
-    // #[cfg(feature = "avro_custom_types")]
+    #[cfg(feature = "avro_custom_types")]
     fn test_roundtrip_duration_logical_types_ocf() -> Result<(), ArrowError> {
         let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test/data/duration_logical_types.avro")

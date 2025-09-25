@@ -2224,7 +2224,10 @@ mod tests {
         let s2 = single_field_schema(dur_field);
         let avro2 = AvroSchema::try_from(&s2).unwrap();
         #[cfg(feature = "avro_custom_types")]
-        assert_json_contains(&avro2.json_string, "\"logicalType\":\"arrow.duration-nanos\"");
+        assert_json_contains(
+            &avro2.json_string,
+            "\"logicalType\":\"arrow.duration-nanos\"",
+        );
     }
 
     #[test]
@@ -2358,7 +2361,7 @@ mod tests {
             "\"logicalType\":\"local-timestamp-millis\"",
         );
     }
-    
+
     #[test]
     fn test_duration_list_extras_propagated() {
         let child = ArrowField::new("lat", DataType::Duration(TimeUnit::Microsecond), false);
@@ -2366,7 +2369,10 @@ mod tests {
         let arrow_schema = single_field_schema(ArrowField::new("durations", list_dt, false));
         let avro = AvroSchema::try_from(&arrow_schema).unwrap();
         #[cfg(feature = "avro_custom_types")]
-        assert_json_contains(&avro.json_string, "\"logicalType\":\"arrow.duration-micros\"");
+        assert_json_contains(
+            &avro.json_string,
+            "\"logicalType\":\"arrow.duration-micros\"",
+        );
     }
 
     #[test]
@@ -2409,7 +2415,10 @@ mod tests {
         let schema = single_field_schema(ArrowField::new("metrics", map_dt, false));
         let avro = AvroSchema::try_from(&schema).unwrap();
         #[cfg(feature = "avro_custom_types")]
-        assert_json_contains(&avro.json_string, "\"logicalType\":\"arrow.duration-seconds\"");
+        assert_json_contains(
+            &avro.json_string,
+            "\"logicalType\":\"arrow.duration-seconds\"",
+        );
     }
 
     #[test]
