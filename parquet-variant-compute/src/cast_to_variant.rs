@@ -91,8 +91,8 @@ mod tests {
         ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
         Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, DurationMicrosecondArray,
         DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray,
-        FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
-        GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
+        FixedSizeBinaryBuilder, FixedSizeListBuilder, Float16Array, Float32Array, Float64Array,
+        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
         IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray,
         LargeListViewBuilder, LargeStringArray, ListArray, ListViewBuilder, MapArray, NullArray,
         StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray,
@@ -1403,6 +1403,98 @@ mod tests {
 
         run_test(
             Arc::new(large_list_view_array.slice(1, 2)),
+            vec![Some(variant), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_fixed_size_list() {
+        let mut builder = FixedSizeListBuilder::new(Int32Array::builder(0), 2);
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.append(true); // First list: [0, 1]
+
+        builder.values().append_null();
+        builder.values().append_value(3);
+        builder.append(true); // Second list: [null, 3]
+
+        builder.values().append_value(4);
+        builder.values().append_null();
+        builder.append(false); // Third list: null
+
+        builder.values().append_nulls(2);
+        builder.append(true); // Last list: [null, null]
+
+        let fixed_size_list_array = builder.finish();
+
+        // Expected values
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0i32);
+            list.append_value(1i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant0 = Variant::new(&metadata, &value);
+
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_null();
+            list.append_value(3i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant1 = Variant::new(&metadata, &value);
+
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_null();
+            list.append_null();
+            list.finish();
+            builder.finish()
+        };
+        let variant3 = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(fixed_size_list_array),
+            vec![Some(variant0), Some(variant1), None, Some(variant3)],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_fixed_size_list() {
+        // Create a FixedSizeListArray with size 2
+        let mut builder = FixedSizeListBuilder::new(Int64Array::builder(0), 2);
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.append(true); // First list: [0, 1]
+
+        builder.values().append_null();
+        builder.values().append_value(3);
+        builder.append(true); // Second list: [null, 3]
+
+        builder.values().append_value(4);
+        builder.values().append_null();
+        builder.append(false); // Third list: null
+
+        let fixed_size_list_array = builder.finish();
+
+        // Expected value for slice(1, 2) - should get the second and third elements
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_null();
+            list.append_value(3i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(fixed_size_list_array.slice(1, 2)),
             vec![Some(variant), None],
         );
     }
