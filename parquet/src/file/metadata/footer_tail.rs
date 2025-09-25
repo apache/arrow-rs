@@ -68,9 +68,10 @@ impl FooterTail {
         };
         // get the metadata length from the footer
         let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
-        Ok(crate::file::metadata::FooterTail {
+
+        Ok(FooterTail {
             // u32 won't be larger than usize in most cases
-            metadata_length: metadata_len as usize,
+            metadata_length: metadata_len.try_into()?,
             encrypted_footer,
         })
     }
