@@ -478,13 +478,6 @@ impl MetadataObjectWriter {
         object.write_thrift(&mut protocol)?;
         Ok(())
     }
-
-    #[inline]
-    fn write_thrift_object(object: &impl WriteThrift, sink: impl Write) -> Result<()> {
-        let mut protocol = ThriftCompactOutputProtocol::new(sink);
-        object.write_thrift(&mut protocol)?;
-        Ok(())
-    }
 }
 
 /// Implementations of [`MetadataObjectWriter`] methods for when encryption is disabled
