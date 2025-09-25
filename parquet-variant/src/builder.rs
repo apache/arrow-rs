@@ -154,7 +154,7 @@ impl ValueBuilder {
 
     // Variant types below
 
-    fn append_null(&mut self) {
+    pub fn append_null(&mut self) {
         self.append_primitive_header(VariantPrimitiveType::Null);
     }
 

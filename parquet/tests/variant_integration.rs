@@ -113,20 +113,18 @@ variant_test_case!(34, "Unsupported typed_value type: Timestamp(ns, \"UTC\")");
 variant_test_case!(35, "Unsupported typed_value type: Timestamp(ns)");
 variant_test_case!(36, "Unsupported typed_value type: Timestamp(ns)");
 variant_test_case!(37);
-// https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(38, "Unsupported typed_value type: Struct(");
+variant_test_case!(38);
 variant_test_case!(39);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(40, "Unsupported typed_value type: List(");
 variant_test_case!(41, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(42, "Invalid variant, conflicting value and typed_value");
-// https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(43, "Unsupported typed_value type: Struct(");
-variant_test_case!(44, "Unsupported typed_value type: Struct(");
+variant_test_case!(43);
+variant_test_case!(44);
 // https://github.com/apache/arrow-rs/issues/8337
 variant_test_case!(45, "Unsupported typed_value type: List(");
-variant_test_case!(46, "Unsupported typed_value type: Struct(");
+variant_test_case!(46);
 variant_test_case!(47);
 variant_test_case!(48);
 variant_test_case!(49);
@@ -163,15 +161,13 @@ variant_test_case!(79);
 variant_test_case!(80);
 variant_test_case!(81);
 variant_test_case!(82);
-// https://github.com/apache/arrow-rs/issues/8336
-variant_test_case!(83, "Unsupported typed_value type: Struct(");
-variant_test_case!(84, "Unsupported typed_value type: Struct(");
+variant_test_case!(83);
+variant_test_case!(84);
 // https://github.com/apache/arrow-rs/issues/8337
 variant_test_case!(85, "Unsupported typed_value type: List(");
 variant_test_case!(86, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
-// TODO: Once structs are supported, expect "Invalid variant, non-object value with shredded fields"
-variant_test_case!(87, "Unsupported typed_value type: Struct(");
+variant_test_case!(87, "Invalid variant, non-object value with shredded fields");
 variant_test_case!(88, "Unsupported typed_value type: List(");
 variant_test_case!(89);
 variant_test_case!(90);
@@ -209,23 +205,25 @@ variant_test_case!(121);
 variant_test_case!(122);
 variant_test_case!(123);
 variant_test_case!(124);
-variant_test_case!(125, "Unsupported typed_value type: Struct");
+variant_test_case!(125);
 variant_test_case!(126, "Unsupported typed_value type: List(");
-// Is an error case (should be failing as the expected error message indicates)
+// Is an error case (error message mentions arrow data type instead of parquet logical type)
 variant_test_case!(127, "Illegal shredded value type: UInt32");
 // Is an error case (should be failing as the expected error message indicates)
-// TODO: Once structs are supported, expect "Invalid variant, non-object value with shredded fields"
-variant_test_case!(128, "Unsupported typed_value type: Struct(");
+variant_test_case!(
+    128,
+    "Invalid variant, non-object value with shredded fields"
+);
 variant_test_case!(129);
-variant_test_case!(130, "Unsupported typed_value type: Struct(");
+variant_test_case!(130);
 variant_test_case!(131);
-variant_test_case!(132, "Unsupported typed_value type: Struct(");
-variant_test_case!(133, "Unsupported typed_value type: Struct(");
-variant_test_case!(134, "Unsupported typed_value type: Struct(");
+variant_test_case!(132);
+variant_test_case!(133);
+variant_test_case!(134);
 variant_test_case!(135);
 variant_test_case!(136, "Unsupported typed_value type: List(");
 variant_test_case!(137, "Illegal shredded value type: FixedSizeBinary(4)");
-variant_test_case!(138, "Unsupported typed_value type: Struct(");
+variant_test_case!(138);
 
 /// Test case definition structure matching the format from
 /// `parquet-testing/parquet_shredded/cases.json`
