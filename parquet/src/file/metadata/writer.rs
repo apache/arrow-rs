@@ -478,6 +478,13 @@ impl MetadataObjectWriter {
         object.write_thrift(&mut protocol)?;
         Ok(())
     }
+
+    #[inline]
+    fn write_thrift_object(object: &impl WriteThrift, sink: impl Write) -> Result<()> {
+        let mut protocol = ThriftCompactOutputProtocol::new(sink);
+        object.write_thrift(&mut protocol)?;
+        Ok(())
+    }
 }
 
 /// Implementations of [`MetadataObjectWriter`] methods for when encryption is disabled
@@ -662,6 +669,8 @@ impl MetadataObjectWriter {
         };
 
         if file_encryptor.is_column_encrypted(column_path) {
+            use crate::encryption::encrypt::encrypt_thrift_object;
+
             let aad = create_module_aad(
                 file_encryptor.file_aad(),
                 module_type,
