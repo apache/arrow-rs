@@ -19,6 +19,19 @@
 //!
 //! Facilities to read Apache Avro–encoded data into Arrow's `RecordBatch` format.
 //!
+//! ### Limitations
+//!
+//!- **Avro unions with > 127 branches are not supported.**
+//!  When decoding Avro unions to Arrow `UnionArray`, Arrow stores the union
+//!  type identifiers in an **8‑bit signed** buffer (`i8`). This implies a
+//!  practical limit of **127** distinct branch ids. Inputs that resolve to
+//!  more than 127 branches will return an error. If you truly need more,
+//!  model the schema as a **union of unions**, per the Arrow format spec.
+//!
+//!  See: Arrow Columnar Format — Dense Union (“types buffer: 8‑bit signed;
+//!  a union with more than 127 possible types can be modeled as a union of
+//!  unions”).
+//!
 //! This module exposes three layers of the API surface, from highest to lowest-level:
 //!
 //! * [`ReaderBuilder`](crate::reader::ReaderBuilder): configures how Avro is read (batch size, strict union handling,
@@ -1289,14 +1302,19 @@ mod test {
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
         ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     };
+    use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
-    use arrow_buffer::{i256, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow_schema::{ArrowError, DataType, Field, Fields, IntervalUnit, Schema};
+    use arrow_buffer::{
+        i256, Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer,
+    };
+    use arrow_schema::{
+        ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, UnionFields, UnionMode,
+    };
     use bytes::{Buf, BufMut, Bytes};
     use futures::executor::block_on;
     use futures::{stream, Stream, StreamExt, TryStreamExt};
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
@@ -2732,6 +2750,1589 @@ mod test {
                 "projected column '{name}' mismatch vs full read column"
             );
         }
+    }
+
+    #[test]
+    fn test_union_fields_avro_nullable_and_general_unions() {
+        let path = "test/data/union_fields.avro";
+        let batch = read_file(path, 1024, false);
+        let schema = batch.schema();
+        let idx = schema.index_of("nullable_int_nullfirst").unwrap();
+        let a = batch.column(idx).as_primitive::<Int32Type>();
+        assert_eq!(a.len(), 4);
+        assert!(a.is_null(0));
+        assert_eq!(a.value(1), 42);
+        assert!(a.is_null(2));
+        assert_eq!(a.value(3), 0);
+        let idx = schema.index_of("nullable_string_nullsecond").unwrap();
+        let s = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("nullable_string_nullsecond should be Utf8");
+        assert_eq!(s.len(), 4);
+        assert_eq!(s.value(0), "s1");
+        assert!(s.is_null(1));
+        assert_eq!(s.value(2), "s3");
+        assert!(s.is_valid(3)); // empty string, not null
+        assert_eq!(s.value(3), "");
+        let idx = schema.index_of("union_prim").unwrap();
+        let u = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("union_prim should be Union");
+        let fields = match u.data_type() {
+            DataType::Union(fields, mode) => {
+                assert!(matches!(mode, UnionMode::Dense), "expect dense unions");
+                fields
+            }
+            other => panic!("expected Union, got {other:?}"),
+        };
+        let tid_by_name = |name: &str| -> i8 {
+            for (tid, f) in fields.iter() {
+                if f.name() == name {
+                    return tid;
+                }
+            }
+            panic!("union child '{name}' not found");
+        };
+        let expected_type_ids = vec![
+            tid_by_name("long"),
+            tid_by_name("int"),
+            tid_by_name("float"),
+            tid_by_name("double"),
+        ];
+        let type_ids: Vec<i8> = u.type_ids().iter().copied().collect();
+        assert_eq!(
+            type_ids, expected_type_ids,
+            "branch selection for union_prim rows"
+        );
+        let longs = u
+            .child(tid_by_name("long"))
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(longs.len(), 1);
+        let ints = u
+            .child(tid_by_name("int"))
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(ints.len(), 1);
+        let floats = u
+            .child(tid_by_name("float"))
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        assert_eq!(floats.len(), 1);
+        let doubles = u
+            .child(tid_by_name("double"))
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert_eq!(doubles.len(), 1);
+        let idx = schema.index_of("union_bytes_vs_string").unwrap();
+        let u = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("union_bytes_vs_string should be Union");
+        let fields = match u.data_type() {
+            DataType::Union(fields, _) => fields,
+            other => panic!("expected Union, got {other:?}"),
+        };
+        let tid_by_name = |name: &str| -> i8 {
+            for (tid, f) in fields.iter() {
+                if f.name() == name {
+                    return tid;
+                }
+            }
+            panic!("union child '{name}' not found");
+        };
+        let tid_bytes = tid_by_name("bytes");
+        let tid_string = tid_by_name("string");
+        let type_ids: Vec<i8> = u.type_ids().iter().copied().collect();
+        assert_eq!(
+            type_ids,
+            vec![tid_bytes, tid_string, tid_string, tid_bytes],
+            "branch selection for bytes/string union"
+        );
+        let s_child = u
+            .child(tid_string)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(s_child.len(), 2);
+        assert_eq!(s_child.value(0), "hello");
+        assert_eq!(s_child.value(1), "world");
+        let b_child = u
+            .child(tid_bytes)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(b_child.len(), 2);
+        assert_eq!(b_child.value(0), &[0x00, 0xFF, 0x7F]);
+        assert_eq!(b_child.value(1), b""); // previously: &[]
+        let idx = schema.index_of("union_enum_records_array_map").unwrap();
+        let u = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("union_enum_records_array_map should be Union");
+        let fields = match u.data_type() {
+            DataType::Union(fields, _) => fields,
+            other => panic!("expected Union, got {other:?}"),
+        };
+        let mut tid_enum: Option<i8> = None;
+        let mut tid_rec_a: Option<i8> = None;
+        let mut tid_rec_b: Option<i8> = None;
+        let mut tid_array: Option<i8> = None;
+        let mut tid_map: Option<i8> = None;
+        for (tid, f) in fields.iter() {
+            match f.data_type() {
+                DataType::Dictionary(_, _) => tid_enum = Some(tid),
+                DataType::Struct(childs) => {
+                    if childs.len() == 2 && childs[0].name() == "a" && childs[1].name() == "b" {
+                        tid_rec_a = Some(tid);
+                    } else if childs.len() == 2
+                        && childs[0].name() == "x"
+                        && childs[1].name() == "y"
+                    {
+                        tid_rec_b = Some(tid);
+                    }
+                }
+                DataType::List(_) => tid_array = Some(tid),
+                DataType::Map(_, _) => tid_map = Some(tid),
+                _ => {}
+            }
+        }
+        let (tid_enum, tid_rec_a, tid_rec_b, tid_array) = (
+            tid_enum.expect("enum child"),
+            tid_rec_a.expect("RecA child"),
+            tid_rec_b.expect("RecB child"),
+            tid_array.expect("array<long> child"),
+        );
+        let type_ids: Vec<i8> = u.type_ids().iter().copied().collect();
+        assert_eq!(
+            type_ids,
+            vec![tid_enum, tid_rec_a, tid_rec_b, tid_array],
+            "branch selection for complex union"
+        );
+        let dict = u
+            .child(tid_enum)
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(dict.len(), 1);
+        assert!(dict.is_valid(0));
+        let rec_a = u
+            .child(tid_rec_a)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(rec_a.len(), 1);
+        let a_val = rec_a
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(a_val.value(0), 7);
+        let b_val = rec_a
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(b_val.value(0), "x");
+        // RecB row: {"x": 123456789, "y": b"\xFF\x00"}
+        let rec_b = u
+            .child(tid_rec_b)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let x_val = rec_b
+            .column_by_name("x")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(x_val.value(0), 123_456_789_i64);
+        let y_val = rec_b
+            .column_by_name("y")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(y_val.value(0), &[0xFF, 0x00]);
+        let arr = u
+            .child(tid_array)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(arr.len(), 1);
+        let first_values = arr.value(0);
+        let longs = first_values.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(longs.len(), 3);
+        assert_eq!(longs.value(0), 1);
+        assert_eq!(longs.value(1), 2);
+        assert_eq!(longs.value(2), 3);
+        let idx = schema.index_of("union_date_or_fixed4").unwrap();
+        let u = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("union_date_or_fixed4 should be Union");
+        let fields = match u.data_type() {
+            DataType::Union(fields, _) => fields,
+            other => panic!("expected Union, got {other:?}"),
+        };
+        let mut tid_date: Option<i8> = None;
+        let mut tid_fixed: Option<i8> = None;
+        for (tid, f) in fields.iter() {
+            match f.data_type() {
+                DataType::Date32 => tid_date = Some(tid),
+                DataType::FixedSizeBinary(4) => tid_fixed = Some(tid),
+                _ => {}
+            }
+        }
+        let (tid_date, tid_fixed) = (tid_date.expect("date"), tid_fixed.expect("fixed(4)"));
+        let type_ids: Vec<i8> = u.type_ids().iter().copied().collect();
+        assert_eq!(
+            type_ids,
+            vec![tid_date, tid_fixed, tid_date, tid_fixed],
+            "branch selection for date/fixed4 union"
+        );
+        let dates = u
+            .child(tid_date)
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .unwrap();
+        assert_eq!(dates.len(), 2);
+        assert_eq!(dates.value(0), 19_000); // ~2022‑01‑15
+        assert_eq!(dates.value(1), 0); // epoch
+        let fixed = u
+            .child(tid_fixed)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(fixed.len(), 2);
+        assert_eq!(fixed.value(0), b"ABCD");
+        assert_eq!(fixed.value(1), &[0x00, 0x11, 0x22, 0x33]);
+    }
+
+    #[test]
+    fn test_union_schema_resolution_all_type_combinations() {
+        let path = "test/data/union_fields.avro";
+        let baseline = read_file(path, 1024, false);
+        let baseline_schema = baseline.schema();
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        let fields = root
+            .get_mut("fields")
+            .and_then(|f| f.as_array_mut())
+            .expect("record has fields");
+        fn is_named_type(obj: &Value, ty: &str, nm: &str) -> bool {
+            obj.get("type").and_then(|v| v.as_str()) == Some(ty)
+                && obj.get("name").and_then(|v| v.as_str()) == Some(nm)
+        }
+        fn is_logical(obj: &Value, prim: &str, lt: &str) -> bool {
+            obj.get("type").and_then(|v| v.as_str()) == Some(prim)
+                && obj.get("logicalType").and_then(|v| v.as_str()) == Some(lt)
+        }
+        fn find_first(arr: &[Value], pred: impl Fn(&Value) -> bool) -> Option<Value> {
+            arr.iter().find(|v| pred(v)).cloned()
+        }
+        fn prim(s: &str) -> Value {
+            Value::String(s.to_string())
+        }
+        for f in fields.iter_mut() {
+            let Some(name) = f.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            match name {
+                // Flip null ordering – should not affect values
+                "nullable_int_nullfirst" => {
+                    f["type"] = json!(["int", "null"]);
+                }
+                "nullable_string_nullsecond" => {
+                    f["type"] = json!(["null", "string"]);
+                }
+                "union_prim" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let long = prim("long");
+                    let double = prim("double");
+                    let string = prim("string");
+                    let bytes = prim("bytes");
+                    let boolean = prim("boolean");
+                    assert!(orig.contains(&long));
+                    assert!(orig.contains(&double));
+                    assert!(orig.contains(&string));
+                    assert!(orig.contains(&bytes));
+                    assert!(orig.contains(&boolean));
+                    f["type"] = json!([long, double, string, bytes, boolean]);
+                }
+                "union_bytes_vs_string" => {
+                    f["type"] = json!(["string", "bytes"]);
+                }
+                "union_fixed_dur_decfix" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let fx8 = find_first(&orig, |o| is_named_type(o, "fixed", "Fx8")).unwrap();
+                    let dur12 = find_first(&orig, |o| is_named_type(o, "fixed", "Dur12")).unwrap();
+                    let decfix16 =
+                        find_first(&orig, |o| is_named_type(o, "fixed", "DecFix16")).unwrap();
+                    f["type"] = json!([decfix16, dur12, fx8]);
+                }
+                "union_enum_records_array_map" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let enum_color = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("enum")
+                    })
+                    .unwrap();
+                    let rec_a = find_first(&orig, |o| is_named_type(o, "record", "RecA")).unwrap();
+                    let rec_b = find_first(&orig, |o| is_named_type(o, "record", "RecB")).unwrap();
+                    let arr = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("array")
+                    })
+                    .unwrap();
+                    let map = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("map")
+                    })
+                    .unwrap();
+                    f["type"] = json!([arr, map, rec_b, rec_a, enum_color]);
+                }
+                "union_date_or_fixed4" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let date = find_first(&orig, |o| is_logical(o, "int", "date")).unwrap();
+                    let fx4 = find_first(&orig, |o| is_named_type(o, "fixed", "Fx4")).unwrap();
+                    f["type"] = json!([fx4, date]);
+                }
+                "union_time_millis_or_enum" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let time_ms =
+                        find_first(&orig, |o| is_logical(o, "int", "time-millis")).unwrap();
+                    let en = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("enum")
+                    })
+                    .unwrap();
+                    f["type"] = json!([en, time_ms]);
+                }
+                "union_time_micros_or_string" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let time_us =
+                        find_first(&orig, |o| is_logical(o, "long", "time-micros")).unwrap();
+                    f["type"] = json!(["string", time_us]);
+                }
+                "union_ts_millis_utc_or_array" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let ts_ms =
+                        find_first(&orig, |o| is_logical(o, "long", "timestamp-millis")).unwrap();
+                    let arr = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("array")
+                    })
+                    .unwrap();
+                    f["type"] = json!([arr, ts_ms]);
+                }
+                "union_ts_micros_local_or_bytes" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let lts_us =
+                        find_first(&orig, |o| is_logical(o, "long", "local-timestamp-micros"))
+                            .unwrap();
+                    f["type"] = json!(["bytes", lts_us]);
+                }
+                "union_uuid_or_fixed10" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let uuid = find_first(&orig, |o| is_logical(o, "string", "uuid")).unwrap();
+                    let fx10 = find_first(&orig, |o| is_named_type(o, "fixed", "Fx10")).unwrap();
+                    f["type"] = json!([fx10, uuid]);
+                }
+                "union_dec_bytes_or_dec_fixed" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let dec_bytes = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("bytes")
+                            && o.get("logicalType").and_then(|v| v.as_str()) == Some("decimal")
+                    })
+                    .unwrap();
+                    let dec_fix = find_first(&orig, |o| {
+                        is_named_type(o, "fixed", "DecFix20")
+                            && o.get("logicalType").and_then(|v| v.as_str()) == Some("decimal")
+                    })
+                    .unwrap();
+                    f["type"] = json!([dec_fix, dec_bytes]);
+                }
+                "union_null_bytes_string" => {
+                    f["type"] = json!(["bytes", "string", "null"]);
+                }
+                "array_of_union" => {
+                    let obj = f
+                        .get_mut("type")
+                        .expect("array type")
+                        .as_object_mut()
+                        .unwrap();
+                    obj.insert("items".to_string(), json!(["string", "long"]));
+                }
+                "map_of_union" => {
+                    let obj = f
+                        .get_mut("type")
+                        .expect("map type")
+                        .as_object_mut()
+                        .unwrap();
+                    obj.insert("values".to_string(), json!(["double", "null"]));
+                }
+                "record_with_union_field" => {
+                    let rec = f
+                        .get_mut("type")
+                        .expect("record type")
+                        .as_object_mut()
+                        .unwrap();
+                    let rec_fields = rec.get_mut("fields").unwrap().as_array_mut().unwrap();
+                    let mut found = false;
+                    for rf in rec_fields.iter_mut() {
+                        if rf.get("name").and_then(|v| v.as_str()) == Some("u") {
+                            rf["type"] = json!(["string", "long"]); // rely on int→long promotion
+                            found = true;
+                            break;
+                        }
+                    }
+                    assert!(found, "field 'u' expected in HasUnion");
+                }
+                "union_ts_micros_utc_or_map" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let ts_us =
+                        find_first(&orig, |o| is_logical(o, "long", "timestamp-micros")).unwrap();
+                    let map = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("map")
+                    })
+                    .unwrap();
+                    f["type"] = json!([map, ts_us]);
+                }
+                "union_ts_millis_local_or_string" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let lts_ms =
+                        find_first(&orig, |o| is_logical(o, "long", "local-timestamp-millis"))
+                            .unwrap();
+                    f["type"] = json!(["string", lts_ms]);
+                }
+                "union_bool_or_string" => {
+                    f["type"] = json!(["string", "boolean"]);
+                }
+                _ => {}
+            }
+        }
+        let reader_schema = AvroSchema::new(root.to_string());
+        let resolved = read_alltypes_with_reader_schema(path, reader_schema);
+
+        fn branch_token(dt: &DataType) -> String {
+            match dt {
+                DataType::Null => "null".into(),
+                DataType::Boolean => "boolean".into(),
+                DataType::Int32 => "int".into(),
+                DataType::Int64 => "long".into(),
+                DataType::Float32 => "float".into(),
+                DataType::Float64 => "double".into(),
+                DataType::Binary => "bytes".into(),
+                DataType::Utf8 => "string".into(),
+                DataType::Date32 => "date".into(),
+                DataType::Time32(arrow_schema::TimeUnit::Millisecond) => "time-millis".into(),
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond) => "time-micros".into(),
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => if tz.is_some() {
+                    "timestamp-millis"
+                } else {
+                    "local-timestamp-millis"
+                }
+                .into(),
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => if tz.is_some() {
+                    "timestamp-micros"
+                } else {
+                    "local-timestamp-micros"
+                }
+                .into(),
+                DataType::Interval(IntervalUnit::MonthDayNano) => "duration".into(),
+                DataType::FixedSizeBinary(n) => format!("fixed{n}"),
+                DataType::Dictionary(_, _) => "enum".into(),
+                DataType::Decimal128(p, s) => format!("decimal({p},{s})"),
+                DataType::Decimal256(p, s) => format!("decimal({p},{s})"),
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(p, s) => format!("decimal({p},{s})"),
+                DataType::Struct(fields) => {
+                    if fields.len() == 2 && fields[0].name() == "a" && fields[1].name() == "b" {
+                        "record:RecA".into()
+                    } else if fields.len() == 2
+                        && fields[0].name() == "x"
+                        && fields[1].name() == "y"
+                    {
+                        "record:RecB".into()
+                    } else {
+                        "record".into()
+                    }
+                }
+                DataType::List(_) => "array".into(),
+                DataType::Map(_, _) => "map".into(),
+                other => format!("{other:?}"),
+            }
+        }
+
+        fn union_tokens(u: &UnionArray) -> (Vec<i8>, HashMap<i8, String>) {
+            let fields = match u.data_type() {
+                DataType::Union(fields, _) => fields,
+                other => panic!("expected Union, got {other:?}"),
+            };
+            let mut dict: HashMap<i8, String> = HashMap::with_capacity(fields.len());
+            for (tid, f) in fields.iter() {
+                dict.insert(tid, branch_token(f.data_type()));
+            }
+            let ids: Vec<i8> = u.type_ids().iter().copied().collect();
+            (ids, dict)
+        }
+
+        fn expected_token(field_name: &str, writer_token: &str) -> String {
+            match field_name {
+                "union_prim" => match writer_token {
+                    "int" => "long".into(),
+                    "float" => "double".into(),
+                    other => other.into(),
+                },
+                "record_with_union_field.u" => match writer_token {
+                    "int" => "long".into(),
+                    other => other.into(),
+                },
+                _ => writer_token.into(),
+            }
+        }
+
+        fn get_union<'a>(
+            rb: &'a RecordBatch,
+            schema: arrow_schema::SchemaRef,
+            fname: &str,
+        ) -> &'a UnionArray {
+            let idx = schema.index_of(fname).unwrap();
+            rb.column(idx)
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .unwrap_or_else(|| panic!("{fname} should be a Union"))
+        }
+
+        fn assert_union_equivalent(field_name: &str, u_writer: &UnionArray, u_reader: &UnionArray) {
+            let (ids_w, dict_w) = union_tokens(u_writer);
+            let (ids_r, dict_r) = union_tokens(u_reader);
+            assert_eq!(
+                ids_w.len(),
+                ids_r.len(),
+                "{field_name}: row count mismatch between baseline and resolved"
+            );
+            for (i, (id_w, id_r)) in ids_w.iter().zip(ids_r.iter()).enumerate() {
+                let w_tok = dict_w.get(id_w).unwrap();
+                let want = expected_token(field_name, w_tok);
+                let got = dict_r.get(id_r).unwrap();
+                assert_eq!(
+                    got, &want,
+                    "{field_name}: row {i} resolved to wrong union branch (writer={w_tok}, expected={want}, got={got})"
+                );
+            }
+        }
+
+        for (fname, dt) in [
+            ("nullable_int_nullfirst", DataType::Int32),
+            ("nullable_string_nullsecond", DataType::Utf8),
+        ] {
+            let idx_b = baseline_schema.index_of(fname).unwrap();
+            let idx_r = resolved.schema().index_of(fname).unwrap();
+            let col_b = baseline.column(idx_b);
+            let col_r = resolved.column(idx_r);
+            assert_eq!(
+                col_b.data_type(),
+                &dt,
+                "baseline {fname} should decode as non-union with nullability"
+            );
+            assert_eq!(
+                col_b.as_ref(),
+                col_r.as_ref(),
+                "{fname}: values must be identical regardless of null-branch order"
+            );
+        }
+        let union_fields = [
+            "union_prim",
+            "union_bytes_vs_string",
+            "union_fixed_dur_decfix",
+            "union_enum_records_array_map",
+            "union_date_or_fixed4",
+            "union_time_millis_or_enum",
+            "union_time_micros_or_string",
+            "union_ts_millis_utc_or_array",
+            "union_ts_micros_local_or_bytes",
+            "union_uuid_or_fixed10",
+            "union_dec_bytes_or_dec_fixed",
+            "union_null_bytes_string",
+            "union_ts_micros_utc_or_map",
+            "union_ts_millis_local_or_string",
+            "union_bool_or_string",
+        ];
+        for fname in union_fields {
+            let u_b = get_union(&baseline, baseline_schema.clone(), fname);
+            let u_r = get_union(&resolved, resolved.schema(), fname);
+            assert_union_equivalent(fname, u_b, u_r);
+        }
+        {
+            let fname = "array_of_union";
+            let idx_b = baseline_schema.index_of(fname).unwrap();
+            let idx_r = resolved.schema().index_of(fname).unwrap();
+            let arr_b = baseline
+                .column(idx_b)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("array_of_union should be a List");
+            let arr_r = resolved
+                .column(idx_r)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("array_of_union should be a List");
+            assert_eq!(
+                arr_b.value_offsets(),
+                arr_r.value_offsets(),
+                "{fname}: list offsets changed after resolution"
+            );
+            let u_b = arr_b
+                .values()
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .expect("array items should be Union");
+            let u_r = arr_r
+                .values()
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .expect("array items should be Union");
+            let (ids_b, dict_b) = union_tokens(u_b);
+            let (ids_r, dict_r) = union_tokens(u_r);
+            assert_eq!(ids_b.len(), ids_r.len(), "{fname}: values length mismatch");
+            for (i, (id_b, id_r)) in ids_b.iter().zip(ids_r.iter()).enumerate() {
+                let w_tok = dict_b.get(id_b).unwrap();
+                let got = dict_r.get(id_r).unwrap();
+                assert_eq!(
+                    got, w_tok,
+                    "{fname}: value {i} resolved to wrong branch (writer={w_tok}, got={got})"
+                );
+            }
+        }
+        {
+            let fname = "map_of_union";
+            let idx_b = baseline_schema.index_of(fname).unwrap();
+            let idx_r = resolved.schema().index_of(fname).unwrap();
+            let map_b = baseline
+                .column(idx_b)
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .expect("map_of_union should be a Map");
+            let map_r = resolved
+                .column(idx_r)
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .expect("map_of_union should be a Map");
+            assert_eq!(
+                map_b.value_offsets(),
+                map_r.value_offsets(),
+                "{fname}: map value offsets changed after resolution"
+            );
+            let ent_b = map_b.entries();
+            let ent_r = map_r.entries();
+            let val_b_any = ent_b.column(1).as_ref();
+            let val_r_any = ent_r.column(1).as_ref();
+            let b_union = val_b_any.as_any().downcast_ref::<UnionArray>();
+            let r_union = val_r_any.as_any().downcast_ref::<UnionArray>();
+            if let (Some(u_b), Some(u_r)) = (b_union, r_union) {
+                assert_union_equivalent(fname, u_b, u_r);
+            } else {
+                assert_eq!(
+                    val_b_any.data_type(),
+                    val_r_any.data_type(),
+                    "{fname}: value data types differ after resolution"
+                );
+                assert_eq!(
+                    val_b_any, val_r_any,
+                    "{fname}: value arrays differ after resolution (nullable value column case)"
+                );
+                let value_nullable = |m: &MapArray| -> bool {
+                    match m.data_type() {
+                        DataType::Map(entries_field, _sorted) => match entries_field.data_type() {
+                            DataType::Struct(fields) => {
+                                assert_eq!(fields.len(), 2, "entries struct must have 2 fields");
+                                assert_eq!(fields[0].name(), "key");
+                                assert_eq!(fields[1].name(), "value");
+                                fields[1].is_nullable()
+                            }
+                            other => panic!("Map entries field must be Struct, got {other:?}"),
+                        },
+                        other => panic!("expected Map data type, got {other:?}"),
+                    }
+                };
+                assert!(
+                    value_nullable(map_b),
+                    "{fname}: baseline Map value field should be nullable per Arrow spec"
+                );
+                assert!(
+                    value_nullable(map_r),
+                    "{fname}: resolved Map value field should be nullable per Arrow spec"
+                );
+            }
+        }
+        {
+            let fname = "record_with_union_field";
+            let idx_b = baseline_schema.index_of(fname).unwrap();
+            let idx_r = resolved.schema().index_of(fname).unwrap();
+            let rec_b = baseline
+                .column(idx_b)
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("record_with_union_field should be a Struct");
+            let rec_r = resolved
+                .column(idx_r)
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("record_with_union_field should be a Struct");
+            let u_b = rec_b
+                .column_by_name("u")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .expect("field 'u' should be Union (baseline)");
+            let u_r = rec_r
+                .column_by_name("u")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .expect("field 'u' should be Union (resolved)");
+            assert_union_equivalent("record_with_union_field.u", u_b, u_r);
+        }
+    }
+
+    #[test]
+    fn test_union_fields_end_to_end_expected_arrays() {
+        fn tid_by_name(fields: &UnionFields, want: &str) -> i8 {
+            for (tid, f) in fields.iter() {
+                if f.name() == want {
+                    return tid;
+                }
+            }
+            panic!("union child '{want}' not found")
+        }
+
+        fn tid_by_dt(fields: &UnionFields, pred: impl Fn(&DataType) -> bool) -> i8 {
+            for (tid, f) in fields.iter() {
+                if pred(f.data_type()) {
+                    return tid;
+                }
+            }
+            panic!("no union child matches predicate")
+        }
+
+        fn uuid16_from_str(s: &str) -> [u8; 16] {
+            fn hex(b: u8) -> u8 {
+                match b {
+                    b'0'..=b'9' => b - b'0',
+                    b'a'..=b'f' => b - b'a' + 10,
+                    b'A'..=b'F' => b - b'A' + 10,
+                    _ => panic!("invalid hex"),
+                }
+            }
+            let mut out = [0u8; 16];
+            let bytes = s.as_bytes();
+            let (mut i, mut j) = (0, 0);
+            while i < bytes.len() {
+                if bytes[i] == b'-' {
+                    i += 1;
+                    continue;
+                }
+                let hi = hex(bytes[i]);
+                let lo = hex(bytes[i + 1]);
+                out[j] = (hi << 4) | lo;
+                j += 1;
+                i += 2;
+            }
+            assert_eq!(j, 16, "uuid must decode to 16 bytes");
+            out
+        }
+
+        fn empty_child_for(dt: &DataType) -> Arc<dyn Array> {
+            match dt {
+                DataType::Null => Arc::new(NullArray::new(0)),
+                DataType::Boolean => Arc::new(BooleanArray::from(Vec::<bool>::new())),
+                DataType::Int32 => Arc::new(Int32Array::from(Vec::<i32>::new())),
+                DataType::Int64 => Arc::new(Int64Array::from(Vec::<i64>::new())),
+                DataType::Float32 => Arc::new(arrow_array::Float32Array::from(Vec::<f32>::new())),
+                DataType::Float64 => Arc::new(arrow_array::Float64Array::from(Vec::<f64>::new())),
+                DataType::Binary => Arc::new(BinaryArray::from(Vec::<&[u8]>::new())),
+                DataType::Utf8 => Arc::new(StringArray::from(Vec::<&str>::new())),
+                DataType::Date32 => Arc::new(arrow_array::Date32Array::from(Vec::<i32>::new())),
+                DataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
+                    Arc::new(Time32MillisecondArray::from(Vec::<i32>::new()))
+                }
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
+                    Arc::new(Time64MicrosecondArray::from(Vec::<i64>::new()))
+                }
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => {
+                    let a = TimestampMillisecondArray::from(Vec::<i64>::new());
+                    Arc::new(if let Some(tz) = tz {
+                        a.with_timezone(tz.clone())
+                    } else {
+                        a
+                    })
+                }
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => {
+                    let a = TimestampMicrosecondArray::from(Vec::<i64>::new());
+                    Arc::new(if let Some(tz) = tz {
+                        a.with_timezone(tz.clone())
+                    } else {
+                        a
+                    })
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    Arc::new(arrow_array::IntervalMonthDayNanoArray::from(Vec::<
+                        IntervalMonthDayNano,
+                    >::new(
+                    )))
+                }
+                DataType::FixedSizeBinary(n) => Arc::new(FixedSizeBinaryArray::new_null(*n, 0)),
+                DataType::Dictionary(k, v) => {
+                    assert_eq!(**k, DataType::Int32, "expect int32 keys for enums");
+                    let keys = Int32Array::from(Vec::<i32>::new());
+                    let values = match v.as_ref() {
+                        DataType::Utf8 => {
+                            Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef
+                        }
+                        other => panic!("unexpected dictionary value type {other:?}"),
+                    };
+                    Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                }
+                DataType::List(field) => {
+                    let values: ArrayRef = match field.data_type() {
+                        DataType::Int32 => {
+                            Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef
+                        }
+                        DataType::Int64 => {
+                            Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef
+                        }
+                        DataType::Utf8 => {
+                            Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef
+                        }
+                        DataType::Union(_, _) => {
+                            let (uf, _) = if let DataType::Union(f, m) = field.data_type() {
+                                (f.clone(), m)
+                            } else {
+                                unreachable!()
+                            };
+                            let children: Vec<ArrayRef> = uf
+                                .iter()
+                                .map(|(_, f)| empty_child_for(f.data_type()))
+                                .collect();
+                            Arc::new(
+                                UnionArray::try_new(
+                                    uf.clone(),
+                                    ScalarBuffer::<i8>::from(Vec::<i8>::new()),
+                                    Some(ScalarBuffer::<i32>::from(Vec::<i32>::new())),
+                                    children,
+                                )
+                                .unwrap(),
+                            ) as ArrayRef
+                        }
+                        other => panic!("unsupported list item type: {other:?}"),
+                    };
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0]));
+                    Arc::new(ListArray::try_new(field.clone(), offsets, values, None).unwrap())
+                }
+                DataType::Map(entry_field, ordered) => {
+                    let DataType::Struct(childs) = entry_field.data_type() else {
+                        panic!("map entries must be struct")
+                    };
+                    let key_field = &childs[0];
+                    let val_field = &childs[1];
+                    assert_eq!(key_field.data_type(), &DataType::Utf8);
+                    let keys = StringArray::from(Vec::<&str>::new());
+                    let vals: ArrayRef = match val_field.data_type() {
+                        DataType::Float64 => {
+                            Arc::new(arrow_array::Float64Array::from(Vec::<f64>::new())) as ArrayRef
+                        }
+                        DataType::Int64 => {
+                            Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef
+                        }
+                        DataType::Utf8 => {
+                            Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef
+                        }
+                        DataType::Union(uf, _) => {
+                            let ch: Vec<ArrayRef> = uf
+                                .iter()
+                                .map(|(_, f)| empty_child_for(f.data_type()))
+                                .collect();
+                            Arc::new(
+                                UnionArray::try_new(
+                                    uf.clone(),
+                                    ScalarBuffer::<i8>::from(Vec::<i8>::new()),
+                                    Some(ScalarBuffer::<i32>::from(Vec::<i32>::new())),
+                                    ch,
+                                )
+                                .unwrap(),
+                            ) as ArrayRef
+                        }
+                        other => panic!("unsupported map value type: {other:?}"),
+                    };
+                    let entries = StructArray::new(
+                        Fields::from(vec![key_field.as_ref().clone(), val_field.as_ref().clone()]),
+                        vec![Arc::new(keys) as ArrayRef, vals],
+                        None,
+                    );
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0]));
+                    Arc::new(MapArray::new(
+                        entry_field.clone(),
+                        offsets,
+                        entries,
+                        None,
+                        *ordered,
+                    ))
+                }
+                other => panic!("empty_child_for: unhandled type {other:?}"),
+            }
+        }
+
+        fn mk_dense_union(
+            fields: &UnionFields,
+            type_ids: Vec<i8>,
+            offsets: Vec<i32>,
+            provide: impl Fn(&Field) -> Option<ArrayRef>,
+        ) -> ArrayRef {
+            let children: Vec<ArrayRef> = fields
+                .iter()
+                .map(|(_, f)| provide(f).unwrap_or_else(|| empty_child_for(f.data_type())))
+                .collect();
+
+            Arc::new(
+                UnionArray::try_new(
+                    fields.clone(),
+                    ScalarBuffer::<i8>::from(type_ids),
+                    Some(ScalarBuffer::<i32>::from(offsets)),
+                    children,
+                )
+                .unwrap(),
+            ) as ArrayRef
+        }
+
+        // Dates / times / timestamps from the Avro content block:
+        let date_a: i32 = 19_000;
+        let time_ms_a: i32 = 13 * 3_600_000 + 45 * 60_000 + 30_000 + 123;
+        let time_us_b: i64 = 23 * 3_600_000_000 + 59 * 60_000_000 + 59 * 1_000_000 + 999_999;
+        let ts_ms_2024_01_01: i64 = 1_704_067_200_000;
+        let ts_us_2024_01_01: i64 = ts_ms_2024_01_01 * 1000;
+        // Fixed / bytes-like values:
+        let fx8_a: [u8; 8] = *b"ABCDEFGH";
+        let fx4_abcd: [u8; 4] = *b"ABCD";
+        let fx4_misc: [u8; 4] = [0x00, 0x11, 0x22, 0x33];
+        let fx10_ascii: [u8; 10] = *b"0123456789";
+        let fx10_aa: [u8; 10] = [0xAA; 10];
+        // Duration logical values as MonthDayNano:
+        let dur_a = IntervalMonthDayNanoType::make_value(1, 2, 3_000_000_000);
+        let dur_b = IntervalMonthDayNanoType::make_value(12, 31, 999_000_000);
+        // UUID logical values (stored as 16-byte FixedSizeBinary in Arrow):
+        let uuid1 = uuid16_from_str("fe7bc30b-4ce8-4c5e-b67c-2234a2d38e66");
+        let uuid2 = uuid16_from_str("0826cc06-d2e3-4599-b4ad-af5fa6905cdb");
+        // Decimals from Avro content:
+        let dec_b_scale2_pos: i128 = 123_456; // "1234.56" bytes-decimal -> (precision=10, scale=2)
+        let dec_fix16_neg: i128 = -101; // "-1.01" fixed(16) decimal(10,2)
+        let dec_fix20_s4: i128 = 1_234_567_891_234; // "123456789.1234" fixed(20) decimal(20,4)
+        let dec_fix20_s4_neg: i128 = -123; // "-0.0123" fixed(20) decimal(20,4)
+        let path = "test/data/union_fields.avro";
+        let actual = read_file(path, 1024, false);
+        let schema = actual.schema();
+        // Helper to fetch union metadata for a column
+        let get_union = |name: &str| -> (UnionFields, UnionMode) {
+            let idx = schema.index_of(name).unwrap();
+            match schema.field(idx).data_type() {
+                DataType::Union(f, m) => (f.clone(), *m),
+                other => panic!("{name} should be a Union, got {other:?}"),
+            }
+        };
+        let mut expected_cols: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
+        // 1) ["null","int"]: Int32 (nullable)
+        expected_cols.push(Arc::new(Int32Array::from(vec![
+            None,
+            Some(42),
+            None,
+            Some(0),
+        ])));
+        // 2) ["string","null"]: Utf8 (nullable)
+        expected_cols.push(Arc::new(StringArray::from(vec![
+            Some("s1"),
+            None,
+            Some("s3"),
+            Some(""),
+        ])));
+        // 3) union_prim: ["boolean","int","long","float","double","bytes","string"]
+        {
+            let (uf, mode) = get_union("union_prim");
+            assert!(matches!(mode, UnionMode::Dense));
+            let tids = vec![
+                tid_by_name(&uf, "long"),
+                tid_by_name(&uf, "int"),
+                tid_by_name(&uf, "float"),
+                tid_by_name(&uf, "double"),
+            ];
+            let offs = vec![0, 0, 0, 0];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.name().as_str() {
+                "int" => Some(Arc::new(Int32Array::from(vec![-1])) as ArrayRef),
+                "long" => Some(Arc::new(Int64Array::from(vec![1_234_567_890_123i64])) as ArrayRef),
+                "float" => {
+                    Some(Arc::new(arrow_array::Float32Array::from(vec![1.25f32])) as ArrayRef)
+                }
+                "double" => {
+                    Some(Arc::new(arrow_array::Float64Array::from(vec![-2.5f64])) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 4) union_bytes_vs_string: ["bytes","string"]
+        {
+            let (uf, _) = get_union("union_bytes_vs_string");
+            let tids = vec![
+                tid_by_name(&uf, "bytes"),
+                tid_by_name(&uf, "string"),
+                tid_by_name(&uf, "string"),
+                tid_by_name(&uf, "bytes"),
+            ];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.name().as_str() {
+                "bytes" => Some(
+                    Arc::new(BinaryArray::from(vec![&[0x00, 0xFF, 0x7F][..], &[][..]])) as ArrayRef,
+                ),
+                "string" => Some(Arc::new(StringArray::from(vec!["hello", "world"])) as ArrayRef),
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 5) union_fixed_dur_decfix: [Fx8, Dur12, DecFix16(decimal(10,2))]
+        {
+            let (uf, _) = get_union("union_fixed_dur_decfix");
+            let tid_fx8 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(8)));
+            let tid_dur = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano)
+                )
+            });
+            let tid_dec = tid_by_dt(&uf, |dt| match dt {
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(10, 2) => true,
+                DataType::Decimal128(10, 2) | DataType::Decimal256(10, 2) => true,
+                _ => false,
+            });
+            let tids = vec![tid_fx8, tid_dur, tid_dec, tid_dur];
+            let offs = vec![0, 0, 0, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::FixedSizeBinary(8) => {
+                    let it = [Some(fx8_a)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 8).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    Some(Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
+                        dur_a, dur_b,
+                    ])) as ArrayRef)
+                }
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(10, 2) => {
+                    let a = arrow_array::Decimal64Array::from_iter_values([dec_fix16_neg as i64]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal128(10, 2) => {
+                    let a = arrow_array::Decimal128Array::from_iter_values([dec_fix16_neg]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal256(10, 2) => {
+                    let a = arrow_array::Decimal256Array::from_iter_values([i256::from_i128(
+                        dec_fix16_neg,
+                    )]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 6) union_enum_records_array_map: [enum ColorU, record RecA, record RecB, array<long>, map<string>]
+        {
+            let (uf, _) = get_union("union_enum_records_array_map");
+            let tid_enum = tid_by_dt(&uf, |dt| matches!(dt, DataType::Dictionary(_, _)));
+            let tid_reca = tid_by_dt(&uf, |dt| {
+                if let DataType::Struct(fs) = dt {
+                    fs.len() == 2 && fs[0].name() == "a" && fs[1].name() == "b"
+                } else {
+                    false
+                }
+            });
+            let tid_recb = tid_by_dt(&uf, |dt| {
+                if let DataType::Struct(fs) = dt {
+                    fs.len() == 2 && fs[0].name() == "x" && fs[1].name() == "y"
+                } else {
+                    false
+                }
+            });
+            let tid_arr = tid_by_dt(&uf, |dt| matches!(dt, DataType::List(_)));
+            let tids = vec![tid_enum, tid_reca, tid_recb, tid_arr];
+            let offs = vec![0, 0, 0, 0];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Dictionary(_, _) => {
+                    let keys = Int32Array::from(vec![0i32]); // "RED"
+                    let values =
+                        Arc::new(StringArray::from(vec!["RED", "GREEN", "BLUE"])) as ArrayRef;
+                    Some(
+                        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                            as ArrayRef,
+                    )
+                }
+                DataType::Struct(fs)
+                    if fs.len() == 2 && fs[0].name() == "a" && fs[1].name() == "b" =>
+                {
+                    let a = Int32Array::from(vec![7]);
+                    let b = StringArray::from(vec!["x"]);
+                    Some(Arc::new(StructArray::new(
+                        fs.clone(),
+                        vec![Arc::new(a), Arc::new(b)],
+                        None,
+                    )) as ArrayRef)
+                }
+                DataType::Struct(fs)
+                    if fs.len() == 2 && fs[0].name() == "x" && fs[1].name() == "y" =>
+                {
+                    let x = Int64Array::from(vec![123_456_789i64]);
+                    let y = BinaryArray::from(vec![&[0xFF, 0x00][..]]);
+                    Some(Arc::new(StructArray::new(
+                        fs.clone(),
+                        vec![Arc::new(x), Arc::new(y)],
+                        None,
+                    )) as ArrayRef)
+                }
+                DataType::List(field) => {
+                    let values = Int64Array::from(vec![1i64, 2, 3]);
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3]));
+                    Some(Arc::new(
+                        ListArray::try_new(field.clone(), offsets, Arc::new(values), None).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::Map(_, _) => None,
+                other => panic!("unexpected child {other:?}"),
+            });
+            expected_cols.push(arr);
+        }
+        // 7) union_date_or_fixed4: [date32, fixed(4)]
+        {
+            let (uf, _) = get_union("union_date_or_fixed4");
+            let tid_date = tid_by_dt(&uf, |dt| matches!(dt, DataType::Date32));
+            let tid_fx4 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(4)));
+            let tids = vec![tid_date, tid_fx4, tid_date, tid_fx4];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Date32 => {
+                    Some(Arc::new(arrow_array::Date32Array::from(vec![date_a, 0])) as ArrayRef)
+                }
+                DataType::FixedSizeBinary(4) => {
+                    let it = [Some(fx4_abcd), Some(fx4_misc)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 4).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 8) union_time_millis_or_enum: [time-millis, enum OnOff]
+        {
+            let (uf, _) = get_union("union_time_millis_or_enum");
+            let tid_ms = tid_by_dt(&uf, |dt| {
+                matches!(dt, DataType::Time32(arrow_schema::TimeUnit::Millisecond))
+            });
+            let tid_en = tid_by_dt(&uf, |dt| matches!(dt, DataType::Dictionary(_, _)));
+            let tids = vec![tid_ms, tid_en, tid_en, tid_ms];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
+                    Some(Arc::new(Time32MillisecondArray::from(vec![time_ms_a, 0])) as ArrayRef)
+                }
+                DataType::Dictionary(_, _) => {
+                    let keys = Int32Array::from(vec![0i32, 1]); // "ON", "OFF"
+                    let values = Arc::new(StringArray::from(vec!["ON", "OFF"])) as ArrayRef;
+                    Some(
+                        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                            as ArrayRef,
+                    )
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 9) union_time_micros_or_string: [time-micros, string]
+        {
+            let (uf, _) = get_union("union_time_micros_or_string");
+            let tid_us = tid_by_dt(&uf, |dt| {
+                matches!(dt, DataType::Time64(arrow_schema::TimeUnit::Microsecond))
+            });
+            let tid_s = tid_by_name(&uf, "string");
+            let tids = vec![tid_s, tid_us, tid_s, tid_s];
+            let offs = vec![0, 0, 1, 2];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
+                    Some(Arc::new(Time64MicrosecondArray::from(vec![time_us_b])) as ArrayRef)
+                }
+                DataType::Utf8 => {
+                    Some(Arc::new(StringArray::from(vec!["evening", "night", ""])) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 10) union_ts_millis_utc_or_array: [timestamp-millis(TZ), array<int>]
+        {
+            let (uf, _) = get_union("union_ts_millis_utc_or_array");
+            let tid_ts = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _)
+                )
+            });
+            let tid_arr = tid_by_dt(&uf, |dt| matches!(dt, DataType::List(_)));
+            let tids = vec![tid_ts, tid_arr, tid_arr, tid_ts];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => {
+                    let a = TimestampMillisecondArray::from(vec![
+                        ts_ms_2024_01_01,
+                        ts_ms_2024_01_01 + 86_400_000,
+                    ]);
+                    Some(Arc::new(if let Some(tz) = tz {
+                        a.with_timezone(tz.clone())
+                    } else {
+                        a
+                    }) as ArrayRef)
+                }
+                DataType::List(field) => {
+                    let values = Int32Array::from(vec![0, 1, 2, -1, 0, 1]);
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6]));
+                    Some(Arc::new(
+                        ListArray::try_new(field.clone(), offsets, Arc::new(values), None).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 11) union_ts_micros_local_or_bytes: [local-timestamp-micros, bytes]
+        {
+            let (uf, _) = get_union("union_ts_micros_local_or_bytes");
+            let tid_lts = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+                )
+            });
+            let tid_b = tid_by_name(&uf, "bytes");
+            let tids = vec![tid_b, tid_lts, tid_b, tid_b];
+            let offs = vec![0, 0, 1, 2];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None) => Some(Arc::new(
+                    TimestampMicrosecondArray::from(vec![ts_us_2024_01_01]),
+                )
+                    as ArrayRef),
+                DataType::Binary => Some(Arc::new(BinaryArray::from(vec![
+                    &b"\x11\x22\x33"[..],
+                    &b"\x00"[..],
+                    &b"\x10\x20\x30\x40"[..],
+                ])) as ArrayRef),
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 12) union_uuid_or_fixed10: [uuid(string)->fixed(16), fixed(10)]
+        {
+            let (uf, _) = get_union("union_uuid_or_fixed10");
+            let tid_fx16 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(16)));
+            let tid_fx10 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(10)));
+            let tids = vec![tid_fx16, tid_fx10, tid_fx16, tid_fx10];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::FixedSizeBinary(16) => {
+                    let it = [Some(uuid1), Some(uuid2)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 16).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::FixedSizeBinary(10) => {
+                    let it = [Some(fx10_ascii), Some(fx10_aa)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 10).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 13) union_dec_bytes_or_dec_fixed: [bytes dec(10,2), fixed(20) dec(20,4)]
+        {
+            let (uf, _) = get_union("union_dec_bytes_or_dec_fixed");
+            let tid_b10s2 = tid_by_dt(&uf, |dt| match dt {
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(10, 2) => true,
+                DataType::Decimal128(10, 2) | DataType::Decimal256(10, 2) => true,
+                _ => false,
+            });
+            let tid_f20s4 = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Decimal128(20, 4) | DataType::Decimal256(20, 4)
+                )
+            });
+            let tids = vec![tid_b10s2, tid_f20s4, tid_b10s2, tid_f20s4];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(10, 2) => {
+                    let a = Decimal64Array::from_iter_values([dec_b_scale2_pos as i64, 0i64]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal128(10, 2) => {
+                    let a = Decimal128Array::from_iter_values([dec_b_scale2_pos, 0]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal256(10, 2) => {
+                    let a = Decimal256Array::from_iter_values([
+                        i256::from_i128(dec_b_scale2_pos),
+                        i256::from(0),
+                    ]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal128(20, 4) => {
+                    let a = Decimal128Array::from_iter_values([dec_fix20_s4_neg, dec_fix20_s4]);
+                    Some(Arc::new(a.with_precision_and_scale(20, 4).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal256(20, 4) => {
+                    let a = Decimal256Array::from_iter_values([
+                        i256::from_i128(dec_fix20_s4_neg),
+                        i256::from_i128(dec_fix20_s4),
+                    ]);
+                    Some(Arc::new(a.with_precision_and_scale(20, 4).unwrap()) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 14) union_null_bytes_string: ["null","bytes","string"]
+        {
+            let (uf, _) = get_union("union_null_bytes_string");
+            let tid_n = tid_by_name(&uf, "null");
+            let tid_b = tid_by_name(&uf, "bytes");
+            let tid_s = tid_by_name(&uf, "string");
+            let tids = vec![tid_n, tid_b, tid_s, tid_s];
+            let offs = vec![0, 0, 0, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.name().as_str() {
+                "null" => Some(Arc::new(arrow_array::NullArray::new(1)) as ArrayRef),
+                "bytes" => Some(Arc::new(BinaryArray::from(vec![&b"\x01\x02"[..]])) as ArrayRef),
+                "string" => Some(Arc::new(StringArray::from(vec!["text", "u"])) as ArrayRef),
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 15) array_of_union: array<[long,string]>
+        {
+            let idx = schema.index_of("array_of_union").unwrap();
+            let dt = schema.field(idx).data_type().clone();
+            let (item_field, _) = match &dt {
+                DataType::List(f) => (f.clone(), ()),
+                other => panic!("array_of_union must be List, got {other:?}"),
+            };
+            let (uf, _) = match item_field.data_type() {
+                DataType::Union(f, m) => (f.clone(), m),
+                other => panic!("array_of_union items must be Union, got {other:?}"),
+            };
+            let tid_l = tid_by_name(&uf, "long");
+            let tid_s = tid_by_name(&uf, "string");
+            let type_ids = vec![tid_l, tid_s, tid_l, tid_s, tid_l, tid_l, tid_s, tid_l];
+            let offsets = vec![0, 0, 1, 1, 2, 3, 2, 4];
+            let values_union =
+                mk_dense_union(&uf, type_ids, offsets, |f| match f.name().as_str() {
+                    "long" => {
+                        Some(Arc::new(Int64Array::from(vec![1i64, -5, 42, -1, 0])) as ArrayRef)
+                    }
+                    "string" => Some(Arc::new(StringArray::from(vec!["a", "", "z"])) as ArrayRef),
+                    _ => None,
+                });
+            let list_offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 6, 8]));
+            expected_cols.push(Arc::new(
+                ListArray::try_new(item_field.clone(), list_offsets, values_union, None).unwrap(),
+            ));
+        }
+        // 16) map_of_union: map<[null,double]>
+        {
+            let idx = schema.index_of("map_of_union").unwrap();
+            let dt = schema.field(idx).data_type().clone();
+            let (entry_field, ordered) = match &dt {
+                DataType::Map(f, ordered) => (f.clone(), *ordered),
+                other => panic!("map_of_union must be Map, got {other:?}"),
+            };
+            let DataType::Struct(entry_fields) = entry_field.data_type() else {
+                panic!("map entries must be struct")
+            };
+            let key_field = entry_fields[0].clone();
+            let val_field = entry_fields[1].clone();
+            let keys = StringArray::from(vec!["a", "b", "x", "pi"]);
+            let rounded_pi = (std::f64::consts::PI * 100_000.0).round() / 100_000.0;
+            let values: ArrayRef = match val_field.data_type() {
+                DataType::Union(uf, _) => {
+                    let tid_n = tid_by_name(uf, "null");
+                    let tid_d = tid_by_name(uf, "double");
+                    let tids = vec![tid_n, tid_d, tid_d, tid_d];
+                    let offs = vec![0, 0, 1, 2];
+                    mk_dense_union(uf, tids, offs, |f| match f.name().as_str() {
+                        "null" => Some(Arc::new(NullArray::new(1)) as ArrayRef),
+                        "double" => Some(Arc::new(arrow_array::Float64Array::from(vec![
+                            2.5f64, -0.5f64, rounded_pi,
+                        ])) as ArrayRef),
+                        _ => None,
+                    })
+                }
+                DataType::Float64 => Arc::new(arrow_array::Float64Array::from(vec![
+                    None,
+                    Some(2.5),
+                    Some(-0.5),
+                    Some(rounded_pi),
+                ])),
+                other => panic!("unexpected map value type {other:?}"),
+            };
+            let entries = StructArray::new(
+                Fields::from(vec![key_field.as_ref().clone(), val_field.as_ref().clone()]),
+                vec![Arc::new(keys) as ArrayRef, values],
+                None,
+            );
+            let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3, 3, 4]));
+            expected_cols.push(Arc::new(MapArray::new(
+                entry_field,
+                offsets,
+                entries,
+                None,
+                ordered,
+            )));
+        }
+        // 17) record_with_union_field: struct { id:int, u:[int,string] }
+        {
+            let idx = schema.index_of("record_with_union_field").unwrap();
+            let DataType::Struct(rec_fields) = schema.field(idx).data_type() else {
+                panic!("record_with_union_field should be Struct")
+            };
+            let id = Int32Array::from(vec![1, 2, 3, 4]);
+            let u_field = rec_fields.iter().find(|f| f.name() == "u").unwrap();
+            let DataType::Union(uf, _) = u_field.data_type() else {
+                panic!("u must be Union")
+            };
+            let tid_i = tid_by_name(uf, "int");
+            let tid_s = tid_by_name(uf, "string");
+            let tids = vec![tid_s, tid_i, tid_i, tid_s];
+            let offs = vec![0, 0, 1, 1];
+            let u = mk_dense_union(uf, tids, offs, |f| match f.name().as_str() {
+                "int" => Some(Arc::new(Int32Array::from(vec![99, 0])) as ArrayRef),
+                "string" => Some(Arc::new(StringArray::from(vec!["one", "four"])) as ArrayRef),
+                _ => None,
+            });
+            let rec = StructArray::new(rec_fields.clone(), vec![Arc::new(id) as ArrayRef, u], None);
+            expected_cols.push(Arc::new(rec));
+        }
+        // 18) union_ts_micros_utc_or_map: [timestamp-micros(TZ), map<long>]
+        {
+            let (uf, _) = get_union("union_ts_micros_utc_or_map");
+            let tid_ts = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some(_))
+                )
+            });
+            let tid_map = tid_by_dt(&uf, |dt| matches!(dt, DataType::Map(_, _)));
+            let tids = vec![tid_ts, tid_map, tid_ts, tid_map];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => {
+                    let a = TimestampMicrosecondArray::from(vec![ts_us_2024_01_01, 0i64]);
+                    Some(Arc::new(if let Some(tz) = tz {
+                        a.with_timezone(tz.clone())
+                    } else {
+                        a
+                    }) as ArrayRef)
+                }
+                DataType::Map(entry_field, ordered) => {
+                    let DataType::Struct(fs) = entry_field.data_type() else {
+                        panic!("map entries must be struct")
+                    };
+                    let key_field = fs[0].clone();
+                    let val_field = fs[1].clone();
+                    assert_eq!(key_field.data_type(), &DataType::Utf8);
+                    assert_eq!(val_field.data_type(), &DataType::Int64);
+                    let keys = StringArray::from(vec!["k1", "k2", "n"]);
+                    let vals = Int64Array::from(vec![1i64, 2, 0]);
+                    let entries = StructArray::new(
+                        Fields::from(vec![key_field.as_ref().clone(), val_field.as_ref().clone()]),
+                        vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
+                        None,
+                    );
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3]));
+                    Some(Arc::new(MapArray::new(
+                        entry_field.clone(),
+                        offsets,
+                        entries,
+                        None,
+                        *ordered,
+                    )) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 19) union_ts_millis_local_or_string: [local-timestamp-millis, string]
+        {
+            let (uf, _) = get_union("union_ts_millis_local_or_string");
+            let tid_ts = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None)
+                )
+            });
+            let tid_s = tid_by_name(&uf, "string");
+            let tids = vec![tid_s, tid_ts, tid_s, tid_s];
+            let offs = vec![0, 0, 1, 2];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None) => Some(Arc::new(
+                    TimestampMillisecondArray::from(vec![ts_ms_2024_01_01]),
+                )
+                    as ArrayRef),
+                DataType::Utf8 => {
+                    Some(
+                        Arc::new(StringArray::from(vec!["local midnight", "done", ""])) as ArrayRef,
+                    )
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 20) union_bool_or_string: ["boolean","string"]
+        {
+            let (uf, _) = get_union("union_bool_or_string");
+            let tid_b = tid_by_name(&uf, "boolean");
+            let tid_s = tid_by_name(&uf, "string");
+            let tids = vec![tid_b, tid_s, tid_b, tid_s];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.name().as_str() {
+                "boolean" => Some(Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef),
+                "string" => Some(Arc::new(StringArray::from(vec!["no", "yes"])) as ArrayRef),
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        let expected = RecordBatch::try_new(schema.clone(), expected_cols).unwrap();
+        assert_eq!(
+            actual, expected,
+            "full end-to-end equality for union_fields.avro"
+        );
     }
 
     #[test]

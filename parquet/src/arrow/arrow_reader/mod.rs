@@ -43,7 +43,7 @@ use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
+pub use read_plan::{ReadPlan, ReadPlanBuilder};
 
 mod filter;
 pub mod metrics;
@@ -3678,8 +3678,8 @@ mod tests {
                 ),
             ])),
             "Arrow: Incompatible supplied Arrow schema: data type mismatch for field nested: \
-            requested Struct(nested1_valid Utf8, nested1_invalid Int32) \
-            but found Struct(nested1_valid Utf8, nested1_invalid Int64)",
+            requested Struct(\"nested1_valid\": Utf8, \"nested1_invalid\": Int32) \
+            but found Struct(\"nested1_valid\": Utf8, \"nested1_invalid\": Int64)",
         );
     }
 

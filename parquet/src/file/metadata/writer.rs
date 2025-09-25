@@ -662,6 +662,8 @@ impl MetadataObjectWriter {
         };
 
         if file_encryptor.is_column_encrypted(column_path) {
+            use crate::encryption::encrypt::encrypt_thrift_object;
+
             let aad = create_module_aad(
                 file_encryptor.file_aad(),
                 module_type,
