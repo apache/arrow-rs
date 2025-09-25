@@ -26,7 +26,7 @@ pub(crate) fn parse_data_type(val: &str) -> ArrowResult<DataType> {
 type ArrowResult<T> = Result<T, ArrowError>;
 
 fn make_error(val: &str, msg: &str) -> ArrowError {
-    let msg = format!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error {msg}" );
+    let msg = format!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'. Error {msg}" );
     ArrowError::ParseError(msg)
 }
 
@@ -81,9 +81,6 @@ impl<'a> Parser<'a> {
             Token::LargeList => self.parse_large_list(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
-            Token::FieldName(word) => {
-                Err(make_error(self.val, &format!("unrecognized word: {word}")))
-            }
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -135,34 +132,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the next timezone
-    fn parse_timezone(&mut self, context: &str) -> ArrowResult<Option<String>> {
-        match self.next_token()? {
-            Token::None => Ok(None),
-            Token::Some => {
-                self.expect_token(Token::LParen)?;
-                let timezone = self.parse_double_quoted_string("Timezone")?;
-                self.expect_token(Token::RParen)?;
-                Ok(Some(timezone))
-            }
-            tok => Err(make_error(
-                self.val,
-                &format!("finding Timezone for {context}, got {tok}"),
-            )),
-        }
-    }
-
     /// Parses the next double quoted string
     fn parse_double_quoted_string(&mut self, context: &str) -> ArrowResult<String> {
-        match self.next_token()? {
-            Token::DoubleQuotedString(s) => Ok(s),
-            Token::FieldName(word) => {
-                Err(make_error(self.val, &format!("unrecognized word: {word}")))
-            }
-            tok => Err(make_error(
+        let token = self.next_token()?;
+        if let Token::DoubleQuotedString(string) = token {
+            Ok(string)
+        } else {
+            Err(make_error(
                 self.val,
-                &format!("finding double quoted string for {context}, got '{tok}'"),
-            )),
+                &format!("expected double quoted string for {context}, got '{token}'"),
+            ))
         }
     }
 
@@ -214,9 +193,23 @@ impl<'a> Parser<'a> {
     fn parse_timestamp(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let time_unit = self.parse_time_unit("Timestamp")?;
-        self.expect_token(Token::Comma)?;
-        let timezone = self.parse_timezone("Timestamp")?;
-        self.expect_token(Token::RParen)?;
+
+        let timezone;
+        match self.next_token()? {
+            Token::Comma => {
+                timezone = Some(self.parse_double_quoted_string("Timezone")?);
+                self.expect_token(Token::RParen)?;
+            }
+            Token::RParen => {
+                timezone = None;
+            }
+            next_token => {
+                return Err(make_error(
+                    self.val,
+                    &format!("Expected comma followed by a timezone, or an ), got {next_token:?}"),
+                ));
+            }
+        }
         Ok(DataType::Timestamp(time_unit, timezone.map(Into::into)))
     }
 
@@ -324,27 +317,22 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let mut fields = Vec::new();
         loop {
+            // expects:   "field name": [nullable] #datatype
+
             let field_name = match self.next_token()? {
-                // It's valid to have a name that is a type name
-                Token::SimpleType(data_type) => data_type.to_string(),
-                Token::FieldName(name) => name,
                 Token::RParen => {
-                    if fields.is_empty() {
-                        break;
-                    } else {
-                        return Err(make_error(
-                            self.val,
-                            "Unexpected token while parsing Struct fields. Expected a word for the name of Struct, but got trailing comma",
-                        ));
-                    }
+                    break;
                 }
+                Token::DoubleQuotedString(field_name) => field_name,
                 tok => {
                     return Err(make_error(
                         self.val,
-                        &format!("Expected a word for the name of Struct, but got {tok}"),
+                        &format!("Expected a quoted string for a field name; got {tok:?}"),
                     ))
                 }
             };
+            self.expect_token(Token::Colon)?;
+
             let nullable = self
                 .tokenizer
                 .next_if(|next| matches!(next, Ok(Token::Nullable)))
@@ -386,19 +374,17 @@ impl<'a> Parser<'a> {
 
 /// returns true if this character is a separator
 fn is_separator(c: char) -> bool {
-    c == '(' || c == ')' || c == ',' || c == ' '
+    c == '(' || c == ')' || c == ',' || c == ':' || c == ' '
 }
 
 #[derive(Debug)]
 /// Splits a strings like Dictionary(Int32, Int64) into tokens sutable for parsing
 ///
-/// For example the string "Timestamp(Nanosecond, None)" would be parsed into:
+/// For example the string "Timestamp(ns)" would be parsed into:
 ///
 /// * Token::Timestamp
 /// * Token::Lparen
 /// * Token::IntervalUnit(IntervalUnit::Nanosecond)
-/// * Token::Comma,
-/// * Token::None,
 /// * Token::Rparen,
 struct Tokenizer<'a> {
     val: &'a str,
@@ -450,50 +436,6 @@ impl<'a> Tokenizer<'a> {
                 })?;
                 return Ok(Token::Integer(val));
             }
-            // if it started with a double quote `"`, try parsing it as a double quoted string
-            else if c == '"' {
-                let len = self.word.chars().count();
-
-                // to verify it's double quoted
-                if let Some(last_c) = self.word.chars().last() {
-                    if last_c != '"' || len < 2 {
-                        return Err(make_error(
-                            self.val,
-                            &format!(
-                                "parsing {} as double quoted string: last char must be \"",
-                                self.word
-                            ),
-                        ));
-                    }
-                }
-
-                if len == 2 {
-                    return Err(make_error(
-                        self.val,
-                        &format!(
-                            "parsing {} as double quoted string: empty string isn't supported",
-                            self.word
-                        ),
-                    ));
-                }
-
-                let val: String = self.word.parse().map_err(|e| {
-                    make_error(
-                        self.val,
-                        &format!("parsing {} as double quoted string: {e}", self.word),
-                    )
-                })?;
-
-                let s = val[1..len - 1].to_string();
-                if s.contains('"') {
-                    return Err(make_error(
-                        self.val,
-                        &format!("parsing {} as double quoted string: escaped double quote isn't supported", self.word),
-                    ));
-                }
-
-                return Ok(Token::DoubleQuotedString(s));
-            }
         }
 
         // figure out what the word was
@@ -529,10 +471,10 @@ impl<'a> Tokenizer<'a> {
             "LargeList" => Token::LargeList,
             "FixedSizeList" => Token::FixedSizeList,
 
-            "Second" => Token::TimeUnit(TimeUnit::Second),
-            "Millisecond" => Token::TimeUnit(TimeUnit::Millisecond),
-            "Microsecond" => Token::TimeUnit(TimeUnit::Microsecond),
-            "Nanosecond" => Token::TimeUnit(TimeUnit::Nanosecond),
+            "s" | "Second" => Token::TimeUnit(TimeUnit::Second),
+            "ms" | "Millisecond" => Token::TimeUnit(TimeUnit::Millisecond),
+            "µs" | "us" | "Microsecond" => Token::TimeUnit(TimeUnit::Microsecond),
+            "ns" | "Nanosecond" => Token::TimeUnit(TimeUnit::Nanosecond),
 
             "Timestamp" => Token::Timestamp,
             "Time32" => Token::Time32,
@@ -559,10 +501,62 @@ impl<'a> Tokenizer<'a> {
 
             "Struct" => Token::Struct,
 
-            // If we don't recognize the word, treat it as a field name
-            word => Token::FieldName(word.to_string()),
+            token => {
+                return Err(make_error(self.val, &format!("unknown token: {token}")));
+            }
         };
         Ok(token)
+    }
+
+    /// Parses e.g. `"foo bar"`
+    fn parse_quoted_string(&mut self) -> ArrowResult<Token> {
+        if self.next_char() != Some('\"') {
+            return Err(make_error(self.val, "Expected \""));
+        }
+
+        // reset temp space
+        self.word.clear();
+
+        let mut is_escaped = false;
+
+        loop {
+            match self.next_char() {
+                None => {
+                    return Err(ArrowError::ParseError(format!(
+                        "Unterminated string at: \"{}",
+                        self.word
+                    )));
+                }
+                Some(c) => match c {
+                    '\\' => {
+                        is_escaped = true;
+                        self.word.push(c);
+                    }
+                    '"' => {
+                        if is_escaped {
+                            self.word.push(c);
+                            is_escaped = false;
+                        } else {
+                            break;
+                        }
+                    }
+                    c => {
+                        self.word.push(c);
+                    }
+                },
+            }
+        }
+
+        let val: String = self.word.parse().map_err(|err| {
+            ArrowError::ParseError(format!("Failed to parse string: \"{}\": {err}", self.word))
+        })?;
+
+        if val.is_empty() {
+            // Using empty strings as field names is just asking for trouble
+            return Err(make_error(self.val, "empty strings aren't allowed"));
+        }
+
+        Ok(Token::DoubleQuotedString(val))
     }
 }
 
@@ -577,6 +571,9 @@ impl Iterator for Tokenizer<'_> {
                     self.next_char();
                     continue;
                 }
+                '"' => {
+                    return Some(self.parse_quoted_string());
+                }
                 '(' => {
                     self.next_char();
                     return Some(Ok(Token::LParen));
@@ -588,6 +585,10 @@ impl Iterator for Tokenizer<'_> {
                 ',' => {
                     self.next_char();
                     return Some(Ok(Token::Comma));
+                }
+                ':' => {
+                    self.next_char();
+                    return Some(Ok(Token::Colon));
                 }
                 _ => return Some(self.parse_word()),
             }
@@ -617,6 +618,7 @@ enum Token {
     LParen,
     RParen,
     Comma,
+    Colon,
     Some,
     None,
     Integer(i64),
@@ -626,7 +628,6 @@ enum Token {
     FixedSizeList,
     Struct,
     Nullable,
-    FieldName(String),
 }
 
 impl Display for Token {
@@ -646,6 +647,7 @@ impl Display for Token {
             Token::LParen => write!(f, "("),
             Token::RParen => write!(f, ")"),
             Token::Comma => write!(f, ","),
+            Token::Colon => write!(f, ":"),
             Token::Some => write!(f, "Some"),
             Token::None => write!(f, "None"),
             Token::FixedSizeBinary => write!(f, "FixedSizeBinary"),
@@ -658,7 +660,6 @@ impl Display for Token {
             Token::DoubleQuotedString(s) => write!(f, "DoubleQuotedString({s})"),
             Token::Struct => write!(f, "Struct"),
             Token::Nullable => write!(f, "nullable"),
-            Token::FieldName(s) => write!(f, "FieldName({s})"),
         }
     }
 }
@@ -679,7 +680,7 @@ mod test {
     /// verifying it is the same
     fn round_trip(data_type: DataType) {
         let data_type_string = data_type.to_string();
-        println!("Input '{data_type_string}' ({data_type})");
+        println!("Input '{data_type_string}' ({data_type:?})");
         let parsed_type = parse_data_type(&data_type_string).unwrap();
         assert_eq!(
             data_type, parsed_type,
@@ -808,19 +809,19 @@ mod test {
         let cases = [
             ("Int8", DataType::Int8),
             (
-                "Timestamp        (Nanosecond,      None)",
+                "Timestamp        (ns)",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
             (
-                "Timestamp        (Nanosecond,      None)  ",
+                "Timestamp        (ns)  ",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
             (
-                "          Timestamp        (Nanosecond,      None               )",
+                "          Timestamp        (ns               )",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
             (
-                "Timestamp        (Nanosecond,      None               )  ",
+                "Timestamp        (ns               )  ",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
         ];
@@ -841,22 +842,22 @@ mod test {
             ("null", "Unsupported type 'null'"),
             ("Nu", "Unsupported type 'Nu'"),
             (
-                r#"Timestamp(Nanosecond, Some(+00:00))"#,
-                "Error unrecognized word: +00:00",
+                r#"Timestamp(ns, +00:00)"#,
+                "Error unknown token: +00",
             ),
             (
-                r#"Timestamp(Nanosecond, Some("+00:00))"#,
-                r#"parsing "+00:00 as double quoted string: last char must be ""#,
+                r#"Timestamp(ns, "+00:00)"#,
+                r#"Unterminated string at: "+00:00)"#,
             ),
             (
-                r#"Timestamp(Nanosecond, Some(""))"#,
-                r#"parsing "" as double quoted string: empty string isn't supported"#,
+                r#"Timestamp(ns, "")"#,
+                r#"empty strings aren't allowed"#,
             ),
             (
-                r#"Timestamp(Nanosecond, Some("+00:00""))"#,
-                r#"parsing "+00:00"" as double quoted string: escaped double quote isn't supported"#,
+                r#"Timestamp(ns, "+00:00"")"#,
+                r#"Parser error: Unterminated string at: ")"#,
             ),
-            ("Timestamp(Nanosecond, ", "Error finding next token"),
+            ("Timestamp(ns, ", "Error finding next token"),
             (
                 "Float32 Float32",
                 "trailing content after parsing 'Float32'",
@@ -876,9 +877,9 @@ mod test {
             ("Decimal64(3, 500)", "Error converting 500 into i8 for Decimal64: out of range integral type conversion attempted"),
             ("Decimal128(3, 500)", "Error converting 500 into i8 for Decimal128: out of range integral type conversion attempted"),
             ("Decimal256(3, 500)", "Error converting 500 into i8 for Decimal256: out of range integral type conversion attempted"),
-            ("Struct(f1, Int64)", "Error finding next type, got unexpected ','"),
-            ("Struct(f1 Int64,)", "Expected a word for the name of Struct, but got trailing comma"),
-            ("Struct(f1)", "Error finding next type, got unexpected ')'"),
+            ("Struct(f1 Int64)", "Error unknown token: f1"),
+            ("Struct(\"f1\" Int64)", "Expected ':'"),
+            ("Struct(\"f1\": )", "Error finding next type, got unexpected ')'"),
         ];
 
         for (data_type_string, expected_message) in cases {
@@ -889,10 +890,13 @@ mod test {
                     let message = e.to_string();
                     assert!(
                         message.contains(expected_message),
-                        "\n\ndid not find expected in actual.\n\nexpected: {expected_message}\nactual:{message}\n"
+                        "\n\ndid not find expected in actual.\n\nexpected: {expected_message}\nactual: {message}\n"
                     );
-                    // errors should also contain  a help message
-                    assert!(message.contains("Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'"));
+
+                    if !message.contains("Unterminated string") {
+                        // errors should also contain a help message
+                        assert!(message.contains("Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'"), "message: {message}");
+                    }
                 }
             }
         }
@@ -902,6 +906,6 @@ mod test {
     fn parse_error_type() {
         let err = parse_data_type("foobar").unwrap_err();
         assert!(matches!(err, ArrowError::ParseError(_)));
-        assert_eq!(err.to_string(), "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error unrecognized word: foobar");
+        assert_eq!(err.to_string(), "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'. Error unknown token: foobar");
     }
 }

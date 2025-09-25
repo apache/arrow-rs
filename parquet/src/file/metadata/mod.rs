@@ -40,7 +40,7 @@
 //! metadata into parquet files. To work with metadata directly,
 //! the following APIs are available:
 //!
-//! * [`ParquetMetaDataReader`] for reading from a reader for I/O
+//! * [`ParquetMetaDataReader`] for reading metadata from an I/O source (sync and async)
 //! * [`ParquetMetaDataPushDecoder`] for decoding from bytes without I/O
 //! * [`ParquetMetaDataWriter`] for writing.
 //!
@@ -92,6 +92,7 @@
 //! ```
 mod footer_tail;
 mod memory;
+mod parser;
 mod push_decoder;
 pub(crate) mod reader;
 mod writer;
@@ -197,10 +198,10 @@ impl ParquetMetaData {
         ParquetMetaData {
             file_metadata,
             row_groups,
-            #[cfg(feature = "encryption")]
-            file_decryptor: None,
             column_index: None,
             offset_index: None,
+            #[cfg(feature = "encryption")]
+            file_decryptor: None,
         }
     }
 

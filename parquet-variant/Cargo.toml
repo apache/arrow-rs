@@ -19,7 +19,7 @@
 name = "parquet-variant"
 # This package is still in development and thus the version does
 # not follow the versions of the rest of the crates in this repo.
-version = "0.1.0"
+version = "0.2.0"
 license = { workspace = true }
 description = "Apache Parquet Variant implementation in Rust"
 homepage = { workspace = true }
