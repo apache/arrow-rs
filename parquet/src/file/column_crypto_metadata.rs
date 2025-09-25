@@ -20,6 +20,7 @@
 use std::io::Write;
 
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::HeapSize;
 use crate::parquet_thrift::{
     read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
     ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
@@ -40,6 +41,12 @@ pub struct EncryptionWithColumnKey {
 }
 );
 
+impl HeapSize for EncryptionWithColumnKey {
+    fn heap_size(&self) -> usize {
+        self.path_in_schema.heap_size() + self.key_metadata.heap_size()
+    }
+}
+
 thrift_union!(
 /// ColumnCryptoMetadata for a column chunk
 union ColumnCryptoMetaData {
@@ -47,6 +54,15 @@ union ColumnCryptoMetaData {
   2: (EncryptionWithColumnKey) ENCRYPTION_WITH_COLUMN_KEY
 }
 );
+
+impl HeapSize for ColumnCryptoMetaData {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::ENCRYPTION_WITH_FOOTER_KEY => 0,
+            Self::ENCRYPTION_WITH_COLUMN_KEY(path) => path.heap_size(),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
