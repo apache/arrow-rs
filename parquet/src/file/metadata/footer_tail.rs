@@ -100,9 +100,8 @@ impl TryFrom<&[u8]> for FooterTail {
     fn try_from(value: &[u8]) -> Result<Self> {
         if value.len() != FOOTER_SIZE {
             return Err(general_err!(
-                "Invalid footer length {}, expected {}",
-                value.len(),
-                FOOTER_SIZE
+                "Invalid footer length {}, expected {FOOTER_SIZE}",
+                value.len()
             ));
         }
         let slice: &[u8; FOOTER_SIZE] = value.try_into().unwrap();
