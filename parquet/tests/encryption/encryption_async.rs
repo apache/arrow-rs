@@ -819,9 +819,6 @@ async fn test_multi_threaded_encrypted_writing() {
 
     // Close the file writer which writes the footer
     assert_eq!(metadata.file_metadata().num_rows(), 50);
-    // TODO(ets): what was this meant to test? The read and written schemas differ because an
-    // archaic form for a list was used in the source file.
-    // assert_eq!(metadata.schema, metadata.schema);
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
@@ -912,9 +909,6 @@ async fn test_multi_threaded_encrypted_writing_deprecated() {
     // Close the file writer which writes the footer
     let metadata = writer.finish().unwrap();
     assert_eq!(metadata.file_metadata().num_rows(), 100);
-    // TODO(ets): what was this meant to test? The read and written schemas differ because an
-    // archaic form for a list was used in the source file.
-    // assert_eq!(metadata.schema, metadata.schema);
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
