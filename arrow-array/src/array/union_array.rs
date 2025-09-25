@@ -1877,7 +1877,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: Offsets must be positive and within the length of the Array"
+            "Invalid argument error: Offsets must be non-negative and within the length of the Array"
         );
 
         let offsets = Some(vec![0, 1].into());
