@@ -52,6 +52,9 @@ pub enum ParquetError {
     /// Returned when a function needs more data to complete properly. The `usize` field indicates
     /// the total number of bytes required, not the number of additional bytes.
     NeedMoreData(usize),
+    /// Returned when a function needs more data to complete properly.
+    /// The `Range<u64>` indicates the range of bytes that are needed.
+    NeedMoreDataRange(std::ops::Range<u64>),
 }
 
 impl std::fmt::Display for ParquetError {
@@ -69,6 +72,9 @@ impl std::fmt::Display for ParquetError {
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
             ParquetError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
+            ParquetError::NeedMoreDataRange(range) => {
+                write!(fmt, "NeedMoreDataRange: {}..{}", range.start, range.end)
+            }
         }
     }
 }
@@ -132,6 +138,13 @@ impl From<object_store::Error> for ParquetError {
     }
 }
 
+#[cfg(feature = "encryption")]
+impl From<ring::error::Unspecified> for ParquetError {
+    fn from(e: ring::error::Unspecified) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
 /// A specialized `Result` for Parquet errors.
 pub type Result<T, E = ParquetError> = result::Result<T, E>;
 
@@ -140,7 +153,7 @@ pub type Result<T, E = ParquetError> = result::Result<T, E>;
 
 impl From<ParquetError> for io::Error {
     fn from(e: ParquetError) -> Self {
-        io::Error::new(io::ErrorKind::Other, e)
+        io::Error::other(e)
     }
 }
 

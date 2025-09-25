@@ -794,13 +794,13 @@ pub fn array_from_json(
         DataType::Dictionary(key_type, value_type) => {
             #[allow(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
+                ArrowError::JsonError(format!("Unable to find dict_id for field {field}"))
             })?;
             // find dictionary
             let dictionary = dictionaries
                 .ok_or_else(|| {
                     ArrowError::JsonError(format!(
-                        "Unable to find any dictionaries for field {field:?}"
+                        "Unable to find any dictionaries for field {field}"
                     ))
                 })?
                 .get(&dict_id);
@@ -814,9 +814,45 @@ pub fn array_from_json(
                     dictionaries,
                 ),
                 None => Err(ArrowError::JsonError(format!(
-                    "Unable to find dictionary for field {field:?}"
+                    "Unable to find dictionary for field {field}"
                 ))),
             }
+        }
+        DataType::Decimal32(precision, scale) => {
+            let mut b = Decimal32Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i32>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        DataType::Decimal64(precision, scale) => {
+            let mut b = Decimal64Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i64>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
         }
         DataType::Decimal128(precision, scale) => {
             let mut b = Decimal128Builder::with_capacity(json_col.count);
@@ -910,7 +946,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(
-            "data type {t:?} not supported"
+            "data type {t} not supported"
         ))),
     }
 }

@@ -65,7 +65,7 @@ pub trait RecordBatchWriter {
 /// Support for limited data types is available. The macro will return a compile error if an unsupported data type is used.
 /// Presently supported data types are:
 /// - `Boolean`, `Null`
-/// - `Decimal128`, `Decimal256`
+/// - `Decimal32`, `Decimal64`, `Decimal128`, `Decimal256`
 /// - `Float16`, `Float32`, `Float64`
 /// - `Int8`, `Int16`, `Int32`, `Int64`
 /// - `UInt8`, `UInt16`, `UInt32`, `UInt64`
@@ -107,6 +107,8 @@ macro_rules! create_array {
     (@from DurationMillisecond) => { $crate::DurationMillisecondArray };
     (@from DurationMicrosecond) => { $crate::DurationMicrosecondArray };
     (@from DurationNanosecond) => { $crate::DurationNanosecondArray };
+    (@from Decimal32) => { $crate::Decimal32Array };
+    (@from Decimal64) => { $crate::Decimal64Array };
     (@from Decimal128) => { $crate::Decimal128Array };
     (@from Decimal256) => { $crate::Decimal256Array };
     (@from TimestampSecond) => { $crate::TimestampSecondArray };
@@ -211,10 +213,11 @@ impl RecordBatch {
     /// Creates a `RecordBatch` from a schema and columns.
     ///
     /// Expects the following:
-    ///  * the vec of columns to not be empty
-    ///  * the schema and column data types to have equal lengths
-    ///    and match
-    ///  * each array in columns to have the same length
+    ///
+    ///  * `!columns.is_empty()`
+    ///  * `schema.fields.len() == columns.len()`
+    ///  * `schema.fields[i].data_type() == columns[i].data_type()`
+    ///  * `columns[i].len() == columns[j].len()`
     ///
     /// If the conditions are not met, an error is returned.
     ///
@@ -238,6 +241,33 @@ impl RecordBatch {
     pub fn try_new(schema: SchemaRef, columns: Vec<ArrayRef>) -> Result<Self, ArrowError> {
         let options = RecordBatchOptions::new();
         Self::try_new_impl(schema, columns, &options)
+    }
+
+    /// Creates a `RecordBatch` from a schema and columns, without validation.
+    ///
+    /// See [`Self::try_new`] for the checked version.
+    ///
+    /// # Safety
+    ///
+    /// Expects the following:
+    ///
+    ///  * `schema.fields.len() == columns.len()`
+    ///  * `schema.fields[i].data_type() == columns[i].data_type()`
+    ///  * `columns[i].len() == row_count`
+    ///
+    /// Note: if the schema does not match the underlying data exactly, it can lead to undefined
+    /// behavior, for example, via conversion to a `StructArray`, which in turn could lead
+    /// to incorrect access.
+    pub unsafe fn new_unchecked(
+        schema: SchemaRef,
+        columns: Vec<Arc<dyn Array>>,
+        row_count: usize,
+    ) -> Self {
+        Self {
+            schema,
+            columns,
+            row_count,
+        }
     }
 
     /// Creates a `RecordBatch` from a schema and columns, with additional options,
@@ -330,7 +360,7 @@ impl RecordBatch {
 
         if let Some((i, (col_type, field_type))) = not_match {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "column types must match schema types, expected {field_type:?} but found {col_type:?} at column index {i}")));
+                "column types must match schema types, expected {field_type} but found {col_type} at column index {i}")));
         }
 
         Ok(RecordBatch {
@@ -340,10 +370,17 @@ impl RecordBatch {
         })
     }
 
+    /// Return the schema, columns and row count of this [`RecordBatch`]
+    pub fn into_parts(self) -> (SchemaRef, Vec<ArrayRef>, usize) {
+        (self.schema, self.columns, self.row_count)
+    }
+
     /// Override the schema of this [`RecordBatch`]
     ///
     /// Returns an error if `schema` is not a superset of the current schema
     /// as determined by [`Schema::contains`]
+    ///
+    /// See also [`Self::schema_metadata_mut`].
     pub fn with_schema(self, schema: SchemaRef) -> Result<Self, ArrowError> {
         if !schema.contains(self.schema.as_ref()) {
             return Err(ArrowError::SchemaError(format!(
@@ -367,6 +404,28 @@ impl RecordBatch {
     /// Returns a reference to the [`Schema`] of the record batch.
     pub fn schema_ref(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    /// Mutable access to the metadata of the schema.
+    ///
+    /// This allows you to modify [`Schema::metadata`] of [`Self::schema`] in a convenient and fast way.
+    ///
+    /// Note this will clone the entire underlying `Schema` object if it is currently shared
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{record_batch, RecordBatch};
+    /// let mut batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+    /// // Initially, the metadata is empty
+    /// assert!(batch.schema().metadata().get("key").is_none());
+    /// // Insert a key-value pair into the metadata
+    /// batch.schema_metadata_mut().insert("key".into(), "value".into());
+    /// assert_eq!(batch.schema().metadata().get("key"), Some(&String::from("value")));
+    /// ```
+    pub fn schema_metadata_mut(&mut self) -> &mut std::collections::HashMap<String, String> {
+        let schema = Arc::make_mut(&mut self.schema);
+        &mut schema.metadata
     }
 
     /// Projects the schema onto the specified columns
@@ -1040,8 +1099,8 @@ mod tests {
 
         let a = Int64Array::from(vec![1, 2, 3, 4, 5]);
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]);
-        assert!(batch.is_err());
+        let err = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap_err();
+        assert_eq!(err.to_string(), "Invalid argument error: column types must match schema types, expected Int32 but found Int64 at column index 0");
     }
 
     #[test]

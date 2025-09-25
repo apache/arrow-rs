@@ -20,7 +20,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::MutableBuffer;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
 
@@ -249,9 +249,10 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 fn decode_binary_view_inner(
     rows: &mut [&[u8]],
     options: SortOptions,
-    check_utf8: bool,
+    validate_utf8: bool,
 ) -> BinaryViewArray {
     let len = rows.len();
+    let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
     let mut null_count = 0;
 
@@ -261,13 +262,33 @@ fn decode_binary_view_inner(
         valid
     });
 
-    let values_capacity: usize = rows.iter().map(|row| decoded_len(row, options)).sum();
+    // If we are validating UTF-8, decode all string values (including short strings)
+    // into the values buffer and validate UTF-8 once. If not validating,
+    // we save memory by only copying long strings to the values buffer, as short strings
+    // will be inlined into the view and do not need to be stored redundantly.
+    let values_capacity = if validate_utf8 {
+        // Capacity for all long and short strings
+        rows.iter().map(|row| decoded_len(row, options)).sum()
+    } else {
+        // Capacity for all long strings plus room for one short string
+        rows.iter().fold(0, |acc, row| {
+            let len = decoded_len(row, options);
+            if len > inline_str_max_len {
+                acc + len
+            } else {
+                acc
+            }
+        }) + inline_str_max_len
+    };
     let mut values = MutableBuffer::new(values_capacity);
-    let mut views = BufferBuilder::<u128>::new(len);
 
+    let mut views = BufferBuilder::<u128>::new(len);
     for row in rows {
         let start_offset = values.len();
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
+        // Measure string length via change in values buffer.
+        // Used to check if decoded value should be truncated (short string) when validate_utf8 is false
+        let decoded_len = values.len() - start_offset;
         if row[0] == null_sentinel(options) {
             debug_assert_eq!(offset, 1);
             debug_assert_eq!(start_offset, values.len());
@@ -282,11 +303,16 @@ fn decode_binary_view_inner(
 
             let view = make_view(val, 0, start_offset as u32);
             views.append(view);
+
+            // truncate inline string in values buffer if validate_utf8 is false
+            if !validate_utf8 && decoded_len <= inline_str_max_len {
+                values.truncate(start_offset);
+            }
         }
         *row = &row[offset..];
     }
 
-    if check_utf8 {
+    if validate_utf8 {
         // the values contains all data, no matter if it is short or long
         // we can validate utf8 in one go.
         std::str::from_utf8(values.as_slice()).unwrap();

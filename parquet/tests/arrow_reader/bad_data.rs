@@ -135,7 +135,7 @@ fn test_arrow_rs_gh_45185_dict_levels() {
 /// Returns an error if the file is invalid
 fn read_file(name: &str) -> Result<usize, ParquetError> {
     let path = bad_data_dir().join(name);
-    println!("Reading file: {:?}", path);
+    println!("Reading file: {path:?}");
 
     let file = std::fs::File::open(&path).unwrap();
     let reader = ArrowReaderBuilder::try_new(file)?.build()?;
@@ -150,13 +150,14 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
 
 #[cfg(feature = "async")]
 #[tokio::test]
+#[allow(deprecated)]
 async fn bad_metadata_err() {
     use bytes::Bytes;
     use parquet::file::metadata::ParquetMetaDataReader;
 
     let metadata_buffer = Bytes::from_static(include_bytes!("bad_raw_metadata.bin"));
 
-    let metadata_length = metadata_buffer.len();
+    let metadata_length = metadata_buffer.len() as u64;
 
     let mut reader = std::io::Cursor::new(&metadata_buffer);
     let mut loader = ParquetMetaDataReader::new();

@@ -105,6 +105,12 @@ pub struct FieldLevels {
 ///
 /// Columns not included within [`ProjectionMask`] will be ignored.
 ///
+/// The optional `hint` parameter is the desired Arrow schema. See the
+/// [`arrow`] module documentation for more information.
+///
+/// [`arrow`]: crate::arrow
+///
+/// # Notes:
 /// Where a field type in `hint` is compatible with the corresponding parquet type in `schema`, it
 /// will be used, otherwise the default arrow type for the given parquet column type will be used.
 ///
@@ -174,9 +180,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
 pub fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
-    #[allow(deprecated)]
-    let mut dictionary_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(true, options.preserve_dict_id());
+    let mut dictionary_tracker = writer::DictionaryTracker::new(true);
     let data_gen = writer::IpcDataGenerator::default();
     let mut serialized_schema =
         data_gen.schema_to_bytes_with_dictionary_tracker(schema, &mut dictionary_tracker, &options);
@@ -192,8 +196,12 @@ pub fn encode_arrow_schema(schema: &Schema) -> String {
     BASE64_STANDARD.encode(&len_prefix_schema)
 }
 
-/// Mutates writer metadata by storing the encoded Arrow schema.
+/// Mutates writer metadata by storing the encoded Arrow schema hint in
+/// [`ARROW_SCHEMA_META_KEY`].
+///
 /// If there is an existing Arrow schema metadata, it is replaced.
+///
+/// [`ARROW_SCHEMA_META_KEY`]: crate::arrow::ARROW_SCHEMA_META_KEY
 pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
     let encoded = encode_arrow_schema(schema);
 
@@ -224,7 +232,12 @@ pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterP
 
 /// Converter for Arrow schema to Parquet schema
 ///
-/// Example:
+/// See the documentation on the [`arrow`] module for background
+/// information on how Arrow schema is represented in Parquet.
+///
+/// [`arrow`]: crate::arrow
+///
+/// # Example:
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_schema::{Field, Schema, DataType};
@@ -341,15 +354,6 @@ impl<'a> ArrowSchemaConverter<'a> {
             .build()?;
         Ok(SchemaDescriptor::new(Arc::new(group)))
     }
-}
-
-/// Convert arrow schema to parquet schema
-///
-/// The name of the root schema element defaults to `"arrow_schema"`, this can be
-/// overridden with [`ArrowSchemaConverter`]
-#[deprecated(since = "54.0.0", note = "Use `ArrowSchemaConverter` instead")]
-pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    ArrowSchemaConverter::new().convert(schema)
 }
 
 fn parse_key_value_metadata(
@@ -586,7 +590,10 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Duration(_) => Err(arrow_err!("Converting Duration to parquet not supported",)),
+        DataType::Duration(_) => Type::primitive_type_builder(name, PhysicalType::INT64)
+            .with_repetition(repetition)
+            .with_id(id)
+            .build(),
         DataType::Interval(_) => {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_converted_type(ConvertedType::INTERVAL)
@@ -622,7 +629,10 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
             let (physical_type, length) = if *precision > 1 && *precision <= 9 {
@@ -2061,6 +2071,8 @@ mod tests {
                     false, // fails to roundtrip keys_sorted
                     false,
                 ),
+                Field::new("c42", DataType::Decimal32(5, 2), false),
+                Field::new("c43", DataType::Decimal64(18, 12), true),
             ],
             meta(&[("Key", "Value")]),
         );

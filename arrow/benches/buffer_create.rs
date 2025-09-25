@@ -19,7 +19,7 @@
 extern crate criterion;
 use arrow::util::test_util::seedable_rng;
 use criterion::Criterion;
-use rand::distributions::Uniform;
+use rand::distr::Uniform;
 use rand::Rng;
 
 extern crate arrow;
@@ -28,9 +28,10 @@ use arrow::{
     buffer::{Buffer, MutableBuffer},
     datatypes::ToByteSlice,
 };
+use std::hint;
 
 fn mutable_buffer_from_iter(data: &[Vec<bool>]) -> Vec<Buffer> {
-    criterion::black_box(
+    hint::black_box(
         data.iter()
             .map(|vec| vec.iter().copied().collect::<MutableBuffer>().into())
             .collect::<Vec<_>>(),
@@ -38,7 +39,7 @@ fn mutable_buffer_from_iter(data: &[Vec<bool>]) -> Vec<Buffer> {
 }
 
 fn buffer_from_iter(data: &[Vec<bool>]) -> Vec<Buffer> {
-    criterion::black_box(
+    hint::black_box(
         data.iter()
             .map(|vec| vec.iter().copied().collect::<Buffer>())
             .collect::<Vec<_>>(),
@@ -46,11 +47,11 @@ fn buffer_from_iter(data: &[Vec<bool>]) -> Vec<Buffer> {
 }
 
 fn mutable_buffer_iter_bitset(data: &[Vec<bool>]) -> Vec<Buffer> {
-    criterion::black_box({
+    hint::black_box({
         data.iter()
             .map(|datum| {
                 let mut result =
-                    MutableBuffer::new((data.len() + 7) / 8).with_bitset(datum.len(), false);
+                    MutableBuffer::new(data.len().div_ceil(8)).with_bitset(datum.len(), false);
                 for (i, value) in datum.iter().enumerate() {
                     if *value {
                         unsafe {
@@ -65,7 +66,7 @@ fn mutable_buffer_iter_bitset(data: &[Vec<bool>]) -> Vec<Buffer> {
 }
 
 fn mutable_iter_extend_from_slice(data: &[Vec<u32>], capacity: usize) -> Buffer {
-    criterion::black_box({
+    hint::black_box({
         let mut result = MutableBuffer::new(capacity);
 
         data.iter().for_each(|vec| {
@@ -78,7 +79,7 @@ fn mutable_iter_extend_from_slice(data: &[Vec<u32>], capacity: usize) -> Buffer 
 }
 
 fn mutable_buffer(data: &[Vec<u32>], capacity: usize) -> Buffer {
-    criterion::black_box({
+    hint::black_box({
         let mut result = MutableBuffer::new(capacity);
 
         data.iter().for_each(|vec| result.extend_from_slice(vec));
@@ -88,7 +89,7 @@ fn mutable_buffer(data: &[Vec<u32>], capacity: usize) -> Buffer {
 }
 
 fn mutable_buffer_extend(data: &[Vec<u32>], capacity: usize) -> Buffer {
-    criterion::black_box({
+    hint::black_box({
         let mut result = MutableBuffer::new(capacity);
 
         data.iter()
@@ -99,7 +100,7 @@ fn mutable_buffer_extend(data: &[Vec<u32>], capacity: usize) -> Buffer {
 }
 
 fn from_slice(data: &[Vec<u32>], capacity: usize) -> Buffer {
-    criterion::black_box({
+    hint::black_box({
         let mut a = Vec::<u32>::with_capacity(capacity);
 
         data.iter().for_each(|vec| a.extend(vec));
@@ -110,7 +111,7 @@ fn from_slice(data: &[Vec<u32>], capacity: usize) -> Buffer {
 
 fn create_data(size: usize) -> Vec<Vec<u32>> {
     let rng = &mut seedable_rng();
-    let range = Uniform::new(0, 33);
+    let range = Uniform::new(0, 33).unwrap();
 
     (0..size)
         .map(|_| {
@@ -125,7 +126,7 @@ fn create_data(size: usize) -> Vec<Vec<u32>> {
 
 fn create_data_bool(size: usize) -> Vec<Vec<bool>> {
     let rng = &mut seedable_rng();
-    let range = Uniform::new(0, 33);
+    let range = Uniform::new(0, 33).unwrap();
 
     (0..size)
         .map(|_| {
@@ -147,12 +148,10 @@ fn benchmark(c: &mut Criterion) {
     let byte_cap = cap * std::mem::size_of::<u32>();
 
     c.bench_function("mutable iter extend_from_slice", |b| {
-        b.iter(|| {
-            mutable_iter_extend_from_slice(criterion::black_box(&data), criterion::black_box(0))
-        })
+        b.iter(|| mutable_iter_extend_from_slice(hint::black_box(&data), hint::black_box(0)))
     });
     c.bench_function("mutable", |b| {
-        b.iter(|| mutable_buffer(criterion::black_box(&data), criterion::black_box(0)))
+        b.iter(|| mutable_buffer(hint::black_box(&data), hint::black_box(0)))
     });
 
     c.bench_function("mutable extend", |b| {
@@ -160,24 +159,24 @@ fn benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("mutable prepared", |b| {
-        b.iter(|| mutable_buffer(criterion::black_box(&data), criterion::black_box(byte_cap)))
+        b.iter(|| mutable_buffer(hint::black_box(&data), hint::black_box(byte_cap)))
     });
 
     c.bench_function("from_slice", |b| {
-        b.iter(|| from_slice(criterion::black_box(&data), criterion::black_box(0)))
+        b.iter(|| from_slice(hint::black_box(&data), hint::black_box(0)))
     });
     c.bench_function("from_slice prepared", |b| {
-        b.iter(|| from_slice(criterion::black_box(&data), criterion::black_box(cap)))
+        b.iter(|| from_slice(hint::black_box(&data), hint::black_box(cap)))
     });
 
     c.bench_function("MutableBuffer iter bitset", |b| {
-        b.iter(|| mutable_buffer_iter_bitset(criterion::black_box(&bool_data)))
+        b.iter(|| mutable_buffer_iter_bitset(hint::black_box(&bool_data)))
     });
     c.bench_function("MutableBuffer::from_iter bool", |b| {
-        b.iter(|| mutable_buffer_from_iter(criterion::black_box(&bool_data)))
+        b.iter(|| mutable_buffer_from_iter(hint::black_box(&bool_data)))
     });
     c.bench_function("Buffer::from_iter bool", |b| {
-        b.iter(|| buffer_from_iter(criterion::black_box(&bool_data)))
+        b.iter(|| buffer_from_iter(hint::black_box(&bool_data)))
     });
 }
 

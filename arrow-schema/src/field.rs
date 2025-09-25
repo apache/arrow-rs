@@ -36,8 +36,15 @@ pub type FieldRef = Arc<Field>;
 /// Describes a single column in a [`Schema`](super::Schema).
 ///
 /// A [`Schema`](super::Schema) is an ordered collection of
-/// [`Field`] objects.
-#[derive(Debug, Clone)]
+/// [`Field`] objects. Fields contain:
+/// * `name`: the name of the field
+/// * `data_type`: the type of the field
+/// * `nullable`: if the field is nullable
+/// * `metadata`: a map of key-value pairs containing additional custom metadata
+///
+/// Arrow Extension types, are encoded in `Field`s metadata. See
+/// [`Self::try_extension_type`] to retrieve the [`ExtensionType`], if any.
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
     name: String,
@@ -51,6 +58,46 @@ pub struct Field {
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
     metadata: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #![expect(deprecated)] // Must still print dict_id, if set
+        let Self {
+            name,
+            data_type,
+            nullable,
+            dict_id,
+            dict_is_ordered,
+            metadata,
+        } = self;
+
+        let mut s = f.debug_struct("Field");
+
+        if name != "item" {
+            // Keep it short when debug-formatting `DataType::List`
+            s.field("name", name);
+        }
+
+        s.field("data_type", data_type);
+
+        if *nullable {
+            s.field("nullable", nullable);
+        }
+
+        if *dict_id != 0 {
+            s.field("dict_id", dict_id);
+        }
+
+        if *dict_is_ordered {
+            s.field("dict_is_ordered", dict_is_ordered);
+        }
+
+        if !metadata.is_empty() {
+            s.field("metadata", metadata);
+        }
+        s.finish()
+    }
 }
 
 // Auto-derive `PartialEq` traits will pull `dict_id` and `dict_is_ordered`
@@ -129,7 +176,13 @@ impl Field {
     /// Default list member field name
     pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
 
-    /// Creates a new field with the given name, type, and nullability
+    /// Creates a new field with the given name, data type, and nullability
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_schema::{Field, DataType};
+    /// Field::new("field_name", DataType::Int32, true);
+    /// ```
     pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
         #[allow(deprecated)]
         Field {
@@ -315,10 +368,22 @@ impl Field {
         &self.metadata
     }
 
+    /// Returns a mutable reference to the `Field`'s optional custom metadata.
+    #[inline]
+    pub fn metadata_mut(&mut self) -> &mut HashMap<String, String> {
+        &mut self.metadata
+    }
+
     /// Returns an immutable reference to the `Field`'s name.
     #[inline]
     pub const fn name(&self) -> &String {
         &self.name
+    }
+
+    /// Set the name of this [`Field`]
+    #[inline]
+    pub fn set_name(&mut self, name: impl Into<String>) {
+        self.name = name.into();
     }
 
     /// Set the name of the [`Field`] and returns self.
@@ -331,7 +396,7 @@ impl Field {
     /// assert_eq!(field.name(), "c2");
     /// ```
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
+        self.set_name(name);
         self
     }
 
@@ -339,6 +404,20 @@ impl Field {
     #[inline]
     pub const fn data_type(&self) -> &DataType {
         &self.data_type
+    }
+
+    /// Set [`DataType`] of the [`Field`]
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let mut field = Field::new("c1", DataType::Int64, false);
+    /// field.set_data_type(DataType::Utf8);
+    ///
+    /// assert_eq!(field.data_type(), &DataType::Utf8);
+    /// ```
+    #[inline]
+    pub fn set_data_type(&mut self, data_type: DataType) {
+        self.data_type = data_type;
     }
 
     /// Set [`DataType`] of the [`Field`] and returns self.
@@ -351,7 +430,7 @@ impl Field {
     /// assert_eq!(field.data_type(), &DataType::Utf8);
     /// ```
     pub fn with_data_type(mut self, data_type: DataType) -> Self {
-        self.data_type = data_type;
+        self.set_data_type(data_type);
         self
     }
 
@@ -508,7 +587,7 @@ impl Field {
     /// # Error
     ///
     /// Returns an error if
-    /// - this field does have a canonical extension type (mismatch or missing)
+    /// - this field does not have a canonical extension type (mismatch or missing)
     /// - the canonical extension is not supported
     /// - the construction of the extension type fails
     #[cfg(feature = "canonical_extension_types")]
@@ -517,9 +596,25 @@ impl Field {
     }
 
     /// Indicates whether this [`Field`] supports null values.
+    ///
+    /// If true, the field *may* contain null values.
     #[inline]
     pub const fn is_nullable(&self) -> bool {
         self.nullable
+    }
+
+    /// Set the `nullable` of this [`Field`].
+    ///
+    /// ```
+    /// # use arrow_schema::*;
+    /// let mut field = Field::new("c1", DataType::Int64, false);
+    /// field.set_nullable(true);
+    ///
+    /// assert_eq!(field.is_nullable(), true);
+    /// ```
+    #[inline]
+    pub fn set_nullable(&mut self, nullable: bool) {
+        self.nullable = nullable;
     }
 
     /// Set `nullable` of the [`Field`] and returns self.
@@ -532,7 +627,7 @@ impl Field {
     /// assert_eq!(field.is_nullable(), true);
     /// ```
     pub fn with_nullable(mut self, nullable: bool) -> Self {
-        self.nullable = nullable;
+        self.set_nullable(nullable);
         self
     }
 
@@ -640,13 +735,6 @@ impl Field {
     /// assert!(field.is_nullable());
     /// ```
     pub fn try_merge(&mut self, from: &Field) -> Result<(), ArrowError> {
-        #[allow(deprecated)]
-        if from.dict_id != self.dict_id {
-            return Err(ArrowError::SchemaError(format!(
-                "Fail to merge schema field '{}' because from dict_id = {} does not match {}",
-                self.name, from.dict_id, self.dict_id
-            )));
-        }
         if from.dict_is_ordered != self.dict_is_ordered {
             return Err(ArrowError::SchemaError(format!(
                 "Fail to merge schema field '{}' because from dict_is_ordered = {} does not match {}",
@@ -760,6 +848,8 @@ impl Field {
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => {
                 if from.data_type == DataType::Null {
@@ -783,11 +873,8 @@ impl Field {
     /// * self.metadata is a superset of other.metadata
     /// * all other fields are equal
     pub fn contains(&self, other: &Field) -> bool {
-        #[allow(deprecated)]
-        let matching_dict_id = self.dict_id == other.dict_id;
         self.name == other.name
         && self.data_type.contains(&other.data_type)
-        && matching_dict_id
         && self.dict_is_ordered == other.dict_is_ordered
         // self need to be nullable or both of them are not nullable
         && (self.nullable || !other.nullable)
@@ -813,10 +900,37 @@ impl Field {
     }
 }
 
-// TODO: improve display with crate https://crates.io/crates/derive_more ?
 impl std::fmt::Display for Field {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{self:?}")
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #![expect(deprecated)] // Must still print dict_id, if set
+        let Self {
+            name,
+            data_type,
+            nullable,
+            dict_id,
+            dict_is_ordered,
+            metadata,
+        } = self;
+        let maybe_nullable = if *nullable { "nullable " } else { "" };
+        let metadata_str = if metadata.is_empty() {
+            String::new()
+        } else {
+            format!(", metadata: {metadata:?}")
+        };
+        let dict_id_str = if dict_id == &0 {
+            String::new()
+        } else {
+            format!(", dict_id: {dict_id}")
+        };
+        let dict_is_ordered_str = if *dict_is_ordered {
+            ", dict_is_ordered"
+        } else {
+            ""
+        };
+        write!(
+            f,
+            "Field {{ {name:?}: {maybe_nullable}{data_type}{dict_id_str}{dict_is_ordered_str}{metadata_str} }}"
+        )
     }
 }
 
@@ -838,6 +952,24 @@ mod test {
         let s = "c1";
         #[allow(deprecated)]
         Field::new_dict(s, DataType::Int64, false, 4, false);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
+    fn test_debug_format_field() {
+        // Make sure the `Debug` formatting of `Field` is readable and not too long
+        insta::assert_debug_snapshot!(Field::new("item", DataType::UInt8, false), @r"
+        Field {
+            data_type: UInt8,
+        }
+        ");
+        insta::assert_debug_snapshot!(Field::new("column", DataType::LargeUtf8, true), @r#"
+        Field {
+            name: "column",
+            data_type: LargeUtf8,
+            nullable: true,
+        }
+        "#);
     }
 
     #[test]

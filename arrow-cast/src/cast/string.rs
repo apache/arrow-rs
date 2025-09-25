@@ -107,15 +107,14 @@ fn parse_string_iter<
             .map(|x| match x {
                 Some(v) => P::parse(v).ok_or_else(|| {
                     ArrowError::CastError(format!(
-                        "Cannot cast string '{}' to value of {:?} type",
-                        v,
+                        "Cannot cast string '{v}' to value of {} type",
                         P::DATA_TYPE
                     ))
                 }),
                 None => Ok(P::Native::default()),
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        PrimitiveArray::new(v.into(), nulls())
+        PrimitiveArray::try_new(v.into(), nulls())?
     };
 
     Ok(Arc::new(array) as ArrayRef)

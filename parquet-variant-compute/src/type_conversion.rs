@@ -1,0 +1,159 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Module for transforming a typed arrow `Array` to `VariantArray`.
+
+use arrow::datatypes::{self, ArrowPrimitiveType};
+use parquet_variant::Variant;
+
+/// Options for controlling the behavior of `cast_to_variant_with_options`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CastOptions {
+    /// If true, return error on conversion failure. If false, insert null for failed conversions.
+    pub strict: bool,
+}
+
+impl Default for CastOptions {
+    fn default() -> Self {
+        Self { strict: true }
+    }
+}
+
+/// Helper trait for converting `Variant` values to arrow primitive values.
+pub(crate) trait VariantAsPrimitive<T: ArrowPrimitiveType> {
+    fn as_primitive(&self) -> Option<T::Native>;
+}
+
+impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i32> {
+        self.as_int32()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i16> {
+        self.as_int16()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int8Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i8> {
+        self.as_int8()
+    }
+}
+impl VariantAsPrimitive<datatypes::Int64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<i64> {
+        self.as_int64()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<half::f16> {
+        self.as_f16()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<f32> {
+        self.as_f32()
+    }
+}
+impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<f64> {
+        self.as_f64()
+    }
+}
+
+impl VariantAsPrimitive<datatypes::UInt8Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<u8> {
+        self.as_u8()
+    }
+}
+
+impl VariantAsPrimitive<datatypes::UInt16Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<u16> {
+        self.as_u16()
+    }
+}
+
+impl VariantAsPrimitive<datatypes::UInt32Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<u32> {
+        self.as_u32()
+    }
+}
+
+impl VariantAsPrimitive<datatypes::UInt64Type> for Variant<'_, '_> {
+    fn as_primitive(&self) -> Option<u64> {
+        self.as_u64()
+    }
+}
+
+/// Convert the value at a specific index in the given array into a `Variant`.
+macro_rules! non_generic_conversion_single_value {
+    ($array:expr, $cast_fn:expr, $index:expr) => {{
+        let array = $array;
+        if array.is_null($index) {
+            Variant::Null
+        } else {
+            let cast_value = $cast_fn(array.value($index));
+            Variant::from(cast_value)
+        }
+    }};
+}
+pub(crate) use non_generic_conversion_single_value;
+
+/// Convert the value at a specific index in the given array into a `Variant`,
+/// using `method` requiring a generic type to downcast the generic array
+/// to a specific array type and `cast_fn` to transform the element.
+macro_rules! generic_conversion_single_value {
+    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $index:expr) => {{
+        $crate::type_conversion::non_generic_conversion_single_value!(
+            $input.$method::<$t>(),
+            $cast_fn,
+            $index
+        )
+    }};
+}
+pub(crate) use generic_conversion_single_value;
+
+/// Convert the value at a specific index in the given array into a `Variant`.
+macro_rules! primitive_conversion_single_value {
+    ($t:ty, $input:expr, $index:expr) => {{
+        $crate::type_conversion::generic_conversion_single_value!(
+            $t,
+            as_primitive,
+            |v| v,
+            $input,
+            $index
+        )
+    }};
+}
+pub(crate) use primitive_conversion_single_value;
+
+/// Convert a decimal value to a `VariantDecimal`
+macro_rules! decimal_to_variant_decimal {
+    ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {{
+        let (v, scale) = if *$scale < 0 {
+            // For negative scale, we need to multiply the value by 10^|scale|
+            // For example: 123 with scale -2 becomes 12300 with scale 0
+            let multiplier = <$value_type>::pow(10, (-*$scale) as u32);
+            (<$value_type>::checked_mul($v, multiplier), 0u8)
+        } else {
+            (Some($v), *$scale as u8)
+        };
+
+        v.and_then(|v| <$variant_type>::try_new(v, scale).ok())
+            .map_or(Variant::Null, Variant::from)
+    }};
+}
+pub(crate) use decimal_to_variant_decimal;

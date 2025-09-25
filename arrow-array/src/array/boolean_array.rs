@@ -178,6 +178,9 @@ impl BooleanArray {
 
     /// Returns the boolean value at index `i`.
     ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// This doesn't check bounds, the caller must ensure that index < self.len()
     pub unsafe fn value_unchecked(&self, i: usize) -> bool {
@@ -185,6 +188,10 @@ impl BooleanArray {
     }
 
     /// Returns the boolean value at index `i`.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> bool {
@@ -479,7 +486,7 @@ impl From<BooleanBuffer> for BooleanArray {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -667,11 +674,11 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // Takes too long
     fn test_true_false_count() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for _ in 0..10 {
             // No nulls
-            let d: Vec<_> = (0..2000).map(|_| rng.gen_bool(0.5)).collect();
+            let d: Vec<_> = (0..2000).map(|_| rng.random_bool(0.5)).collect();
             let b = BooleanArray::from(d.clone());
 
             let expected_true = d.iter().filter(|x| **x).count();
@@ -680,7 +687,7 @@ mod tests {
 
             // With nulls
             let d: Vec<_> = (0..2000)
-                .map(|_| rng.gen_bool(0.5).then(|| rng.gen_bool(0.5)))
+                .map(|_| rng.random_bool(0.5).then(|| rng.random_bool(0.5)))
                 .collect();
             let b = BooleanArray::from(d.clone());
 

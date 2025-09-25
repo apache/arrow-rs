@@ -119,9 +119,7 @@ impl FlightService for FlightServiceImpl {
             .ok_or_else(|| Status::not_found(format!("Could not find flight. {key}")))?;
 
         let options = arrow::ipc::writer::IpcWriteOptions::default();
-        #[allow(deprecated)]
-        let mut dictionary_tracker =
-            writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+        let mut dictionary_tracker = writer::DictionaryTracker::new(false);
         let data_gen = writer::IpcDataGenerator::default();
         let data = IpcMessage(
             data_gen
@@ -146,7 +144,12 @@ impl FlightService for FlightServiceImpl {
             .enumerate()
             .flat_map(|(counter, batch)| {
                 let (encoded_dictionaries, encoded_batch) = data_gen
-                    .encoded_batch(batch, &mut dictionary_tracker, &options)
+                    .encode(
+                        batch,
+                        &mut dictionary_tracker,
+                        &options,
+                        &mut Default::default(),
+                    )
                     .expect("DictionaryTracker configured above to not error on replacement");
 
                 let dictionary_flight_data = encoded_dictionaries.into_iter().map(Into::into);

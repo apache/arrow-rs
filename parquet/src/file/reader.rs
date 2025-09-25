@@ -48,11 +48,12 @@ pub trait Length {
 /// Generates [`Read`]ers to read chunks of a Parquet data source.
 ///
 /// The Parquet reader uses [`ChunkReader`] to access Parquet data, allowing
-/// multiple decoders to read concurrently from different locations in the same file.
+/// multiple decoders to read concurrently from different locations in the same
+/// file.
 ///
-/// The trait provides:
-/// * random access (via [`Self::get_bytes`])
-/// * sequential (via [`Self::get_read`])
+/// The trait functions both as a reader and a factory for readers.
+/// * random access via [`Self::get_bytes`]
+/// * sequential access via the reader returned via factory method [`Self::get_read`]
 ///
 /// # Provided Implementations
 /// * [`File`] for reading from local file system
@@ -153,7 +154,7 @@ pub trait FileReader: Send + Sync {
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter>;
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>>;
 }
 
 /// Parquet row group reader API. With this, user can get metadata information about the
@@ -211,7 +212,7 @@ pub trait RowGroupReader: Send + Sync {
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter>;
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>>;
 }
 
 // ----------------------------------------------------------------------

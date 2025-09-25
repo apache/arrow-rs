@@ -47,7 +47,7 @@ impl ExtensionType for Bool8 {
     }
 
     fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
-        if metadata.map_or(false, str::is_empty) {
+        if metadata.is_some_and(str::is_empty) {
             Ok("")
         } else {
             Err(ArrowError::InvalidArgumentError(

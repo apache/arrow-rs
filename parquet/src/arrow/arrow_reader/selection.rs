@@ -162,8 +162,8 @@ impl RowSelection {
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
-    pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<usize>> {
-        let mut ranges = vec![];
+    pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<u64>> {
+        let mut ranges: Vec<Range<u64>> = vec![];
         let mut row_offset = 0;
 
         let mut pages = page_locations.iter().peekable();
@@ -175,8 +175,8 @@ impl RowSelection {
 
         while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
             if !(selector.skip || current_page_included) {
-                let start = page.offset as usize;
-                let end = start + page.compressed_page_size as usize;
+                let start = page.offset as u64;
+                let end = start + page.compressed_page_size as u64;
                 ranges.push(start..end);
                 current_page_included = true;
             }
@@ -200,8 +200,8 @@ impl RowSelection {
                 }
             } else {
                 if !(selector.skip || current_page_included) {
-                    let start = page.offset as usize;
-                    let end = start + page.compressed_page_size as usize;
+                    let start = page.offset as u64;
+                    let end = start + page.compressed_page_size as u64;
                     ranges.push(start..end);
                 }
                 current_selector = selectors.next()
@@ -441,6 +441,59 @@ impl RowSelection {
     pub fn skipped_row_count(&self) -> usize {
         self.iter().filter(|s| s.skip).map(|s| s.row_count).sum()
     }
+
+    /// Expands the selection to align with batch boundaries.
+    /// This is needed when using cached array readers to ensure that
+    /// the cached data covers full batches.
+    #[cfg(feature = "async")]
+    pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
+        if batch_size == 0 {
+            return self.clone();
+        }
+
+        let mut expanded_ranges = Vec::new();
+        let mut row_offset = 0;
+
+        for selector in &self.selectors {
+            if selector.skip {
+                row_offset += selector.row_count;
+            } else {
+                let start = row_offset;
+                let end = row_offset + selector.row_count;
+
+                // Expand start to batch boundary
+                let expanded_start = (start / batch_size) * batch_size;
+                // Expand end to batch boundary
+                let expanded_end = end.div_ceil(batch_size) * batch_size;
+                let expanded_end = expanded_end.min(total_rows);
+
+                expanded_ranges.push(expanded_start..expanded_end);
+                row_offset += selector.row_count;
+            }
+        }
+
+        // Sort ranges by start position
+        expanded_ranges.sort_by_key(|range| range.start);
+
+        // Merge overlapping or consecutive ranges
+        let mut merged_ranges: Vec<Range<usize>> = Vec::new();
+        for range in expanded_ranges {
+            if let Some(last) = merged_ranges.last_mut() {
+                if range.start <= last.end {
+                    // Overlapping or consecutive - merge them
+                    last.end = last.end.max(range.end);
+                } else {
+                    // No overlap - add new range
+                    merged_ranges.push(range);
+                }
+            } else {
+                // First range
+                merged_ranges.push(range);
+            }
+        }
+
+        Self::from_consecutive_ranges(merged_ranges.into_iter(), total_rows)
+    }
 }
 
 impl From<Vec<RowSelector>> for RowSelection {
@@ -641,7 +694,7 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 mod tests {
     use super::*;
     use crate::format::PageLocation;
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
 
     #[test]
     fn test_from_filters() {
@@ -1013,14 +1066,14 @@ mod tests {
 
     #[test]
     fn test_and_fuzz() {
-        let mut rand = thread_rng();
+        let mut rand = rng();
         for _ in 0..100 {
-            let a_len = rand.gen_range(10..100);
-            let a_bools: Vec<_> = (0..a_len).map(|_| rand.gen_bool(0.2)).collect();
+            let a_len = rand.random_range(10..100);
+            let a_bools: Vec<_> = (0..a_len).map(|_| rand.random_bool(0.2)).collect();
             let a = RowSelection::from_filters(&[BooleanArray::from(a_bools.clone())]);
 
             let b_len: usize = a_bools.iter().map(|x| *x as usize).sum();
-            let b_bools: Vec<_> = (0..b_len).map(|_| rand.gen_bool(0.8)).collect();
+            let b_bools: Vec<_> = (0..b_len).map(|_| rand.random_bool(0.8)).collect();
             let b = RowSelection::from_filters(&[BooleanArray::from(b_bools.clone())]);
 
             let mut expected_bools = vec![false; a_len];

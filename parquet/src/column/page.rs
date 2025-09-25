@@ -90,6 +90,16 @@ impl Page {
         }
     }
 
+    /// Returns whether this page is any version of a data page
+    pub fn is_data_page(&self) -> bool {
+        matches!(self, Page::DataPage { .. } | Page::DataPageV2 { .. })
+    }
+
+    /// Returns whether this page is a dictionary page
+    pub fn is_dictionary_page(&self) -> bool {
+        matches!(self, Page::DictionaryPage { .. })
+    }
+
     /// Returns internal byte buffer reference for this page.
     pub fn buffer(&self) -> &Bytes {
         match self {
@@ -186,9 +196,21 @@ impl CompressedPage {
     }
 
     /// Returns the thrift page header
-    pub(crate) fn to_thrift_header(&self) -> PageHeader {
+    pub(crate) fn to_thrift_header(&self) -> Result<PageHeader> {
         let uncompressed_size = self.uncompressed_size();
         let compressed_size = self.compressed_size();
+        if uncompressed_size > i32::MAX as usize {
+            return Err(general_err!(
+                "Page uncompressed size overflow: {}",
+                uncompressed_size
+            ));
+        }
+        if compressed_size > i32::MAX as usize {
+            return Err(general_err!(
+                "Page compressed size overflow: {}",
+                compressed_size
+            ));
+        }
         let num_values = self.num_values();
         let encoding = self.encoding();
         let page_type = self.page_type();
@@ -251,7 +273,26 @@ impl CompressedPage {
                 page_header.dictionary_page_header = Some(dictionary_page_header);
             }
         }
-        page_header
+        Ok(page_header)
+    }
+
+    /// Update the compressed buffer for a page.
+    /// This might be required when encrypting page data for example.
+    /// The size of uncompressed data must not change.
+    #[cfg(feature = "encryption")]
+    pub(crate) fn with_new_compressed_buffer(mut self, new_buffer: Bytes) -> Self {
+        match &mut self.compressed_page {
+            Page::DataPage { buf, .. } => {
+                *buf = new_buffer;
+            }
+            Page::DataPageV2 { buf, .. } => {
+                *buf = new_buffer;
+            }
+            Page::DictionaryPage { buf, .. } => {
+                *buf = new_buffer;
+            }
+        }
+        self
     }
 }
 
@@ -461,5 +502,29 @@ mod tests {
         assert_eq!(cpage.num_values(), 10);
         assert_eq!(cpage.encoding(), Encoding::PLAIN);
         assert_eq!(cpage.data(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn test_compressed_page_uncompressed_size_overflow() {
+        // Test that to_thrift_header fails when uncompressed size exceeds i32::MAX
+        let data_page = Page::DataPage {
+            buf: Bytes::from(vec![0, 1, 2]),
+            num_values: 10,
+            encoding: Encoding::PLAIN,
+            def_level_encoding: Encoding::RLE,
+            rep_level_encoding: Encoding::RLE,
+            statistics: None,
+        };
+
+        // Create a CompressedPage with uncompressed size larger than i32::MAX
+        let uncompressed_size = (i32::MAX as usize) + 1;
+        let cpage = CompressedPage::new(data_page, uncompressed_size);
+
+        // Verify that to_thrift_header returns an error
+        let result = cpage.to_thrift_header();
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Page uncompressed size overflow"));
     }
 }

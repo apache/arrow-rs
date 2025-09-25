@@ -149,7 +149,7 @@ impl FixedSizeListArray {
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
         let s = size.to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {}", size))
+            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
         let len = match s {
@@ -243,6 +243,12 @@ impl FixedSizeListArray {
     }
 
     /// Returns ith value of this list array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
         self.values
             .slice(self.value_offset_at(i), self.value_length() as usize)
@@ -343,8 +349,8 @@ impl From<ArrayData> for FixedSizeListArray {
     fn from(data: ArrayData) -> Self {
         let value_length = match data.data_type() {
             DataType::FixedSizeList(_, len) => *len,
-            _ => {
-                panic!("FixedSizeListArray data should contain a FixedSizeList data type")
+            data_type => {
+                panic!("FixedSizeListArray data should contain a FixedSizeList data type, got {data_type}")
             }
         };
 

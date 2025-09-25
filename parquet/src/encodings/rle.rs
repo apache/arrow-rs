@@ -84,6 +84,7 @@ impl RleEncoder {
 
     /// Initialize the encoder from existing `buffer`
     pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
+        assert!(bit_width <= 64);
         let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
@@ -135,7 +136,7 @@ impl RleEncoder {
         } else {
             if self.repeat_count >= 8 {
                 // The current RLE run has ended and we've gathered enough. Flush first.
-                assert_eq!(self.bit_packed_count, 0);
+                debug_assert_eq!(self.bit_packed_count, 0);
                 self.flush_rle_run();
             }
             self.repeat_count = 1;
@@ -146,7 +147,7 @@ impl RleEncoder {
         self.num_buffered_values += 1;
         if self.num_buffered_values == 8 {
             // Buffered values are full. Flush them.
-            assert_eq!(self.bit_packed_count % 8, 0);
+            debug_assert_eq!(self.bit_packed_count % 8, 0);
             self.flush_buffered_values();
         }
     }
@@ -220,7 +221,7 @@ impl RleEncoder {
     }
 
     fn flush_rle_run(&mut self) {
-        assert!(self.repeat_count > 0);
+        debug_assert!(self.repeat_count > 0);
         let indicator_value = self.repeat_count << 1;
         self.bit_writer.put_vlq_int(indicator_value as u64);
         self.bit_writer.put_aligned(
@@ -237,9 +238,8 @@ impl RleEncoder {
         }
 
         // Write all buffered values as bit-packed literals
-        for i in 0..self.num_buffered_values {
-            self.bit_writer
-                .put_value(self.buffered_values[i], self.bit_width as usize);
+        for v in &self.buffered_values[..self.num_buffered_values] {
+            self.bit_writer.put_value(*v, self.bit_width as usize);
         }
         self.num_buffered_values = 0;
         if update_indicator_byte {
@@ -253,14 +253,13 @@ impl RleEncoder {
         }
     }
 
-    #[inline(never)]
     fn flush_buffered_values(&mut self) {
         if self.repeat_count >= 8 {
             self.num_buffered_values = 0;
             if self.bit_packed_count > 0 {
                 // In this case we choose RLE encoding. Flush the current buffered values
                 // as bit-packed encoding.
-                assert_eq!(self.bit_packed_count % 8, 0);
+                debug_assert_eq!(self.bit_packed_count % 8, 0);
                 self.flush_bit_packed_run(true)
             }
             return;
@@ -271,7 +270,7 @@ impl RleEncoder {
         if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
             // We've reached the maximum value that can be hold in a single bit-packed
             // run.
-            assert!(self.indicator_byte_pos >= 0);
+            debug_assert!(self.indicator_byte_pos >= 0);
             self.flush_bit_packed_run(true);
         } else {
             self.flush_bit_packed_run(false);
@@ -528,7 +527,7 @@ mod tests {
     use super::*;
 
     use crate::util::bit_util::ceil;
-    use rand::{self, distributions::Standard, thread_rng, Rng, SeedableRng};
+    use rand::{self, distr::StandardUniform, rng, Rng, SeedableRng};
 
     const MAX_WIDTH: usize = 32;
 
@@ -866,7 +865,7 @@ mod tests {
         let mut data: Vec<u8> = vec![
             (3 << 1) | 1, // bit-packed run of 3 * 8
         ];
-        data.extend(std::iter::repeat(0xFF).take(20));
+        data.extend(std::iter::repeat_n(0xFF, 20));
         let data: Bytes = data.into();
 
         let mut decoder = RleDecoder::new(8);
@@ -1019,15 +1018,18 @@ mod tests {
 
         for _ in 0..niters {
             values.clear();
-            let rng = thread_rng();
-            let seed_vec: Vec<u8> = rng.sample_iter::<u8, _>(&Standard).take(seed_len).collect();
+            let rng = rng();
+            let seed_vec: Vec<u8> = rng
+                .sample_iter::<u8, _>(&StandardUniform)
+                .take(seed_len)
+                .collect();
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&seed_vec[0..seed_len]);
             let mut gen = rand::rngs::StdRng::from_seed(seed);
 
             let mut parity = false;
             for _ in 0..ngroups {
-                let mut group_size = gen.gen_range(1..20);
+                let mut group_size = gen.random_range(1..20);
                 if group_size > max_group_size {
                     group_size = 1;
                 }

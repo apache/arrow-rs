@@ -41,7 +41,7 @@ use std::ops::Deref;
 /// let sliced = buffer.slice(1, 2);
 /// assert_eq!(&sliced, &[2, 3]);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ScalarBuffer<T: ArrowNativeType> {
     /// Underlying data buffer
     buffer: Buffer,
@@ -72,6 +72,19 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         buffer.slice_with_length(byte_offset, byte_len).into()
     }
 
+    /// Unsafe function to create a new [`ScalarBuffer`] from a [`Buffer`].
+    /// Only use for testing purpose.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it does not check if the `buffer` is aligned
+    pub unsafe fn new_unchecked(buffer: Buffer) -> Self {
+        Self {
+            buffer,
+            phantom: Default::default(),
+        }
+    }
+
     /// Free up unused memory.
     pub fn shrink_to_fit(&mut self) {
         self.buffer.shrink_to_fit();
@@ -98,6 +111,16 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     #[inline]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.buffer.ptr_eq(&other.buffer)
+    }
+
+    /// Returns the number of elements in the buffer
+    pub fn len(&self) -> usize {
+        self.buffer.len() / std::mem::size_of::<T>()
+    }
+
+    /// Returns if the buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -221,6 +244,9 @@ impl<T: ArrowNativeType> PartialEq<ScalarBuffer<T>> for Vec<T> {
     }
 }
 
+/// If T implements Eq, then so does ScalarBuffer.
+impl<T: ArrowNativeType + Eq> Eq for ScalarBuffer<T> {}
+
 #[cfg(test)]
 mod tests {
     use std::{ptr::NonNull, sync::Arc};
@@ -341,5 +367,20 @@ mod tests {
         let vec = Vec::from(scalar_buffer);
         assert_eq!(vec, input.as_slice());
         assert_ne!(vec.as_ptr(), input.as_ptr());
+    }
+
+    #[test]
+    fn scalar_buffer_impl_eq() {
+        fn are_equal<T: Eq>(a: &T, b: &T) -> bool {
+            a.eq(b)
+        }
+
+        assert!(
+            are_equal(
+                &ScalarBuffer::<i16>::from(vec![23]),
+                &ScalarBuffer::<i16>::from(vec![23])
+            ),
+            "ScalarBuffer should implement Eq if the inner type does"
+        );
     }
 }
