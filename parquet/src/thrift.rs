@@ -351,6 +351,7 @@ mod tests {
             null_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
+            nan_counts: None,
         };
 
         assert_eq!(&index, &expected);
@@ -372,6 +373,7 @@ mod tests {
             null_counts: None,
             repetition_level_histograms: None,
             definition_level_histograms: None,
+            nan_counts: None,
         };
 
         assert_eq!(&index, &expected);
