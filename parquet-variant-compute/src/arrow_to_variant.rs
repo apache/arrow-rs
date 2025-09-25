@@ -17,8 +17,8 @@
 
 use crate::type_conversion::{decimal_to_variant_decimal, CastOptions};
 use arrow::array::{
-    Array, AsArray, GenericBinaryArray, GenericListArray, GenericListViewArray, GenericStringArray,
-    OffsetSizeTrait, PrimitiveArray,
+    Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
+    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
@@ -82,6 +82,7 @@ pub(crate) enum ArrowToVariantRowBuilder<'a> {
     LargeList(ListArrowToVariantBuilder<'a, GenericListArray<i64>>),
     ListView(ListArrowToVariantBuilder<'a, GenericListViewArray<i32>>),
     LargeListView(ListArrowToVariantBuilder<'a, GenericListViewArray<i64>>),
+    FixedSizeList(ListArrowToVariantBuilder<'a, FixedSizeListArray>),
     Struct(StructArrowToVariantBuilder<'a>),
     Map(MapArrowToVariantBuilder<'a>),
     Union(UnionArrowToVariantBuilder<'a>),
@@ -138,6 +139,7 @@ impl<'a> ArrowToVariantRowBuilder<'a> {
             LargeList(b) => b.append_row(builder, index),
             ListView(b) => b.append_row(builder, index),
             LargeListView(b) => b.append_row(builder, index),
+            FixedSizeList(b) => b.append_row(builder, index),
             Struct(b) => b.append_row(builder, index),
             Map(b) => b.append_row(builder, index),
             Union(b) => b.append_row(builder, index),
@@ -255,6 +257,10 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
                 array.as_list_view(),
                 options,
             )?),
+            DataType::FixedSizeList(_, _) => FixedSizeList(ListArrowToVariantBuilder::new(
+                array.as_fixed_size_list(),
+                options,
+            )?),
             DataType::Struct(_) => Struct(StructArrowToVariantBuilder::new(
                 array.as_struct(),
                 options,
@@ -281,11 +287,6 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
                     )));
                 }
             },
-            dt => {
-                return Err(ArrowError::CastError(format!(
-                    "Unsupported data type for casting to Variant: {dt}",
-                )));
-            }
         };
     Ok(builder)
 }
@@ -523,7 +524,8 @@ impl NullArrowToVariantBuilder {
     }
 }
 
-/// Generic list builder for List, LargeList, ListView, and LargeListView types
+/// Generic list builder for ListLikeArray types including List, LargeList, ListView, LargeListView,
+/// and FixedSizeList
 pub(crate) struct ListArrowToVariantBuilder<'a, L: ListLikeArray> {
     list_array: &'a L,
     values_builder: Box<ArrowToVariantRowBuilder<'a>>,
@@ -599,6 +601,18 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
     }
 }
 
+impl ListLikeArray for FixedSizeListArray {
+    fn values(&self) -> &dyn Array {
+        self.values()
+    }
+
+    fn element_range(&self, index: usize) -> Range<usize> {
+        let value_length = self.value_length().as_usize();
+        let offset = index * value_length;
+        offset..(offset + value_length)
+    }
+}
+
 /// Struct builder for StructArray
 pub(crate) struct StructArrowToVariantBuilder<'a> {
     struct_array: &'a arrow::array::StructArray,
@@ -645,8 +659,7 @@ impl<'a> StructArrowToVariantBuilder<'a> {
 
             // Process each field
             for (field_name, row_builder) in &mut self.field_builders {
-                let mut field_builder =
-                    parquet_variant::ObjectFieldBuilder::new(field_name, &mut obj_builder);
+                let mut field_builder = ObjectFieldBuilder::new(field_name, &mut obj_builder);
                 row_builder.append_row(&mut field_builder, index)?;
             }
 
