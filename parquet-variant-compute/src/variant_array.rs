@@ -642,8 +642,10 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 /// | --     | exists      | **Perfectly shredded**: If present, the value is always the shredded type |
 /// | exists | exists      | **Imperfectly shredded**: The value might (not) be present and might (not) be the shredded type |
 ///
-/// NOTE: Partial shredding is a row-wise property that implies imperfect shredding (a column-wise
-/// property): Both columns exist and can both be non-NULL for the same row.
+/// NOTE: Partial shredding is a row-wise situation that can arise under imperfect shredding (a
+/// column-wise situation): When both columns exist (imperfect shredding) and the typed_value column
+/// is a struct, then both columns can be non-NULL for the same row if value is a variant object
+/// (partial shredding).
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
 #[derive(Clone, Debug)]
