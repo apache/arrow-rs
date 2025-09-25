@@ -341,7 +341,11 @@ impl AvroDataType {
             | Codec::TimeMicros
             | Codec::TimestampMillis(_)
             | Codec::TimestampMicros(_) => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
-            Codec::Duration(_) => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::DurationNanos
+            | Codec::DurationMicros
+            | Codec::DurationMillis
+            | Codec::DurationSeconds => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
             Codec::Float32 => {
                 let f = parse_json_f64(default_json, "float")?;
                 if !f.is_finite() || f < f32::MIN as f64 || f > f32::MAX as f64 {
@@ -686,8 +690,18 @@ pub enum Codec {
     Interval,
     /// Represents Avro union type, maps to Arrow's Union data type
     Union(Arc<[AvroDataType]>, UnionFields, UnionMode),
-    /// Represents an Avro long with an `arrowDurationUnit` metadata property. Maps to Arrow's Duration(TimeUnit) data type.
-    Duration(TimeUnit),
+    /// Represents Avro custom logical type to map to Arrow Duration(TimeUnit::Nanosecond)
+    #[cfg(feature = "avro_custom_types")]
+    DurationNanos,
+    /// Represents Avro custom logical type to map to Arrow Duration(TimeUnit::Microsecond)
+    #[cfg(feature = "avro_custom_types")]
+    DurationMicros,
+    /// Represents Avro custom logical type to map to Arrow Duration(TimeUnit::Millisecond)
+    #[cfg(feature = "avro_custom_types")]
+    DurationMillis,
+    /// Represents Avro custom logical type to map to Arrow Duration(TimeUnit::Second)
+    #[cfg(feature = "avro_custom_types")]
+    DurationSeconds,
 }
 
 impl Codec {
@@ -762,7 +776,14 @@ impl Codec {
                 )
             }
             Self::Union(_, fields, mode) => DataType::Union(fields.clone(), *mode),
-            Self::Duration(time_unit) => DataType::Duration(*time_unit),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationNanos => DataType::Duration(TimeUnit::Nanosecond),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationMicros => DataType::Duration(TimeUnit::Microsecond),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationMillis => DataType::Duration(TimeUnit::Millisecond),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSeconds => DataType::Duration(TimeUnit::Second),
         }
     }
 
@@ -948,7 +969,11 @@ impl From<&Codec> for UnionFieldKind {
             Codec::Map(_) => Self::Map,
             Codec::Uuid => Self::Uuid,
             Codec::Union(..) => Self::Union,
-            Codec::Duration(_) => Self::Duration,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::DurationNanos
+            | Codec::DurationMicros
+            | Codec::DurationMillis
+            | Codec::DurationSeconds => Self::Duration,
         }
     }
 }
@@ -1322,6 +1347,16 @@ impl<'a> Maker<'a> {
                         *c = Codec::TimestampMicros(false)
                     }
                     (Some("uuid"), c @ Codec::Utf8) => *c = Codec::Uuid,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.duration-nanos"), c @ Codec::Int64) => *c = Codec::DurationNanos,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.duration-micros"), c @ Codec::Int64) => *c = Codec::DurationMicros,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.duration-millis"), c @ Codec::Int64) => *c = Codec::DurationMillis,
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.duration-seconds"), c @ Codec::Int64) => {
+                        *c = Codec::DurationSeconds
+                    }
                     (Some(logical), _) => {
                         // Insert unrecognized logical type into metadata map
                         field.metadata.insert("logicalType".into(), logical.into());
@@ -1329,26 +1364,8 @@ impl<'a> Maker<'a> {
                     (None, _) => {}
                 }
                 if !t.attributes.additional.is_empty() {
-                    let mut is_duration = false;
                     for (k, v) in &t.attributes.additional {
-                        let key = k.to_string();
-                        if matches!(field.codec, Codec::Int64) && key == "arrowDurationUnit" {
-                            let unit = match v.as_str() {
-                                Some("second") => TimeUnit::Second,
-                                Some("millisecond") => TimeUnit::Millisecond,
-                                Some("microsecond") => TimeUnit::Microsecond,
-                                Some("nanosecond") => TimeUnit::Nanosecond,
-                                other => {
-                                    return Err(ArrowError::SchemaError(format!(
-                                        "Unknown arrowDurationUnit value: {other:?}"
-                                    )))
-                                }
-                            };
-                            field.codec = Codec::Duration(unit);
-                            is_duration = true;
-                        } else {
-                            field.metadata.insert(key, v.to_string());
-                        }
+                        field.metadata.insert(k.to_string(), v.to_string());
                     }
                 }
                 Ok(field)

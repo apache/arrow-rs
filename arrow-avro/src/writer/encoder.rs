@@ -271,6 +271,9 @@ impl<'a> FieldEncoder<'a> {
                         array.as_primitive::<IntervalDayTimeType>(),
                     )),
                 }
+                #[cfg(not(feature = "avro_custom_types"))]
+                DataType::Duration(tu) => Encoder::Long(LongEncoder(array.as_primitive::<Int64Type>())),
+                #[cfg(feature = "avro_custom_types")]
                 DataType::Duration(tu) => {
                     match tu {
                         TimeUnit::Second => Encoder::DurationSec(LongEncoder(
@@ -814,11 +817,26 @@ impl FieldPlan {
                     "Avro duration logical type requires Arrow Interval(MonthDayNano), found: {other:?}"
                 ))),
             }
-            Codec::Duration(tu) => match arrow_field.data_type() {
-                DataType::Duration(u) if u == tu => Ok(FieldPlan::Scalar),
-                other => Err(ArrowError::SchemaError(format!(
-                    "Avro long with arrowDurationUnit={tu:?} requires Arrow Duration({tu:?}), found: {other:?}"
-                ))),
+            #[cfg(feature = "avro_custom_types")]
+            c @ (Codec::DurationNanos
+            | Codec::DurationMicros
+            | Codec::DurationMillis
+            | Codec::DurationSeconds) => {
+                let (expected_tu, annotation) = match c {
+                    Codec::DurationNanos => (TimeUnit::Nanosecond, "arrow.duration-nanos"),
+                    Codec::DurationMicros => (TimeUnit::Microsecond, "arrow.duration-micros"),
+                    Codec::DurationMillis => (TimeUnit::Millisecond, "arrow.duration-millis"),
+                    Codec::DurationSeconds => (TimeUnit::Second, "arrow.duration-seconds"),
+                    _ => unreachable!(),
+                };
+
+                match arrow_field.data_type() {
+                    DataType::Duration(actual_tu) if *actual_tu == expected_tu => Ok(FieldPlan::Scalar),
+                    other => Err(ArrowError::SchemaError(format!(
+                        "Avro long with annotation {} requires Arrow Duration({:?}), found: {:?}",
+                        annotation, expected_tu, other,
+                    ))),
+                }
             }
             _ => Ok(FieldPlan::Scalar),
         }
@@ -1909,6 +1927,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "avro_custom_types")]
     fn duration_encoding_seconds() {
         let arr: PrimitiveArray<DurationSecondType> = vec![0i64, -1, 2].into();
         let mut expected = Vec::new();
@@ -1920,6 +1939,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "avro_custom_types")]
     fn duration_encoding_milliseconds() {
         let arr: PrimitiveArray<DurationMillisecondType> = vec![1i64, 0, -2].into();
         let mut expected = Vec::new();
@@ -1931,6 +1951,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "avro_custom_types")]
     fn duration_encoding_microseconds() {
         let arr: PrimitiveArray<DurationMicrosecondType> = vec![5i64, -6, 7].into();
         let mut expected = Vec::new();
@@ -1942,6 +1963,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "avro_custom_types")]
     fn duration_encoding_nanoseconds() {
         let arr: PrimitiveArray<DurationNanosecondType> = vec![8i64, 9, -10].into();
         let mut expected = Vec::new();

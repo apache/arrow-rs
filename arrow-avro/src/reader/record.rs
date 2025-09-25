@@ -220,9 +220,13 @@ enum Decoder {
     Boolean(BooleanBufferBuilder),
     Int32(Vec<i32>),
     Int64(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
     DurationSecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
     DurationMillisecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
     DurationMicrosecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
     DurationNanosecond(Vec<i64>),
     Float32(Vec<f32>),
     Float64(Vec<f64>),
@@ -347,18 +351,22 @@ impl Decoder {
             (Codec::TimestampMicros(is_utc), _) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
-            (Codec::Duration(unit), _) => match unit {
-                TimeUnit::Second => Self::DurationSecond(Vec::with_capacity(DEFAULT_CAPACITY)),
-                TimeUnit::Millisecond => {
-                    Self::DurationMillisecond(Vec::with_capacity(DEFAULT_CAPACITY))
-                }
-                TimeUnit::Microsecond => {
-                    Self::DurationMicrosecond(Vec::with_capacity(DEFAULT_CAPACITY))
-                }
-                TimeUnit::Nanosecond => {
-                    Self::DurationNanosecond(Vec::with_capacity(DEFAULT_CAPACITY))
-                }
-            },
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationNanos, _) => {
+                Self::DurationNanosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationMicros, _) => {
+                Self::DurationMicrosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationMillis, _) => {
+                Self::DurationMillisecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationSeconds, _) => {
+                Self::DurationSecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
             (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Decimal(precision, scale, size), _) => {
                 let p = *precision;
@@ -521,6 +529,7 @@ impl Decoder {
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
             | Self::TimestampMicros(_, v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
             Self::DurationSecond(v)
             | Self::DurationMillisecond(v)
             | Self::DurationMicrosecond(v)
@@ -610,16 +619,25 @@ impl Decoder {
                     "Default for int32/date32/time-millis must be int".to_string(),
                 )),
             },
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for duration long must be long".to_string(),
+                )),
+            },
             Self::Int64(v)
             | Self::Int32ToInt64(v)
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
             | Self::TimestampMicros(_, v)
-            | Self::TimestampMicros(_, v)
-            | Self::DurationSecond(v)
-            | Self::DurationMillisecond(v)
-            | Self::DurationMicrosecond(v)
-            | Self::DurationNanosecond(v) => match lit {
+            | Self::TimestampMicros(_, v) => match lit {
                 AvroLiteral::Long(i) => {
                     v.push(*i);
                     Ok(())
@@ -826,6 +844,7 @@ impl Decoder {
             | Self::TimeMicros(values)
             | Self::TimestampMillis(_, values)
             | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
+            #[cfg(feature = "avro_custom_types")]
             Self::DurationSecond(values)
             | Self::DurationMillisecond(values)
             | Self::DurationMicrosecond(values)
@@ -1021,15 +1040,19 @@ impl Decoder {
                 flush_primitive::<TimestampMicrosecondType>(values, nulls)
                     .with_timezone_opt(is_utc.then(|| "+00:00")),
             ),
+            #[cfg(feature = "avro_custom_types")]
             Self::DurationSecond(values) => {
                 Arc::new(flush_primitive::<DurationSecondType>(values, nulls))
             }
+            #[cfg(feature = "avro_custom_types")]
             Self::DurationMillisecond(values) => {
                 Arc::new(flush_primitive::<DurationMillisecondType>(values, nulls))
             }
+            #[cfg(feature = "avro_custom_types")]
             Self::DurationMicrosecond(values) => {
                 Arc::new(flush_primitive::<DurationMicrosecondType>(values, nulls))
             }
+            #[cfg(feature = "avro_custom_types")]
             Self::DurationNanosecond(values) => {
                 Arc::new(flush_primitive::<DurationNanosecondType>(values, nulls))
             }
@@ -2936,9 +2959,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "avro_custom_types")]
     fn test_duration_seconds_decoding() {
-        let avro_type =
-            AvroDataType::new(Codec::Duration(TimeUnit::Second), Default::default(), None);
+        let avro_type = AvroDataType::new(Codec::DurationSeconds, Default::default(), None);
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let mut data = Vec::new();
         // Three values: 0, -1, 2
@@ -2958,12 +2981,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "avro_custom_types")]
     fn test_duration_milliseconds_decoding() {
-        let avro_type = AvroDataType::new(
-            Codec::Duration(TimeUnit::Millisecond),
-            Default::default(),
-            None,
-        );
+        let avro_type = AvroDataType::new(Codec::DurationMillis, Default::default(), None);
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let mut data = Vec::new();
         for v in [1i64, 0, -2] {
@@ -2982,12 +3002,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "avro_custom_types")]
     fn test_duration_microseconds_decoding() {
-        let avro_type = AvroDataType::new(
-            Codec::Duration(TimeUnit::Microsecond),
-            Default::default(),
-            None,
-        );
+        let avro_type = AvroDataType::new(Codec::DurationMicros, Default::default(), None);
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let mut data = Vec::new();
         for v in [5i64, -6, 7] {
@@ -3006,12 +3023,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "avro_custom_types")]
     fn test_duration_nanoseconds_decoding() {
-        let avro_type = AvroDataType::new(
-            Codec::Duration(TimeUnit::Nanosecond),
-            Default::default(),
-            None,
-        );
+        let avro_type = AvroDataType::new(Codec::DurationNanos, Default::default(), None);
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let mut data = Vec::new();
         for v in [8i64, 9, -10] {
