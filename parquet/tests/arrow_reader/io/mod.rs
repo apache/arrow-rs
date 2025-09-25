@@ -34,6 +34,8 @@ mod sync_reader;
 
 #[cfg(feature = "async")]
 mod async_reader;
+#[cfg(feature = "async")]
+mod page_cache;
 
 use arrow::compute::and;
 use arrow::compute::kernels::cmp::{gt, lt};

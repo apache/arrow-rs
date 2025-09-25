@@ -46,6 +46,7 @@ use crate::arrow::arrow_reader::{
     RowFilter, RowSelection,
 };
 use crate::arrow::ProjectionMask;
+use crate::file::page_cache::{PageCacheStrategy, ParquetContext};
 
 use crate::bloom_filter::{
     chunk_read_bloom_filter_header_and_offset, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
@@ -54,6 +55,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::properties::ReaderProperties;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 
@@ -413,7 +415,14 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// # }
     /// ```
     pub fn new_with_metadata(input: T, metadata: ArrowReaderMetadata) -> Self {
-        Self::new_builder(AsyncReader(input), metadata)
+        let mut builder = Self::new_builder(AsyncReader(input), metadata);
+
+        // Enable default page caching for async readers (using shared default ParquetContext)
+        if builder.page_cache.is_none() {
+            builder.page_cache = ParquetContext::get_cache().page_cache.clone();
+        }
+
+        builder
     }
 
     /// Read bloom filter for a column in a row group
@@ -516,6 +525,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset: self.offset,
             metrics: self.metrics,
             max_predicate_cache_size: self.max_predicate_cache_size,
+            page_cache: self.page_cache.clone(),
         };
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -572,6 +582,9 @@ struct ReaderFactory<T> {
 
     /// Maximum size of the predicate cache
     max_predicate_cache_size: usize,
+
+    /// Page cache for caching decoded pages
+    page_cache: Option<Arc<dyn PageCacheStrategy>>,
 }
 
 impl<T> ReaderFactory<T>
@@ -617,6 +630,7 @@ where
             offset_index,
             row_group_idx,
             metadata: self.metadata.as_ref(),
+            page_cache: self.page_cache.clone(),
         };
 
         let cache_options_builder = CacheOptionsBuilder::new(&cache_projection, &row_group_cache);
@@ -970,6 +984,7 @@ struct InMemoryRowGroup<'a> {
     row_count: usize,
     row_group_idx: usize,
     metadata: &'a ParquetMetaData,
+    page_cache: Option<Arc<dyn PageCacheStrategy>>,
 }
 
 impl InMemoryRowGroup<'_> {
@@ -1104,18 +1119,22 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     .filter(|index| !index.is_empty())
                     .map(|index| index[i].page_locations.clone());
                 let column_chunk_metadata = self.metadata.row_group(self.row_group_idx).column(i);
-                let page_reader = SerializedPageReader::new(
+                let page_reader = SerializedPageReader::new_with_properties(
                     data.clone(),
                     column_chunk_metadata,
                     self.row_count,
                     page_locations,
+                    Arc::new(ReaderProperties::builder().build()),
+                    self.page_cache.clone(),
                 )?;
-                let page_reader = page_reader.add_crypto_context(
-                    self.row_group_idx,
-                    i,
-                    self.metadata,
-                    column_chunk_metadata,
-                )?;
+                let page_reader = page_reader
+                    .add_crypto_context(
+                        self.row_group_idx,
+                        i,
+                        self.metadata,
+                        column_chunk_metadata,
+                    )?
+                    .set_cache_context_metadata(self.row_group_idx, i, self.metadata);
 
                 let page_reader: Box<dyn PageReader> = Box::new(page_reader);
 
@@ -1985,6 +2004,7 @@ mod tests {
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
             max_predicate_cache_size: 0,
+            page_cache: None,
         };
 
         let mut skip = true;
@@ -2450,6 +2470,7 @@ mod tests {
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
             max_predicate_cache_size: 0,
+            page_cache: None,
         };
 
         // Provide an output projection that also selects the same nested leaf
