@@ -800,7 +800,7 @@ fn typed_value_to_variant<'a>(
             let date = Date32Type::to_naive_date(value);
             Variant::from(date)
         }
-        // 16-byte FixedSizeBinary is alway corresponds to a UUID; all other sizes are illegal.
+        // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
             let array = typed_value.as_fixed_size_binary();
             let value = array.value(index);
@@ -880,7 +880,9 @@ fn is_valid_variant_decimal(p: &u8, s: &i8, max_precision: u8) -> bool {
     *p <= max_precision && (0..=*p as i8).contains(s)
 }
 
-/// replaces all instances of Binary with BinaryView in a DataType
+/// Recursively visits a data type, ensuring that it only contains data types that can legally
+/// appear in a (possibly shredded) variant array. It also replaces Binary fields with BinaryView,
+/// since that's what comes back from the parquet reader and what the variant code expects to find.
 fn canonicalize_and_verify_data_type(
     data_type: &DataType,
 ) -> Result<Cow<'_, DataType>, ArrowError> {
@@ -905,7 +907,7 @@ fn canonicalize_and_verify_data_type(
         Null | Boolean => borrow!(),
         Int8 | Int16 | Int32 | Int64 | Float32 | Float64 => borrow!(),
 
-        // Unsigned integers are not allowed at all
+        // Unsigned integers and half-float are not allowed
         UInt8 | UInt16 | UInt32 | UInt64 | Float16 => fail!(),
 
         // Most decimal types are allowed, with restrictions on precision and scale
@@ -914,16 +916,16 @@ fn canonicalize_and_verify_data_type(
         Decimal128(p, s) if is_valid_variant_decimal(p, s, 38) => borrow!(),
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
-        // Only micro and nano timestamps are supported
+        // Only micro and nano timestamps are allowed
         Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, _) => borrow!(),
         Timestamp(TimeUnit::Millisecond | TimeUnit::Second, _) => fail!(),
 
-        // Only 32-bit dates and 64-bit microsecond time are supported.
+        // Only 32-bit dates and 64-bit microsecond time are allowed.
         Date32 | Time64(TimeUnit::Microsecond) => borrow!(),
         Date64 | Time32(_) | Time64(_) | Duration(_) | Interval(_) => fail!(),
 
-        // Binary and string are allowed.
-        // NOTE: We force Binary to BinaryView because that's what the parquet reader returns.
+        // Binary and string are allowed. Force Binary to BinaryView because that's what the parquet
+        // reader returns and what the rest of the variant code expects.
         Binary => Cow::Owned(DataType::BinaryView),
         BinaryView | Utf8 => borrow!(),
 
@@ -931,18 +933,20 @@ fn canonicalize_and_verify_data_type(
         FixedSizeBinary(16) => borrow!(),
         FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
 
-        // We can _possibly_ support (some of) these some day?
+        // We can _possibly_ allow (some of) these some day?
         LargeBinary | LargeUtf8 | Utf8View | ListView(_) | LargeList(_) | LargeListView(_) => {
             fail!()
         }
 
-        // Lists and struct are supported, maps and unions are not
+        // Lists and struct are allowed, maps and unions are not
         List(field) => match canonicalize_and_verify_field(field)? {
             Cow::Borrowed(_) => borrow!(),
             Cow::Owned(new_field) => Cow::Owned(DataType::List(new_field)),
         },
+        // Struct is used by the internal layout, and can also represent a shredded variant object.
         Struct(fields) => {
-            // Avoid allocation unless at least one field was rewritten
+            // Avoid allocation unless at least one field changes, to avoid unnecessary deep cloning
+            // of the data type. Even if some fields change, the others are shallow arc clones.
             let mut new_fields = std::collections::HashMap::new();
             for (i, field) in fields.iter().enumerate() {
                 if let Cow::Owned(new_field) = canonicalize_and_verify_field(field)? {
