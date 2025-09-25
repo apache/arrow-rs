@@ -1066,7 +1066,7 @@ impl ColumnChunkMetaData {
     /// Returns geospatial statistics that are set for this column chunk,
     /// or `None` if no geospatial statistics are available.
     pub fn geo_statistics(&self) -> Option<&geo_statistics::GeospatialStatistics> {
-        self.geo_statistics.as_ref().map(|boxed| boxed.as_ref())
+        self.geo_statistics.as_deref()
     }
 
     /// Returns the offset for the page encoding stats,

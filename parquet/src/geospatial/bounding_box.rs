@@ -198,13 +198,13 @@ impl From<parquet::BoundingBox> for BoundingBox {
 
         new_bbox = match (bbox.zmin, bbox.zmax) {
             (Some(zmin), Some(zmax)) => new_bbox.with_zrange(zmin.into(), zmax.into()),
-            // If both None or mismatch, set it to None and don't error
+            // If either None or mismatch, leave it as None and don't error
             _ => new_bbox,
         };
 
         new_bbox = match (bbox.mmin, bbox.mmax) {
             (Some(mmin), Some(mmax)) => new_bbox.with_mrange(mmin.into(), mmax.into()),
-            // If both None or mismatch, set it to None and don't error
+            // If either None or mismatch, leave it as None and don't error
             _ => new_bbox,
         };
 
@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bounding_box_from_and_to_thrift() {
+    fn test_bounding_box_thrift_roundtrip() {
         use thrift::OrderedFloat;
 
         let thrift_bbox = parquet::BoundingBox {

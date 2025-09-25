@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides functionality for working with geospatial data in Parquet file as defied in the [spec][parquet-geo-spec].
+//! This module provides functionality for working with geospatial data in Parquet file as defined in the [spec][parquet-geo-spec].
 //!
 //! * [`GeospatialStatistics`]: describes the geospatial statistics for a Parquet column.
 //! * [`BoundingBox`]: describes the bounding box values for a geospatial column.
