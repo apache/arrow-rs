@@ -26,8 +26,7 @@ use arrow::datatypes::{
 };
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
-use parquet_variant::Uuid;
-use parquet_variant::Variant;
+use parquet_variant::{Uuid, Variant, VariantList, VariantMetadata, VariantObject};
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -70,6 +69,131 @@ impl ExtensionType for VariantType {
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
         Self.supports_data_type(data_type)?;
         Ok(Self)
+    }
+}
+
+/// A [`Cow`]-like representation of a [`Variant`] value returned by [`VariantArray::value`], which
+/// may use owned or borrowed value bytes depending on how the underlying variant was shredded. We
+/// cannot "just" use [`Cow`] because of the special lifetime management that [`Variant`] requires.
+pub enum VariantArrayValue<'m, 'v> {
+    Borrowed(Variant<'m, 'v>),
+    Owned {
+        metadata: VariantMetadata<'m>,
+        value_bytes: Vec<u8>,
+    },
+}
+
+impl<'m, 'v> VariantArrayValue<'m, 'v> {
+    /// Creates a new instance that borrows from a normal [`Variant`] value.
+    pub fn borrowed(value: Variant<'m, 'v>) -> Self {
+        Self::Borrowed(value)
+    }
+
+    /// Creates a new instance that wraps owned bytes that can be converted to a [`Variant`] value.
+    pub fn owned(metadata_bytes: &'m [u8], value_bytes: Vec<u8>) -> Self {
+        Self::Owned {
+            metadata: VariantMetadata::new(metadata_bytes),
+            value_bytes,
+        }
+    }
+
+    /// Consumes this variant value, passing the result to a `visitor` function.
+    ///
+    /// The visitor idiom is helpful because a variant value based on owned bytes cannot outlive
+    /// self.
+    pub fn consume<R>(self, visitor: impl FnOnce(Variant<'_, '_>) -> R) -> R {
+        match self {
+            VariantArrayValue::Borrowed(v) => visitor(v),
+            VariantArrayValue::Owned {
+                metadata,
+                value_bytes,
+            } => visitor(Variant::new_with_metadata(metadata, &value_bytes)),
+        }
+    }
+
+    // internal helper for when we don't want to pay the extra clone
+    fn as_variant_cow(&self) -> Cow<'_, Variant<'m, '_>> {
+        match self {
+            VariantArrayValue::Borrowed(v) => Cow::Borrowed(v),
+            VariantArrayValue::Owned {
+                metadata,
+                value_bytes,
+            } => Cow::Owned(Variant::new_with_metadata(metadata.clone(), value_bytes)),
+        }
+    }
+
+    /// Returns a [`Variant`] instance for this value.
+    pub fn as_variant(&self) -> Variant<'m, '_> {
+        self.as_variant_cow().into_owned()
+    }
+
+    /// Returns the variant metadata that backs this value.
+    pub fn metadata(&self) -> &VariantMetadata<'m> {
+        match self {
+            VariantArrayValue::Borrowed(v) => v.metadata(),
+            VariantArrayValue::Owned { metadata, .. } => metadata,
+        }
+    }
+
+    /// Extracts the underlying [`VariantObject`], if this is a variant object.
+    ///
+    /// See also [`Variant::as_object`].
+    pub fn as_object(&self) -> Option<VariantObject<'m, '_>> {
+        self.as_variant_cow().as_object().cloned()
+    }
+
+    /// Extracts the underlying [`VariantList`], if this is a variant array.
+    ///
+    /// See also [`Variant::as_list`].
+    pub fn as_list(&self) -> Option<VariantList<'m, '_>> {
+        self.as_variant_cow().as_list().cloned()
+    }
+
+    /// Extracts the value of the named variant object field, if this is a variant object.
+    ///
+    /// See also [`Variant::get_object_field`].
+    pub fn get_object_field<'s>(&'s self, field_name: &str) -> Option<Variant<'m, 's>> {
+        self.as_variant_cow().get_object_field(field_name)
+    }
+
+    /// Extracts the value of the variant array element at `index`, if this is a variant object.
+    ///
+    /// See also [`Variant::get_list_element`].
+    pub fn get_list_element(&self, index: usize) -> Option<Variant<'m, '_>> {
+        self.as_variant_cow().get_list_element(index)
+    }
+}
+
+impl<'m, 'v> From<Variant<'m, 'v>> for VariantArrayValue<'m, 'v> {
+    fn from(value: Variant<'m, 'v>) -> Self {
+        Self::borrowed(value)
+    }
+}
+
+// By providing PartialEq for all three combinations, we avoid changing a lot of unit test code that
+// relies on comparisons.
+impl PartialEq for VariantArrayValue<'_, '_> {
+    fn eq(&self, other: &VariantArrayValue<'_, '_>) -> bool {
+        self.as_variant_cow().as_ref() == other.as_variant_cow().as_ref()
+    }
+}
+
+impl PartialEq<Variant<'_, '_>> for VariantArrayValue<'_, '_> {
+    fn eq(&self, other: &Variant<'_, '_>) -> bool {
+        self.as_variant_cow().as_ref() == other
+    }
+}
+
+impl PartialEq<VariantArrayValue<'_, '_>> for Variant<'_, '_> {
+    fn eq(&self, other: &VariantArrayValue<'_, '_>) -> bool {
+        self == other.as_variant_cow().as_ref()
+    }
+}
+
+// Make it transparent -- looks just like the underlying value it proxies
+impl std::fmt::Debug for VariantArrayValue<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_variant_cow().as_ref().fmt(f)
     }
 }
 
@@ -353,7 +477,7 @@ impl VariantArray {
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn value(&self, index: usize) -> Variant<'_, '_> {
+    pub fn value(&self, index: usize) -> VariantArrayValue<'_, '_> {
         match (self.typed_value_field(), self.value_field()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
@@ -361,11 +485,11 @@ impl VariantArray {
             }
             // Otherwise fall back to value, if available
             (_, Some(value)) if value.is_valid(index) => {
-                Variant::new(self.metadata.value(index), value.value(index))
+                Variant::new(self.metadata.value(index), value.value(index)).into()
             }
             // It is technically invalid for neither value nor typed_value fields to be available,
             // but the spec specifically requires readers to return Variant::Null in this case.
-            _ => Variant::Null,
+            _ => Variant::Null.into(),
         }
     }
 
@@ -782,13 +906,13 @@ fn typed_value_to_variant<'a>(
     typed_value: &'a ArrayRef,
     value: Option<&BinaryViewArray>,
     index: usize,
-) -> Variant<'a, 'a> {
+) -> VariantArrayValue<'a, 'a> {
     let data_type = typed_value.data_type();
     if value.is_some_and(|v| !matches!(data_type, DataType::Struct(_)) && v.is_valid(index)) {
         // Only a partially shredded struct is allowed to have values for both columns
         panic!("Invalid variant, conflicting value and typed_value");
     }
-    match data_type {
+    let value = match data_type {
         DataType::Boolean => {
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
@@ -850,7 +974,8 @@ fn typed_value_to_variant<'a>(
             );
             Variant::Null
         }
-    }
+    };
+    value.into()
 }
 
 /// Workaround for lack of direct support for BinaryArray

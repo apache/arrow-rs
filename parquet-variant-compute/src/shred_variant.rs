@@ -86,7 +86,9 @@ pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<Variant
         if array.is_null(i) {
             builder.append_null()?;
         } else {
-            builder.append_value(array.value(i))?;
+            array
+                .value(i)
+                .consume(|value| builder.append_value(value))?;
         }
     }
     let (value, typed_value, nulls) = builder.finish()?;
