@@ -50,13 +50,17 @@ impl fmt::Display for DataType {
             Self::Float32 => write!(f, "Float32"),
             Self::Float64 => write!(f, "Float64"),
             Self::Timestamp(time_unit, timezone) => {
-                write!(f, "Timestamp({time_unit:?}, {timezone:?})")
+                if let Some(timezone) = timezone {
+                    write!(f, "Timestamp({time_unit}, {timezone:?})")
+                } else {
+                    write!(f, "Timestamp({time_unit})")
+                }
             }
             Self::Date32 => write!(f, "Date32"),
             Self::Date64 => write!(f, "Date64"),
-            Self::Time32(time_unit) => write!(f, "Time32({time_unit:?})"),
-            Self::Time64(time_unit) => write!(f, "Time64({time_unit:?})"),
-            Self::Duration(time_unit) => write!(f, "Duration({time_unit:?})"),
+            Self::Time32(time_unit) => write!(f, "Time32({time_unit})"),
+            Self::Time64(time_unit) => write!(f, "Time64({time_unit})"),
+            Self::Duration(time_unit) => write!(f, "Duration({time_unit})"),
             Self::Interval(interval_unit) => write!(f, "Interval({interval_unit:?})"),
             Self::Binary => write!(f, "Binary"),
             Self::FixedSizeBinary(bytes_per_value) => {
@@ -131,13 +135,13 @@ impl fmt::Display for DataType {
                 write!(f, "Union({union_fields:?}, {union_mode:?})")
             }
             Self::Dictionary(data_type, data_type1) => {
-                write!(f, "Dictionary({data_type}, {data_type1:?})")
+                write!(f, "Dictionary({data_type}, {data_type1})")
             }
-            Self::Decimal32(precision, scale) => write!(f, "Decimal32({precision:?}, {scale:?})"),
-            Self::Decimal64(precision, scale) => write!(f, "Decimal64({precision:?}, {scale:?})"),
-            Self::Decimal128(precision, scale) => write!(f, "Decimal128({precision:?}, {scale:?})"),
-            Self::Decimal256(precision, scale) => write!(f, "Decimal256({precision:?}, {scale:?})"),
-            Self::Map(field, keys_are_sorted) => write!(f, "Map({field}, {keys_are_sorted:?})"),
+            Self::Decimal32(precision, scale) => write!(f, "Decimal32({precision}, {scale})"),
+            Self::Decimal64(precision, scale) => write!(f, "Decimal64({precision}, {scale})"),
+            Self::Decimal128(precision, scale) => write!(f, "Decimal128({precision}, {scale})"),
+            Self::Decimal256(precision, scale) => write!(f, "Decimal256({precision}, {scale})"),
+            Self::Map(field, keys_are_sorted) => write!(f, "Map({field}, {keys_are_sorted})"),
             Self::RunEndEncoded(run_ends_field, values_field) => {
                 write!(f, "RunEndEncoded({run_ends_field}, {values_field})")
             }

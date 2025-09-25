@@ -43,7 +43,7 @@ use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHas
 use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-pub(crate) use read_plan::{ReadPlan, ReadPlanBuilder};
+pub use read_plan::{ReadPlan, ReadPlanBuilder};
 
 mod filter;
 pub mod metrics;

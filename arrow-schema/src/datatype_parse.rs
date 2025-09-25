@@ -26,7 +26,7 @@ pub(crate) fn parse_data_type(val: &str) -> ArrowResult<DataType> {
 type ArrowResult<T> = Result<T, ArrowError>;
 
 fn make_error(val: &str, msg: &str) -> ArrowError {
-    let msg = format!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error {msg}" );
+    let msg = format!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'. Error {msg}" );
     ArrowError::ParseError(msg)
 }
 
@@ -132,23 +132,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the next timezone
-    fn parse_timezone(&mut self, context: &str) -> ArrowResult<Option<String>> {
-        match self.next_token()? {
-            Token::None => Ok(None),
-            Token::Some => {
-                self.expect_token(Token::LParen)?;
-                let timezone = self.parse_double_quoted_string("Timezone")?;
-                self.expect_token(Token::RParen)?;
-                Ok(Some(timezone))
-            }
-            tok => Err(make_error(
-                self.val,
-                &format!("finding Timezone for {context}, got {tok}"),
-            )),
-        }
-    }
-
     /// Parses the next double quoted string
     fn parse_double_quoted_string(&mut self, context: &str) -> ArrowResult<String> {
         let token = self.next_token()?;
@@ -210,9 +193,23 @@ impl<'a> Parser<'a> {
     fn parse_timestamp(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let time_unit = self.parse_time_unit("Timestamp")?;
-        self.expect_token(Token::Comma)?;
-        let timezone = self.parse_timezone("Timestamp")?;
-        self.expect_token(Token::RParen)?;
+
+        let timezone;
+        match self.next_token()? {
+            Token::Comma => {
+                timezone = Some(self.parse_double_quoted_string("Timezone")?);
+                self.expect_token(Token::RParen)?;
+            }
+            Token::RParen => {
+                timezone = None;
+            }
+            next_token => {
+                return Err(make_error(
+                    self.val,
+                    &format!("Expected comma followed by a timezone, or an ), got {next_token:?}"),
+                ));
+            }
+        }
         Ok(DataType::Timestamp(time_unit, timezone.map(Into::into)))
     }
 
@@ -383,13 +380,11 @@ fn is_separator(c: char) -> bool {
 #[derive(Debug)]
 /// Splits a strings like Dictionary(Int32, Int64) into tokens sutable for parsing
 ///
-/// For example the string "Timestamp(Nanosecond, None)" would be parsed into:
+/// For example the string "Timestamp(ns)" would be parsed into:
 ///
 /// * Token::Timestamp
 /// * Token::Lparen
 /// * Token::IntervalUnit(IntervalUnit::Nanosecond)
-/// * Token::Comma,
-/// * Token::None,
 /// * Token::Rparen,
 struct Tokenizer<'a> {
     val: &'a str,
@@ -476,10 +471,10 @@ impl<'a> Tokenizer<'a> {
             "LargeList" => Token::LargeList,
             "FixedSizeList" => Token::FixedSizeList,
 
-            "Second" => Token::TimeUnit(TimeUnit::Second),
-            "Millisecond" => Token::TimeUnit(TimeUnit::Millisecond),
-            "Microsecond" => Token::TimeUnit(TimeUnit::Microsecond),
-            "Nanosecond" => Token::TimeUnit(TimeUnit::Nanosecond),
+            "s" | "Second" => Token::TimeUnit(TimeUnit::Second),
+            "ms" | "Millisecond" => Token::TimeUnit(TimeUnit::Millisecond),
+            "µs" | "us" | "Microsecond" => Token::TimeUnit(TimeUnit::Microsecond),
+            "ns" | "Nanosecond" => Token::TimeUnit(TimeUnit::Nanosecond),
 
             "Timestamp" => Token::Timestamp,
             "Time32" => Token::Time32,
@@ -685,7 +680,7 @@ mod test {
     /// verifying it is the same
     fn round_trip(data_type: DataType) {
         let data_type_string = data_type.to_string();
-        println!("Input '{data_type_string}' ({data_type})");
+        println!("Input '{data_type_string}' ({data_type:?})");
         let parsed_type = parse_data_type(&data_type_string).unwrap();
         assert_eq!(
             data_type, parsed_type,
@@ -814,19 +809,19 @@ mod test {
         let cases = [
             ("Int8", DataType::Int8),
             (
-                "Timestamp        (Nanosecond,      None)",
+                "Timestamp        (ns)",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
             (
-                "Timestamp        (Nanosecond,      None)  ",
+                "Timestamp        (ns)  ",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
             (
-                "          Timestamp        (Nanosecond,      None               )",
+                "          Timestamp        (ns               )",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
             (
-                "Timestamp        (Nanosecond,      None               )  ",
+                "Timestamp        (ns               )  ",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
         ];
@@ -847,22 +842,22 @@ mod test {
             ("null", "Unsupported type 'null'"),
             ("Nu", "Unsupported type 'Nu'"),
             (
-                r#"Timestamp(Nanosecond, Some(+00:00))"#,
+                r#"Timestamp(ns, +00:00)"#,
                 "Error unknown token: +00",
             ),
             (
-                r#"Timestamp(Nanosecond, Some("+00:00))"#,
-                r#"Unterminated string at: "+00:00))"#,
+                r#"Timestamp(ns, "+00:00)"#,
+                r#"Unterminated string at: "+00:00)"#,
             ),
             (
-                r#"Timestamp(Nanosecond, Some(""))"#,
+                r#"Timestamp(ns, "")"#,
                 r#"empty strings aren't allowed"#,
             ),
             (
-                r#"Timestamp(Nanosecond, Some("+00:00""))"#,
-                r#"Parser error: Unterminated string at: "))"#,
+                r#"Timestamp(ns, "+00:00"")"#,
+                r#"Parser error: Unterminated string at: ")"#,
             ),
-            ("Timestamp(Nanosecond, ", "Error finding next token"),
+            ("Timestamp(ns, ", "Error finding next token"),
             (
                 "Float32 Float32",
                 "trailing content after parsing 'Float32'",
@@ -900,7 +895,7 @@ mod test {
 
                     if !message.contains("Unterminated string") {
                         // errors should also contain a help message
-                        assert!(message.contains("Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'"), "message: {message}");
+                        assert!(message.contains("Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'"), "message: {message}");
                     }
                 }
             }
@@ -911,6 +906,6 @@ mod test {
     fn parse_error_type() {
         let err = parse_data_type("foobar").unwrap_err();
         assert!(matches!(err, ArrowError::ParseError(_)));
-        assert_eq!(err.to_string(), "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(Nanosecond, None)'. Error unknown token: foobar");
+        assert_eq!(err.to_string(), "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'. Error unknown token: foobar");
     }
 }
