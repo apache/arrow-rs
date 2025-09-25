@@ -985,7 +985,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState { value: None, typed_value: None }
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
 
         // Verify that value() returns Variant::Null (compensating for spec violation)
@@ -1045,7 +1048,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             ShreddingState::new(None, None),
-            ShreddingState { value: None, typed_value: None }
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
     }
 
@@ -1062,7 +1068,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState { value: None, typed_value: None }
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
 
         // Verify all values are null
@@ -1112,7 +1121,10 @@ mod test {
         // This should be Unshredded, not AllNull, because value field exists in schema
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState { value: Some(_), typed_value: None }
+            ShreddingState {
+                value: Some(_),
+                typed_value: None
+            }
         ));
     }
 }
