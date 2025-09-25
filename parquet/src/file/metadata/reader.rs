@@ -38,7 +38,7 @@ use crate::file::metadata::parser::{decode_metadata, parse_column_index, parse_o
 /// * Synchronous: [`Self::try_parse()`], [`Self::try_parse_sized()`], [`Self::parse_and_finish()`], etc.
 /// * Asynchronous (requires `async` and `arrow` features): [`Self::try_load()`], etc
 ///
-///  See the [`ParquetMetaDataPushDecoder`] for more an API that does not require I/O.
+///  See the [`ParquetMetaDataPushDecoder`] for an API that does not require I/O.
 ///
 /// [`ParquetMetaDataPushDecoder`]: crate::file::metadata::push_decoder::ParquetMetaDataPushDecoder
 ///
