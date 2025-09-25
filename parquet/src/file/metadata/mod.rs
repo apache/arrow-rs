@@ -90,6 +90,7 @@
 //!
 //!                         * Same name, different struct
 //! ```
+mod footer_tail;
 mod memory;
 mod parser;
 mod push_decoder;
@@ -121,8 +122,9 @@ use crate::schema::types::{
 };
 #[cfg(feature = "encryption")]
 use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+pub use footer_tail::FooterTail;
 pub use push_decoder::ParquetMetaDataPushDecoder;
-pub use reader::{FooterTail, PageIndexPolicy, ParquetMetaDataReader};
+pub use reader::{PageIndexPolicy, ParquetMetaDataReader};
 use std::ops::Range;
 use std::sync::Arc;
 pub use writer::ParquetMetaDataWriter;
