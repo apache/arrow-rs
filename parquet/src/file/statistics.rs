@@ -518,15 +518,14 @@ pub(crate) fn page_stats_to_thrift(stats: Option<&Statistics>) -> Option<PageSta
 
 /// Strongly typed statistics for a column chunk within a row group.
 ///
-/// This structure is a natively typed, in memory representation of the
-/// [`Statistics`] structure in a parquet file footer. The statistics stored in
+/// This structure is a natively typed, in memory representation of the thrift
+/// `Statistics` structure in a Parquet file footer. The statistics stored in
 /// this structure can be used by query engines to skip decoding pages while
 /// reading parquet data.
 ///
-/// Page level statistics are stored separately, in [NativeIndex].
+/// Page level statistics are stored separately, in [ColumnIndexMetaData].
 ///
-/// [`Statistics`]: crate::format::Statistics
-/// [NativeIndex]: crate::file::page_index::index::NativeIndex
+/// [ColumnIndexMetaData]: crate::file::page_index::column_index::ColumnIndexMetaData
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statistics {
     /// Statistics for Boolean column

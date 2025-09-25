@@ -21,7 +21,7 @@ use bytes::Bytes;
 use half::f16;
 
 use crate::bloom_filter::Sbbf;
-use crate::file::page_index::index::Index;
+use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
@@ -192,7 +192,7 @@ pub struct ColumnCloseResult {
     /// Optional bloom filter for this column
     pub bloom_filter: Option<Sbbf>,
     /// Optional column index, for filtering
-    pub column_index: Option<Index>,
+    pub column_index: Option<ColumnIndexMetaData>,
     /// Optional offset index, identifying page locations
     pub offset_index: Option<OffsetIndexMetaData>,
 }
@@ -2959,28 +2959,22 @@ mod tests {
         assert!(r.column_index.is_some());
         let col_idx = r.column_index.unwrap();
         let col_idx = match col_idx {
-            Index::INT32(col_idx) => col_idx,
+            ColumnIndexMetaData::INT32(col_idx) => col_idx,
             _ => panic!("wrong stats type"),
         };
         // null_pages should be true for page 0
-        assert!(col_idx.indexes[0].is_null_page());
+        assert!(col_idx.is_null_page(0));
         // min and max should be empty byte arrays
-        assert!(col_idx.indexes[0].min().is_none());
-        assert!(col_idx.indexes[0].max().is_none());
+        assert!(col_idx.min_value(0).is_none());
+        assert!(col_idx.max_value(0).is_none());
         // null_counts should be defined and be 4 for page 0
-        assert!(col_idx.indexes[0].null_count().is_some());
-        assert_eq!(col_idx.indexes[0].null_count().unwrap(), 4);
+        assert!(col_idx.null_count(0).is_some());
+        assert_eq!(col_idx.null_count(0), Some(4));
         // there is no repetition so rep histogram should be absent
-        assert!(col_idx.indexes[0].repetition_level_histogram().is_none());
+        assert!(col_idx.repetition_level_histogram(0).is_none());
         // definition_level_histogram should be present and should be 0:4, 1:0
-        assert!(col_idx.indexes[0].definition_level_histogram().is_some());
-        assert_eq!(
-            col_idx.indexes[0]
-                .definition_level_histogram()
-                .unwrap()
-                .values(),
-            &[4, 0]
-        );
+        assert!(col_idx.definition_level_histogram(0).is_some());
+        assert_eq!(col_idx.definition_level_histogram(0).unwrap(), &[4, 0]);
     }
 
     #[test]
@@ -3004,15 +2998,15 @@ mod tests {
 
         // column index
         let column_index = match column_index {
-            Index::INT32(column_index) => column_index,
+            ColumnIndexMetaData::INT32(column_index) => column_index,
             _ => panic!("wrong stats type"),
         };
-        assert_eq!(2, column_index.indexes.len());
+        assert_eq!(2, column_index.num_pages());
         assert_eq!(2, offset_index.page_locations.len());
         assert_eq!(BoundaryOrder::UNORDERED, column_index.boundary_order);
         for idx in 0..2 {
-            assert!(!column_index.indexes[idx].is_null_page());
-            assert_eq!(0, *column_index.indexes[idx].null_count.as_ref().unwrap());
+            assert!(!column_index.is_null_page(idx));
+            assert_eq!(0, column_index.null_count(0).unwrap());
         }
 
         if let Some(stats) = r.metadata.statistics() {
@@ -3022,8 +3016,8 @@ mod tests {
                 // first page is [1,2,3,4]
                 // second page is [-5,2,4,8]
                 // note that we don't increment here, as this is a non BinaryArray type.
-                assert_eq!(stats.min_opt(), column_index.indexes[1].min());
-                assert_eq!(stats.max_opt(), column_index.indexes[1].max());
+                assert_eq!(stats.min_opt(), column_index.min_value(1));
+                assert_eq!(stats.max_opt(), column_index.max_value(1));
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -3064,25 +3058,25 @@ mod tests {
         let offset_index = r.offset_index.unwrap();
 
         let column_index = match column_index {
-            Index::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
             _ => panic!("wrong stats type"),
         };
 
         assert_eq!(3, r.rows_written);
 
         // column index
-        assert_eq!(1, column_index.indexes.len());
+        assert_eq!(1, column_index.num_pages());
         assert_eq!(1, offset_index.page_locations.len());
         assert_eq!(BoundaryOrder::ASCENDING, column_index.boundary_order);
-        assert!(!column_index.indexes[0].is_null_page());
-        assert_eq!(Some(0), column_index.indexes[0].null_count());
+        assert!(!column_index.is_null_page(0));
+        assert_eq!(Some(0), column_index.null_count(0));
 
         if let Some(stats) = r.metadata.statistics() {
             assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count_opt(), None);
             if let Statistics::FixedLenByteArray(stats) = stats {
-                let column_index_min_value = column_index.indexes[0].min_bytes().unwrap();
-                let column_index_max_value = column_index.indexes[0].max_bytes().unwrap();
+                let column_index_min_value = column_index.min_value(0).unwrap();
+                let column_index_max_value = column_index.max_value(0).unwrap();
 
                 // Column index stats are truncated, while the column chunk's aren't.
                 assert_ne!(stats.min_bytes_opt().unwrap(), column_index_min_value);
@@ -3135,25 +3129,25 @@ mod tests {
         let offset_index = r.offset_index.unwrap();
 
         let column_index = match column_index {
-            Index::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
             _ => panic!("wrong stats type"),
         };
 
         assert_eq!(1, r.rows_written);
 
         // column index
-        assert_eq!(1, column_index.indexes.len());
+        assert_eq!(1, column_index.num_pages());
         assert_eq!(1, offset_index.page_locations.len());
         assert_eq!(BoundaryOrder::ASCENDING, column_index.boundary_order);
-        assert!(!column_index.indexes[0].is_null_page());
-        assert_eq!(Some(0), column_index.indexes[0].null_count());
+        assert!(!column_index.is_null_page(0));
+        assert_eq!(Some(0), column_index.null_count(0));
 
         if let Some(stats) = r.metadata.statistics() {
             assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count_opt(), None);
             if let Statistics::FixedLenByteArray(_stats) = stats {
-                let column_index_min_value = column_index.indexes[0].min_bytes().unwrap();
-                let column_index_max_value = column_index.indexes[0].max_bytes().unwrap();
+                let column_index_min_value = column_index.min_value(0).unwrap();
+                let column_index_max_value = column_index.max_value(0).unwrap();
 
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
@@ -3190,11 +3184,11 @@ mod tests {
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
         let column_index = match column_index {
-            Index::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
             _ => panic!("wrong stats type"),
         };
-        let column_index_min_bytes = column_index.indexes[0].min_bytes().unwrap();
-        let column_index_max_bytes = column_index.indexes[0].min_bytes().unwrap();
+        let column_index_min_bytes = column_index.min_value(0).unwrap();
+        let column_index_max_bytes = column_index.max_value(0).unwrap();
         assert_eq!(expected_value, column_index_min_bytes);
         assert_eq!(expected_value, column_index_max_bytes);
 
@@ -3233,11 +3227,11 @@ mod tests {
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
         let column_index = match column_index {
-            Index::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
             _ => panic!("wrong stats type"),
         };
-        let column_index_min_bytes = column_index.indexes[0].min_bytes().unwrap();
-        let column_index_max_bytes = column_index.indexes[0].min_bytes().unwrap();
+        let column_index_min_bytes = column_index.min_value(0).unwrap();
+        let column_index_max_bytes = column_index.max_value(0).unwrap();
         assert_eq!(expected_value, column_index_min_bytes);
         assert_eq!(expected_value, column_index_max_bytes);
 

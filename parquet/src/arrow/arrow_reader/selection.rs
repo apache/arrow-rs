@@ -97,7 +97,7 @@ impl RowSelector {
 /// * It contains no [`RowSelector`] of 0 rows
 /// * Consecutive [`RowSelector`]s alternate skipping or selecting rows
 ///
-/// [`PageIndex`]: crate::file::page_index::index::PageIndex
+/// [`PageIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct RowSelection {
     selectors: Vec<RowSelector>,
