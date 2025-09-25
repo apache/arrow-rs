@@ -122,7 +122,7 @@ impl fmt::Display for DataType {
                             let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
                             let data_type = field.data_type();
                             let metadata_str = format_metadata(field.metadata());
-                            format!("{name} {maybe_nullable}{data_type}{metadata_str}")
+                            format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
                         })
                         .collect::<Vec<_>>()
                         .join(", ");

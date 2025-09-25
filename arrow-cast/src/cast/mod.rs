@@ -1422,9 +1422,7 @@ pub fn cast_with_options(
             let binary_arr = cast_view_to_byte::<BinaryViewType, GenericBinaryType<i64>>(array)?;
             cast_binary_to_string::<i64>(&binary_arr, cast_options)
         }
-        (BinaryView, Utf8View) => {
-            Ok(Arc::new(array.as_binary_view().clone().to_string_view()?) as ArrayRef)
-        }
+        (BinaryView, Utf8View) => cast_binary_view_to_string_view(array, cast_options),
         (BinaryView, _) => Err(ArrowError::CastError(format!(
             "Casting from {from_type} to {to_type} not supported",
         ))),
@@ -6389,6 +6387,38 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_view_to_string_view_with_invalid_utf8() {
+        let binary_view_array = BinaryViewArray::from_iter(vec![
+            Some("valid".as_bytes()),
+            Some(&[0xff]),
+            Some("utf8".as_bytes()),
+            None,
+        ]);
+
+        let strict_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        assert!(
+            cast_with_options(&binary_view_array, &DataType::Utf8View, &strict_options).is_err()
+        );
+
+        let safe_options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+
+        let string_view_array =
+            cast_with_options(&binary_view_array, &DataType::Utf8View, &safe_options).unwrap();
+        assert_eq!(string_view_array.data_type(), &DataType::Utf8View);
+
+        let values: Vec<_> = string_view_array.as_string_view().iter().collect();
+
+        assert_eq!(values, vec![Some("valid"), None, Some("utf8"), None]);
+    }
+
+    #[test]
     fn test_string_to_view() {
         _test_string_to_view::<i32>();
         _test_string_to_view::<i64>();
@@ -8665,7 +8695,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct(key Utf8, value nullable Utf8) }, false) to Map(Field { "entries": Struct(key Utf8, value Utf8) }, true) not supported"#
+            r#"Casting from Map(Field { "entries": Struct("key": Utf8, "value": nullable Utf8) }, false) to Map(Field { "entries": Struct("key": Utf8, "value": Utf8) }, true) not supported"#
         );
     }
 
@@ -8716,7 +8746,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct(key Utf8, value nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct(key Utf8, value Duration(s)) }, true) not supported"#
+            r#"Casting from Map(Field { "entries": Struct("key": Utf8, "value": nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct("key": Utf8, "value": Duration(s)) }, true) not supported"#
         );
     }
 
@@ -10805,7 +10835,7 @@ mod tests {
         let to_type = DataType::Utf8;
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Struct(a Boolean) to Utf8 not supported"#,
+            r#"Cast error: Casting from Struct("a": Boolean) to Utf8 not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -10816,7 +10846,7 @@ mod tests {
         let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
         let result = cast(&array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct(a Boolean) not supported"#,
+            r#"Cast error: Casting from Utf8 to Struct("a": Boolean) not supported"#,
             result.unwrap_err().to_string()
         );
     }
