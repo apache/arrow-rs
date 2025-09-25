@@ -20,8 +20,12 @@
 use crate::VariantArray;
 use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
-use parquet_variant::{ListBuilder, ObjectBuilder, Variant, VariantBuilderExt};
-use parquet_variant::{ParentState, ValueBuilder, WritableMetadataBuilder};
+use parquet_variant::{
+    BuilderSpecificState, ListBuilder, MetadataBuilder, ObjectBuilder, Variant, VariantBuilderExt,
+};
+use parquet_variant::{
+    ParentState, ReadOnlyMetadataBuilder, ValueBuilder, WritableMetadataBuilder,
+};
 use std::sync::Arc;
 
 /// A builder for [`VariantArray`]
@@ -46,12 +50,10 @@ use std::sync::Arc;
 /// builder.append_variant(Variant::from(42));
 /// // append a null row (note not a Variant::Null)
 /// builder.append_null();
-/// // append an object to the builder
-/// let mut vb = builder.variant_builder();
-/// vb.new_object()
+/// // append an object to the builder using VariantBuilderExt methods directly
+/// builder.new_object()
 ///   .with_field("foo", "bar")
 ///   .finish();
-///  vb.finish(); // must call finish to write the variant to the buffers
 ///
 /// // create the final VariantArray
 /// let variant_array = builder.build();
@@ -131,7 +133,7 @@ impl VariantArrayBuilder {
         );
         // TODO add arrow extension type metadata
 
-        VariantArray::try_new(Arc::new(inner)).expect("valid VariantArray by construction")
+        VariantArray::try_new(&inner).expect("valid VariantArray by construction")
     }
 
     /// Appends a null row to the builder.
@@ -144,116 +146,213 @@ impl VariantArrayBuilder {
 
     /// Append the [`Variant`] to the builder as the next row
     pub fn append_variant(&mut self, variant: Variant) {
-        let mut direct_builder = self.variant_builder();
-        direct_builder.append_value(variant);
-        direct_builder.finish()
+        ValueBuilder::append_variant(self.parent_state(), variant);
     }
 
-    /// Return a `VariantArrayVariantBuilder` that writes directly to the
-    /// buffers of this builder.
-    ///
-    /// You must call [`VariantArrayVariantBuilder::finish`] to complete the builder
-    ///
-    /// # Example
-    /// ```
-    /// # use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt};
-    /// # use parquet_variant_compute::{VariantArray, VariantArrayBuilder};
-    /// let mut array_builder = VariantArrayBuilder::new(10);
-    ///
-    /// // First row has a string
-    /// let mut variant_builder = array_builder.variant_builder();
-    /// variant_builder.append_value("Hello, World!");
-    /// // must call finish to write the variant to the buffers
-    /// variant_builder.finish();
-    ///
-    /// // Second row is an object
-    /// let mut variant_builder = array_builder.variant_builder();
-    /// variant_builder
-    ///     .new_object()
-    ///     .with_field("my_field", 42i64)
-    ///     .finish();
-    /// variant_builder.finish();
-    ///
-    /// // finalize the array
-    /// let variant_array: VariantArray = array_builder.build();
-    ///
-    /// // verify what we wrote is still there
-    /// assert_eq!(variant_array.value(0), Variant::from("Hello, World!"));
-    /// assert!(variant_array.value(1).as_object().is_some());
-    ///  ```
-    pub fn variant_builder(&mut self) -> VariantArrayVariantBuilder<'_> {
-        VariantArrayVariantBuilder::new(self)
+    /// Creates a builder-specific parent state
+    fn parent_state(&mut self) -> ParentState<'_, ArrayBuilderState<'_>> {
+        let state = ArrayBuilderState {
+            metadata_offsets: &mut self.metadata_offsets,
+            value_offsets: &mut self.value_offsets,
+            nulls: &mut self.nulls,
+        };
+
+        ParentState::new(&mut self.value_builder, &mut self.metadata_builder, state)
     }
 }
 
-/// A `VariantBuilderExt` that writes directly to the buffers of a `VariantArrayBuilder`.
-///
-// This struct implements [`VariantBuilderExt`], so in most cases it can be used as a
-// [`VariantBuilder`] to perform variant-related operations for [`VariantArrayBuilder`].
-///
-/// If [`Self::finish`] is not called, any changes will be rolled back
-///
-/// See [`VariantArrayBuilder::variant_builder`] for an example
-pub struct VariantArrayVariantBuilder<'a> {
-    parent_state: ParentState<'a>,
+/// Builder-specific state for array building that manages array-level offsets and nulls. See
+/// [`VariantBuilderExt`] for details.
+#[derive(Debug)]
+pub struct ArrayBuilderState<'a> {
     metadata_offsets: &'a mut Vec<usize>,
     value_offsets: &'a mut Vec<usize>,
     nulls: &'a mut NullBufferBuilder,
 }
 
-impl VariantBuilderExt for VariantArrayVariantBuilder<'_> {
-    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
-        ValueBuilder::append_variant(self.parent_state(), value.into());
+// All changes are pending until finalized
+impl BuilderSpecificState for ArrayBuilderState<'_> {
+    fn finish(
+        &mut self,
+        metadata_builder: &mut dyn MetadataBuilder,
+        value_builder: &mut ValueBuilder,
+    ) {
+        self.metadata_offsets.push(metadata_builder.finish());
+        self.value_offsets.push(value_builder.offset());
+        self.nulls.append_non_null();
+    }
+}
+
+impl VariantBuilderExt for VariantArrayBuilder {
+    type State<'a>
+        = ArrayBuilderState<'a>
+    where
+        Self: 'a;
+
+    /// Appending NULL to a variant array produces an actual NULL value
+    fn append_null(&mut self) {
+        self.append_null();
     }
 
-    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.append_variant(value.into());
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(ListBuilder::new(self.parent_state(), false))
     }
 
-    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(ObjectBuilder::new(self.parent_state(), false))
     }
 }
 
-impl<'a> VariantArrayVariantBuilder<'a> {
-    /// Constructs a new VariantArrayVariantBuilder
-    ///
-    /// Note this is not public as this is a structure that is logically
-    /// part of the [`VariantArrayBuilder`] and relies on its internal structure
-    fn new(builder: &'a mut VariantArrayBuilder) -> Self {
-        let parent_state =
-            ParentState::variant(&mut builder.value_builder, &mut builder.metadata_builder);
-        VariantArrayVariantBuilder {
-            parent_state,
-            metadata_offsets: &mut builder.metadata_offsets,
-            value_offsets: &mut builder.value_offsets,
-            nulls: &mut builder.nulls,
+/// A builder for creating only the value column of a [`VariantArray`]
+///
+/// This builder is used when you have existing metadata and only need to build
+/// the value column. It's useful for scenarios like variant unshredding, data
+/// transformation, or filtering where you want to reuse existing metadata.
+///
+/// The builder produces a [`BinaryViewArray`] that can be combined with existing
+/// metadata to create a complete [`VariantArray`].
+///
+/// # Example:
+/// ```
+/// # use arrow::array::Array;
+/// # use parquet_variant::{Variant};
+/// # use parquet_variant_compute::VariantValueArrayBuilder;
+/// // Create a variant value builder for 10 rows
+/// let mut builder = VariantValueArrayBuilder::new(10);
+///
+/// // Append some values with their corresponding metadata, which the
+/// // builder takes advantage of to avoid creating new metadata.
+/// builder.append_value(Variant::from(42));
+/// builder.append_null();
+/// builder.append_value(Variant::from("hello"));
+///
+/// // Build the final value array
+/// let value_array = builder.build().unwrap();
+/// assert_eq!(value_array.len(), 3);
+/// ```
+#[derive(Debug)]
+pub struct VariantValueArrayBuilder {
+    value_builder: ValueBuilder,
+    value_offsets: Vec<usize>,
+    nulls: NullBufferBuilder,
+}
+
+impl VariantValueArrayBuilder {
+    /// Create a new `VariantValueArrayBuilder` with the specified row capacity
+    pub fn new(row_capacity: usize) -> Self {
+        Self {
+            value_builder: ValueBuilder::new(),
+            value_offsets: Vec::with_capacity(row_capacity),
+            nulls: NullBufferBuilder::new(row_capacity),
         }
     }
 
-    /// Called to finish the in progress variant and write it to the underlying
-    /// buffers
+    /// Build the final value array
     ///
-    /// Note if you do not call finish, on drop any changes made to the
-    /// underlying buffers will be rolled back.
-    pub fn finish(mut self) {
-        // Record the ending offsets after finishing metadata and finish the parent state.
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-        self.metadata_offsets.push(metadata_builder.finish());
-        self.value_offsets.push(value_builder.offset());
-        self.nulls.append_non_null();
-        self.parent_state.finish();
+    /// Returns a [`BinaryViewArray`] containing the serialized variant values.
+    /// This can be combined with existing metadata to create a complete [`VariantArray`].
+    pub fn build(mut self) -> Result<BinaryViewArray, ArrowError> {
+        let value_buffer = self.value_builder.into_inner();
+        let mut array = binary_view_array_from_buffers(value_buffer, self.value_offsets);
+        if let Some(nulls) = self.nulls.finish() {
+            let (views, buffers, _) = array.into_parts();
+            array = BinaryViewArray::try_new(views, buffers, Some(nulls))?;
+        }
+        Ok(array)
     }
 
-    fn parent_state(&mut self) -> ParentState<'_> {
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
-        ParentState::variant(value_builder, metadata_builder)
+    /// Append a null row to the builder
+    ///
+    /// WARNING: It is only valid to call this method when building the `value` field of a shredded
+    /// variant column (which is nullable). The `value` field of a binary (unshredded) variant
+    /// column is non-nullable, and callers should instead invoke [`Self::append_value`] with
+    /// `Variant::Null`, passing the appropriate metadata value.
+    pub fn append_null(&mut self) {
+        self.value_offsets.push(self.value_builder.offset());
+        self.nulls.append_null();
+    }
+
+    /// Append a variant value with its corresponding metadata
+    ///
+    /// # Arguments
+    /// * `value` - The variant value to append
+    /// * `metadata` - The metadata dictionary for this variant (used for field name resolution)
+    ///
+    /// # Returns
+    /// * `Ok(())` if the value was successfully appended
+    /// * `Err(ArrowError)` if the variant contains field names not found in the metadata
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::Variant;
+    /// # use parquet_variant_compute::VariantValueArrayBuilder;
+    /// let mut builder = VariantValueArrayBuilder::new(10);
+    /// builder.append_value(Variant::from(42));
+    /// ```
+    pub fn append_value(&mut self, value: Variant<'_, '_>) {
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
+        ValueBuilder::append_variant_bytes(self.parent_state(&mut metadata_builder), value);
+    }
+
+    /// Creates a builder-specific parent state.
+    ///
+    /// For example, this can be useful for code that wants to copy a subset of fields from an
+    /// object `value` as a new row of `value_array_builder`:
+    ///
+    /// ```no_run
+    /// # use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant};
+    /// # use parquet_variant_compute::VariantValueArrayBuilder;
+    /// # let value = Variant::Null;
+    /// # let mut value_array_builder = VariantValueArrayBuilder::new(0);
+    /// # fn should_keep(field_name: &str) -> bool { todo!() };
+    /// let Variant::Object(obj) = value else {
+    ///     panic!("Not a variant object");
+    /// };
+    /// let mut metadata_builder = ReadOnlyMetadataBuilder::new(obj.metadata.clone());
+    /// let state = value_array_builder.parent_state(&mut metadata_builder);
+    /// let mut object_builder = ObjectBuilder::new(state, false);
+    /// for (field_name, field_value) in obj.iter() {
+    ///     if should_keep(field_name) {
+    ///         object_builder.insert_bytes(field_name, field_value);
+    ///     }
+    /// }
+    ///  object_builder.finish(); // appends the filtered object
+    /// ```
+    pub fn parent_state<'a>(
+        &'a mut self,
+        metadata_builder: &'a mut dyn MetadataBuilder,
+    ) -> ParentState<'a, ValueArrayBuilderState<'a>> {
+        let state = ValueArrayBuilderState {
+            value_offsets: &mut self.value_offsets,
+            nulls: &mut self.nulls,
+        };
+
+        ParentState::new(&mut self.value_builder, metadata_builder, state)
     }
 }
 
-// Empty Drop to help with borrow checking - warns users if they forget to call finish()
-impl Drop for VariantArrayVariantBuilder<'_> {
-    fn drop(&mut self) {}
+/// Builder-specific state for array building that manages array-level offsets and nulls. See
+/// [`VariantBuilderExt`] for details.
+#[derive(Debug)]
+pub struct ValueArrayBuilderState<'a> {
+    value_offsets: &'a mut Vec<usize>,
+    nulls: &'a mut NullBufferBuilder,
+}
+
+// All changes are pending until finalized
+impl BuilderSpecificState for ValueArrayBuilderState<'_> {
+    fn finish(
+        &mut self,
+        _metadata_builder: &mut dyn MetadataBuilder,
+        value_builder: &mut ValueBuilder,
+    ) {
+        self.value_offsets.push(value_builder.offset());
+        self.nulls.append_non_null();
+    }
 }
 
 fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> BinaryViewArray {
@@ -279,6 +378,7 @@ fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> Binar
 mod test {
     use super::*;
     use arrow::array::Array;
+    use parquet_variant::Variant;
 
     /// Test that both the metadata and value buffers are non nullable
     #[test]
@@ -308,26 +408,22 @@ mod test {
         }
     }
 
-    /// Test using sub builders to append variants
+    /// Test using appending variants to the array builder
     #[test]
-    fn test_variant_array_builder_variant_builder() {
+    fn test_variant_array_builder() {
         let mut builder = VariantArrayBuilder::new(10);
         builder.append_null(); // should not panic
         builder.append_variant(Variant::from(42i32));
 
-        // let's make a sub-object in the next row
-        let mut sub_builder = builder.variant_builder();
-        sub_builder.new_object().with_field("foo", "bar").finish();
-        sub_builder.finish(); // must call finish to write the variant to the buffers
+        // make an object in the next row
+        builder.new_object().with_field("foo", "bar").finish();
 
         // append a new list
-        let mut sub_builder = builder.variant_builder();
-        sub_builder
+        builder
             .new_list()
             .with_value(Variant::from(1i32))
             .with_value(Variant::from(2i32))
             .finish();
-        sub_builder.finish();
         let variant_array = builder.build();
 
         assert_eq!(variant_array.len(), 4);
@@ -344,44 +440,91 @@ mod test {
         assert_eq!(list.len(), 2);
     }
 
-    /// Test using non-finished sub builders to append variants
     #[test]
-    fn test_variant_array_builder_variant_builder_reset() {
-        let mut builder = VariantArrayBuilder::new(10);
+    fn test_variant_value_array_builder_basic() {
+        let mut builder = VariantValueArrayBuilder::new(10);
 
-        // make a sub-object in the first row
-        let mut sub_builder = builder.variant_builder();
-        sub_builder.new_object().with_field("foo", 1i32).finish();
-        sub_builder.finish(); // must call finish to write the variant to the buffers
+        // Append some values
+        builder.append_value(Variant::from(42i32));
+        builder.append_null();
+        builder.append_value(Variant::from("hello"));
 
-        // start appending an object but don't finish
-        let mut sub_builder = builder.variant_builder();
-        sub_builder.new_object().with_field("bar", 2i32).finish();
-        drop(sub_builder); // drop the sub builder without finishing it
+        let value_array = builder.build().unwrap();
+        assert_eq!(value_array.len(), 3);
+    }
 
-        // make a third sub-object (this should reset the previous unfinished object)
-        let mut sub_builder = builder.variant_builder();
-        sub_builder.new_object().with_field("baz", 3i32).finish();
-        sub_builder.finish(); // must call finish to write the variant to the buffers
+    #[test]
+    fn test_variant_value_array_builder_with_objects() {
+        // Populate a variant array with objects
+        let mut builder = VariantArrayBuilder::new(3);
+        builder
+            .new_object()
+            .with_field("name", "Alice")
+            .with_field("age", 30i32)
+            .finish();
 
-        let variant_array = builder.build();
+        builder
+            .new_object()
+            .with_field("name", "Bob")
+            .with_field("age", 42i32)
+            .with_field("city", "Wonderland")
+            .finish();
 
-        // only the two finished objects should be present
-        assert_eq!(variant_array.len(), 2);
-        assert!(!variant_array.is_null(0));
-        let variant = variant_array.value(0);
-        assert_eq!(
-            variant.get_object_field("foo"),
-            Some(Variant::from(1i32)),
-            "Expected an object with field \"foo\", got: {variant:?}"
+        builder
+            .new_object()
+            .with_field("name", "Charlie")
+            .with_field("age", 1i32)
+            .finish();
+
+        let array = builder.build();
+
+        // Copy (some of) the objects over to the value array builder
+        //
+        // NOTE: Because we will reuse the metadata column, we cannot reorder rows. We can only
+        // filter or manipulate values within a row.
+        let mut builder = VariantValueArrayBuilder::new(3);
+
+        // straight copy
+        builder.append_value(array.value(0));
+
+        // filtering fields takes more work because we need to manually create an object builder
+        let value = array.value(1);
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
+        let state = builder.parent_state(&mut metadata_builder);
+        ObjectBuilder::new(state, false)
+            .with_field("name", value.get_object_field("name").unwrap())
+            .with_field("age", value.get_object_field("age").unwrap())
+            .finish();
+
+        // same bytes, but now nested and duplicated inside a list
+        let value = array.value(2);
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
+        let state = builder.parent_state(&mut metadata_builder);
+        ListBuilder::new(state, false)
+            .with_value(value.clone())
+            .with_value(value.clone())
+            .finish();
+
+        let array2 = VariantArray::from_parts(
+            array.metadata_field().clone(),
+            Some(builder.build().unwrap()),
+            None,
+            None,
         );
 
-        assert!(!variant_array.is_null(1));
-        let variant = variant_array.value(1);
+        assert_eq!(array2.len(), 3);
+        assert_eq!(array.value(0), array2.value(0));
+
         assert_eq!(
-            variant.get_object_field("baz"),
-            Some(Variant::from(3i32)),
-            "Expected an object with field \"baz\", got: {variant:?}"
+            array.value(1).get_object_field("name"),
+            array2.value(1).get_object_field("name")
         );
+        assert_eq!(
+            array.value(1).get_object_field("age"),
+            array2.value(1).get_object_field("age")
+        );
+
+        assert_eq!(array.value(2), array2.value(2).get_list_element(0).unwrap());
+        assert_eq!(array.value(2), array2.value(2).get_list_element(1).unwrap());
     }
 }

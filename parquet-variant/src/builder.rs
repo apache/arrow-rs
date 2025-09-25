@@ -275,7 +275,7 @@ impl ValueBuilder {
         self.append_slice(value.as_bytes());
     }
 
-    fn append_object(state: ParentState<'_>, obj: VariantObject) {
+    fn append_object<S: BuilderSpecificState>(state: ParentState<'_, S>, obj: VariantObject) {
         let mut object_builder = ObjectBuilder::new(state, false);
 
         for (field_name, value) in obj.iter() {
@@ -285,7 +285,10 @@ impl ValueBuilder {
         object_builder.finish();
     }
 
-    fn try_append_object(state: ParentState<'_>, obj: VariantObject) -> Result<(), ArrowError> {
+    fn try_append_object<S: BuilderSpecificState>(
+        state: ParentState<'_, S>,
+        obj: VariantObject,
+    ) -> Result<(), ArrowError> {
         let mut object_builder = ObjectBuilder::new(state, false);
 
         for res in obj.iter_try() {
@@ -297,7 +300,7 @@ impl ValueBuilder {
         Ok(())
     }
 
-    fn append_list(state: ParentState<'_>, list: VariantList) {
+    fn append_list<S: BuilderSpecificState>(state: ParentState<'_, S>, list: VariantList) {
         let mut list_builder = ListBuilder::new(state, false);
         for value in list.iter() {
             list_builder.append_value(value);
@@ -305,7 +308,10 @@ impl ValueBuilder {
         list_builder.finish();
     }
 
-    fn try_append_list(state: ParentState<'_>, list: VariantList) -> Result<(), ArrowError> {
+    fn try_append_list<S: BuilderSpecificState>(
+        state: ParentState<'_, S>,
+        list: VariantList,
+    ) -> Result<(), ArrowError> {
         let mut list_builder = ListBuilder::new(state, false);
         for res in list.iter_try() {
             let value = res?;
@@ -328,10 +334,12 @@ impl ValueBuilder {
     ///
     /// This method will panic if the variant contains duplicate field names in objects
     /// when validation is enabled. For a fallible version, use [`ValueBuilder::try_append_variant`]
-    pub fn append_variant(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
-        let builder = state.value_builder();
+    pub fn append_variant<S: BuilderSpecificState>(
+        mut state: ParentState<'_, S>,
+        variant: Variant<'_, '_>,
+    ) {
         variant_append_value!(
-            builder,
+            state.value_builder(),
             variant,
             Variant::Object(obj) => return Self::append_object(state, obj),
             Variant::List(list) => return Self::append_list(state, list)
@@ -343,13 +351,12 @@ impl ValueBuilder {
     ///
     /// The attempt fails if the variant contains duplicate field names in objects when validation
     /// is enabled.
-    pub fn try_append_variant(
-        mut state: ParentState<'_>,
+    pub fn try_append_variant<S: BuilderSpecificState>(
+        mut state: ParentState<'_, S>,
         variant: Variant<'_, '_>,
     ) -> Result<(), ArrowError> {
-        let builder = state.value_builder();
         variant_append_value!(
-            builder,
+            state.value_builder(),
             variant,
             Variant::Object(obj) => return Self::try_append_object(state, obj),
             Variant::List(list) => return Self::try_append_list(state, list)
@@ -366,7 +373,10 @@ impl ValueBuilder {
     ///
     /// The caller must ensure that the metadata dictionary is already built and correct for
     /// any objects or lists being appended.
-    pub fn append_variant_bytes(mut state: ParentState<'_>, variant: Variant<'_, '_>) {
+    pub fn append_variant_bytes<S: BuilderSpecificState>(
+        mut state: ParentState<'_, S>,
+        variant: Variant<'_, '_>,
+    ) {
         let builder = state.value_builder();
         variant_append_value!(
             builder,
@@ -552,7 +562,7 @@ pub struct WritableMetadataBuilder {
 
 impl WritableMetadataBuilder {
     /// Upsert field name to dictionary, return its ID
-    fn upsert_field_name(&mut self, field_name: &str) -> u32 {
+    pub fn upsert_field_name(&mut self, field_name: &str) -> u32 {
         let (id, new_entry) = self.field_names.insert_full(field_name.to_string());
 
         if new_entry {
@@ -669,7 +679,64 @@ impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
     }
 }
 
-/// Tracks information needed to correctly finalize a nested builder, for each parent builder type.
+/// A trait for managing state specific to different builder types.
+pub trait BuilderSpecificState: std::fmt::Debug {
+    /// Called by [`ParentState::finish`] to apply any pending builder-specific changes.
+    ///
+    /// The provided implementation does nothing by default.
+    ///
+    /// Parameters:
+    /// - `metadata_builder`: The metadata builder that was used
+    /// - `value_builder`: The value builder that was used
+    fn finish(
+        &mut self,
+        _metadata_builder: &mut dyn MetadataBuilder,
+        _value_builder: &mut ValueBuilder,
+    ) {
+    }
+
+    /// Called by [`ParentState::drop`] to revert any changes that were eagerly applied, if
+    /// [`ParentState::finish`] was never invoked.
+    ///
+    /// The provided implementation does nothing by default.
+    ///
+    /// The base [`ParentState`] will handle rolling back the value and metadata builders,
+    /// but builder-specific state may need to revert its own changes.
+    fn rollback(&mut self) {}
+}
+
+/// Empty no-op implementation for top-level variant building
+impl BuilderSpecificState for () {}
+
+/// Internal state for list building
+#[derive(Debug)]
+pub struct ListState<'a> {
+    offsets: &'a mut Vec<usize>,
+    saved_offsets_size: usize,
+}
+
+// `ListBuilder::finish()` eagerly updates the list offsets, which we should rollback on failure.
+impl BuilderSpecificState for ListState<'_> {
+    fn rollback(&mut self) {
+        self.offsets.truncate(self.saved_offsets_size);
+    }
+}
+
+/// Internal state for object building
+#[derive(Debug)]
+pub struct ObjectState<'a> {
+    fields: &'a mut IndexMap<u32, usize>,
+    saved_fields_size: usize,
+}
+
+// `ObjectBuilder::finish()` eagerly updates the field offsets, which we should rollback on failure.
+impl BuilderSpecificState for ObjectState<'_> {
+    fn rollback(&mut self) {
+        self.fields.truncate(self.saved_fields_size);
+    }
+}
+
+/// Tracks information needed to correctly finalize a nested builder.
 ///
 /// A child builder has no effect on its parent unless/until its `finalize` method is called, at
 /// which point the child appends the new value to the parent. As a (desirable) side effect,
@@ -679,39 +746,70 @@ impl<S: AsRef<str>> Extend<S> for WritableMetadataBuilder {
 ///
 /// The redundancy in `value_builder` and `metadata_builder` is because all the references come from
 /// the parent, and we cannot "split" a mutable reference across two objects (parent state and the
-/// child builder that uses it). So everything has to be here. Rust layout optimizations should
-/// treat the variants as a union, so that accessing a `value_builder` or `metadata_builder` is
-/// branch-free.
+/// child builder that uses it). So everything has to be here.
 #[derive(Debug)]
-pub enum ParentState<'a> {
-    Variant {
-        value_builder: &'a mut ValueBuilder,
-        saved_value_builder_offset: usize,
-        metadata_builder: &'a mut dyn MetadataBuilder,
-        saved_metadata_builder_dict_size: usize,
-        finished: bool,
-    },
-    List {
-        value_builder: &'a mut ValueBuilder,
-        saved_value_builder_offset: usize,
-        metadata_builder: &'a mut dyn MetadataBuilder,
-        saved_metadata_builder_dict_size: usize,
-        offsets: &'a mut Vec<usize>,
-        saved_offsets_size: usize,
-        finished: bool,
-    },
-    Object {
-        value_builder: &'a mut ValueBuilder,
-        saved_value_builder_offset: usize,
-        metadata_builder: &'a mut dyn MetadataBuilder,
-        saved_metadata_builder_dict_size: usize,
-        fields: &'a mut IndexMap<u32, usize>,
-        saved_fields_size: usize,
-        finished: bool,
-    },
+pub struct ParentState<'a, S: BuilderSpecificState> {
+    value_builder: &'a mut ValueBuilder,
+    saved_value_builder_offset: usize,
+    metadata_builder: &'a mut dyn MetadataBuilder,
+    saved_metadata_builder_dict_size: usize,
+    builder_state: S,
+    finished: bool,
 }
 
-impl<'a> ParentState<'a> {
+impl<'a, S: BuilderSpecificState> ParentState<'a, S> {
+    /// Creates a new ParentState instance. The value and metadata builder
+    /// state is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The
+    /// builder-specific state is governed by its own `finish` and `rollback` calls.
+    pub fn new(
+        value_builder: &'a mut ValueBuilder,
+        metadata_builder: &'a mut dyn MetadataBuilder,
+        builder_state: S,
+    ) -> Self {
+        Self {
+            saved_value_builder_offset: value_builder.offset(),
+            value_builder,
+            saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
+            metadata_builder,
+            builder_state,
+            finished: false,
+        }
+    }
+
+    /// Marks the insertion as having succeeded and invokes
+    /// [`BuilderSpecificState::finish`]. Internal state will no longer roll back on drop.
+    pub fn finish(&mut self) {
+        self.builder_state
+            .finish(self.metadata_builder, self.value_builder);
+        self.finished = true
+    }
+
+    // Rolls back value and metadata builder changes and invokes [`BuilderSpecificState::rollback`].
+    fn rollback(&mut self) {
+        if self.finished {
+            return;
+        }
+
+        self.value_builder
+            .inner_mut()
+            .truncate(self.saved_value_builder_offset);
+        self.metadata_builder
+            .truncate_field_names(self.saved_metadata_builder_dict_size);
+        self.builder_state.rollback();
+    }
+
+    // Useful because e.g. `let b = self.value_builder;` fails compilation.
+    fn value_builder(&mut self) -> &mut ValueBuilder {
+        self.value_builder
+    }
+
+    // Useful because e.g. `let b = self.metadata_builder;` fails compilation.
+    fn metadata_builder(&mut self) -> &mut dyn MetadataBuilder {
+        self.metadata_builder
+    }
+}
+
+impl<'a> ParentState<'a, ()> {
     /// Creates a new instance suitable for a top-level variant builder
     /// (e.g. [`VariantBuilder`]). The value and metadata builder state is checkpointed and will
     /// roll back on drop, unless [`Self::finish`] is called.
@@ -719,15 +817,11 @@ impl<'a> ParentState<'a> {
         value_builder: &'a mut ValueBuilder,
         metadata_builder: &'a mut dyn MetadataBuilder,
     ) -> Self {
-        ParentState::Variant {
-            saved_value_builder_offset: value_builder.offset(),
-            saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
-            value_builder,
-            metadata_builder,
-            finished: false,
-        }
+        Self::new(value_builder, metadata_builder, ())
     }
+}
 
+impl<'a> ParentState<'a, ListState<'a>> {
     /// Creates a new instance suitable for a [`ListBuilder`]. The value and metadata builder state
     /// is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The new
     /// element's offset is also captured eagerly and will also roll back if not finished.
@@ -744,17 +838,22 @@ impl<'a> ParentState<'a> {
         let saved_offsets_size = offsets.len();
         offsets.push(saved_value_builder_offset - saved_parent_value_builder_offset);
 
-        ParentState::List {
+        let builder_state = ListState {
+            offsets,
+            saved_offsets_size,
+        };
+        Self {
             saved_metadata_builder_dict_size: metadata_builder.num_field_names(),
             saved_value_builder_offset,
-            saved_offsets_size,
             metadata_builder,
             value_builder,
-            offsets,
+            builder_state,
             finished: false,
         }
     }
+}
 
+impl<'a> ParentState<'a, ObjectState<'a>> {
     /// Creates a new instance suitable for an [`ObjectBuilder`]. The value and metadata builder state
     /// is checkpointed and will roll back on drop, unless [`Self::finish`] is called. The new
     /// field's name and offset are also captured eagerly and will also roll back if not finished.
@@ -782,132 +881,23 @@ impl<'a> ParentState<'a> {
             )));
         }
 
-        Ok(ParentState::Object {
+        let builder_state = ObjectState {
+            fields,
+            saved_fields_size,
+        };
+        Ok(Self {
             saved_metadata_builder_dict_size,
             saved_value_builder_offset,
-            saved_fields_size,
             value_builder,
             metadata_builder,
-            fields,
+            builder_state,
             finished: false,
         })
-    }
-
-    fn value_builder(&mut self) -> &mut ValueBuilder {
-        self.value_and_metadata_builders().0
-    }
-
-    fn metadata_builder(&mut self) -> &mut dyn MetadataBuilder {
-        self.value_and_metadata_builders().1
-    }
-
-    fn saved_value_builder_offset(&mut self) -> usize {
-        match self {
-            ParentState::Variant {
-                saved_value_builder_offset,
-                ..
-            }
-            | ParentState::List {
-                saved_value_builder_offset,
-                ..
-            }
-            | ParentState::Object {
-                saved_value_builder_offset,
-                ..
-            } => *saved_value_builder_offset,
-        }
-    }
-
-    fn is_finished(&mut self) -> &mut bool {
-        match self {
-            ParentState::Variant { finished, .. }
-            | ParentState::List { finished, .. }
-            | ParentState::Object { finished, .. } => finished,
-        }
-    }
-
-    /// Mark the insertion as having succeeded. Internal state will no longer roll back on drop.
-    pub fn finish(&mut self) {
-        *self.is_finished() = true
-    }
-
-    // Performs any parent-specific aspects of rolling back a builder if an insertion failed.
-    fn rollback(&mut self) {
-        if *self.is_finished() {
-            return;
-        }
-
-        // All builders need to revert the buffers
-        match self {
-            ParentState::Variant {
-                value_builder,
-                saved_value_builder_offset,
-                metadata_builder,
-                saved_metadata_builder_dict_size,
-                ..
-            }
-            | ParentState::List {
-                value_builder,
-                saved_value_builder_offset,
-                metadata_builder,
-                saved_metadata_builder_dict_size,
-                ..
-            }
-            | ParentState::Object {
-                value_builder,
-                saved_value_builder_offset,
-                metadata_builder,
-                saved_metadata_builder_dict_size,
-                ..
-            } => {
-                value_builder
-                    .inner_mut()
-                    .truncate(*saved_value_builder_offset);
-                metadata_builder.truncate_field_names(*saved_metadata_builder_dict_size);
-            }
-        };
-
-        // List and Object builders also need to roll back the starting offset they stored.
-        match self {
-            ParentState::Variant { .. } => (),
-            ParentState::List {
-                offsets,
-                saved_offsets_size,
-                ..
-            } => offsets.truncate(*saved_offsets_size),
-            ParentState::Object {
-                fields,
-                saved_fields_size,
-                ..
-            } => fields.truncate(*saved_fields_size),
-        }
-    }
-
-    /// Return mutable references to the value and metadata builders that this
-    /// parent state is using.
-    pub fn value_and_metadata_builders(&mut self) -> (&mut ValueBuilder, &mut dyn MetadataBuilder) {
-        match self {
-            ParentState::Variant {
-                value_builder,
-                metadata_builder,
-                ..
-            }
-            | ParentState::List {
-                value_builder,
-                metadata_builder,
-                ..
-            }
-            | ParentState::Object {
-                value_builder,
-                metadata_builder,
-                ..
-            } => (value_builder, *metadata_builder),
-        }
     }
 }
 
 /// Automatically rolls back any unfinished `ParentState`.
-impl Drop for ParentState<'_> {
+impl<S: BuilderSpecificState> Drop for ParentState<'_, S> {
     fn drop(&mut self) {
         self.rollback()
     }
@@ -1233,7 +1223,7 @@ impl VariantBuilder {
     /// Create an [`ListBuilder`] for creating [`Variant::List`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
-    pub fn new_list(&mut self) -> ListBuilder<'_> {
+    pub fn new_list(&mut self) -> ListBuilder<'_, ()> {
         let parent_state =
             ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ListBuilder::new(parent_state, self.validate_unique_fields)
@@ -1242,7 +1232,7 @@ impl VariantBuilder {
     /// Create an [`ObjectBuilder`] for creating [`Variant::Object`] values.
     ///
     /// See the examples on [`VariantBuilder`] for usage.
-    pub fn new_object(&mut self) -> ObjectBuilder<'_> {
+    pub fn new_object(&mut self) -> ObjectBuilder<'_, ()> {
         let parent_state =
             ParentState::variant(&mut self.value_builder, &mut self.metadata_builder);
         ObjectBuilder::new(parent_state, self.validate_unique_fields)
@@ -1303,15 +1293,15 @@ impl VariantBuilder {
 ///
 /// See the examples on [`VariantBuilder`] for usage.
 #[derive(Debug)]
-pub struct ListBuilder<'a> {
-    parent_state: ParentState<'a>,
+pub struct ListBuilder<'a, S: BuilderSpecificState> {
+    parent_state: ParentState<'a, S>,
     offsets: Vec<usize>,
     validate_unique_fields: bool,
 }
 
-impl<'a> ListBuilder<'a> {
+impl<'a, S: BuilderSpecificState> ListBuilder<'a, S> {
     /// Creates a new list builder, nested on top of the given parent state.
-    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    pub fn new(parent_state: ParentState<'a, S>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             offsets: vec![],
@@ -1329,14 +1319,12 @@ impl<'a> ListBuilder<'a> {
     }
 
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
-    fn parent_state(&mut self) -> (ParentState<'_>, bool) {
-        let saved_parent_value_builder_offset = self.parent_state.saved_value_builder_offset();
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
+    fn parent_state(&mut self) -> (ParentState<'_, ListState<'_>>, bool) {
         let state = ParentState::list(
-            value_builder,
-            metadata_builder,
+            self.parent_state.value_builder,
+            self.parent_state.metadata_builder,
             &mut self.offsets,
-            saved_parent_value_builder_offset,
+            self.parent_state.saved_value_builder_offset,
         );
         (state, self.validate_unique_fields)
     }
@@ -1344,7 +1332,7 @@ impl<'a> ListBuilder<'a> {
     /// Returns an object builder that can be used to append a new (nested) object to this list.
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
-    pub fn new_object(&mut self) -> ObjectBuilder<'_> {
+    pub fn new_object(&mut self) -> ObjectBuilder<'_, ListState<'_>> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ObjectBuilder::new(parent_state, validate_unique_fields)
     }
@@ -1352,7 +1340,7 @@ impl<'a> ListBuilder<'a> {
     /// Returns a list builder that can be used to append a new (nested) list to this list.
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
-    pub fn new_list(&mut self) -> ListBuilder<'_> {
+    pub fn new_list(&mut self) -> ListBuilder<'_, ListState<'_>> {
         let (parent_state, validate_unique_fields) = self.parent_state();
         ListBuilder::new(parent_state, validate_unique_fields)
     }
@@ -1414,7 +1402,7 @@ impl<'a> ListBuilder<'a> {
 
     /// Finalizes this list and appends it to its parent, which otherwise remains unmodified.
     pub fn finish(mut self) {
-        let starting_offset = self.parent_state.saved_value_builder_offset();
+        let starting_offset = self.parent_state.saved_value_builder_offset;
         let value_builder = self.parent_state.value_builder();
 
         let data_size = value_builder
@@ -1459,15 +1447,15 @@ impl<'a> ListBuilder<'a> {
 ///
 /// See the examples on [`VariantBuilder`] for usage.
 #[derive(Debug)]
-pub struct ObjectBuilder<'a> {
-    parent_state: ParentState<'a>,
+pub struct ObjectBuilder<'a, S: BuilderSpecificState> {
+    parent_state: ParentState<'a, S>,
     fields: IndexMap<u32, usize>, // (field_id, offset)
     validate_unique_fields: bool,
 }
 
-impl<'a> ObjectBuilder<'a> {
+impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
     /// Creates a new object builder, nested on top of the given parent state.
-    pub fn new(parent_state: ParentState<'a>, validate_unique_fields: bool) -> Self {
+    pub fn new(parent_state: ParentState<'a, S>, validate_unique_fields: bool) -> Self {
         Self {
             parent_state,
             fields: IndexMap::new(),
@@ -1580,16 +1568,14 @@ impl<'a> ObjectBuilder<'a> {
     // Returns validate_unique_fields because we can no longer reference self once this method returns.
     fn parent_state<'b>(
         &'b mut self,
-        field_name: &'b str,
-    ) -> Result<(ParentState<'b>, bool), ArrowError> {
-        let saved_parent_value_builder_offset = self.parent_state.saved_value_builder_offset();
+        field_name: &str,
+    ) -> Result<(ParentState<'b, ObjectState<'b>>, bool), ArrowError> {
         let validate_unique_fields = self.validate_unique_fields;
-        let (value_builder, metadata_builder) = self.parent_state.value_and_metadata_builders();
         let state = ParentState::try_object(
-            value_builder,
-            metadata_builder,
+            self.parent_state.value_builder,
+            self.parent_state.metadata_builder,
             &mut self.fields,
-            saved_parent_value_builder_offset,
+            self.parent_state.saved_value_builder_offset,
             field_name,
             validate_unique_fields,
         )?;
@@ -1601,7 +1587,7 @@ impl<'a> ObjectBuilder<'a> {
     /// Panics if the proposed key was a duplicate
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
-    pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b> {
+    pub fn new_object<'b>(&'b mut self, key: &'b str) -> ObjectBuilder<'b, ObjectState<'b>> {
         self.try_new_object(key).unwrap()
     }
 
@@ -1610,7 +1596,10 @@ impl<'a> ObjectBuilder<'a> {
     /// Fails if the proposed key was a duplicate
     ///
     /// WARNING: The builder will have no effect unless/until [`ObjectBuilder::finish`] is called.
-    pub fn try_new_object<'b>(&'b mut self, key: &'b str) -> Result<ObjectBuilder<'b>, ArrowError> {
+    pub fn try_new_object<'b>(
+        &'b mut self,
+        key: &str,
+    ) -> Result<ObjectBuilder<'b, ObjectState<'b>>, ArrowError> {
         let (parent_state, validate_unique_fields) = self.parent_state(key)?;
         Ok(ObjectBuilder::new(parent_state, validate_unique_fields))
     }
@@ -1620,7 +1609,7 @@ impl<'a> ObjectBuilder<'a> {
     /// Panics if the proposed key was a duplicate
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
-    pub fn new_list<'b>(&'b mut self, key: &'b str) -> ListBuilder<'b> {
+    pub fn new_list<'b>(&'b mut self, key: &str) -> ListBuilder<'b, ObjectState<'b>> {
         self.try_new_list(key).unwrap()
     }
 
@@ -1629,7 +1618,10 @@ impl<'a> ObjectBuilder<'a> {
     /// Fails if the proposed key was a duplicate
     ///
     /// WARNING: The builder will have no effect unless/until [`ListBuilder::finish`] is called.
-    pub fn try_new_list<'b>(&'b mut self, key: &'b str) -> Result<ListBuilder<'b>, ArrowError> {
+    pub fn try_new_list<'b>(
+        &'b mut self,
+        key: &str,
+    ) -> Result<ListBuilder<'b, ObjectState<'b>>, ArrowError> {
         let (parent_state, validate_unique_fields) = self.parent_state(key)?;
         Ok(ListBuilder::new(parent_state, validate_unique_fields))
     }
@@ -1647,7 +1639,7 @@ impl<'a> ObjectBuilder<'a> {
         let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
         let id_size = int_size(max_id as usize);
 
-        let starting_offset = self.parent_state.saved_value_builder_offset();
+        let starting_offset = self.parent_state.saved_value_builder_offset;
         let value_builder = self.parent_state.value_builder();
         let current_offset = value_builder.offset();
         // Current object starts from `object_start_offset`
@@ -1706,55 +1698,116 @@ impl<'a> ObjectBuilder<'a> {
 /// Allows users to append values to a [`VariantBuilder`], [`ListBuilder`] or
 /// [`ObjectBuilder`]. using the same interface.
 pub trait VariantBuilderExt {
+    /// The builder specific state used by nested builders
+    type State<'a>: BuilderSpecificState + 'a
+    where
+        Self: 'a;
+
+    /// Appends a NULL value to this builder. The semantics depend on the implementation, but will
+    /// often translate to appending a [`Variant::Null`] value.
+    fn append_null(&mut self);
+
     /// Appends a new variant value to this builder. See e.g. [`VariantBuilder::append_value`].
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>);
 
     /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Panics if the nested
     /// builder cannot be created, see e.g. [`ObjectBuilder::new_list`].
-    fn new_list(&mut self) -> ListBuilder<'_> {
+    fn new_list(&mut self) -> ListBuilder<'_, Self::State<'_>> {
         self.try_new_list().unwrap()
     }
 
     /// Creates a nested object builder. See e.g. [`VariantBuilder::new_object`]. Panics if the
     /// nested builder cannot be created, see e.g. [`ObjectBuilder::new_object`].
-    fn new_object(&mut self) -> ObjectBuilder<'_> {
+    fn new_object(&mut self) -> ObjectBuilder<'_, Self::State<'_>> {
         self.try_new_object().unwrap()
     }
 
     /// Creates a nested list builder. See e.g. [`VariantBuilder::new_list`]. Returns an error if
     /// the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_list`].
-    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError>;
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError>;
 
     /// Creates a nested object builder. See e.g. [`VariantBuilder::new_object`]. Returns an error
     /// if the nested builder cannot be created, see e.g. [`ObjectBuilder::try_new_object`].
-    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError>;
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError>;
 }
 
-impl VariantBuilderExt for ListBuilder<'_> {
+impl<'a, S: BuilderSpecificState> VariantBuilderExt for ListBuilder<'a, S> {
+    type State<'s>
+        = ListState<'s>
+    where
+        Self: 's;
+
+    /// Variant arrays cannot encode NULL values, only `Variant::Null`.
+    fn append_null(&mut self) {
+        self.append_value(Variant::Null);
+    }
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
 
-    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(self.new_list())
     }
 
-    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(self.new_object())
     }
 }
 
 impl VariantBuilderExt for VariantBuilder {
+    type State<'a>
+        = ()
+    where
+        Self: 'a;
+
+    /// Variant values cannot encode NULL, only [`Variant::Null`]. This is different from the column
+    /// that holds variant values being NULL at some positions.
+    fn append_null(&mut self) {
+        self.append_value(Variant::Null);
+    }
     fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
         self.append_value(value);
     }
 
-    fn try_new_list(&mut self) -> Result<ListBuilder<'_>, ArrowError> {
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(self.new_list())
     }
 
-    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_>, ArrowError> {
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
         Ok(self.new_object())
+    }
+}
+
+/// A [`VariantBuilderExt`] that inserts a new field into a variant object.
+pub struct ObjectFieldBuilder<'o, 'v, 's, S: BuilderSpecificState> {
+    key: &'s str,
+    builder: &'o mut ObjectBuilder<'v, S>,
+}
+
+impl<'o, 'v, 's, S: BuilderSpecificState> ObjectFieldBuilder<'o, 'v, 's, S> {
+    pub fn new(key: &'s str, builder: &'o mut ObjectBuilder<'v, S>) -> Self {
+        Self { key, builder }
+    }
+}
+
+impl<S: BuilderSpecificState> VariantBuilderExt for ObjectFieldBuilder<'_, '_, '_, S> {
+    type State<'a>
+        = ObjectState<'a>
+    where
+        Self: 'a;
+
+    /// A NULL object field is interpreted as missing, so nothing gets inserted at all.
+    fn append_null(&mut self) {}
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        self.builder.insert(self.key, value);
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
+        self.builder.try_new_list(self.key)
+    }
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
+        self.builder.try_new_object(self.key)
     }
 }
 
@@ -3388,7 +3441,7 @@ mod tests {
         let mut metadata = ReadOnlyMetadataBuilder::new(metadata);
         let mut builder2 = ValueBuilder::new();
         let state = ParentState::variant(&mut builder2, &mut metadata);
-        ValueBuilder::append_variant_bytes(state, variant1.clone());
+        ValueBuilder::append_variant_bytes(state, variant1);
         let value2 = builder2.into_inner();
 
         // The bytes should be identical, we merely copied them across.

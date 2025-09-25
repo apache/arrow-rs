@@ -15,104 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use crate::type_conversion::{
-    decimal_to_variant_decimal, generic_conversion_array, non_generic_conversion_array,
-    primitive_conversion_array,
-};
-use crate::{VariantArray, VariantArrayBuilder};
-use arrow::array::{
-    Array, AsArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
-};
-use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::compute::kernels::cast;
-use arrow::datatypes::{
-    i256, ArrowNativeType, BinaryType, BinaryViewType, Date32Type, Date64Type, Decimal128Type,
-    Decimal256Type, Decimal32Type, Decimal64Type, Float16Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, LargeBinaryType, RunEndIndexType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
-};
-use arrow::temporal_conversions::{
-    timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
-    timestamp_us_to_datetime,
-};
-use arrow_schema::{ArrowError, DataType, TimeUnit, UnionFields};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
-use parquet_variant::{
-    Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
-};
-
-fn convert_timestamp(
-    time_unit: &TimeUnit,
-    time_zone: &Option<Arc<str>>,
-    input: &dyn Array,
-    builder: &mut VariantArrayBuilder,
-) {
-    let native_datetimes: Vec<Option<NaiveDateTime>> = match time_unit {
-        arrow_schema::TimeUnit::Second => {
-            let ts_array = input
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .expect("Array is not TimestampSecondArray");
-
-            ts_array
-                .iter()
-                .map(|x| x.map(|y| timestamp_s_to_datetime(y).unwrap()))
-                .collect()
-        }
-        arrow_schema::TimeUnit::Millisecond => {
-            let ts_array = input
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .expect("Array is not TimestampMillisecondArray");
-
-            ts_array
-                .iter()
-                .map(|x| x.map(|y| timestamp_ms_to_datetime(y).unwrap()))
-                .collect()
-        }
-        arrow_schema::TimeUnit::Microsecond => {
-            let ts_array = input
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .expect("Array is not TimestampMicrosecondArray");
-            ts_array
-                .iter()
-                .map(|x| x.map(|y| timestamp_us_to_datetime(y).unwrap()))
-                .collect()
-        }
-        arrow_schema::TimeUnit::Nanosecond => {
-            let ts_array = input
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .expect("Array is not TimestampNanosecondArray");
-            ts_array
-                .iter()
-                .map(|x| x.map(|y| timestamp_ns_to_datetime(y).unwrap()))
-                .collect()
-        }
-    };
-
-    for x in native_datetimes {
-        match x {
-            Some(ndt) => {
-                if time_zone.is_none() {
-                    builder.append_variant(ndt.into());
-                } else {
-                    let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&ndt);
-                    builder.append_variant(utc_dt.into());
-                }
-            }
-            None => {
-                builder.append_null();
-            }
-        }
-    }
-}
+use crate::arrow_to_variant::make_arrow_to_variant_row_builder;
+use crate::{CastOptions, VariantArray, VariantArrayBuilder};
+use arrow::array::Array;
+use arrow_schema::ArrowError;
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
 /// need to convert a specific data type
@@ -143,506 +49,35 @@ fn convert_timestamp(
 /// `1970-01-01T00:00:01.234567890Z`
 /// will be truncated to
 /// `1970-01-01T00:00:01.234567Z`
+///
+/// # Arguments
+/// * `input` - The array to convert to VariantArray
+/// * `options` - Options controlling conversion behavior
+pub fn cast_to_variant_with_options(
+    input: &dyn Array,
+    options: &CastOptions,
+) -> Result<VariantArray, ArrowError> {
+    // Create row builder for the input array type
+    let mut row_builder = make_arrow_to_variant_row_builder(input.data_type(), input, options)?;
+
+    // Create output array builder
+    let mut array_builder = VariantArrayBuilder::new(input.len());
+
+    // Process each row using the row builder
+    for i in 0..input.len() {
+        row_builder.append_row(&mut array_builder, i)?;
+    }
+
+    Ok(array_builder.build())
+}
+
+/// Convert an array to a [`VariantArray`] with strict mode enabled (returns errors on conversion
+/// failures).
+///
+/// This function provides backward compatibility. For non-strict behavior,
+/// use [`cast_to_variant_with_options`] with `CastOptions { strict: false }`.
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
-    let mut builder = VariantArrayBuilder::new(input.len());
-
-    let input_type = input.data_type();
-    // todo: handle other types like Boolean, Date, Timestamp, etc.
-    match input_type {
-        DataType::Boolean => {
-            non_generic_conversion_array!(input.as_boolean(), |v| v, builder);
-        }
-        DataType::Binary => {
-            generic_conversion_array!(BinaryType, as_bytes, |v| v, input, builder);
-        }
-        DataType::LargeBinary => {
-            generic_conversion_array!(LargeBinaryType, as_bytes, |v| v, input, builder);
-        }
-        DataType::BinaryView => {
-            generic_conversion_array!(BinaryViewType, as_byte_view, |v| v, input, builder);
-        }
-        DataType::Int8 => {
-            primitive_conversion_array!(Int8Type, input, builder);
-        }
-        DataType::Int16 => {
-            primitive_conversion_array!(Int16Type, input, builder);
-        }
-        DataType::Int32 => {
-            primitive_conversion_array!(Int32Type, input, builder);
-        }
-        DataType::Int64 => {
-            primitive_conversion_array!(Int64Type, input, builder);
-        }
-        DataType::UInt8 => {
-            primitive_conversion_array!(UInt8Type, input, builder);
-        }
-        DataType::UInt16 => {
-            primitive_conversion_array!(UInt16Type, input, builder);
-        }
-        DataType::UInt32 => {
-            primitive_conversion_array!(UInt32Type, input, builder);
-        }
-        DataType::UInt64 => {
-            primitive_conversion_array!(UInt64Type, input, builder);
-        }
-        DataType::Float16 => {
-            generic_conversion_array!(Float16Type, as_primitive, f32::from, input, builder);
-        }
-        DataType::Float32 => {
-            primitive_conversion_array!(Float32Type, input, builder);
-        }
-        DataType::Float64 => {
-            primitive_conversion_array!(Float64Type, input, builder);
-        }
-        DataType::Decimal32(_, scale) => {
-            generic_conversion_array!(
-                Decimal32Type,
-                as_primitive,
-                |v| decimal_to_variant_decimal!(v, scale, i32, VariantDecimal4),
-                input,
-                builder
-            );
-        }
-        DataType::Decimal64(_, scale) => {
-            generic_conversion_array!(
-                Decimal64Type,
-                as_primitive,
-                |v| decimal_to_variant_decimal!(v, scale, i64, VariantDecimal8),
-                input,
-                builder
-            );
-        }
-        DataType::Decimal128(_, scale) => {
-            generic_conversion_array!(
-                Decimal128Type,
-                as_primitive,
-                |v| decimal_to_variant_decimal!(v, scale, i128, VariantDecimal16),
-                input,
-                builder
-            );
-        }
-        DataType::Decimal256(_, scale) => {
-            generic_conversion_array!(
-                Decimal256Type,
-                as_primitive,
-                |v: i256| {
-                    // Since `i128::MAX` is larger than the max value of `VariantDecimal16`,
-                    // any `i256` value that cannot be cast to `i128` is unable to be cast to `VariantDecimal16` either.
-                    // Therefore, we can safely convert `i256` to `i128` first and process it like `i128`.
-                    if let Some(v) = v.to_i128() {
-                        decimal_to_variant_decimal!(v, scale, i128, VariantDecimal16)
-                    } else {
-                        Variant::Null
-                    }
-                },
-                input,
-                builder
-            );
-        }
-        DataType::FixedSizeBinary(_) => {
-            non_generic_conversion_array!(input.as_fixed_size_binary(), |v| v, builder);
-        }
-        DataType::Null => {
-            for _ in 0..input.len() {
-                builder.append_null();
-            }
-        }
-        DataType::Timestamp(time_unit, time_zone) => {
-            convert_timestamp(time_unit, time_zone, input, &mut builder);
-        }
-        DataType::Time32(unit) => {
-            match *unit {
-                TimeUnit::Second => {
-                    generic_conversion_array!(
-                        Time32SecondType,
-                        as_primitive,
-                        // nano second are always 0
-                        |v| NaiveTime::from_num_seconds_from_midnight_opt(v as u32, 0u32).unwrap(),
-                        input,
-                        builder
-                    );
-                }
-                TimeUnit::Millisecond => {
-                    generic_conversion_array!(
-                        Time32MillisecondType,
-                        as_primitive,
-                        |v| NaiveTime::from_num_seconds_from_midnight_opt(
-                            v as u32 / 1000,
-                            (v as u32 % 1000) * 1_000_000
-                        )
-                        .unwrap(),
-                        input,
-                        builder
-                    );
-                }
-                _ => {
-                    return Err(ArrowError::CastError(format!(
-                        "Unsupported Time32 unit: {:?}",
-                        unit
-                    )));
-                }
-            };
-        }
-        DataType::Time64(unit) => {
-            match *unit {
-                TimeUnit::Microsecond => {
-                    generic_conversion_array!(
-                        Time64MicrosecondType,
-                        as_primitive,
-                        |v| NaiveTime::from_num_seconds_from_midnight_opt(
-                            (v / 1_000_000) as u32,
-                            (v % 1_000_000 * 1_000) as u32
-                        )
-                        .unwrap(),
-                        input,
-                        builder
-                    );
-                }
-                TimeUnit::Nanosecond => {
-                    generic_conversion_array!(
-                        Time64NanosecondType,
-                        as_primitive,
-                        |v| NaiveTime::from_num_seconds_from_midnight_opt(
-                            (v / 1_000_000_000) as u32,
-                            (v % 1_000_000_000) as u32
-                        )
-                        .unwrap(),
-                        input,
-                        builder
-                    );
-                }
-                _ => {
-                    return Err(ArrowError::CastError(format!(
-                        "Unsupported Time64 unit: {:?}",
-                        unit
-                    )));
-                }
-            };
-        }
-        DataType::Duration(_) | DataType::Interval(_) => {
-            return Err(ArrowError::InvalidArgumentError(
-                "Casting duration/interval types to Variant is not supported. \
-                 The Variant format does not define duration/interval types."
-                    .to_string(),
-            ));
-        }
-        DataType::Utf8 => {
-            generic_conversion_array!(i32, as_string, |v| v, input, builder);
-        }
-        DataType::LargeUtf8 => {
-            generic_conversion_array!(i64, as_string, |v| v, input, builder);
-        }
-        DataType::Utf8View => {
-            non_generic_conversion_array!(input.as_string_view(), |v| v, builder);
-        }
-        DataType::Struct(_) => {
-            let struct_array = input.as_struct();
-
-            // Pre-convert all field arrays once for better performance
-            // This avoids converting the same field array multiple times
-            // Alternative approach: Use slicing per row: field_array.slice(i, 1)
-            // However, pre-conversion is more efficient for typical use cases
-            let field_variant_arrays: Result<Vec<_>, _> = struct_array
-                .columns()
-                .iter()
-                .map(|field_array| cast_to_variant(field_array.as_ref()))
-                .collect();
-            let field_variant_arrays = field_variant_arrays?;
-
-            // Cache column names to avoid repeated calls
-            let column_names = struct_array.column_names();
-
-            for i in 0..struct_array.len() {
-                if struct_array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                // Create a VariantBuilder for this struct instance
-                let mut variant_builder = VariantBuilder::new();
-                let mut object_builder = variant_builder.new_object();
-
-                // Iterate through all fields in the struct
-                for (field_idx, field_name) in column_names.iter().enumerate() {
-                    // Use pre-converted field variant arrays for better performance
-                    // Check nulls directly from the pre-converted arrays instead of accessing column again
-                    if !field_variant_arrays[field_idx].is_null(i) {
-                        let field_variant = field_variant_arrays[field_idx].value(i);
-                        object_builder.insert(field_name, field_variant);
-                    }
-                    // Note: we skip null fields rather than inserting Variant::Null
-                    // to match Arrow struct semantics where null fields are omitted
-                }
-
-                object_builder.finish();
-                let (metadata, value) = variant_builder.finish();
-                let variant = Variant::try_new(&metadata, &value)?;
-                builder.append_variant(variant);
-            }
-        }
-        DataType::Union(fields, _) => {
-            convert_union(fields, input, &mut builder)?;
-        }
-        DataType::Date32 => {
-            generic_conversion_array!(
-                Date32Type,
-                as_primitive,
-                |v: i32| -> NaiveDate { Date32Type::to_naive_date(v) },
-                input,
-                builder
-            );
-        }
-        DataType::Date64 => {
-            generic_conversion_array!(
-                Date64Type,
-                as_primitive,
-                |v: i64| { Date64Type::to_naive_date_opt(v).unwrap() },
-                input,
-                builder
-            );
-        }
-        DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-            DataType::Int16 => convert_run_end_encoded::<Int16Type>(input, &mut builder)?,
-            DataType::Int32 => convert_run_end_encoded::<Int32Type>(input, &mut builder)?,
-            DataType::Int64 => convert_run_end_encoded::<Int64Type>(input, &mut builder)?,
-            _ => {
-                return Err(ArrowError::CastError(format!(
-                    "Unsupported run ends type: {:?}",
-                    run_ends.data_type()
-                )));
-            }
-        },
-        DataType::Dictionary(_, _) => {
-            convert_dictionary_encoded(input, &mut builder)?;
-        }
-
-        DataType::Map(field, _) => match field.data_type() {
-            DataType::Struct(_) => {
-                let map_array = input.as_map();
-                let keys = cast(map_array.keys(), &DataType::Utf8)?;
-                let key_strings = keys.as_string::<i32>();
-                let values = cast_to_variant(map_array.values())?;
-                let offsets = map_array.offsets();
-
-                let mut start_offset = offsets[0];
-                for end_offset in offsets.iter().skip(1) {
-                    if start_offset >= *end_offset {
-                        builder.append_null();
-                        continue;
-                    }
-
-                    let length = (end_offset - start_offset) as usize;
-
-                    let mut variant_builder = VariantBuilder::new();
-                    let mut object_builder = variant_builder.new_object();
-
-                    for i in start_offset..*end_offset {
-                        let value = values.value(i as usize);
-                        object_builder.insert(key_strings.value(i as usize), value);
-                    }
-                    object_builder.finish();
-                    let (metadata, value) = variant_builder.finish();
-                    let variant = Variant::try_new(&metadata, &value)?;
-
-                    builder.append_variant(variant);
-
-                    start_offset += length as i32;
-                }
-            }
-            _ => {
-                return Err(ArrowError::CastError(format!(
-                    "Unsupported map field type for casting to Variant: {field:?}",
-                )));
-            }
-        },
-        DataType::List(_) => {
-            let list_array = input.as_list::<i32>();
-            let values = list_array.values();
-            let offsets = list_array.offsets();
-
-            let first_offset = offsets.first().expect("There should be an offset");
-            let length = offsets.last().expect("There should be an offset") - first_offset;
-            let sliced_values = values.slice(*first_offset as usize, length as usize);
-
-            let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
-            let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
-                offsets.iter().map(|o| o - first_offset),
-            ));
-
-            for i in 0..list_array.len() {
-                if list_array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                let start = new_offsets[i] as usize;
-                let end = new_offsets[i + 1] as usize;
-
-                // Start building the inner VariantList
-                let mut variant_builder = VariantBuilder::new();
-                let mut list_builder = variant_builder.new_list();
-
-                // Add all values from the slice
-                for j in start..end {
-                    list_builder.append_value(values_variant_array.value(j));
-                }
-
-                list_builder.finish();
-
-                let (metadata, value) = variant_builder.finish();
-                let variant = Variant::new(&metadata, &value);
-                let variant_list = variant.as_list().expect("Variant should be list");
-                builder.append_variant(Variant::List(variant_list.clone()))
-            }
-        }
-        DataType::LargeList(_) => {
-            let large_list_array = input.as_list::<i64>();
-            let values = large_list_array.values();
-            let offsets = large_list_array.offsets();
-
-            let first_offset = offsets.first().expect("There should be an offset");
-            let length = offsets.last().expect("There should be an offset") - first_offset;
-            let sliced_values = values.slice(*first_offset as usize, length as usize);
-
-            let values_variant_array = cast_to_variant(sliced_values.as_ref())?;
-            let new_offsets = OffsetBuffer::new(ScalarBuffer::from_iter(
-                offsets.iter().map(|o| o - first_offset),
-            ));
-
-            for i in 0..large_list_array.len() {
-                if large_list_array.is_null(i) {
-                    builder.append_null();
-                    continue;
-                }
-
-                let start = new_offsets[i] as usize; // What if the system is 32bit and offset is > usize::MAX?
-                let end = new_offsets[i + 1] as usize;
-
-                // Start building the inner VariantList
-                let mut variant_builder = VariantBuilder::new();
-                let mut list_builder = variant_builder.new_list();
-
-                // Add all values from the slice
-                for j in start..end {
-                    list_builder.append_value(values_variant_array.value(j));
-                }
-
-                list_builder.finish();
-
-                let (metadata, value) = variant_builder.finish();
-                let variant = Variant::new(&metadata, &value);
-                let variant_list = variant.as_list().expect("Variant should be list");
-                builder.append_variant(Variant::List(variant_list.clone()))
-            }
-        }
-
-        dt => {
-            return Err(ArrowError::CastError(format!(
-                "Unsupported data type for casting to Variant: {dt:?}",
-            )));
-        }
-    };
-    Ok(builder.build())
-}
-
-/// Convert union arrays
-fn convert_union(
-    fields: &UnionFields,
-    input: &dyn Array,
-    builder: &mut VariantArrayBuilder,
-) -> Result<(), ArrowError> {
-    let union_array = input.as_union();
-
-    // Convert each child array to variant arrays
-    let mut child_variant_arrays = HashMap::new();
-    for (type_id, _) in fields.iter() {
-        let child_array = union_array.child(type_id);
-        let child_variant_array = cast_to_variant(child_array.as_ref())?;
-        child_variant_arrays.insert(type_id, child_variant_array);
-    }
-
-    // Process each element in the union array
-    for i in 0..union_array.len() {
-        let type_id = union_array.type_id(i);
-        let value_offset = union_array.value_offset(i);
-
-        if let Some(child_variant_array) = child_variant_arrays.get(&type_id) {
-            if child_variant_array.is_null(value_offset) {
-                builder.append_null();
-            } else {
-                let value = child_variant_array.value(value_offset);
-                builder.append_variant(value);
-            }
-        } else {
-            // This should not happen in a valid union, but handle gracefully
-            builder.append_null();
-        }
-    }
-
-    Ok(())
-}
-
-/// Generic function to convert run-end encoded arrays
-fn convert_run_end_encoded<R: RunEndIndexType>(
-    input: &dyn Array,
-    builder: &mut VariantArrayBuilder,
-) -> Result<(), ArrowError> {
-    let run_array = input.as_run::<R>();
-    let values_variant_array = cast_to_variant(run_array.values().as_ref())?;
-
-    // Process runs in batches for better performance
-    let run_ends = run_array.run_ends().values();
-    let mut logical_start = 0;
-
-    for (physical_idx, &run_end) in run_ends.iter().enumerate() {
-        let logical_end = run_end.as_usize();
-        let run_length = logical_end - logical_start;
-
-        if values_variant_array.is_null(physical_idx) {
-            // Append nulls for the entire run
-            for _ in 0..run_length {
-                builder.append_null();
-            }
-        } else {
-            // Get the value once and append it for the entire run
-            let value = values_variant_array.value(physical_idx);
-            for _ in 0..run_length {
-                builder.append_variant(value.clone());
-            }
-        }
-
-        logical_start = logical_end;
-    }
-
-    Ok(())
-}
-
-/// Convert dictionary encoded arrays
-fn convert_dictionary_encoded(
-    input: &dyn Array,
-    builder: &mut VariantArrayBuilder,
-) -> Result<(), ArrowError> {
-    let dict_array = input.as_any_dictionary();
-    let values_variant_array = cast_to_variant(dict_array.values().as_ref())?;
-    let normalized_keys = dict_array.normalized_keys();
-    let keys = dict_array.keys();
-
-    for (i, key_idx) in normalized_keys.iter().enumerate() {
-        if keys.is_null(i) {
-            builder.append_null();
-            continue;
-        }
-
-        if values_variant_array.is_null(*key_idx) {
-            builder.append_null();
-            continue;
-        }
-
-        let value = values_variant_array.value(*key_idx);
-        builder.append_variant(value);
-    }
-
-    Ok(())
+    cast_to_variant_with_options(input, &CastOptions::default())
 }
 
 // TODO do we need a cast_with_options to allow specifying conversion behavior,
@@ -659,19 +94,27 @@ mod tests {
         FixedSizeBinaryBuilder, Float16Array, Float32Array, Float64Array, GenericByteBuilder,
         GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
         IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray,
-        LargeStringArray, ListArray, MapArray, NullArray, StringArray, StringRunBuilder,
-        StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-        UInt8Array, UnionArray,
+        LargeListViewBuilder, LargeStringArray, ListArray, ListViewBuilder, MapArray, NullArray,
+        StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray,
+        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
+    use arrow::datatypes::{
+        i256, BinaryType, BinaryViewType, Date32Type, Date64Type, Int32Type, Int64Type, Int8Type,
+        IntervalDayTime, IntervalMonthDayNano, LargeBinaryType,
+    };
     use arrow_schema::{DataType, Field, Fields, UnionFields};
     use arrow_schema::{
         DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
+    use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
-    use parquet_variant::{Variant, VariantDecimal16};
+    use parquet_variant::{
+        Variant, VariantBuilder, VariantBuilderExt, VariantDecimal16, VariantDecimal4,
+        VariantDecimal8,
+    };
     use std::{sync::Arc, vec};
 
     macro_rules! max_unscaled_value {
@@ -687,140 +130,8 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_to_variant_timestamp() {
-        let run_array_tests =
-            |microseconds: i64, array_ntz: Arc<dyn Array>, array_tz: Arc<dyn Array>| {
-                let timestamp = DateTime::from_timestamp_nanos(microseconds * 1000);
-                run_test(
-                    array_tz,
-                    vec![Some(Variant::TimestampMicros(timestamp)), None],
-                );
-                run_test(
-                    array_ntz,
-                    vec![
-                        Some(Variant::TimestampNtzMicros(timestamp.naive_utc())),
-                        None,
-                    ],
-                );
-            };
-
-        let nanosecond = 1234567890;
-        let microsecond = 1234567;
-        let millisecond = 1234;
-        let second = 1;
-
-        let second_array = TimestampSecondArray::from(vec![Some(second), None]);
-        run_array_tests(
-            second * 1000 * 1000,
-            Arc::new(second_array.clone()),
-            Arc::new(second_array.with_timezone("+01:00".to_string())),
-        );
-
-        let millisecond_array = TimestampMillisecondArray::from(vec![Some(millisecond), None]);
-        run_array_tests(
-            millisecond * 1000,
-            Arc::new(millisecond_array.clone()),
-            Arc::new(millisecond_array.with_timezone("+01:00".to_string())),
-        );
-
-        let microsecond_array = TimestampMicrosecondArray::from(vec![Some(microsecond), None]);
-        run_array_tests(
-            microsecond,
-            Arc::new(microsecond_array.clone()),
-            Arc::new(microsecond_array.with_timezone("+01:00".to_string())),
-        );
-
-        let timestamp = DateTime::from_timestamp_nanos(nanosecond);
-        let nanosecond_array = TimestampNanosecondArray::from(vec![Some(nanosecond), None]);
-        run_test(
-            Arc::new(nanosecond_array.clone()),
-            vec![
-                Some(Variant::TimestampNtzNanos(timestamp.naive_utc())),
-                None,
-            ],
-        );
-        run_test(
-            Arc::new(nanosecond_array.with_timezone("+01:00".to_string())),
-            vec![Some(Variant::TimestampNanos(timestamp)), None],
-        );
-    }
-
-    #[test]
-    fn test_cast_to_variant_fixed_size_binary() {
-        let v1 = vec![1, 2];
-        let v2 = vec![3, 4];
-        let v3 = vec![5, 6];
-
-        let mut builder = FixedSizeBinaryBuilder::new(2);
-        builder.append_value(&v1).unwrap();
-        builder.append_value(&v2).unwrap();
-        builder.append_null();
-        builder.append_value(&v3).unwrap();
-        let array = builder.finish();
-
-        run_test(
-            Arc::new(array),
-            vec![
-                Some(Variant::Binary(&v1)),
-                Some(Variant::Binary(&v2)),
-                None,
-                Some(Variant::Binary(&v3)),
-            ],
-        );
-    }
-
-    #[test]
-    fn test_cast_to_variant_binary() {
-        // BinaryType
-        let mut builder = GenericByteBuilder::<BinaryType>::new();
-        builder.append_value(b"hello");
-        builder.append_value(b"");
-        builder.append_null();
-        builder.append_value(b"world");
-        let binary_array = builder.finish();
-        run_test(
-            Arc::new(binary_array),
-            vec![
-                Some(Variant::Binary(b"hello")),
-                Some(Variant::Binary(b"")),
-                None,
-                Some(Variant::Binary(b"world")),
-            ],
-        );
-
-        // LargeBinaryType
-        let mut builder = GenericByteBuilder::<LargeBinaryType>::new();
-        builder.append_value(b"hello");
-        builder.append_value(b"");
-        builder.append_null();
-        builder.append_value(b"world");
-        let large_binary_array = builder.finish();
-        run_test(
-            Arc::new(large_binary_array),
-            vec![
-                Some(Variant::Binary(b"hello")),
-                Some(Variant::Binary(b"")),
-                None,
-                Some(Variant::Binary(b"world")),
-            ],
-        );
-
-        // BinaryViewType
-        let mut builder = GenericByteViewBuilder::<BinaryViewType>::new();
-        builder.append_value(b"hello");
-        builder.append_value(b"");
-        builder.append_null();
-        builder.append_value(b"world");
-        let byte_view_array = builder.finish();
-        run_test(
-            Arc::new(byte_view_array),
-            vec![
-                Some(Variant::Binary(b"hello")),
-                Some(Variant::Binary(b"")),
-                None,
-                Some(Variant::Binary(b"world")),
-            ],
-        );
+    fn test_cast_to_variant_null() {
+        run_test(Arc::new(NullArray::new(2)), vec![None, None])
     }
 
     #[test]
@@ -1062,62 +373,6 @@ mod tests {
                 Some(Variant::Double(f64::MAX)),
             ],
         )
-    }
-
-    #[test]
-    fn test_cast_to_variant_duration_or_interval_errors() {
-        let arrays: Vec<Box<dyn Array>> = vec![
-            // Duration types
-            Box::new(DurationSecondArray::from(vec![Some(10), None, Some(-5)])),
-            Box::new(DurationMillisecondArray::from(vec![
-                Some(10),
-                None,
-                Some(-5),
-            ])),
-            Box::new(DurationMicrosecondArray::from(vec![
-                Some(10),
-                None,
-                Some(-5),
-            ])),
-            Box::new(DurationNanosecondArray::from(vec![
-                Some(10),
-                None,
-                Some(-5),
-            ])),
-            // Interval types
-            Box::new(IntervalYearMonthArray::from(vec![Some(12), None, Some(-6)])),
-            Box::new(IntervalDayTimeArray::from(vec![
-                Some(IntervalDayTime::new(12, 0)),
-                None,
-                Some(IntervalDayTime::new(-6, 0)),
-            ])),
-            Box::new(IntervalMonthDayNanoArray::from(vec![
-                Some(IntervalMonthDayNano::new(12, 0, 0)),
-                None,
-                Some(IntervalMonthDayNano::new(-6, 0, 0)),
-            ])),
-        ];
-
-        for array in arrays {
-            let result = cast_to_variant(array.as_ref());
-            assert!(result.is_err());
-            match result.unwrap_err() {
-                ArrowError::InvalidArgumentError(msg) => {
-                    assert!(
-                        msg.contains("Casting duration/interval types to Variant is not supported")
-                    );
-                    assert!(
-                        msg.contains("The Variant format does not define duration/interval types")
-                    );
-                }
-                _ => panic!("Expected InvalidArgumentError"),
-            }
-        }
-    }
-
-    #[test]
-    fn test_cast_to_variant_null() {
-        run_test(Arc::new(NullArray::new(2)), vec![None, None])
     }
 
     #[test]
@@ -1513,7 +768,105 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_time32_second_to_variant_time() {
+    fn test_cast_to_variant_timestamp() {
+        let run_array_tests =
+            |microseconds: i64, array_ntz: Arc<dyn Array>, array_tz: Arc<dyn Array>| {
+                let timestamp = DateTime::from_timestamp_nanos(microseconds * 1000);
+                run_test(
+                    array_tz,
+                    vec![Some(Variant::TimestampMicros(timestamp)), None],
+                );
+                run_test(
+                    array_ntz,
+                    vec![
+                        Some(Variant::TimestampNtzMicros(timestamp.naive_utc())),
+                        None,
+                    ],
+                );
+            };
+
+        let nanosecond = 1234567890;
+        let microsecond = 1234567;
+        let millisecond = 1234;
+        let second = 1;
+
+        let second_array = TimestampSecondArray::from(vec![Some(second), None]);
+        run_array_tests(
+            second * 1000 * 1000,
+            Arc::new(second_array.clone()),
+            Arc::new(second_array.with_timezone("+01:00".to_string())),
+        );
+
+        let millisecond_array = TimestampMillisecondArray::from(vec![Some(millisecond), None]);
+        run_array_tests(
+            millisecond * 1000,
+            Arc::new(millisecond_array.clone()),
+            Arc::new(millisecond_array.with_timezone("+01:00".to_string())),
+        );
+
+        let microsecond_array = TimestampMicrosecondArray::from(vec![Some(microsecond), None]);
+        run_array_tests(
+            microsecond,
+            Arc::new(microsecond_array.clone()),
+            Arc::new(microsecond_array.with_timezone("+01:00".to_string())),
+        );
+
+        let timestamp = DateTime::from_timestamp_nanos(nanosecond);
+        let nanosecond_array = TimestampNanosecondArray::from(vec![Some(nanosecond), None]);
+        run_test(
+            Arc::new(nanosecond_array.clone()),
+            vec![
+                Some(Variant::TimestampNtzNanos(timestamp.naive_utc())),
+                None,
+            ],
+        );
+        run_test(
+            Arc::new(nanosecond_array.with_timezone("+01:00".to_string())),
+            vec![Some(Variant::TimestampNanos(timestamp)), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_date() {
+        // Date32Array
+        run_test(
+            Arc::new(Date32Array::from(vec![
+                Some(Date32Type::from_naive_date(NaiveDate::MIN)),
+                None,
+                Some(Date32Type::from_naive_date(
+                    NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
+                )),
+                Some(Date32Type::from_naive_date(NaiveDate::MAX)),
+            ])),
+            vec![
+                Some(Variant::Date(NaiveDate::MIN)),
+                None,
+                Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
+                Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
+
+        // Date64Array
+        run_test(
+            Arc::new(Date64Array::from(vec![
+                Some(Date64Type::from_naive_date(NaiveDate::MIN)),
+                None,
+                Some(Date64Type::from_naive_date(
+                    NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
+                )),
+                Some(Date64Type::from_naive_date(NaiveDate::MAX)),
+            ])),
+            vec![
+                Some(Variant::Date(NaiveDate::MIN)),
+                None,
+                Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
+                Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_time32_second() {
         let array: Time32SecondArray = vec![Some(1), Some(86_399), None].into();
         let values = Arc::new(array);
         run_test(
@@ -1531,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_time32_millisecond_to_variant_time() {
+    fn test_cast_to_variant_time32_millisecond() {
         let array: Time32MillisecondArray = vec![Some(123_456), Some(456_000), None].into();
         let values = Arc::new(array);
         run_test(
@@ -1549,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_time64_micro_to_variant_time() {
+    fn test_cast_to_variant_time64_micro() {
         let array: Time64MicrosecondArray = vec![Some(1), Some(123_456_789), None].into();
         let values = Arc::new(array);
         run_test(
@@ -1567,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_time64_nano_to_variant_time() {
+    fn test_cast_to_variant_time64_nano() {
         let array: Time64NanosecondArray =
             vec![Some(1), Some(1001), Some(123_456_789_012), None].into();
         run_test(
@@ -1586,6 +939,135 @@ mod tests {
                 None,
             ],
         )
+    }
+
+    #[test]
+    fn test_cast_to_variant_duration_or_interval_errors() {
+        let arrays: Vec<Box<dyn Array>> = vec![
+            // Duration types
+            Box::new(DurationSecondArray::from(vec![Some(10), None, Some(-5)])),
+            Box::new(DurationMillisecondArray::from(vec![
+                Some(10),
+                None,
+                Some(-5),
+            ])),
+            Box::new(DurationMicrosecondArray::from(vec![
+                Some(10),
+                None,
+                Some(-5),
+            ])),
+            Box::new(DurationNanosecondArray::from(vec![
+                Some(10),
+                None,
+                Some(-5),
+            ])),
+            // Interval types
+            Box::new(IntervalYearMonthArray::from(vec![Some(12), None, Some(-6)])),
+            Box::new(IntervalDayTimeArray::from(vec![
+                Some(IntervalDayTime::new(12, 0)),
+                None,
+                Some(IntervalDayTime::new(-6, 0)),
+            ])),
+            Box::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano::new(12, 0, 0)),
+                None,
+                Some(IntervalMonthDayNano::new(-6, 0, 0)),
+            ])),
+        ];
+
+        for array in arrays {
+            let result = cast_to_variant(array.as_ref());
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                ArrowError::InvalidArgumentError(msg) => {
+                    assert!(
+                        msg.contains("Casting duration/interval types to Variant is not supported")
+                    );
+                    assert!(
+                        msg.contains("The Variant format does not define duration/interval types")
+                    );
+                }
+                _ => panic!("Expected InvalidArgumentError"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_to_variant_binary() {
+        // BinaryType
+        let mut builder = GenericByteBuilder::<BinaryType>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"world");
+        let binary_array = builder.finish();
+        run_test(
+            Arc::new(binary_array),
+            vec![
+                Some(Variant::Binary(b"hello")),
+                Some(Variant::Binary(b"")),
+                None,
+                Some(Variant::Binary(b"world")),
+            ],
+        );
+
+        // LargeBinaryType
+        let mut builder = GenericByteBuilder::<LargeBinaryType>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"world");
+        let large_binary_array = builder.finish();
+        run_test(
+            Arc::new(large_binary_array),
+            vec![
+                Some(Variant::Binary(b"hello")),
+                Some(Variant::Binary(b"")),
+                None,
+                Some(Variant::Binary(b"world")),
+            ],
+        );
+
+        // BinaryViewType
+        let mut builder = GenericByteViewBuilder::<BinaryViewType>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"world");
+        let byte_view_array = builder.finish();
+        run_test(
+            Arc::new(byte_view_array),
+            vec![
+                Some(Variant::Binary(b"hello")),
+                Some(Variant::Binary(b"")),
+                None,
+                Some(Variant::Binary(b"world")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_fixed_size_binary() {
+        let v1 = vec![1, 2];
+        let v2 = vec![3, 4];
+        let v3 = vec![5, 6];
+
+        let mut builder = FixedSizeBinaryBuilder::new(2);
+        builder.append_value(&v1).unwrap();
+        builder.append_value(&v2).unwrap();
+        builder.append_null();
+        builder.append_value(&v3).unwrap();
+        let array = builder.finish();
+
+        run_test(
+            Arc::new(array),
+            vec![
+                Some(Variant::Binary(&v1)),
+                Some(Variant::Binary(&v2)),
+                None,
+                Some(Variant::Binary(&v3)),
+            ],
+        );
     }
 
     #[test]
@@ -1683,6 +1165,249 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_to_variant_list() {
+        // List Array
+        let data = vec![Some(vec![Some(0), Some(1), Some(2)]), None];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0);
+            list.append_value(1);
+            list.append_value(2);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(Arc::new(list_array), vec![Some(variant), None]);
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_list() {
+        // List Array
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+            None,
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3);
+            list.append_value(4);
+            list.append_value(5);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(Arc::new(list_array.slice(1, 2)), vec![Some(variant), None]);
+    }
+
+    #[test]
+    fn test_cast_to_variant_large_list() {
+        // Large List Array
+        let data = vec![Some(vec![Some(0), Some(1), Some(2)]), None];
+        let large_list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0i64);
+            list.append_value(1i64);
+            list.append_value(2i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(Arc::new(large_list_array), vec![Some(variant), None]);
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_large_list() {
+        // List Array
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![Some(3), Some(4), Some(5)]),
+            None,
+        ];
+        let large_list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
+
+        // Expected value
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i64);
+            list.append_value(4i64);
+            list.append_value(5i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(large_list_array.slice(1, 2)),
+            vec![Some(variant), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_list_view() {
+        // Create a ListViewArray with some data
+        let mut builder = ListViewBuilder::new(Int32Array::builder(0));
+        builder.append_value(&Int32Array::from(vec![Some(0), None, Some(2)]));
+        builder.append_value(&Int32Array::from(vec![Some(3), Some(4)]));
+        builder.append_null();
+        builder.append_value(&Int32Array::from(vec![None, None]));
+        let list_view_array = builder.finish();
+
+        // Expected values
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0i32);
+            list.append_null();
+            list.append_value(2i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant0 = Variant::new(&metadata, &value);
+
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i32);
+            list.append_value(4i32);
+            list.finish();
+            builder.finish()
+        };
+        let variant1 = Variant::new(&metadata, &value);
+
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_null();
+            list.append_null();
+            list.finish();
+            builder.finish()
+        };
+        let variant3 = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(list_view_array),
+            vec![Some(variant0), Some(variant1), None, Some(variant3)],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_list_view() {
+        // Create a ListViewArray with some data
+        let mut builder = ListViewBuilder::new(Int32Array::builder(0));
+        builder.append_value(&Int32Array::from(vec![Some(0), Some(1), Some(2)]));
+        builder.append_value(&Int32Array::from(vec![Some(3), None]));
+        builder.append_null();
+        let list_view_array = builder.finish();
+
+        // Expected value for slice(1, 2) - should get the second and third elements
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i32);
+            list.append_null();
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(list_view_array.slice(1, 2)),
+            vec![Some(variant), None],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_large_list_view() {
+        // Create a LargeListViewArray with some data
+        let mut builder = LargeListViewBuilder::new(Int64Array::builder(0));
+        builder.append_value(&Int64Array::from(vec![Some(0), None, Some(2)]));
+        builder.append_value(&Int64Array::from(vec![Some(3), Some(4)]));
+        builder.append_null();
+        builder.append_value(&Int64Array::from(vec![None, None]));
+        let large_list_view_array = builder.finish();
+
+        // Expected values
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(0i64);
+            list.append_null();
+            list.append_value(2i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant0 = Variant::new(&metadata, &value);
+
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i64);
+            list.append_value(4i64);
+            list.finish();
+            builder.finish()
+        };
+        let variant1 = Variant::new(&metadata, &value);
+
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_null();
+            list.append_null();
+            list.finish();
+            builder.finish()
+        };
+        let variant3 = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(large_list_view_array),
+            vec![Some(variant0), Some(variant1), None, Some(variant3)],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_sliced_large_list_view() {
+        // Create a LargeListViewArray with some data
+        let mut builder = LargeListViewBuilder::new(Int64Array::builder(0));
+        builder.append_value(&Int64Array::from(vec![Some(0), Some(1), Some(2)]));
+        builder.append_value(&Int64Array::from(vec![Some(3), None]));
+        builder.append_null();
+        let large_list_view_array = builder.finish();
+
+        // Expected value for slice(1, 2) - should get the second and third elements
+        let (metadata, value) = {
+            let mut builder = VariantBuilder::new();
+            let mut list = builder.new_list();
+            list.append_value(3i64);
+            list.append_null();
+            list.finish();
+            builder.finish()
+        };
+        let variant = Variant::new(&metadata, &value);
+
+        run_test(
+            Arc::new(large_list_view_array.slice(1, 2)),
+            vec![Some(variant), None],
+        );
+    }
+
+    #[test]
     fn test_cast_to_variant_struct() {
         // Test a simple struct with two fields: id (int64) and age (int32)
         let id_array = Int64Array::from(vec![Some(1001), Some(1002), None, Some(1003)]);
@@ -1725,97 +1450,6 @@ mod tests {
         let obj4 = variant4.as_object().unwrap();
         assert_eq!(obj4.get("id"), Some(Variant::from(1003i64)));
         assert_eq!(obj4.get("age"), None);
-    }
-
-    #[test]
-    fn test_cast_to_variant_union_sparse() {
-        // Create a sparse union array with mixed types (int, float, string)
-        let int_array = Int32Array::from(vec![Some(1), None, None, None, Some(34), None]);
-        let float_array = Float64Array::from(vec![None, Some(3.2), None, Some(32.5), None, None]);
-        let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
-        let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
-
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
-
-        let children: Vec<Arc<dyn Array>> = vec![
-            Arc::new(int_array),
-            Arc::new(float_array),
-            Arc::new(string_array),
-        ];
-
-        let union_array = UnionArray::try_new(
-            union_fields,
-            type_ids,
-            None, // Sparse union
-            children,
-        )
-        .unwrap();
-
-        run_test(
-            Arc::new(union_array),
-            vec![
-                Some(Variant::Int32(1)),
-                Some(Variant::Double(3.2)),
-                Some(Variant::from("hello")),
-                Some(Variant::Double(32.5)),
-                Some(Variant::Int32(34)),
-                None,
-            ],
-        );
-    }
-
-    #[test]
-    fn test_cast_to_variant_union_dense() {
-        // Create a dense union array with mixed types (int, float, string)
-        let int_array = Int32Array::from(vec![Some(1), Some(34), None]);
-        let float_array = Float64Array::from(vec![3.2, 32.5]);
-        let string_array = StringArray::from(vec!["hello"]);
-        let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
-        let offsets = [0, 0, 0, 1, 1, 2]
-            .into_iter()
-            .collect::<ScalarBuffer<i32>>();
-
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
-
-        let children: Vec<Arc<dyn Array>> = vec![
-            Arc::new(int_array),
-            Arc::new(float_array),
-            Arc::new(string_array),
-        ];
-
-        let union_array = UnionArray::try_new(
-            union_fields,
-            type_ids,
-            Some(offsets), // Dense union
-            children,
-        )
-        .unwrap();
-
-        run_test(
-            Arc::new(union_array),
-            vec![
-                Some(Variant::Int32(1)),
-                Some(Variant::Double(3.2)),
-                Some(Variant::from("hello")),
-                Some(Variant::Double(32.5)),
-                Some(Variant::Int32(34)),
-                None,
-            ],
-        );
     }
 
     #[test]
@@ -2054,40 +1688,257 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_to_variant_date() {
-        // Date32Array
-        run_test(
-            Arc::new(Date32Array::from(vec![
-                Some(Date32Type::from_naive_date(NaiveDate::MIN)),
-                None,
-                Some(Date32Type::from_naive_date(
-                    NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
-                )),
-                Some(Date32Type::from_naive_date(NaiveDate::MAX)),
-            ])),
+    fn test_cast_to_variant_map() {
+        let keys = vec!["key1", "key2", "key3"];
+        let values_data = Int32Array::from(vec![1, 2, 3]);
+        let entry_offsets = vec![0, 1, 3];
+        let map_array =
+            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
+                .unwrap();
+
+        let result = cast_to_variant(&map_array).unwrap();
+        // [{"key1":1}]
+        let variant1 = result.value(0);
+        assert_eq!(
+            variant1.as_object().unwrap().get("key1").unwrap(),
+            Variant::from(1)
+        );
+
+        // [{"key2":2},{"key3":3}]
+        let variant2 = result.value(1);
+        assert_eq!(
+            variant2.as_object().unwrap().get("key2").unwrap(),
+            Variant::from(2)
+        );
+        assert_eq!(
+            variant2.as_object().unwrap().get("key3").unwrap(),
+            Variant::from(3)
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_map_with_nulls_and_empty() {
+        use arrow::array::{Int32Array, MapArray, StringArray, StructArray};
+        use arrow::buffer::{NullBuffer, OffsetBuffer};
+        use arrow::datatypes::{DataType, Field, Fields};
+        use std::sync::Arc;
+
+        // Create entries struct array
+        let keys = StringArray::from(vec!["key1", "key2", "key3"]);
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let entries_fields = Fields::from(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+        ]);
+        let entries = StructArray::new(
+            entries_fields.clone(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+
+        // Create offsets for 4 maps: [0..1], [1..1], [1..1], [1..3]
+        let offsets = OffsetBuffer::new(vec![0, 1, 1, 1, 3].into());
+
+        // Create null buffer - map at index 2 is NULL
+        let null_buffer = Some(NullBuffer::from(vec![true, true, false, true]));
+
+        let map_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields),
+            false,
+        ));
+
+        let map_array = MapArray::try_new(map_field, offsets, entries, null_buffer, false).unwrap();
+
+        let result = cast_to_variant(&map_array).unwrap();
+
+        // Map 0: {"key1": 1}
+        let variant0 = result.value(0);
+        assert_eq!(
+            variant0.as_object().unwrap().get("key1").unwrap(),
+            Variant::from(1)
+        );
+
+        // Map 1: {} (empty, not null)
+        let variant1 = result.value(1);
+        let obj1 = variant1.as_object().unwrap();
+        assert_eq!(obj1.len(), 0); // Empty object
+
+        // Map 2: null (actual NULL)
+        assert!(result.is_null(2));
+
+        // Map 3: {"key2": 2, "key3": 3}
+        let variant3 = result.value(3);
+        assert_eq!(
+            variant3.as_object().unwrap().get("key2").unwrap(),
+            Variant::from(2)
+        );
+        assert_eq!(
+            variant3.as_object().unwrap().get("key3").unwrap(),
+            Variant::from(3)
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_map_with_non_string_keys() {
+        let offsets = OffsetBuffer::new(vec![0, 1, 3].into());
+        let fields = Fields::from(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("values", DataType::Int32, false),
+        ]);
+        let columns = vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
+        ];
+
+        let entries = StructArray::new(fields.clone(), columns, None);
+        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+
+        let map_array = MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
+
+        let result = cast_to_variant(&map_array).unwrap();
+
+        let variant1 = result.value(0);
+        assert_eq!(
+            variant1.as_object().unwrap().get("1").unwrap(),
+            Variant::from(1)
+        );
+
+        let variant2 = result.value(1);
+        assert_eq!(
+            variant2.as_object().unwrap().get("2").unwrap(),
+            Variant::from(2)
+        );
+        assert_eq!(
+            variant2.as_object().unwrap().get("3").unwrap(),
+            Variant::from(3)
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_union_sparse() {
+        // Create a sparse union array with mixed types (int, float, string)
+        let int_array = Int32Array::from(vec![Some(1), None, None, None, Some(34), None]);
+        let float_array = Float64Array::from(vec![None, Some(3.2), None, Some(32.5), None, None]);
+        let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
+        let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let union_fields = UnionFields::new(
+            vec![0, 1, 2],
             vec![
-                Some(Variant::Date(NaiveDate::MIN)),
-                None,
-                Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
-                Some(Variant::Date(NaiveDate::MAX)),
+                Field::new("int_field", DataType::Int32, false),
+                Field::new("float_field", DataType::Float64, false),
+                Field::new("string_field", DataType::Utf8, false),
             ],
         );
 
-        // Date64Array
+        let children: Vec<Arc<dyn Array>> = vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(string_array),
+        ];
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            None, // Sparse union
+            children,
+        )
+        .unwrap();
+
         run_test(
-            Arc::new(Date64Array::from(vec![
-                Some(Date64Type::from_naive_date(NaiveDate::MIN)),
-                None,
-                Some(Date64Type::from_naive_date(
-                    NaiveDate::from_ymd_opt(2025, 8, 1).unwrap(),
-                )),
-                Some(Date64Type::from_naive_date(NaiveDate::MAX)),
-            ])),
+            Arc::new(union_array),
             vec![
-                Some(Variant::Date(NaiveDate::MIN)),
+                Some(Variant::Int32(1)),
+                Some(Variant::Double(3.2)),
+                Some(Variant::from("hello")),
+                Some(Variant::Double(32.5)),
+                Some(Variant::Int32(34)),
                 None,
-                Some(Variant::Date(NaiveDate::from_ymd_opt(2025, 8, 1).unwrap())),
-                Some(Variant::Date(NaiveDate::MAX)),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_union_dense() {
+        // Create a dense union array with mixed types (int, float, string)
+        let int_array = Int32Array::from(vec![Some(1), Some(34), None]);
+        let float_array = Float64Array::from(vec![3.2, 32.5]);
+        let string_array = StringArray::from(vec!["hello"]);
+        let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 0, 1, 1, 2]
+            .into_iter()
+            .collect::<ScalarBuffer<i32>>();
+
+        let union_fields = UnionFields::new(
+            vec![0, 1, 2],
+            vec![
+                Field::new("int_field", DataType::Int32, false),
+                Field::new("float_field", DataType::Float64, false),
+                Field::new("string_field", DataType::Utf8, false),
+            ],
+        );
+
+        let children: Vec<Arc<dyn Array>> = vec![
+            Arc::new(int_array),
+            Arc::new(float_array),
+            Arc::new(string_array),
+        ];
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            Some(offsets), // Dense union
+            children,
+        )
+        .unwrap();
+
+        run_test(
+            Arc::new(union_array),
+            vec![
+                Some(Variant::Int32(1)),
+                Some(Variant::Double(3.2)),
+                Some(Variant::from("hello")),
+                Some(Variant::Double(32.5)),
+                Some(Variant::Int32(34)),
+                None,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_dictionary() {
+        let values = StringArray::from(vec!["apple", "banana", "cherry", "date"]);
+        let keys = Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(0), Some(3)]);
+        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        run_test(
+            Arc::new(dict_array),
+            vec![
+                Some(Variant::from("apple")),
+                Some(Variant::from("banana")),
+                None,
+                Some(Variant::from("cherry")),
+                Some(Variant::from("apple")),
+                Some(Variant::from("date")),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_dictionary_with_nulls() {
+        // Test dictionary with null values in the values array
+        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let keys = Int8Array::from(vec![Some(0), Some(1), Some(2), Some(0)]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+        run_test(
+            Arc::new(dict_array),
+            vec![
+                Some(Variant::from("a")),
+                None, // key 1 points to null value
+                Some(Variant::from("c")),
+                Some(Variant::from("a")),
             ],
         );
     }
@@ -2144,241 +1995,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_cast_to_variant_dictionary() {
-        let values = StringArray::from(vec!["apple", "banana", "cherry", "date"]);
-        let keys = Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(0), Some(3)]);
-        let dict_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
-
-        run_test(
-            Arc::new(dict_array),
-            vec![
-                Some(Variant::from("apple")),
-                Some(Variant::from("banana")),
-                None,
-                Some(Variant::from("cherry")),
-                Some(Variant::from("apple")),
-                Some(Variant::from("date")),
-            ],
-        );
-    }
-
-    #[test]
-    fn test_cast_to_variant_dictionary_with_nulls() {
-        // Test dictionary with null values in the values array
-        let values = StringArray::from(vec![Some("a"), None, Some("c")]);
-        let keys = Int8Array::from(vec![Some(0), Some(1), Some(2), Some(0)]);
-        let dict_array = DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
-
-        run_test(
-            Arc::new(dict_array),
-            vec![
-                Some(Variant::from("a")),
-                None, // key 1 points to null value
-                Some(Variant::from("c")),
-                Some(Variant::from("a")),
-            ],
-        );
-    }
-
-    #[test]
-    fn test_cast_map_to_variant_object() {
-        let keys = vec!["key1", "key2", "key3"];
-        let values_data = Int32Array::from(vec![1, 2, 3]);
-        let entry_offsets = vec![0, 1, 3];
-        let map_array =
-            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
-                .unwrap();
-
-        let result = cast_to_variant(&map_array).unwrap();
-        // [{"key1":1}]
-        let variant1 = result.value(0);
-        assert_eq!(
-            variant1.as_object().unwrap().get("key1").unwrap(),
-            Variant::from(1)
-        );
-
-        // [{"key2":2},{"key3":3}]
-        let variant2 = result.value(1);
-        assert_eq!(
-            variant2.as_object().unwrap().get("key2").unwrap(),
-            Variant::from(2)
-        );
-        assert_eq!(
-            variant2.as_object().unwrap().get("key3").unwrap(),
-            Variant::from(3)
-        );
-    }
-
-    #[test]
-    fn test_cast_map_to_variant_object_with_nulls() {
-        let keys = vec!["key1", "key2", "key3"];
-        let values_data = Int32Array::from(vec![1, 2, 3]);
-        let entry_offsets = vec![0, 1, 1, 3];
-        let map_array =
-            MapArray::new_from_strings(keys.clone().into_iter(), &values_data, &entry_offsets)
-                .unwrap();
-
-        let result = cast_to_variant(&map_array).unwrap();
-        // [{"key1":1}]
-        let variant1 = result.value(0);
-        assert_eq!(
-            variant1.as_object().unwrap().get("key1").unwrap(),
-            Variant::from(1)
-        );
-
-        // None
-        assert!(result.is_null(1));
-
-        // [{"key2":2},{"key3":3}]
-        let variant2 = result.value(2);
-        assert_eq!(
-            variant2.as_object().unwrap().get("key2").unwrap(),
-            Variant::from(2)
-        );
-        assert_eq!(
-            variant2.as_object().unwrap().get("key3").unwrap(),
-            Variant::from(3)
-        );
-    }
-
-    #[test]
-    fn test_cast_map_with_non_string_keys_to_variant_object() {
-        let offsets = OffsetBuffer::new(vec![0, 1, 3].into());
-        let fields = Fields::from(vec![
-            Field::new("key", DataType::Int32, false),
-            Field::new("values", DataType::Int32, false),
-        ]);
-        let columns = vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
-            Arc::new(Int32Array::from(vec![1, 2, 3])) as _,
-        ];
-
-        let entries = StructArray::new(fields.clone(), columns, None);
-        let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
-
-        let map_array = MapArray::new(field.clone(), offsets.clone(), entries.clone(), None, false);
-
-        let result = cast_to_variant(&map_array).unwrap();
-
-        let variant1 = result.value(0);
-        assert_eq!(
-            variant1.as_object().unwrap().get("1").unwrap(),
-            Variant::from(1)
-        );
-
-        let variant2 = result.value(1);
-        assert_eq!(
-            variant2.as_object().unwrap().get("2").unwrap(),
-            Variant::from(2)
-        );
-        assert_eq!(
-            variant2.as_object().unwrap().get("3").unwrap(),
-            Variant::from(3)
-        );
-    }
-
-    #[test]
-    fn test_cast_to_variant_list() {
-        // List Array
-        let data = vec![Some(vec![Some(0), Some(1), Some(2)]), None];
-        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-
-        // Expected value
-        let (metadata, value) = {
-            let mut builder = VariantBuilder::new();
-            let mut list = builder.new_list();
-            list.append_value(0);
-            list.append_value(1);
-            list.append_value(2);
-            list.finish();
-            builder.finish()
-        };
-        let variant = Variant::new(&metadata, &value);
-
-        run_test(Arc::new(list_array), vec![Some(variant), None]);
-    }
-
-    #[test]
-    fn test_cast_to_variant_sliced_list() {
-        // List Array
-        let data = vec![
-            Some(vec![Some(0), Some(1), Some(2)]),
-            Some(vec![Some(3), Some(4), Some(5)]),
-            None,
-        ];
-        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-
-        // Expected value
-        let (metadata, value) = {
-            let mut builder = VariantBuilder::new();
-            let mut list = builder.new_list();
-            list.append_value(3);
-            list.append_value(4);
-            list.append_value(5);
-            list.finish();
-            builder.finish()
-        };
-        let variant = Variant::new(&metadata, &value);
-
-        run_test(Arc::new(list_array.slice(1, 2)), vec![Some(variant), None]);
-    }
-
-    #[test]
-    fn test_cast_to_variant_large_list() {
-        // Large List Array
-        let data = vec![Some(vec![Some(0), Some(1), Some(2)]), None];
-        let large_list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
-
-        // Expected value
-        let (metadata, value) = {
-            let mut builder = VariantBuilder::new();
-            let mut list = builder.new_list();
-            list.append_value(0i64);
-            list.append_value(1i64);
-            list.append_value(2i64);
-            list.finish();
-            builder.finish()
-        };
-        let variant = Variant::new(&metadata, &value);
-
-        run_test(Arc::new(large_list_array), vec![Some(variant), None]);
-    }
-
-    #[test]
-    fn test_cast_to_variant_sliced_large_list() {
-        // List Array
-        let data = vec![
-            Some(vec![Some(0), Some(1), Some(2)]),
-            Some(vec![Some(3), Some(4), Some(5)]),
-            None,
-        ];
-        let large_list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(data);
-
-        // Expected value
-        let (metadata, value) = {
-            let mut builder = VariantBuilder::new();
-            let mut list = builder.new_list();
-            list.append_value(3i64);
-            list.append_value(4i64);
-            list.append_value(5i64);
-            list.finish();
-            builder.finish()
-        };
-        let variant = Variant::new(&metadata, &value);
-
-        run_test(
-            Arc::new(large_list_array.slice(1, 2)),
-            vec![Some(variant), None],
-        );
-    }
-
     /// Converts the given `Array` to a `VariantArray` and tests the conversion
     /// against the expected values. It also tests the handling of nulls by
     /// setting one element to null and verifying the output.
-    fn run_test(values: ArrayRef, expected: Vec<Option<Variant>>) {
-        // test without nulls
-        let variant_array = cast_to_variant(&values).unwrap();
+    fn run_test_with_options(values: ArrayRef, expected: Vec<Option<Variant>>, strict: bool) {
+        let options = CastOptions { strict };
+        let variant_array = cast_to_variant_with_options(&values, &options).unwrap();
         assert_eq!(variant_array.len(), expected.len());
         for (i, expected_value) in expected.iter().enumerate() {
             match expected_value {
@@ -2391,5 +2013,67 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn run_test(values: ArrayRef, expected: Vec<Option<Variant>>) {
+        run_test_with_options(values, expected, true);
+    }
+
+    fn run_test_non_strict(values: ArrayRef, expected: Vec<Option<Variant>>) {
+        run_test_with_options(values, expected, false);
+    }
+
+    #[test]
+    fn test_cast_to_variant_non_strict_mode_date64() {
+        let date64_values = Date64Array::from(vec![Some(i64::MAX), Some(0), Some(i64::MIN)]);
+
+        let values = Arc::new(date64_values);
+        run_test_non_strict(
+            values,
+            vec![
+                None,
+                Some(Variant::Date(Date64Type::to_naive_date_opt(0).unwrap())),
+                None,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_non_strict_mode_time32() {
+        let time32_array = Time32SecondArray::from(vec![Some(90000), Some(3600), Some(-1)]);
+
+        let values = Arc::new(time32_array);
+        run_test_non_strict(
+            values,
+            vec![
+                None,
+                Some(Variant::Time(
+                    NaiveTime::from_num_seconds_from_midnight_opt(3600, 0).unwrap(),
+                )),
+                None,
+            ],
+        );
+    }
+
+    #[test]
+    fn test_cast_to_variant_non_strict_mode_timestamp() {
+        use arrow::temporal_conversions::timestamp_s_to_datetime;
+
+        let ts_array = TimestampSecondArray::from(vec![Some(i64::MAX), Some(0), Some(1609459200)])
+            .with_timezone_opt(None::<&str>);
+
+        let values = Arc::new(ts_array);
+        run_test_non_strict(
+            values,
+            vec![
+                None, // Invalid timestamp becomes null
+                Some(Variant::TimestampNtzMicros(
+                    timestamp_s_to_datetime(0).unwrap(),
+                )),
+                Some(Variant::TimestampNtzMicros(
+                    timestamp_s_to_datetime(1609459200).unwrap(),
+                )),
+            ],
+        );
     }
 }

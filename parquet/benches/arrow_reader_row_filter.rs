@@ -461,7 +461,7 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
             let projection_mask = ProjectionMask::roots(schema_descr, output_projection.clone());
             let pred_mask = ProjectionMask::roots(schema_descr, filter_col.clone());
 
-            let benchmark_name = format!("{filter_type:?}/{proj_case}",);
+            let benchmark_name = format!("{filter_type}/{proj_case}",);
 
             // run the benchmark for the async reader
             let bench_id = BenchmarkId::new(benchmark_name.clone(), "async");

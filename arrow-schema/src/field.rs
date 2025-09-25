@@ -44,7 +44,7 @@ pub type FieldRef = Arc<Field>;
 ///
 /// Arrow Extension types, are encoded in `Field`s metadata. See
 /// [`Self::try_extension_type`] to retrieve the [`ExtensionType`], if any.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Field {
     name: String,
@@ -58,6 +58,46 @@ pub struct Field {
     dict_is_ordered: bool,
     /// A map of key-value pairs containing additional custom meta data.
     metadata: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #![expect(deprecated)] // Must still print dict_id, if set
+        let Self {
+            name,
+            data_type,
+            nullable,
+            dict_id,
+            dict_is_ordered,
+            metadata,
+        } = self;
+
+        let mut s = f.debug_struct("Field");
+
+        if name != "item" {
+            // Keep it short when debug-formatting `DataType::List`
+            s.field("name", name);
+        }
+
+        s.field("data_type", data_type);
+
+        if *nullable {
+            s.field("nullable", nullable);
+        }
+
+        if *dict_id != 0 {
+            s.field("dict_id", dict_id);
+        }
+
+        if *dict_is_ordered {
+            s.field("dict_is_ordered", dict_is_ordered);
+        }
+
+        if !metadata.is_empty() {
+            s.field("metadata", metadata);
+        }
+        s.finish()
+    }
 }
 
 // Auto-derive `PartialEq` traits will pull `dict_id` and `dict_is_ordered`
@@ -860,10 +900,37 @@ impl Field {
     }
 }
 
-// TODO: improve display with crate https://crates.io/crates/derive_more ?
 impl std::fmt::Display for Field {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{self:?}")
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #![expect(deprecated)] // Must still print dict_id, if set
+        let Self {
+            name,
+            data_type,
+            nullable,
+            dict_id,
+            dict_is_ordered,
+            metadata,
+        } = self;
+        let maybe_nullable = if *nullable { "nullable " } else { "" };
+        let metadata_str = if metadata.is_empty() {
+            String::new()
+        } else {
+            format!(", metadata: {metadata:?}")
+        };
+        let dict_id_str = if dict_id == &0 {
+            String::new()
+        } else {
+            format!(", dict_id: {dict_id}")
+        };
+        let dict_is_ordered_str = if *dict_is_ordered {
+            ", dict_is_ordered"
+        } else {
+            ""
+        };
+        write!(
+            f,
+            "Field {{ {name:?}: {maybe_nullable}{data_type}{dict_id_str}{dict_is_ordered_str}{metadata_str} }}"
+        )
     }
 }
 
@@ -885,6 +952,24 @@ mod test {
         let s = "c1";
         #[allow(deprecated)]
         Field::new_dict(s, DataType::Int64, false, 4, false);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
+    fn test_debug_format_field() {
+        // Make sure the `Debug` formatting of `Field` is readable and not too long
+        insta::assert_debug_snapshot!(Field::new("item", DataType::UInt8, false), @r"
+        Field {
+            data_type: UInt8,
+        }
+        ");
+        insta::assert_debug_snapshot!(Field::new("column", DataType::LargeUtf8, true), @r#"
+        Field {
+            name: "column",
+            data_type: LargeUtf8,
+            nullable: true,
+        }
+        "#);
     }
 
     #[test]
@@ -1248,8 +1333,10 @@ mod test {
 
     #[cfg(feature = "serde")]
     fn assert_binary_serde_round_trip(field: Field) {
-        let serialized = bincode::serialize(&field).unwrap();
-        let deserialized: Field = bincode::deserialize(&serialized).unwrap();
+        let config = bincode::config::legacy();
+        let serialized = bincode::serde::encode_to_vec(&field, config).unwrap();
+        let (deserialized, _): (Field, _) =
+            bincode::serde::decode_from_slice(&serialized, config).unwrap();
         assert_eq!(field, deserialized)
     }
 

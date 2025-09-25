@@ -2702,7 +2702,12 @@ mod tests {
         let gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
         let (_, encoded) = gen
-            .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+            .encode(
+                &batch,
+                &mut dict_tracker,
+                &Default::default(),
+                &mut Default::default(),
+            )
             .unwrap();
 
         let message = root_as_message(&encoded.ipc_message).unwrap();
@@ -2740,7 +2745,12 @@ mod tests {
         let gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
         let (_, encoded) = gen
-            .encoded_batch(&batch, &mut dict_tracker, &Default::default())
+            .encode(
+                &batch,
+                &mut dict_tracker,
+                &Default::default(),
+                &mut Default::default(),
+            )
             .unwrap();
 
         let message = root_as_message(&encoded.ipc_message).unwrap();

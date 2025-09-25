@@ -44,11 +44,12 @@ bytes = { version = "1", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 once_cell = { version = "1", optional = true }
 paste = { version = "1.0" , optional = true }
-prost = { version = "0.13.1", default-features = false, features = ["prost-derive"] }
+prost = { version = "0.14.1", default-features = false, features = ["derive"] }
 # For Timestamp type
-prost-types = { version = "0.13.1", default-features = false }
+prost-types = { version = "0.14.1", default-features = false }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "rt-multi-thread"], optional = true }
-tonic = { version = "0.13", default-features = false, features = ["transport", "codegen", "prost", "router"] }
+tonic = { version = "0.14.1", default-features = false, features = ["transport", "codegen", "router"] }
+tonic-prost = { version = "0.14.1", default-features = false }
 
 # CLI-related dependencies
 anyhow = { version = "1.0", optional = true }
@@ -70,7 +71,7 @@ tls-ring = ["tonic/tls-ring"]
 tls-webpki-roots = ["tonic/tls-webpki-roots"]
 
 # Enable CLI tools
-cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-roots", "dep:anyhow", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber", "dep:tokio"]
+cli = ["arrow-array/chrono-tz", "arrow-cast/prettyprint", "tonic/tls-webpki-roots", "tonic/gzip", "tonic/deflate", "tonic/zstd", "dep:anyhow", "dep:clap", "dep:tracing-log", "dep:tracing-subscriber", "dep:tokio"]
 
 [dev-dependencies]
 arrow-cast = { workspace = true, features = ["prettyprint"] }

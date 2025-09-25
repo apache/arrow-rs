@@ -20,7 +20,7 @@ use std::{collections::VecDeque, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use crate::{error::Result, FlightData, FlightDescriptor, SchemaAsIpc};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, UnionArray};
-use arrow_ipc::writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
+use arrow_ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator, IpcWriteOptions};
 
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef, UnionMode};
 use bytes::Bytes;
@@ -647,6 +647,7 @@ struct FlightIpcEncoder {
     options: IpcWriteOptions,
     data_gen: IpcDataGenerator,
     dictionary_tracker: DictionaryTracker,
+    compression_context: CompressionContext,
 }
 
 impl FlightIpcEncoder {
@@ -655,6 +656,7 @@ impl FlightIpcEncoder {
             options,
             data_gen: IpcDataGenerator::default(),
             dictionary_tracker: DictionaryTracker::new(error_on_replacement),
+            compression_context: CompressionContext::default(),
         }
     }
 
@@ -666,9 +668,12 @@ impl FlightIpcEncoder {
     /// Convert a `RecordBatch` to a Vec of `FlightData` representing
     /// dictionaries and a `FlightData` representing the batch
     fn encode_batch(&mut self, batch: &RecordBatch) -> Result<(Vec<FlightData>, FlightData)> {
-        let (encoded_dictionaries, encoded_batch) =
-            self.data_gen
-                .encoded_batch(batch, &mut self.dictionary_tracker, &self.options)?;
+        let (encoded_dictionaries, encoded_batch) = self.data_gen.encode(
+            batch,
+            &mut self.dictionary_tracker,
+            &self.options,
+            &mut self.compression_context,
+        )?;
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
         let flight_batch = encoded_batch.into();
@@ -1596,9 +1601,15 @@ mod tests {
     ) -> (Vec<FlightData>, FlightData) {
         let data_gen = IpcDataGenerator::default();
         let mut dictionary_tracker = DictionaryTracker::new(false);
+        let mut compression_context = CompressionContext::default();
 
         let (encoded_dictionaries, encoded_batch) = data_gen
-            .encoded_batch(batch, &mut dictionary_tracker, options)
+            .encode(
+                batch,
+                &mut dictionary_tracker,
+                options,
+                &mut compression_context,
+            )
             .expect("DictionaryTracker configured above to not error on replacement");
 
         let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();

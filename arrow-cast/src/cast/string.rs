@@ -107,15 +107,14 @@ fn parse_string_iter<
             .map(|x| match x {
                 Some(v) => P::parse(v).ok_or_else(|| {
                     ArrowError::CastError(format!(
-                        "Cannot cast string '{}' to value of {:?} type",
-                        v,
+                        "Cannot cast string '{v}' to value of {} type",
                         P::DATA_TYPE
                     ))
                 }),
                 None => Ok(P::Native::default()),
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        PrimitiveArray::new(v.into(), nulls())
+        PrimitiveArray::try_new(v.into(), nulls())?
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -339,6 +338,14 @@ where
 
 /// A specified helper to cast from `GenericBinaryArray` to `GenericStringArray` when they have same
 /// offset size so re-encoding offset is unnecessary.
+fn extend_valid_utf8<'a, B, I>(builder: &mut B, iter: I)
+where
+    B: Extend<Option<&'a str>>,
+    I: Iterator<Item = Option<&'a [u8]>>,
+{
+    builder.extend(iter.map(|value| value.and_then(|bytes| std::str::from_utf8(bytes).ok())));
+}
+
 pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
@@ -356,14 +363,29 @@ pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
                 let mut builder =
                     GenericStringBuilder::<O>::with_capacity(array.len(), array.value_data().len());
 
-                let iter = array
-                    .iter()
-                    .map(|v| v.and_then(|v| std::str::from_utf8(v).ok()));
-
-                builder.extend(iter);
+                extend_valid_utf8(&mut builder, array.iter());
                 Ok(Arc::new(builder.finish()))
             }
             false => Err(e),
+        },
+    }
+}
+
+pub(crate) fn cast_binary_view_to_string_view(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_binary_view();
+
+    match array.clone().to_string_view() {
+        Ok(result) => Ok(Arc::new(result)),
+        Err(error) => match cast_options.safe {
+            true => {
+                let mut builder = StringViewBuilder::with_capacity(array.len());
+                extend_valid_utf8(&mut builder, array.iter());
+                Ok(Arc::new(builder.finish()))
+            }
+            false => Err(error),
         },
     }
 }

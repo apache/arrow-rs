@@ -17,49 +17,107 @@
 
 //! Avro reader
 //!
-//! This module provides facilities to read Apache Avro-encoded files or streams
-//! into Arrow's `RecordBatch` format. In particular, it introduces:
+//! Facilities to read Apache Avro–encoded data into Arrow's `RecordBatch` format.
 //!
-//! * `ReaderBuilder`: Configures Avro reading, e.g., batch size
-//! * `Reader`: Yields `RecordBatch` values, implementing `Iterator`
-//! * `Decoder`: A low-level push-based decoder for Avro records
+//! ### Limitations
 //!
-//! # Basic Usage
+//!- **Avro unions with > 127 branches are not supported.**
+//!  When decoding Avro unions to Arrow `UnionArray`, Arrow stores the union
+//!  type identifiers in an **8‑bit signed** buffer (`i8`). This implies a
+//!  practical limit of **127** distinct branch ids. Inputs that resolve to
+//!  more than 127 branches will return an error. If you truly need more,
+//!  model the schema as a **union of unions**, per the Arrow format spec.
 //!
-//! `Reader` can be used directly with synchronous data sources, such as [`std::fs::File`].
+//!  See: Arrow Columnar Format — Dense Union (“types buffer: 8‑bit signed;
+//!  a union with more than 127 possible types can be modeled as a union of
+//!  unions”).
 //!
-//! ## Reading a Single Batch
+//! This module exposes three layers of the API surface, from highest to lowest-level:
+//!
+//! * [`ReaderBuilder`](crate::reader::ReaderBuilder): configures how Avro is read (batch size, strict union handling,
+//!   string representation, reader schema, etc.) and produces either:
+//!   * a `Reader` for **Avro Object Container Files (OCF)** read from any `BufRead`, or
+//!   * a low-level `Decoder` for **single‑object encoded** Avro bytes and Confluent
+//!     **Schema Registry** framed messages.
+//! * [`Reader`](crate::reader::Reader): a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
+//!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
+//!   `RecordBatchReader`.
+//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes raw Avro bytes and yields ready
+//!   `RecordBatch` values when batches fill. This is suitable for integrating with async
+//!   byte streams, network protocols, or other custom data sources.
+//!
+//! ## Encodings and when to use which type
+//!
+//! * **Object Container File (OCF)**: A self‑describing file format with a header containing
+//!   the writer schema, optional compression codec, and a sync marker, followed by one or
+//!   more data blocks. Use `Reader` for this format. See the Avro 1.11.1 specification
+//!   (“Object Container Files”). <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
+//! * **Single‑Object Encoding**: A stream‑friendly framing that prefixes each record body with
+//!   the 2‑byte marker `0xC3 0x01` followed by the **8‑byte little‑endian CRC‑64‑AVRO Rabin
+//!   fingerprint** of the writer schema, then the Avro binary body. Use `Decoder` with a
+//!   populated `SchemaStore` to resolve fingerprints to full schemas.
+//!   See “Single object encoding” in the Avro 1.11.1 spec.
+//!   <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
+//! * **Confluent Schema Registry wire format**: A 1‑byte magic `0x00`, a **4‑byte big‑endian**
+//!   schema ID, then the Avro‑encoded body. Use `Decoder` with a `SchemaStore` configured
+//!   for `FingerprintAlgorithm::None` and entries keyed by `Fingerprint::Id`. See
+//!   Confluent’s “Wire format” documentation.
+//!   <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
+//!
+//! ## Basic file usage (OCF)
+//!
+//! Use `ReaderBuilder::build` to construct a `Reader` from any `BufRead`. The doctest below
+//! creates a tiny OCF in memory using `AvroWriter` and then reads it back.
 //!
 //! ```
-//! # use std::fs::File;
-//! # use std::io::BufReader;
-//! # use arrow_avro::reader::ReaderBuilder;
-//! # let path = "avro/alltypes_plain.avro";
-//! # let path = match std::env::var("ARROW_TEST_DATA") {
-//! #   Ok(dir) => format!("{dir}/{path}"),
-//! #   Err(_) => format!("../testing/data/{path}")
-//! # };
-//! let file = File::open(path).unwrap();
-//! let mut avro = ReaderBuilder::new().build(BufReader::new(file)).unwrap();
-//! let batch = avro.next().unwrap();
+//! use std::io::Cursor;
+//! use std::sync::Arc;
+//! use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//! use arrow_avro::writer::AvroWriter;
+//! use arrow_avro::reader::ReaderBuilder;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Build a minimal Arrow schema and batch
+//! let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(schema.clone()),
+//!     vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+//! )?;
+//!
+//! // Write an Avro OCF to memory
+//! let buffer: Vec<u8> = Vec::new();
+//! let mut writer = AvroWriter::new(buffer, schema.clone())?;
+//! writer.write(&batch)?;
+//! writer.finish()?;
+//! let bytes = writer.into_inner();
+//!
+//! // Read it back with ReaderBuilder
+//! let mut reader = ReaderBuilder::new().build(Cursor::new(bytes))?;
+//! let out = reader.next().unwrap()?;
+//! assert_eq!(out.num_rows(), 3);
+//! # Ok(()) }
 //! ```
 //!
-//! # Async Usage
+//! ## Streaming usage (single‑object / Confluent)
 //!
-//! The lower-level `Decoder` can be integrated with various forms of async data streams,
-//! and is designed to be agnostic to different async IO primitives within
-//! the Rust ecosystem. It works by incrementally decoding Avro data from byte slices.
+//! The `Decoder` lets you integrate Avro decoding with **any** source of bytes by
+//! periodically calling `Decoder::decode` with new data and calling `Decoder::flush`
+//! to get a `RecordBatch` once at least one row is complete.
 //!
-//! For example, see below for how it could be used with an arbitrary `Stream` of `Bytes`:
+//! The example below shows how to decode from an arbitrary stream of `bytes::Bytes` using
+//! `futures` utilities. Note: this is illustrative and keeps a single in‑memory `Bytes`
+//! buffer for simplicity—real applications typically maintain a rolling buffer.
 //!
 //! ```
-//! # use std::task::{Poll, ready};
-//! # use bytes::{Buf, Bytes};
-//! # use arrow_schema::ArrowError;
-//! # use futures::stream::{Stream, StreamExt};
-//! # use arrow_array::RecordBatch;
-//! # use arrow_avro::reader::Decoder;
+//! use bytes::{Buf, Bytes};
+//! use futures::{Stream, StreamExt};
+//! use std::task::{Poll, ready};
+//! use arrow_array::RecordBatch;
+//! use arrow_schema::ArrowError;
+//! use arrow_avro::reader::Decoder;
 //!
+//! /// Decode a stream of Avro-framed bytes into RecordBatch values.
 //! fn decode_stream<S: Stream<Item = Bytes> + Unpin>(
 //!     mut decoder: Decoder,
 //!     mut input: S,
@@ -70,29 +128,356 @@
 //!             if buffered.is_empty() {
 //!                 buffered = match ready!(input.poll_next_unpin(cx)) {
 //!                     Some(b) => b,
-//!                     None => break,
+//!                     None => break, // EOF
 //!                 };
 //!             }
+//!             // Feed as much as possible
 //!             let decoded = match decoder.decode(buffered.as_ref()) {
-//!                 Ok(decoded) => decoded,
+//!                 Ok(n) => n,
 //!                 Err(e) => return Poll::Ready(Some(Err(e))),
 //!             };
 //!             let read = buffered.len();
 //!             buffered.advance(decoded);
 //!             if decoded != read {
+//!                 // decoder made partial progress; request more bytes
 //!                 break
 //!             }
 //!         }
-//!         // Convert any fully-decoded rows to a RecordBatch, if available
+//!         // Return a batch if one or more rows are complete
 //!         Poll::Ready(decoder.flush().transpose())
 //!     })
 //! }
 //! ```
 //!
+//! ### Building and using a `Decoder` for **single‑object encoding** (Rabin fingerprints)
+//!
+//! The doctest below **writes** a single‑object framed record using the Avro writer
+//! (no manual varints) for the writer schema
+//! (`{"type":"record","name":"User","fields":[{"name":"id","type":"long"}]}`)
+//! and then decodes it into a `RecordBatch`.
+//!
+//! ```
+//! use std::sync::Arc;
+//! use std::collections::HashMap;
+//! use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//! use arrow_avro::schema::{AvroSchema, SchemaStore, SCHEMA_METADATA_KEY, FingerprintStrategy};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+//! use arrow_avro::reader::ReaderBuilder;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Register the writer schema (Rabin fingerprint by default).
+//! let mut store = SchemaStore::new();
+//! let avro_schema = AvroSchema::new(r#"{"type":"record","name":"User","fields":[
+//!   {"name":"id","type":"long"}]}"#.to_string());
+//! let _fp = store.register(avro_schema.clone())?;
+//!
+//! // Create a single-object framed record { id: 42 } with the Avro writer.
+//! let mut md = HashMap::new();
+//! md.insert(SCHEMA_METADATA_KEY.to_string(), avro_schema.json_string.clone());
+//! let arrow = Schema::new_with_metadata(vec![Field::new("id", DataType::Int64, false)], md);
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(arrow.clone()),
+//!     vec![Arc::new(Int64Array::from(vec![42])) as ArrayRef],
+//! )?;
+//! let mut w = WriterBuilder::new(arrow)
+//!     .with_fingerprint_strategy(FingerprintStrategy::Rabin) // SOE prefix
+//!     .build::<_, AvroBinaryFormat>(Vec::new())?;
+//! w.write(&batch)?;
+//! w.finish()?;
+//! let frame = w.into_inner(); // C3 01 + fp + Avro body
+//!
+//! // Decode with a `Decoder`
+//! let mut dec = ReaderBuilder::new()
+//!   .with_writer_schema_store(store)
+//!   .with_batch_size(1024)
+//!   .build_decoder()?;
+//!
+//! dec.decode(&frame)?;
+//! let out = dec.flush()?.expect("one batch");
+//! assert_eq!(out.num_rows(), 1);
+//! # Ok(()) }
+//! ```
+//!
+//! See Avro 1.11.1 “Single object encoding” for details of the 2‑byte marker
+//! and little‑endian CRC‑64‑AVRO fingerprint:
+//! <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
+//!
+//! ### Building and using a `Decoder` for **Confluent Schema Registry** framing
+//!
+//! The Confluent wire format is: 1‑byte magic `0x00`, then a **4‑byte big‑endian** schema ID,
+//! then the Avro body. The doctest below crafts two messages for the same schema ID and
+//! decodes them into a single `RecordBatch` with two rows.
+//!
+//! ```
+//! use std::sync::Arc;
+//! use std::collections::HashMap;
+//! use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//! use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY, FingerprintStrategy};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+//! use arrow_avro::reader::ReaderBuilder;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Set up a store keyed by numeric IDs (Confluent).
+//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+//! let schema_id = 7u32;
+//! let avro_schema = AvroSchema::new(r#"{"type":"record","name":"User","fields":[
+//!   {"name":"id","type":"long"}, {"name":"name","type":"string"}]}"#.to_string());
+//! store.set(Fingerprint::Id(schema_id), avro_schema.clone())?;
+//!
+//! // Write two Confluent-framed messages {id:1,name:"a"} and {id:2,name:"b"}.
+//! fn msg(id: i64, name: &str, schema: &AvroSchema, schema_id: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+//!     let mut md = HashMap::new();
+//!     md.insert(SCHEMA_METADATA_KEY.to_string(), schema.json_string.clone());
+//!     let arrow = Schema::new_with_metadata(
+//!         vec![Field::new("id", DataType::Int64, false), Field::new("name", DataType::Utf8, false)],
+//!         md,
+//!     );
+//!     let batch = RecordBatch::try_new(
+//!         Arc::new(arrow.clone()),
+//!         vec![
+//!           Arc::new(Int64Array::from(vec![id])) as ArrayRef,
+//!           Arc::new(StringArray::from(vec![name])) as ArrayRef,
+//!         ],
+//!     )?;
+//!     let mut w = WriterBuilder::new(arrow)
+//!         .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id)) // 0x00 + ID + body
+//!         .build::<_, AvroBinaryFormat>(Vec::new())?;
+//!     w.write(&batch)?; w.finish()?;
+//!     Ok(w.into_inner())
+//! }
+//! let m1 = msg(1, "a", &avro_schema, schema_id)?;
+//! let m2 = msg(2, "b", &avro_schema, schema_id)?;
+//!
+//! // Decode both into a single batch.
+//! let mut dec = ReaderBuilder::new()
+//!   .with_writer_schema_store(store)
+//!   .with_batch_size(1024)
+//!   .build_decoder()?;
+//! dec.decode(&m1)?;
+//! dec.decode(&m2)?;
+//! let batch = dec.flush()?.expect("batch");
+//! assert_eq!(batch.num_rows(), 2);
+//! # Ok(()) }
+//! ```
+//!
+//! See Confluent’s “Wire format” notes: magic byte `0x00`, 4‑byte **big‑endian** schema ID,
+//! then the Avro‑encoded payload.
+//! <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
+//!
+//! ## Schema resolution (reader vs. writer schemas)
+//!
+//! Avro supports resolving data written with one schema (“writer”) into another (“reader”)
+//! using rules like **field aliases**, **default values**, and **numeric promotions**.
+//! In practice this lets you evolve schemas over time while remaining compatible with old data.
+//!
+//! *Spec background:* See Avro’s **Schema Resolution** (aliases, defaults) and the Confluent
+//! **Wire format** (magic `0x00` + big‑endian schema id + Avro body).
+//! <https://avro.apache.org/docs/1.11.1/specification/#schema-resolution>
+//! <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
+//!
+//! ### OCF example: rename a field and add a default via a reader schema
+//!
+//! Below we write an OCF with a *writer schema* having fields `id: long`, `name: string`.
+//! We then read it with a *reader schema* that:
+//! - **renames** `name` to `full_name` via `aliases`, and
+//! - **adds** `is_active: boolean` with a **default** value `true`.
+//!
+//! ```
+//! use std::io::Cursor;
+//! use std::sync::Arc;
+//! use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//! use arrow_avro::writer::AvroWriter;
+//! use arrow_avro::reader::ReaderBuilder;
+//! use arrow_avro::schema::AvroSchema;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Writer (past version): { id: long, name: string }
+//! let writer_arrow = Schema::new(vec![
+//!     Field::new("id", DataType::Int64, false),
+//!     Field::new("name", DataType::Utf8, false),
+//! ]);
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(writer_arrow.clone()),
+//!     vec![
+//!         Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+//!         Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+//!     ],
+//! )?;
+//!
+//! // Write an OCF entirely in memory
+//! let mut w = AvroWriter::new(Vec::<u8>::new(), writer_arrow)?;
+//! w.write(&batch)?;
+//! w.finish()?;
+//! let bytes = w.into_inner();
+//!
+//! // Reader (current version):
+//! //  - record name "topLevelRecord" matches the crate's default for OCF
+//! //  - rename `name` -> `full_name` using aliases (optional)
+//! let reader_json = r#"
+//! {
+//!   "type": "record",
+//!   "name": "topLevelRecord",
+//!   "fields": [
+//!     { "name": "id", "type": "long" },
+//!     { "name": "full_name", "type": ["null","string"], "aliases": ["name"], "default": null },
+//!     { "name": "is_active", "type": "boolean", "default": true }
+//!   ]
+//! }"#;
+//!
+//! let mut reader = ReaderBuilder::new()
+//!   .with_reader_schema(AvroSchema::new(reader_json.to_string()))
+//!   .build(Cursor::new(bytes))?;
+//!
+//! let out = reader.next().unwrap()?;
+//! assert_eq!(out.num_rows(), 2);
+//! # Ok(()) }
+//! ```
+//!
+//! ### Confluent single‑object example: resolve *past* writer versions to the topic’s **current** reader schema
+//!
+//! In this scenario, the **reader schema** is the topic’s *current* schema, while the two
+//! **writer schemas** registered under Confluent IDs **1** and **2** represent *past versions*.
+//! The decoder uses the reader schema to resolve both versions.
+//!
+//! ```
+//! use std::sync::Arc;
+//! use std::collections::HashMap;
+//! use arrow_avro::reader::ReaderBuilder;
+//! use arrow_avro::schema::{
+//!     AvroSchema, Fingerprint, FingerprintAlgorithm, SchemaStore,
+//!     SCHEMA_METADATA_KEY, FingerprintStrategy,
+//! };
+//! use arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Reader: current topic schema (no reader-added fields)
+//!     //   {"type":"record","name":"User","fields":[
+//!     //     {"name":"id","type":"long"},
+//!     //     {"name":"name","type":"string"}]}
+//!     let reader_schema = AvroSchema::new(
+//!         r#"{"type":"record","name":"User",
+//!             "fields":[{"name":"id","type":"long"},{"name":"name","type":"string"}]}"#
+//!             .to_string(),
+//!     );
+//!
+//!     // Register two *writer* schemas under Confluent IDs 0 and 1
+//!     let writer_v0 = AvroSchema::new(
+//!         r#"{"type":"record","name":"User",
+//!             "fields":[{"name":"id","type":"int"},{"name":"name","type":"string"}]}"#
+//!             .to_string(),
+//!     );
+//!     let writer_v1 = AvroSchema::new(
+//!         r#"{"type":"record","name":"User",
+//!             "fields":[{"name":"id","type":"long"},{"name":"name","type":"string"},
+//!                       {"name":"email","type":["null","string"],"default":null}]}"#
+//!             .to_string(),
+//!     );
+//!
+//!     let id_v0: u32 = 0;
+//!     let id_v1: u32 = 1;
+//!
+//!     let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None); // integer IDs
+//!     store.set(Fingerprint::Id(id_v0), writer_v0.clone())?;
+//!     store.set(Fingerprint::Id(id_v1), writer_v1.clone())?;
+//!
+//!     // Write two Confluent-framed messages using each writer version
+//!     // frame0: writer v0 body {id:1001_i32, name:"v0-alice"}
+//!     let mut md0 = HashMap::new();
+//!     md0.insert(SCHEMA_METADATA_KEY.to_string(), writer_v0.json_string.clone());
+//!     let arrow0 = Schema::new_with_metadata(
+//!         vec![Field::new("id", DataType::Int32, false),
+//!              Field::new("name", DataType::Utf8, false)], md0);
+//!     let batch0 = RecordBatch::try_new(
+//!         Arc::new(arrow0.clone()),
+//!         vec![Arc::new(Int32Array::from(vec![1001])) as ArrayRef,
+//!              Arc::new(StringArray::from(vec!["v0-alice"])) as ArrayRef])?;
+//!     let mut w0 = arrow_avro::writer::WriterBuilder::new(arrow0)
+//!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v0))
+//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!     w0.write(&batch0)?; w0.finish()?;
+//!     let frame0 = w0.into_inner(); // 0x00 + id_v0 + body
+//!
+//!     // frame1: writer v1 body {id:2002_i64, name:"v1-bob", email: Some("bob@example.com")}
+//!     let mut md1 = HashMap::new();
+//!    md1.insert(SCHEMA_METADATA_KEY.to_string(), writer_v1.json_string.clone());
+//!     let arrow1 = Schema::new_with_metadata(
+//!         vec![Field::new("id", DataType::Int64, false),
+//!              Field::new("name", DataType::Utf8, false),
+//!              Field::new("email", DataType::Utf8, true)], md1);
+//!     let batch1 = RecordBatch::try_new(
+//!         Arc::new(arrow1.clone()),
+//!         vec![Arc::new(Int64Array::from(vec![2002])) as ArrayRef,
+//!              Arc::new(StringArray::from(vec!["v1-bob"])) as ArrayRef,
+//!              Arc::new(StringArray::from(vec![Some("bob@example.com")])) as ArrayRef])?;
+//!     let mut w1 = arrow_avro::writer::WriterBuilder::new(arrow1)
+//!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v1))
+//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!     w1.write(&batch1)?; w1.finish()?;
+//!     let frame1 = w1.into_inner(); // 0x00 + id_v1 + body
+//!
+//!     // Build a streaming Decoder that understands Confluent framing
+//!     let mut decoder = ReaderBuilder::new()
+//!         .with_reader_schema(reader_schema)
+//!         .with_writer_schema_store(store)
+//!         .with_batch_size(8) // small demo batches
+//!         .build_decoder()?;
+//!
+//!     // Decode each whole frame, then drain completed rows with flush()
+//!     let mut total_rows = 0usize;
+//!
+//!     let consumed0 = decoder.decode(&frame0)?;
+//!     assert_eq!(consumed0, frame0.len(), "decoder must consume the whole frame");
+//!     while let Some(batch) = decoder.flush()? { total_rows += batch.num_rows(); }
+//!
+//!     let consumed1 = decoder.decode(&frame1)?;
+//!     assert_eq!(consumed1, frame1.len(), "decoder must consume the whole frame");
+//!     while let Some(batch) = decoder.flush()? { total_rows += batch.num_rows(); }
+//!
+//!     // We sent 2 records so we should get 2 rows (possibly one per flush)
+//!     assert_eq!(total_rows, 2);
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Schema evolution and batch boundaries
+//!
+//! `Decoder` supports mid‑stream schema changes when the input framing carries a schema
+//! fingerprint (single‑object or Confluent). When a new fingerprint is observed:
+//!
+//! * If the current `RecordBatch` is **empty**, the decoder switches to the new schema
+//!   immediately.
+//! * If not, the decoder finishes the current batch first and only then switches.
+//!
+//! Consequently, the schema of batches produced by `Decoder::flush` may change over time,
+//! and `Decoder` intentionally does **not** implement `RecordBatchReader`. In contrast,
+//! `Reader` (OCF) has a single writer schema for the entire file and therefore implements
+//! `RecordBatchReader`.
+//!
+//! ## Performance & memory
+//!
+//! * `batch_size` controls the maximum number of rows per `RecordBatch`. Larger batches
+//!   amortize per‑batch overhead; smaller batches reduce peak memory usage and latency.
+//! * When `utf8_view` is enabled, string columns use Arrow’s `StringViewArray`, which can
+//!   reduce allocations for short strings.
+//! * For OCF, blocks may be compressed; `Reader` will decompress using the codec specified
+//!   in the file header and feed uncompressed bytes to the row `Decoder`.
+//!
+//! ## Error handling
+//!
+//! * Incomplete inputs return parse errors with "Unexpected EOF"; callers typically provide
+//!   more bytes and try again.
+//! * If a fingerprint is unknown to the provided `SchemaStore`, decoding fails with a
+//!   descriptive error. Populate the store up front to avoid this.
+//!
+//! ---
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
-    compare_schemas, generate_fingerprint, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema,
-    SchemaStore, SINGLE_OBJECT_MAGIC,
+    compare_schemas, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore,
+    CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
 };
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
@@ -129,7 +514,6 @@ fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
     })
 }
 
-// NOTE: The Current ` is_incomplete_data ` below is temporary and will be improved prior to public release
 fn is_incomplete_data(err: &ArrowError) -> bool {
     matches!(
         err,
@@ -138,7 +522,128 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
     )
 }
 
-/// A low-level interface for decoding Avro-encoded bytes into Arrow `RecordBatch`.
+/// A low‑level, push‑based decoder from Avro bytes to Arrow `RecordBatch`.
+///
+/// `Decoder` is designed for **streaming** scenarios:
+///
+/// * You *feed* freshly received bytes using `Self::decode`, potentially multiple times,
+///   until at least one row is complete.
+/// * You then *drain* completed rows with `Self::flush`, which yields a `RecordBatch`
+///   if any rows were finished since the last flush.
+///
+/// Unlike `Reader`, which is specialized for Avro **Object Container Files**, `Decoder`
+/// understands **framed single‑object** inputs and **Confluent Schema Registry** messages,
+/// switching schemas mid‑stream when the framing indicates a new fingerprint.
+///
+/// ### Supported prefixes
+///
+/// On each new row boundary, `Decoder` tries to match one of the following "prefixes":
+///
+/// * **Single‑Object encoding**: magic `0xC3 0x01` + schema fingerprint (length depends on
+///   the configured `FingerprintAlgorithm`); see `SINGLE_OBJECT_MAGIC`.
+/// * **Confluent wire format**: magic `0x00` + 4‑byte big‑endian schema id; see
+///   `CONFLUENT_MAGIC`.
+///
+/// The active fingerprint determines which cached row decoder is used to decode the following
+/// record body bytes.
+///
+/// ### Schema switching semantics
+///
+/// When a new fingerprint is observed:
+///
+/// * If the current batch is empty, the decoder switches immediately;
+/// * Otherwise, the current batch is finalized on the next `flush` and only then
+///   does the decoder switch to the new schema. This guarantees that a single `RecordBatch`
+///   never mixes rows with different schemas.
+///
+/// ### Examples
+///
+/// Build and use a `Decoder` for single‑object encoding:
+///
+/// ```
+/// use arrow_avro::schema::{AvroSchema, SchemaStore};
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// // Use a record schema at the top level so we can build an Arrow RecordBatch
+/// let mut store = SchemaStore::new(); // Rabin fingerprinting by default
+/// let avro = AvroSchema::new(
+///     r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string()
+/// );
+/// let fp = store.register(avro)?;
+///
+/// // --- Hidden: write a single-object framed row {x:7} ---
+/// # use std::sync::Arc;
+/// # use std::collections::HashMap;
+/// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// # use arrow_schema::{DataType, Field, Schema};
+/// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # let mut md = HashMap::new();
+/// # md.insert(SCHEMA_METADATA_KEY.to_string(),
+/// #     r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string());
+/// # let arrow = Schema::new_with_metadata(vec![Field::new("x", DataType::Int64, false)], md);
+/// # let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![7])) as ArrayRef])?;
+/// # let mut w = WriterBuilder::new(arrow)
+/// #     .with_fingerprint_strategy(fp.into())
+/// #     .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// # w.write(&batch)?; w.finish()?; let frame = w.into_inner();
+///
+/// let mut decoder = ReaderBuilder::new()
+///     .with_writer_schema_store(store)
+///     .with_batch_size(16)
+///     .build_decoder()?;
+///
+/// # decoder.decode(&frame)?;
+/// let batch = decoder.flush()?.expect("one row");
+/// assert_eq!(batch.num_rows(), 1);
+/// # Ok(()) }
+/// ```
+///
+/// *Background:* Avro's single‑object encoding is defined as `0xC3 0x01` + 8‑byte
+/// little‑endian CRC‑64‑AVRO fingerprint of the **writer schema** + Avro binary body.
+/// See the Avro 1.11.1 spec for details. <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
+///
+/// Build and use a `Decoder` for Confluent Registry messages:
+///
+/// ```
+/// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm};
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+/// store.set(Fingerprint::Id(1234), AvroSchema::new(r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string()))?;
+///
+/// // --- Hidden: encode two Confluent-framed messages {x:1} and {x:2} ---
+/// # use std::sync::Arc;
+/// # use std::collections::HashMap;
+/// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+/// # use arrow_schema::{DataType, Field, Schema};
+/// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # fn msg(x: i64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+/// #   let mut md = HashMap::new();
+/// #   md.insert(SCHEMA_METADATA_KEY.to_string(),
+/// #     r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string());
+/// #   let arrow = Schema::new_with_metadata(vec![Field::new("x", DataType::Int64, false)], md);
+/// #   let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![x])) as ArrayRef])?;
+/// #   let mut w = WriterBuilder::new(arrow)
+/// #       .with_fingerprint_strategy(FingerprintStrategy::Id(1234))
+/// #       .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// #   w.write(&batch)?; w.finish()?; Ok(w.into_inner())
+/// # }
+/// # let m1 = msg(1)?;
+/// # let m2 = msg(2)?;
+///
+/// let mut decoder = ReaderBuilder::new()
+///     .with_writer_schema_store(store)
+///     .build_decoder()?;
+/// # decoder.decode(&m1)?;
+/// # decoder.decode(&m2)?;
+/// let batch = decoder.flush()?.expect("two rows");
+/// assert_eq!(batch.num_rows(), 2);
+/// # Ok(()) }
+/// ```
 #[derive(Debug)]
 pub struct Decoder {
     active_decoder: RecordDecoder,
@@ -154,21 +659,39 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    /// Return the Arrow schema for the rows decoded by this decoder
+    /// Returns the Arrow schema for the rows decoded by this decoder.
+    ///
+    /// **Note:** With single‑object or Confluent framing, the schema may change
+    /// at a row boundary when the input indicates a new fingerprint.
     pub fn schema(&self) -> SchemaRef {
         self.active_decoder.schema().clone()
     }
 
-    /// Return the configured maximum number of rows per batch
+    /// Returns the configured maximum number of rows per batch.
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }
 
-    /// Feed `data` into the decoder row by row until we either:
-    /// - consume all bytes in `data`, or
-    /// - reach `batch_size` decoded rows.
+    /// Feed a chunk of bytes into the decoder.
     ///
-    /// Returns the number of bytes consumed.
+    /// This will:
+    ///
+    /// * Decode at most `Self::batch_size` rows;
+    /// * Return the number of input bytes **consumed** from `data` (which may be 0 if more
+    ///   bytes are required, or less than `data.len()` if a prefix/body straddles the
+    ///   chunk boundary);
+    /// * Defer producing a `RecordBatch` until you call `Self::flush`.
+    ///
+    /// # Returns
+    /// The number of bytes consumed from `data`.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    ///
+    /// * The input indicates an unknown fingerprint (not present in the provided
+    ///   `SchemaStore`;
+    /// * The Avro body is malformed;
+    /// * A strict‑mode union rule is violated (see `ReaderBuilder::with_strict_mode`).
     pub fn decode(&mut self, data: &[u8]) -> Result<usize, ArrowError> {
         let mut total_consumed = 0usize;
         while total_consumed < data.len() && self.remaining_capacity > 0 {
@@ -185,7 +708,7 @@ impl Decoder {
                 };
             }
             match self.handle_prefix(&data[total_consumed..])? {
-                Some(0) => break, // insufficient bytes
+                Some(0) => break, // Insufficient bytes
                 Some(n) => {
                     total_consumed += n;
                     self.apply_pending_schema_if_batch_empty();
@@ -201,31 +724,60 @@ impl Decoder {
         Ok(total_consumed)
     }
 
-    // Attempt to handle a single‑object‑encoding prefix at the current position.
-    //
+    // Attempt to handle a prefix at the current position.
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
     fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
-        // Need at least the magic bytes to decide (2 bytes).
-        let Some(magic_bytes) = buf.get(..SINGLE_OBJECT_MAGIC.len()) else {
-            return Ok(Some(0)); // Get more bytes
-        };
+        match self.fingerprint_algorithm {
+            FingerprintAlgorithm::Rabin => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::Rabin(u64::from_le_bytes(bytes))
+                })
+            }
+            FingerprintAlgorithm::None => {
+                self.handle_prefix_common(buf, &CONFLUENT_MAGIC, |bytes| {
+                    Fingerprint::Id(u32::from_be_bytes(bytes))
+                })
+            }
+            #[cfg(feature = "md5")]
+            FingerprintAlgorithm::MD5 => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::MD5(bytes)
+                })
+            }
+            #[cfg(feature = "sha256")]
+            FingerprintAlgorithm::SHA256 => {
+                self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
+                    Fingerprint::SHA256(bytes)
+                })
+            }
+        }
+    }
+
+    /// This method checks for the provided `magic` bytes at the start of `buf` and, if present,
+    /// attempts to read the following fingerprint of `N` bytes, converting it to a
+    /// `Fingerprint` using `fingerprint_from`.
+    fn handle_prefix_common<const MAGIC_LEN: usize, const N: usize>(
+        &mut self,
+        buf: &[u8],
+        magic: &[u8; MAGIC_LEN],
+        fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
+    ) -> Result<Option<usize>, ArrowError> {
+        // Need at least the magic bytes to decide
+        // 2 bytes for Avro Spec and 1 byte for Confluent Wire Protocol.
+        if buf.len() < MAGIC_LEN {
+            return Ok(Some(0));
+        }
         // Bail out early if the magic does not match.
-        if magic_bytes != SINGLE_OBJECT_MAGIC {
-            return Ok(None); // Continue to decode the next record
+        if &buf[..MAGIC_LEN] != magic {
+            return Ok(None);
         }
         // Try to parse the fingerprint that follows the magic.
-        let fingerprint_size = match self.fingerprint_algorithm {
-            FingerprintAlgorithm::Rabin => self
-                .handle_fingerprint(&buf[SINGLE_OBJECT_MAGIC.len()..], |bytes| {
-                    Fingerprint::Rabin(u64::from_le_bytes(bytes))
-                })?,
-        };
+        let consumed_fp = self.handle_fingerprint(&buf[MAGIC_LEN..], fingerprint_from)?;
         // Convert the inner result into a “bytes consumed” count.
         // NOTE: Incomplete fingerprint consumes no bytes.
-        let consumed = fingerprint_size.map_or(0, |n| n + SINGLE_OBJECT_MAGIC.len());
-        Ok(Some(consumed))
+        Ok(Some(consumed_fp.map_or(0, |n| n + MAGIC_LEN)))
     }
 
     // Attempts to read and install a new fingerprint of `N` bytes.
@@ -239,7 +791,7 @@ impl Decoder {
     ) -> Result<Option<usize>, ArrowError> {
         // Need enough bytes to get fingerprint (next N bytes)
         let Some(fingerprint_bytes) = buf.get(..N) else {
-            return Ok(None); // Insufficient bytes
+            return Ok(None); // insufficient bytes
         };
         // SAFETY: length checked above.
         let new_fingerprint = fingerprint_from(fingerprint_bytes.try_into().unwrap());
@@ -289,6 +841,10 @@ impl Decoder {
 
     /// Produce a `RecordBatch` if at least one row is fully decoded, returning
     /// `Ok(None)` if no new rows are available.
+    ///
+    /// If a schema change was detected while decoding rows for the current batch, the
+    /// schema switch is applied **after** flushing this batch, so the **next** batch
+    /// (if any) may have a different schema.
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         // We must flush the active decoder before switching to the pending one.
         let batch = self.flush_and_reset();
@@ -306,7 +862,7 @@ impl Decoder {
         self.remaining_capacity == 0
     }
 
-    /// Returns true if the decoder has not decoded any batches yet.
+    /// Returns true if the decoder has not decoded any batches yet (i.e., the current batch is empty).
     pub fn batch_is_empty(&self) -> bool {
         self.remaining_capacity == self.batch_size
     }
@@ -332,8 +888,57 @@ impl Decoder {
     }
 }
 
-/// A builder to create an [`Avro Reader`](Reader) that reads Avro data
-/// into Arrow `RecordBatch`.
+/// A builder that configures and constructs Avro readers and decoders.
+///
+/// `ReaderBuilder` is the primary entry point for this module. It supports:
+///
+/// * OCF reading via `Self::build`, returning a `Reader` over any `BufRead`;
+/// * streaming decoding via `Self::build_decoder`, returning a `Decoder`.
+///
+/// ### Options
+///
+/// * **`batch_size`**: Max rows per `RecordBatch` (default: `1024`). See `Self::with_batch_size`.
+/// * **`utf8_view`**: Use Arrow `StringViewArray` for string columns (default: `false`).
+///   See `Self::with_utf8_view`.
+/// * **`strict_mode`**: Opt‑in to stricter union handling (default: `false`).
+///   See `Self::with_strict_mode`.
+/// * **`reader_schema`**: Optional reader schema (projection / evolution) used when decoding
+///   values (default: `None`). See `Self::with_reader_schema`.
+/// * **`writer_schema_store`**: Required for building a `Decoder` for single‑object or
+///   Confluent framing. Maps fingerprints to Avro schemas. See `Self::with_writer_schema_store`.
+/// * **`active_fingerprint`**: Optional starting fingerprint for streaming decode when the
+///   first frame omits one (rare). See `Self::with_active_fingerprint`.
+///
+/// ### Examples
+///
+/// Read an OCF file in batches of 4096 rows:
+///
+/// ```no_run
+/// use std::fs::File;
+/// use std::io::BufReader;
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// let file = File::open("data.avro")?;
+/// let mut reader = ReaderBuilder::new()
+///     .with_batch_size(4096)
+///     .build(BufReader::new(file))?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// Build a `Decoder` for Confluent messages:
+///
+/// ```no_run
+/// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm};
+/// use arrow_avro::reader::ReaderBuilder;
+///
+/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+/// store.set(Fingerprint::Id(1234), AvroSchema::new(r#"{"type":"record","name":"E","fields":[]}"#.to_string()))?;
+///
+/// let decoder = ReaderBuilder::new()
+///     .with_writer_schema_store(store)
+///     .build_decoder()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 #[derive(Debug)]
 pub struct ReaderBuilder {
     batch_size: usize,
@@ -358,13 +963,14 @@ impl Default for ReaderBuilder {
 }
 
 impl ReaderBuilder {
-    /// Creates a new [`ReaderBuilder`] with default settings:
-    /// - `batch_size` = 1024
-    /// - `strict_mode` = false
-    /// - `utf8_view` = false
-    /// - `reader_schema` = None
-    /// - `writer_schema_store` = None
-    /// - `active_fingerprint` = None
+    /// Creates a new `ReaderBuilder` with defaults:
+    ///
+    /// * `batch_size = 1024`
+    /// * `strict_mode = false`
+    /// * `utf8_view = false`
+    /// * `reader_schema = None`
+    /// * `writer_schema_store = None`
+    /// * `active_fingerprint = None`
     pub fn new() -> Self {
         Self::default()
     }
@@ -484,45 +1090,56 @@ impl ReaderBuilder {
         ))
     }
 
-    /// Sets the row-based batch size
+    /// Sets the **row‑based batch size**.
+    ///
+    /// Each call to `Decoder::flush` or each iteration of `Reader` yields a batch with
+    /// *up to* this many rows. Larger batches can reduce overhead; smaller batches can
+    /// reduce peak memory usage and latency.
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self
     }
 
-    /// Set whether to use StringViewArray for string data
+    /// Choose Arrow's `StringViewArray` for UTF‑8 string data.
     ///
-    /// When enabled, string data from Avro files will be loaded into
-    /// Arrow's StringViewArray instead of the standard StringArray.
+    /// When enabled, textual Avro fields are loaded into Arrow’s **StringViewArray**
+    /// instead of the standard `StringArray`. This can improve performance for workloads
+    /// with many short strings by reducing allocations.
     pub fn with_utf8_view(mut self, utf8_view: bool) -> Self {
         self.utf8_view = utf8_view;
         self
     }
 
-    /// Get whether StringViewArray is enabled for string data
+    /// Returns whether `StringViewArray` is enabled for string data.
     pub fn use_utf8view(&self) -> bool {
         self.utf8_view
     }
 
-    /// Controls whether certain Avro unions of the form `[T, "null"]` should produce an error.
+    /// Enable stricter behavior for certain Avro unions (e.g., `[T, "null"]`).
+    ///
+    /// When `true`, ambiguous or lossy unions that would otherwise be coerced may instead
+    /// produce a descriptive error. Use this to catch schema issues early during ingestion.
     pub fn with_strict_mode(mut self, strict_mode: bool) -> Self {
         self.strict_mode = strict_mode;
         self
     }
 
-    /// Sets the Avro reader schema.
+    /// Sets the **reader schema** used during decoding.
     ///
-    /// If a schema is not provided, the schema will be read from the Avro file header.
+    /// If not provided, the writer schema from the OCF header (for `Reader`) or the
+    /// schema looked up from the fingerprint (for `Decoder`) is used directly.
+    ///
+    /// A reader schema can be used for **schema evolution** or **projection**.
     pub fn with_reader_schema(mut self, schema: AvroSchema) -> Self {
         self.reader_schema = Some(schema);
         self
     }
 
-    /// Sets the `SchemaStore` used for resolving writer schemas.
+    /// Sets the `SchemaStore` used to resolve writer schemas by fingerprint.
     ///
-    /// This is necessary when decoding single-object encoded data that identifies
-    /// schemas by a fingerprint. The store allows the decoder to look up the
-    /// full writer schema from a fingerprint embedded in the data.
+    /// This is required when building a `Decoder` for **single‑object encoding** or the
+    /// **Confluent** wire format. The store maps a fingerprint (Rabin / MD5 / SHA‑256 /
+    /// ID) to a full Avro schema.
     ///
     /// Defaults to `None`.
     pub fn with_writer_schema_store(mut self, store: SchemaStore) -> Self {
@@ -530,19 +1147,20 @@ impl ReaderBuilder {
         self
     }
 
-    /// Sets the initial schema fingerprint for decoding single-object encoded data.
+    /// Sets the initial schema fingerprint for stream decoding.
     ///
-    /// This is useful when the data stream does not begin with a schema definition
-    /// or fingerprint, allowing the decoder to start with a known schema from the
-    /// `SchemaStore`.
-    ///
-    /// Defaults to `None`.
+    /// This can be useful for streams that **do not include** a fingerprint before the first
+    /// record body (uncommon). If not set, the first observed fingerprint is used.
     pub fn with_active_fingerprint(mut self, fp: Fingerprint) -> Self {
         self.active_fingerprint = Some(fp);
         self
     }
 
-    /// Create a [`Reader`] from this builder and a `BufRead`
+    /// Build a `Reader` (OCF) from this builder and a `BufRead`.
+    ///
+    /// This reads and validates the OCF header, initializes an internal row decoder from
+    /// the discovered writer (and optional reader) schema, and prepares to iterate blocks,
+    /// decompressing if necessary.
     pub fn build<R: BufRead>(self, mut reader: R) -> Result<Reader<R>, ArrowError> {
         let header = read_header(&mut reader)?;
         let decoder = self.make_decoder(Some(&header), self.reader_schema.as_ref())?;
@@ -558,7 +1176,14 @@ impl ReaderBuilder {
         })
     }
 
-    /// Create a [`Decoder`] from this builder.
+    /// Build a streaming `Decoder` from this builder.
+    ///
+    /// # Requirements
+    /// * `SchemaStore` **must** be provided via `Self::with_writer_schema_store`.
+    /// * The store should contain **all** fingerprints that may appear on the stream.
+    ///
+    /// # Errors
+    /// * Returns [`ArrowError::InvalidArgumentError`] if the schema store is missing
     pub fn build_decoder(self) -> Result<Decoder, ArrowError> {
         if self.writer_schema_store.is_none() {
             return Err(ArrowError::InvalidArgumentError(
@@ -569,8 +1194,15 @@ impl ReaderBuilder {
     }
 }
 
-/// A high-level Avro `Reader` that reads container-file blocks
-/// and feeds them into a row-level [`Decoder`].
+/// A high‑level Avro **Object Container File** reader.
+///
+/// `Reader` pulls blocks from a `BufRead` source, handles optional block compression,
+/// and decodes them row‑by‑row into Arrow `RecordBatch` values using an internal
+/// `Decoder`. It implements both:
+///
+/// * [`Iterator<Item = Result<RecordBatch, ArrowError>>`], and
+/// * `RecordBatchReader`, guaranteeing a consistent schema across all produced batches.
+///
 #[derive(Debug)]
 pub struct Reader<R: BufRead> {
     reader: R,
@@ -584,17 +1216,21 @@ pub struct Reader<R: BufRead> {
 }
 
 impl<R: BufRead> Reader<R> {
-    /// Return the Arrow schema discovered from the Avro file header
+    /// Returns the Arrow schema discovered from the Avro file header (or derived via
+    /// the optional reader schema).
     pub fn schema(&self) -> SchemaRef {
         self.decoder.schema()
     }
 
-    /// Return the Avro container-file header
+    /// Returns a reference to the parsed Avro container‑file header (magic, metadata, codec, sync).
     pub fn avro_header(&self) -> &Header {
         &self.header
     }
 
-    /// Reads the next [`RecordBatch`] from the Avro file or `Ok(None)` on EOF
+    /// Reads the next `RecordBatch` from the Avro file, or `Ok(None)` on EOF.
+    ///
+    /// Batches are bounded by `batch_size`; a single OCF block may yield multiple batches,
+    /// and a batch may also span multiple blocks.
     fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         'outer: while !self.finished && !self.decoder.batch_is_full() {
             while self.block_cursor == self.block_data.len() {
@@ -658,7 +1294,7 @@ mod test {
     use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
     use crate::schema::{
         AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, Schema as AvroRaw,
-        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, SINGLE_OBJECT_MAGIC,
+        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
     };
     use crate::test_util::arrow_test_data;
     use arrow::array::ArrayDataBuilder;
@@ -666,14 +1302,19 @@ mod test {
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
         ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     };
+    use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
-    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow_schema::{ArrowError, DataType, Field, Fields, IntervalUnit, Schema};
+    use arrow_buffer::{
+        i256, Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer,
+    };
+    use arrow_schema::{
+        ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, UnionFields, UnionMode,
+    };
     use bytes::{Buf, BufMut, Bytes};
     use futures::executor::block_on;
     use futures::{stream, Stream, StreamExt, TryStreamExt};
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
@@ -760,6 +1401,17 @@ mod test {
                 out.extend_from_slice(&v.to_le_bytes());
                 out
             }
+            Fingerprint::Id(v) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({v})");
+            }
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(v) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({v:?})");
+            }
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(id) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({id:?})");
+            }
         }
     }
 
@@ -771,6 +1423,21 @@ mod test {
             .with_active_fingerprint(fp)
             .build_decoder()
             .expect("decoder")
+    }
+
+    fn make_id_prefix(id: u32, additional: usize) -> Vec<u8> {
+        let capacity = CONFLUENT_MAGIC.len() + size_of::<u32>() + additional;
+        let mut out = Vec::with_capacity(capacity);
+        out.extend_from_slice(&CONFLUENT_MAGIC);
+        out.extend_from_slice(&id.to_be_bytes());
+        out
+    }
+
+    fn make_message_id(id: u32, value: i64) -> Vec<u8> {
+        let encoded_value = encode_zigzag(value);
+        let mut msg = make_id_prefix(id, encoded_value.len());
+        msg.extend_from_slice(&encoded_value);
+        msg
     }
 
     fn make_value_schema(pt: PrimitiveType) -> AvroSchema {
@@ -855,6 +1522,53 @@ mod test {
         AvroSchema::new(root.to_string())
     }
 
+    fn make_reader_schema_with_enum_remap(
+        path: &str,
+        remap: &HashMap<&str, Vec<&str>>,
+    ) -> AvroSchema {
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        let fields = root
+            .get_mut("fields")
+            .and_then(|f| f.as_array_mut())
+            .expect("record has fields");
+
+        fn to_symbols_array(symbols: &[&str]) -> Value {
+            Value::Array(symbols.iter().map(|s| Value::String((*s).into())).collect())
+        }
+
+        fn update_enum_symbols(ty: &mut Value, symbols: &Value) {
+            match ty {
+                Value::Object(map) => {
+                    if matches!(map.get("type"), Some(Value::String(t)) if t == "enum") {
+                        map.insert("symbols".to_string(), symbols.clone());
+                    }
+                }
+                Value::Array(arr) => {
+                    for b in arr.iter_mut() {
+                        if let Value::Object(map) = b {
+                            if matches!(map.get("type"), Some(Value::String(t)) if t == "enum") {
+                                map.insert("symbols".to_string(), symbols.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for f in fields.iter_mut() {
+            let Some(name) = f.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            if let Some(new_symbols) = remap.get(name) {
+                let symbols_val = to_symbols_array(new_symbols);
+                let ty = f.get_mut("type").expect("field has a type");
+                update_enum_symbols(ty, &symbols_val);
+            }
+        }
+        AvroSchema::new(root.to_string())
+    }
+
     fn read_alltypes_with_reader_schema(path: &str, reader_schema: AvroSchema) -> RecordBatch {
         let file = File::open(path).unwrap();
         let reader = ReaderBuilder::new()
@@ -863,10 +1577,37 @@ mod test {
             .with_reader_schema(reader_schema)
             .build(BufReader::new(file))
             .unwrap();
-
         let schema = reader.schema();
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         arrow::compute::concat_batches(&schema, &batches).unwrap()
+    }
+
+    fn make_reader_schema_with_selected_fields_in_order(
+        path: &str,
+        selected: &[&str],
+    ) -> AvroSchema {
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        let writer_fields = root
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record has fields");
+        let mut field_map: HashMap<String, Value> = HashMap::with_capacity(writer_fields.len());
+        for f in writer_fields {
+            if let Some(name) = f.get("name").and_then(|n| n.as_str()) {
+                field_map.insert(name.to_string(), f.clone());
+            }
+        }
+        let mut new_fields = Vec::with_capacity(selected.len());
+        for name in selected {
+            let f = field_map
+                .get(*name)
+                .unwrap_or_else(|| panic!("field '{name}' not found in writer schema"))
+                .clone();
+            new_fields.push(f);
+        }
+        root["fields"] = Value::Array(new_fields);
+        AvroSchema::new(root.to_string())
     }
 
     #[test]
@@ -1208,6 +1949,52 @@ mod test {
     }
 
     #[test]
+    fn test_simple_enum_with_reader_schema_mapping() {
+        let file = arrow_test_data("avro/simple_enum.avro");
+        let mut remap: HashMap<&str, Vec<&str>> = HashMap::new();
+        remap.insert("f1", vec!["d", "c", "b", "a"]);
+        remap.insert("f2", vec!["h", "g", "f", "e"]);
+        remap.insert("f3", vec!["k", "i", "j"]);
+        let reader_schema = make_reader_schema_with_enum_remap(&file, &remap);
+        let actual = read_alltypes_with_reader_schema(&file, reader_schema);
+        let dict_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let f1_keys = Int32Array::from(vec![3, 2, 1, 0]);
+        let f1_vals = StringArray::from(vec!["d", "c", "b", "a"]);
+        let f1 = DictionaryArray::<Int32Type>::try_new(f1_keys, Arc::new(f1_vals)).unwrap();
+        let mut md_f1 = HashMap::new();
+        md_f1.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["d","c","b","a"]"#.to_string(),
+        );
+        let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
+        let f2_keys = Int32Array::from(vec![1, 0, 3, 2]);
+        let f2_vals = StringArray::from(vec!["h", "g", "f", "e"]);
+        let f2 = DictionaryArray::<Int32Type>::try_new(f2_keys, Arc::new(f2_vals)).unwrap();
+        let mut md_f2 = HashMap::new();
+        md_f2.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["h","g","f","e"]"#.to_string(),
+        );
+        let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
+        let f3_keys = Int32Array::from(vec![Some(2), Some(0), None, Some(1)]);
+        let f3_vals = StringArray::from(vec!["k", "i", "j"]);
+        let f3 = DictionaryArray::<Int32Type>::try_new(f3_keys, Arc::new(f3_vals)).unwrap();
+        let mut md_f3 = HashMap::new();
+        md_f3.insert(
+            AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+            r#"["k","i","j"]"#.to_string(),
+        );
+        let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
+        let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
+        let expected = RecordBatch::try_new(
+            expected_schema,
+            vec![Arc::new(f1) as ArrayRef, Arc::new(f2), Arc::new(f3)],
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_schema_store_register_lookup() {
         let schema_int = make_record_schema(PrimitiveType::Int);
         let schema_long = make_record_schema(PrimitiveType::Long);
@@ -1258,6 +2045,11 @@ mod test {
         let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
+            Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
         };
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         buf.extend_from_slice(&long_bytes[..4]);
@@ -1276,8 +2068,14 @@ mod test {
             RecordDecoder::try_new_with_options(root_long.data_type(), decoder.utf8_view).unwrap();
         let _ = decoder.cache.insert(fp_long, long_decoder);
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
-        let Fingerprint::Rabin(v) = fp_long;
-        buf.extend_from_slice(&v.to_le_bytes());
+        match fp_long {
+            Fingerprint::Rabin(v) => buf.extend_from_slice(&v.to_le_bytes()),
+            Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            #[cfg(feature = "md5")]
+            Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+            #[cfg(feature = "sha256")]
+            Fingerprint::SHA256(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
+        }
         let consumed = decoder.handle_prefix(&buf).unwrap().unwrap();
         assert_eq!(consumed, buf.len());
         assert!(decoder.pending_schema.is_some());
@@ -1355,6 +2153,83 @@ mod test {
     }
 
     #[test]
+    fn test_two_messages_same_schema_id() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let id = 100u32;
+        // Set up store with None fingerprint algorithm and register schema by id
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id), writer_schema.clone())
+            .expect("set id schema");
+        let msg1 = make_message_id(id, 21);
+        let msg2 = make_message_id(id, 22);
+        let input = [msg1.clone(), msg2.clone()].concat();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(reader_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id))
+            .build_decoder()
+            .unwrap();
+        let _ = decoder.decode(&input).unwrap();
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 2);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.value(0), 21);
+        assert_eq!(col.value(1), 22);
+    }
+
+    #[test]
+    fn test_unknown_id_fingerprint_is_error() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let id_known = 7u32;
+        let id_unknown = 9u32;
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id_known), writer_schema.clone())
+            .expect("set id schema");
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(writer_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id_known))
+            .build_decoder()
+            .unwrap();
+        let prefix = make_id_prefix(id_unknown, 0);
+        let err = decoder.decode(&prefix).expect_err("decode should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unknown fingerprint"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_handle_prefix_id_incomplete_magic() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let id = 5u32;
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let _ = store
+            .set(Fingerprint::Id(id), writer_schema.clone())
+            .expect("set id schema");
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(writer_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id(id))
+            .build_decoder()
+            .unwrap();
+        let buf = &crate::schema::CONFLUENT_MAGIC[..0]; // empty incomplete magic
+        let res = decoder.handle_prefix(buf).unwrap();
+        assert_eq!(res, Some(0));
+        assert!(decoder.pending_schema.is_none());
+    }
+
     fn test_split_message_across_chunks() {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let reader_schema = writer_schema.clone();
@@ -1535,6 +2410,1929 @@ mod test {
             RecordBatch::try_from_iter(vec![("str_field", Arc::new(array) as ArrayRef)]).unwrap();
 
         assert!(batch.column(0).as_any().is::<StringViewArray>());
+    }
+
+    fn make_reader_schema_with_default_fields(
+        path: &str,
+        default_fields: Vec<Value>,
+    ) -> AvroSchema {
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        root.as_object_mut()
+            .expect("schema is a JSON object")
+            .insert("fields".to_string(), Value::Array(default_fields));
+        AvroSchema::new(root.to_string())
+    }
+
+    #[test]
+    fn test_schema_resolution_defaults_all_supported_types() {
+        let path = "test/data/skippable_types.avro";
+        let duration_default = "\u{0000}".repeat(12);
+        let reader_schema = make_reader_schema_with_default_fields(
+            path,
+            vec![
+                serde_json::json!({"name":"d_bool","type":"boolean","default":true}),
+                serde_json::json!({"name":"d_int","type":"int","default":42}),
+                serde_json::json!({"name":"d_long","type":"long","default":12345}),
+                serde_json::json!({"name":"d_float","type":"float","default":1.5}),
+                serde_json::json!({"name":"d_double","type":"double","default":2.25}),
+                serde_json::json!({"name":"d_bytes","type":"bytes","default":"XYZ"}),
+                serde_json::json!({"name":"d_string","type":"string","default":"hello"}),
+                serde_json::json!({"name":"d_date","type":{"type":"int","logicalType":"date"},"default":0}),
+                serde_json::json!({"name":"d_time_ms","type":{"type":"int","logicalType":"time-millis"},"default":1000}),
+                serde_json::json!({"name":"d_time_us","type":{"type":"long","logicalType":"time-micros"},"default":2000}),
+                serde_json::json!({"name":"d_ts_ms","type":{"type":"long","logicalType":"local-timestamp-millis"},"default":0}),
+                serde_json::json!({"name":"d_ts_us","type":{"type":"long","logicalType":"local-timestamp-micros"},"default":0}),
+                serde_json::json!({"name":"d_decimal","type":{"type":"bytes","logicalType":"decimal","precision":10,"scale":2},"default":""}),
+                serde_json::json!({"name":"d_fixed","type":{"type":"fixed","name":"F4","size":4},"default":"ABCD"}),
+                serde_json::json!({"name":"d_enum","type":{"type":"enum","name":"E","symbols":["A","B","C"]},"default":"A"}),
+                serde_json::json!({"name":"d_duration","type":{"type":"fixed","name":"Dur","size":12,"logicalType":"duration"},"default":duration_default}),
+                serde_json::json!({"name":"d_uuid","type":{"type":"string","logicalType":"uuid"},"default":"00000000-0000-0000-0000-000000000000"}),
+                serde_json::json!({"name":"d_array","type":{"type":"array","items":"int"},"default":[1,2,3]}),
+                serde_json::json!({"name":"d_map","type":{"type":"map","values":"long"},"default":{"a":1,"b":2}}),
+                serde_json::json!({"name":"d_record","type":{
+              "type":"record","name":"DefaultRec","fields":[
+                  {"name":"x","type":"int"},
+                  {"name":"y","type":["null","string"],"default":null}
+              ]
+        },"default":{"x":7}}),
+                serde_json::json!({"name":"d_nullable_null","type":["null","int"],"default":null}),
+                serde_json::json!({"name":"d_nullable_value","type":["int","null"],"default":123}),
+            ],
+        );
+        let actual = read_alltypes_with_reader_schema(path, reader_schema);
+        let num_rows = actual.num_rows();
+        assert!(num_rows > 0, "skippable_types.avro should contain rows");
+        assert_eq!(
+            actual.num_columns(),
+            22,
+            "expected exactly our defaulted fields"
+        );
+        let mut arrays: Vec<Arc<dyn Array>> = Vec::with_capacity(22);
+        arrays.push(Arc::new(BooleanArray::from_iter(std::iter::repeat_n(
+            Some(true),
+            num_rows,
+        ))));
+        arrays.push(Arc::new(Int32Array::from_iter_values(std::iter::repeat_n(
+            42, num_rows,
+        ))));
+        arrays.push(Arc::new(Int64Array::from_iter_values(std::iter::repeat_n(
+            12345, num_rows,
+        ))));
+        arrays.push(Arc::new(Float32Array::from_iter_values(
+            std::iter::repeat_n(1.5f32, num_rows),
+        )));
+        arrays.push(Arc::new(Float64Array::from_iter_values(
+            std::iter::repeat_n(2.25f64, num_rows),
+        )));
+        arrays.push(Arc::new(BinaryArray::from_iter_values(
+            std::iter::repeat_n(b"XYZ".as_ref(), num_rows),
+        )));
+        arrays.push(Arc::new(StringArray::from_iter_values(
+            std::iter::repeat_n("hello", num_rows),
+        )));
+        arrays.push(Arc::new(Date32Array::from_iter_values(
+            std::iter::repeat_n(0, num_rows),
+        )));
+        arrays.push(Arc::new(Time32MillisecondArray::from_iter_values(
+            std::iter::repeat_n(1_000, num_rows),
+        )));
+        arrays.push(Arc::new(Time64MicrosecondArray::from_iter_values(
+            std::iter::repeat_n(2_000i64, num_rows),
+        )));
+        arrays.push(Arc::new(TimestampMillisecondArray::from_iter_values(
+            std::iter::repeat_n(0i64, num_rows),
+        )));
+        arrays.push(Arc::new(TimestampMicrosecondArray::from_iter_values(
+            std::iter::repeat_n(0i64, num_rows),
+        )));
+        #[cfg(feature = "small_decimals")]
+        let decimal = Decimal64Array::from_iter_values(std::iter::repeat_n(0i64, num_rows))
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        #[cfg(not(feature = "small_decimals"))]
+        let decimal = Decimal128Array::from_iter_values(std::iter::repeat_n(0i128, num_rows))
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        arrays.push(Arc::new(decimal));
+        let fixed_iter = std::iter::repeat_n(Some(*b"ABCD"), num_rows);
+        arrays.push(Arc::new(
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(fixed_iter, 4).unwrap(),
+        ));
+        let enum_keys = Int32Array::from_iter_values(std::iter::repeat_n(0, num_rows));
+        let enum_values = StringArray::from_iter_values(["A", "B", "C"]);
+        let enum_arr =
+            DictionaryArray::<Int32Type>::try_new(enum_keys, Arc::new(enum_values)).unwrap();
+        arrays.push(Arc::new(enum_arr));
+        let duration_values = std::iter::repeat_n(
+            Some(IntervalMonthDayNanoType::make_value(0, 0, 0)),
+            num_rows,
+        );
+        let duration_arr: IntervalMonthDayNanoArray = duration_values.collect();
+        arrays.push(Arc::new(duration_arr));
+        let uuid_bytes = [0u8; 16];
+        let uuid_iter = std::iter::repeat_n(Some(uuid_bytes), num_rows);
+        arrays.push(Arc::new(
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(uuid_iter, 16).unwrap(),
+        ));
+        let item_field = Arc::new(Field::new(
+            Field::LIST_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let mut list_builder = ListBuilder::new(Int32Builder::new()).with_field(item_field);
+        for _ in 0..num_rows {
+            list_builder.values().append_value(1);
+            list_builder.values().append_value(2);
+            list_builder.values().append_value(3);
+            list_builder.append(true);
+        }
+        arrays.push(Arc::new(list_builder.finish()));
+        let values_field = Arc::new(Field::new("value", DataType::Int64, false));
+        let mut map_builder = MapBuilder::new(
+            Some(builder::MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            StringBuilder::new(),
+            Int64Builder::new(),
+        )
+        .with_values_field(values_field);
+        for _ in 0..num_rows {
+            let (keys, vals) = map_builder.entries();
+            keys.append_value("a");
+            vals.append_value(1);
+            keys.append_value("b");
+            vals.append_value(2);
+            map_builder.append(true).unwrap();
+        }
+        arrays.push(Arc::new(map_builder.finish()));
+        let rec_fields: Fields = Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, true),
+        ]);
+        let mut sb = StructBuilder::new(
+            rec_fields.clone(),
+            vec![
+                Box::new(Int32Builder::new()),
+                Box::new(StringBuilder::new()),
+            ],
+        );
+        for _ in 0..num_rows {
+            sb.field_builder::<Int32Builder>(0).unwrap().append_value(7);
+            sb.field_builder::<StringBuilder>(1).unwrap().append_null();
+            sb.append(true);
+        }
+        arrays.push(Arc::new(sb.finish()));
+        arrays.push(Arc::new(Int32Array::from_iter(std::iter::repeat_n(
+            None::<i32>,
+            num_rows,
+        ))));
+        arrays.push(Arc::new(Int32Array::from_iter_values(std::iter::repeat_n(
+            123, num_rows,
+        ))));
+        let expected = RecordBatch::try_new(actual.schema(), arrays).unwrap();
+        assert_eq!(
+            actual, expected,
+            "defaults should materialize correctly for all fields"
+        );
+    }
+
+    #[test]
+    fn test_schema_resolution_default_enum_invalid_symbol_errors() {
+        let path = "test/data/skippable_types.avro";
+        let bad_schema = make_reader_schema_with_default_fields(
+            path,
+            vec![serde_json::json!({
+                "name":"bad_enum",
+                "type":{"type":"enum","name":"E","symbols":["A","B","C"]},
+                "default":"Z"
+            })],
+        );
+        let file = File::open(path).unwrap();
+        let res = ReaderBuilder::new()
+            .with_reader_schema(bad_schema)
+            .build(BufReader::new(file));
+        let err = res.expect_err("expected enum default validation to fail");
+        let msg = err.to_string();
+        let lower_msg = msg.to_lowercase();
+        assert!(
+            lower_msg.contains("enum")
+                && (lower_msg.contains("symbol") || lower_msg.contains("default")),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_schema_resolution_default_fixed_size_mismatch_errors() {
+        let path = "test/data/skippable_types.avro";
+        let bad_schema = make_reader_schema_with_default_fields(
+            path,
+            vec![serde_json::json!({
+                "name":"bad_fixed",
+                "type":{"type":"fixed","name":"F","size":4},
+                "default":"ABC"
+            })],
+        );
+        let file = File::open(path).unwrap();
+        let res = ReaderBuilder::new()
+            .with_reader_schema(bad_schema)
+            .build(BufReader::new(file));
+        let err = res.expect_err("expected fixed default validation to fail");
+        let msg = err.to_string();
+        let lower_msg = msg.to_lowercase();
+        assert!(
+            lower_msg.contains("fixed")
+                && (lower_msg.contains("size")
+                    || lower_msg.contains("length")
+                    || lower_msg.contains("does not match")),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_alltypes_skip_writer_fields_keep_double_only() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&file, &["double_col"]);
+        let batch = read_alltypes_with_reader_schema(&file, reader_schema);
+        let expected = RecordBatch::try_from_iter_with_nullable([(
+            "double_col",
+            Arc::new(Float64Array::from_iter_values(
+                (0..8).map(|x| (x % 2) as f64 * 10.1),
+            )) as _,
+            true,
+        )])
+        .unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn test_alltypes_skip_writer_fields_reorder_and_skip_many() {
+        let file = arrow_test_data("avro/alltypes_plain.avro");
+        let reader_schema =
+            make_reader_schema_with_selected_fields_in_order(&file, &["timestamp_col", "id"]);
+        let batch = read_alltypes_with_reader_schema(&file, reader_schema);
+        let expected = RecordBatch::try_from_iter_with_nullable([
+            (
+                "timestamp_col",
+                Arc::new(
+                    TimestampMicrosecondArray::from_iter_values([
+                        1235865600000000, // 2009-03-01T00:00:00.000
+                        1235865660000000, // 2009-03-01T00:01:00.000
+                        1238544000000000, // 2009-04-01T00:00:00.000
+                        1238544060000000, // 2009-04-01T00:01:00.000
+                        1233446400000000, // 2009-02-01T00:00:00.000
+                        1233446460000000, // 2009-02-01T00:01:00.000
+                        1230768000000000, // 2009-01-01T00:00:00.000
+                        1230768060000000, // 2009-01-01T00:01:00.000
+                    ])
+                    .with_timezone("+00:00"),
+                ) as _,
+                true,
+            ),
+            (
+                "id",
+                Arc::new(Int32Array::from(vec![4, 5, 6, 7, 2, 3, 0, 1])) as _,
+                true,
+            ),
+        ])
+        .unwrap();
+        assert_eq!(batch, expected);
+    }
+
+    #[test]
+    fn test_skippable_types_project_each_field_individually() {
+        let path = "test/data/skippable_types.avro";
+        let full = read_file(path, 1024, false);
+        let schema_full = full.schema();
+        let num_rows = full.num_rows();
+        let writer_json = load_writer_schema_json(path);
+        assert_eq!(
+            writer_json["type"], "record",
+            "writer schema must be a record"
+        );
+        let fields_json = writer_json
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .expect("record has fields");
+        assert_eq!(
+            schema_full.fields().len(),
+            fields_json.len(),
+            "full read column count vs writer fields"
+        );
+        for (idx, f) in fields_json.iter().enumerate() {
+            let name = f
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or_else(|| panic!("field at index {idx} has no name"));
+            let reader_schema = make_reader_schema_with_selected_fields_in_order(path, &[name]);
+            let projected = read_alltypes_with_reader_schema(path, reader_schema);
+            assert_eq!(
+                projected.num_columns(),
+                1,
+                "projected batch should contain exactly the selected column '{name}'"
+            );
+            assert_eq!(
+                projected.num_rows(),
+                num_rows,
+                "row count mismatch for projected column '{name}'"
+            );
+            let field = schema_full.field(idx).clone();
+            let col = full.column(idx).clone();
+            let expected =
+                RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![col]).unwrap();
+            // Equality means: (1) read the right column values; and (2) all other
+            // writer fields were skipped correctly for this projection (no misalignment).
+            assert_eq!(
+                projected, expected,
+                "projected column '{name}' mismatch vs full read column"
+            );
+        }
+    }
+
+    #[test]
+    fn test_union_fields_avro_nullable_and_general_unions() {
+        let path = "test/data/union_fields.avro";
+        let batch = read_file(path, 1024, false);
+        let schema = batch.schema();
+        let idx = schema.index_of("nullable_int_nullfirst").unwrap();
+        let a = batch.column(idx).as_primitive::<Int32Type>();
+        assert_eq!(a.len(), 4);
+        assert!(a.is_null(0));
+        assert_eq!(a.value(1), 42);
+        assert!(a.is_null(2));
+        assert_eq!(a.value(3), 0);
+        let idx = schema.index_of("nullable_string_nullsecond").unwrap();
+        let s = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("nullable_string_nullsecond should be Utf8");
+        assert_eq!(s.len(), 4);
+        assert_eq!(s.value(0), "s1");
+        assert!(s.is_null(1));
+        assert_eq!(s.value(2), "s3");
+        assert!(s.is_valid(3)); // empty string, not null
+        assert_eq!(s.value(3), "");
+        let idx = schema.index_of("union_prim").unwrap();
+        let u = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("union_prim should be Union");
+        let fields = match u.data_type() {
+            DataType::Union(fields, mode) => {
+                assert!(matches!(mode, UnionMode::Dense), "expect dense unions");
+                fields
+            }
+            other => panic!("expected Union, got {other:?}"),
+        };
+        let tid_by_name = |name: &str| -> i8 {
+            for (tid, f) in fields.iter() {
+                if f.name() == name {
+                    return tid;
+                }
+            }
+            panic!("union child '{name}' not found");
+        };
+        let expected_type_ids = vec![
+            tid_by_name("long"),
+            tid_by_name("int"),
+            tid_by_name("float"),
+            tid_by_name("double"),
+        ];
+        let type_ids: Vec<i8> = u.type_ids().iter().copied().collect();
+        assert_eq!(
+            type_ids, expected_type_ids,
+            "branch selection for union_prim rows"
+        );
+        let longs = u
+            .child(tid_by_name("long"))
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(longs.len(), 1);
+        let ints = u
+            .child(tid_by_name("int"))
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(ints.len(), 1);
+        let floats = u
+            .child(tid_by_name("float"))
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+        assert_eq!(floats.len(), 1);
+        let doubles = u
+            .child(tid_by_name("double"))
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert_eq!(doubles.len(), 1);
+        let idx = schema.index_of("union_bytes_vs_string").unwrap();
+        let u = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("union_bytes_vs_string should be Union");
+        let fields = match u.data_type() {
+            DataType::Union(fields, _) => fields,
+            other => panic!("expected Union, got {other:?}"),
+        };
+        let tid_by_name = |name: &str| -> i8 {
+            for (tid, f) in fields.iter() {
+                if f.name() == name {
+                    return tid;
+                }
+            }
+            panic!("union child '{name}' not found");
+        };
+        let tid_bytes = tid_by_name("bytes");
+        let tid_string = tid_by_name("string");
+        let type_ids: Vec<i8> = u.type_ids().iter().copied().collect();
+        assert_eq!(
+            type_ids,
+            vec![tid_bytes, tid_string, tid_string, tid_bytes],
+            "branch selection for bytes/string union"
+        );
+        let s_child = u
+            .child(tid_string)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(s_child.len(), 2);
+        assert_eq!(s_child.value(0), "hello");
+        assert_eq!(s_child.value(1), "world");
+        let b_child = u
+            .child(tid_bytes)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(b_child.len(), 2);
+        assert_eq!(b_child.value(0), &[0x00, 0xFF, 0x7F]);
+        assert_eq!(b_child.value(1), b""); // previously: &[]
+        let idx = schema.index_of("union_enum_records_array_map").unwrap();
+        let u = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("union_enum_records_array_map should be Union");
+        let fields = match u.data_type() {
+            DataType::Union(fields, _) => fields,
+            other => panic!("expected Union, got {other:?}"),
+        };
+        let mut tid_enum: Option<i8> = None;
+        let mut tid_rec_a: Option<i8> = None;
+        let mut tid_rec_b: Option<i8> = None;
+        let mut tid_array: Option<i8> = None;
+        let mut tid_map: Option<i8> = None;
+        for (tid, f) in fields.iter() {
+            match f.data_type() {
+                DataType::Dictionary(_, _) => tid_enum = Some(tid),
+                DataType::Struct(childs) => {
+                    if childs.len() == 2 && childs[0].name() == "a" && childs[1].name() == "b" {
+                        tid_rec_a = Some(tid);
+                    } else if childs.len() == 2
+                        && childs[0].name() == "x"
+                        && childs[1].name() == "y"
+                    {
+                        tid_rec_b = Some(tid);
+                    }
+                }
+                DataType::List(_) => tid_array = Some(tid),
+                DataType::Map(_, _) => tid_map = Some(tid),
+                _ => {}
+            }
+        }
+        let (tid_enum, tid_rec_a, tid_rec_b, tid_array) = (
+            tid_enum.expect("enum child"),
+            tid_rec_a.expect("RecA child"),
+            tid_rec_b.expect("RecB child"),
+            tid_array.expect("array<long> child"),
+        );
+        let type_ids: Vec<i8> = u.type_ids().iter().copied().collect();
+        assert_eq!(
+            type_ids,
+            vec![tid_enum, tid_rec_a, tid_rec_b, tid_array],
+            "branch selection for complex union"
+        );
+        let dict = u
+            .child(tid_enum)
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(dict.len(), 1);
+        assert!(dict.is_valid(0));
+        let rec_a = u
+            .child(tid_rec_a)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(rec_a.len(), 1);
+        let a_val = rec_a
+            .column_by_name("a")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(a_val.value(0), 7);
+        let b_val = rec_a
+            .column_by_name("b")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(b_val.value(0), "x");
+        // RecB row: {"x": 123456789, "y": b"\xFF\x00"}
+        let rec_b = u
+            .child(tid_rec_b)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let x_val = rec_b
+            .column_by_name("x")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(x_val.value(0), 123_456_789_i64);
+        let y_val = rec_b
+            .column_by_name("y")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        assert_eq!(y_val.value(0), &[0xFF, 0x00]);
+        let arr = u
+            .child(tid_array)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(arr.len(), 1);
+        let first_values = arr.value(0);
+        let longs = first_values.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(longs.len(), 3);
+        assert_eq!(longs.value(0), 1);
+        assert_eq!(longs.value(1), 2);
+        assert_eq!(longs.value(2), 3);
+        let idx = schema.index_of("union_date_or_fixed4").unwrap();
+        let u = batch
+            .column(idx)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("union_date_or_fixed4 should be Union");
+        let fields = match u.data_type() {
+            DataType::Union(fields, _) => fields,
+            other => panic!("expected Union, got {other:?}"),
+        };
+        let mut tid_date: Option<i8> = None;
+        let mut tid_fixed: Option<i8> = None;
+        for (tid, f) in fields.iter() {
+            match f.data_type() {
+                DataType::Date32 => tid_date = Some(tid),
+                DataType::FixedSizeBinary(4) => tid_fixed = Some(tid),
+                _ => {}
+            }
+        }
+        let (tid_date, tid_fixed) = (tid_date.expect("date"), tid_fixed.expect("fixed(4)"));
+        let type_ids: Vec<i8> = u.type_ids().iter().copied().collect();
+        assert_eq!(
+            type_ids,
+            vec![tid_date, tid_fixed, tid_date, tid_fixed],
+            "branch selection for date/fixed4 union"
+        );
+        let dates = u
+            .child(tid_date)
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .unwrap();
+        assert_eq!(dates.len(), 2);
+        assert_eq!(dates.value(0), 19_000); // ~2022‑01‑15
+        assert_eq!(dates.value(1), 0); // epoch
+        let fixed = u
+            .child(tid_fixed)
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(fixed.len(), 2);
+        assert_eq!(fixed.value(0), b"ABCD");
+        assert_eq!(fixed.value(1), &[0x00, 0x11, 0x22, 0x33]);
+    }
+
+    #[test]
+    fn test_union_schema_resolution_all_type_combinations() {
+        let path = "test/data/union_fields.avro";
+        let baseline = read_file(path, 1024, false);
+        let baseline_schema = baseline.schema();
+        let mut root = load_writer_schema_json(path);
+        assert_eq!(root["type"], "record", "writer schema must be a record");
+        let fields = root
+            .get_mut("fields")
+            .and_then(|f| f.as_array_mut())
+            .expect("record has fields");
+        fn is_named_type(obj: &Value, ty: &str, nm: &str) -> bool {
+            obj.get("type").and_then(|v| v.as_str()) == Some(ty)
+                && obj.get("name").and_then(|v| v.as_str()) == Some(nm)
+        }
+        fn is_logical(obj: &Value, prim: &str, lt: &str) -> bool {
+            obj.get("type").and_then(|v| v.as_str()) == Some(prim)
+                && obj.get("logicalType").and_then(|v| v.as_str()) == Some(lt)
+        }
+        fn find_first(arr: &[Value], pred: impl Fn(&Value) -> bool) -> Option<Value> {
+            arr.iter().find(|v| pred(v)).cloned()
+        }
+        fn prim(s: &str) -> Value {
+            Value::String(s.to_string())
+        }
+        for f in fields.iter_mut() {
+            let Some(name) = f.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            match name {
+                // Flip null ordering – should not affect values
+                "nullable_int_nullfirst" => {
+                    f["type"] = json!(["int", "null"]);
+                }
+                "nullable_string_nullsecond" => {
+                    f["type"] = json!(["null", "string"]);
+                }
+                "union_prim" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let long = prim("long");
+                    let double = prim("double");
+                    let string = prim("string");
+                    let bytes = prim("bytes");
+                    let boolean = prim("boolean");
+                    assert!(orig.contains(&long));
+                    assert!(orig.contains(&double));
+                    assert!(orig.contains(&string));
+                    assert!(orig.contains(&bytes));
+                    assert!(orig.contains(&boolean));
+                    f["type"] = json!([long, double, string, bytes, boolean]);
+                }
+                "union_bytes_vs_string" => {
+                    f["type"] = json!(["string", "bytes"]);
+                }
+                "union_fixed_dur_decfix" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let fx8 = find_first(&orig, |o| is_named_type(o, "fixed", "Fx8")).unwrap();
+                    let dur12 = find_first(&orig, |o| is_named_type(o, "fixed", "Dur12")).unwrap();
+                    let decfix16 =
+                        find_first(&orig, |o| is_named_type(o, "fixed", "DecFix16")).unwrap();
+                    f["type"] = json!([decfix16, dur12, fx8]);
+                }
+                "union_enum_records_array_map" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let enum_color = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("enum")
+                    })
+                    .unwrap();
+                    let rec_a = find_first(&orig, |o| is_named_type(o, "record", "RecA")).unwrap();
+                    let rec_b = find_first(&orig, |o| is_named_type(o, "record", "RecB")).unwrap();
+                    let arr = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("array")
+                    })
+                    .unwrap();
+                    let map = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("map")
+                    })
+                    .unwrap();
+                    f["type"] = json!([arr, map, rec_b, rec_a, enum_color]);
+                }
+                "union_date_or_fixed4" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let date = find_first(&orig, |o| is_logical(o, "int", "date")).unwrap();
+                    let fx4 = find_first(&orig, |o| is_named_type(o, "fixed", "Fx4")).unwrap();
+                    f["type"] = json!([fx4, date]);
+                }
+                "union_time_millis_or_enum" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let time_ms =
+                        find_first(&orig, |o| is_logical(o, "int", "time-millis")).unwrap();
+                    let en = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("enum")
+                    })
+                    .unwrap();
+                    f["type"] = json!([en, time_ms]);
+                }
+                "union_time_micros_or_string" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let time_us =
+                        find_first(&orig, |o| is_logical(o, "long", "time-micros")).unwrap();
+                    f["type"] = json!(["string", time_us]);
+                }
+                "union_ts_millis_utc_or_array" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let ts_ms =
+                        find_first(&orig, |o| is_logical(o, "long", "timestamp-millis")).unwrap();
+                    let arr = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("array")
+                    })
+                    .unwrap();
+                    f["type"] = json!([arr, ts_ms]);
+                }
+                "union_ts_micros_local_or_bytes" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let lts_us =
+                        find_first(&orig, |o| is_logical(o, "long", "local-timestamp-micros"))
+                            .unwrap();
+                    f["type"] = json!(["bytes", lts_us]);
+                }
+                "union_uuid_or_fixed10" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let uuid = find_first(&orig, |o| is_logical(o, "string", "uuid")).unwrap();
+                    let fx10 = find_first(&orig, |o| is_named_type(o, "fixed", "Fx10")).unwrap();
+                    f["type"] = json!([fx10, uuid]);
+                }
+                "union_dec_bytes_or_dec_fixed" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let dec_bytes = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("bytes")
+                            && o.get("logicalType").and_then(|v| v.as_str()) == Some("decimal")
+                    })
+                    .unwrap();
+                    let dec_fix = find_first(&orig, |o| {
+                        is_named_type(o, "fixed", "DecFix20")
+                            && o.get("logicalType").and_then(|v| v.as_str()) == Some("decimal")
+                    })
+                    .unwrap();
+                    f["type"] = json!([dec_fix, dec_bytes]);
+                }
+                "union_null_bytes_string" => {
+                    f["type"] = json!(["bytes", "string", "null"]);
+                }
+                "array_of_union" => {
+                    let obj = f
+                        .get_mut("type")
+                        .expect("array type")
+                        .as_object_mut()
+                        .unwrap();
+                    obj.insert("items".to_string(), json!(["string", "long"]));
+                }
+                "map_of_union" => {
+                    let obj = f
+                        .get_mut("type")
+                        .expect("map type")
+                        .as_object_mut()
+                        .unwrap();
+                    obj.insert("values".to_string(), json!(["double", "null"]));
+                }
+                "record_with_union_field" => {
+                    let rec = f
+                        .get_mut("type")
+                        .expect("record type")
+                        .as_object_mut()
+                        .unwrap();
+                    let rec_fields = rec.get_mut("fields").unwrap().as_array_mut().unwrap();
+                    let mut found = false;
+                    for rf in rec_fields.iter_mut() {
+                        if rf.get("name").and_then(|v| v.as_str()) == Some("u") {
+                            rf["type"] = json!(["string", "long"]); // rely on int→long promotion
+                            found = true;
+                            break;
+                        }
+                    }
+                    assert!(found, "field 'u' expected in HasUnion");
+                }
+                "union_ts_micros_utc_or_map" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let ts_us =
+                        find_first(&orig, |o| is_logical(o, "long", "timestamp-micros")).unwrap();
+                    let map = find_first(&orig, |o| {
+                        o.get("type").and_then(|v| v.as_str()) == Some("map")
+                    })
+                    .unwrap();
+                    f["type"] = json!([map, ts_us]);
+                }
+                "union_ts_millis_local_or_string" => {
+                    let orig = f["type"].as_array().unwrap().clone();
+                    let lts_ms =
+                        find_first(&orig, |o| is_logical(o, "long", "local-timestamp-millis"))
+                            .unwrap();
+                    f["type"] = json!(["string", lts_ms]);
+                }
+                "union_bool_or_string" => {
+                    f["type"] = json!(["string", "boolean"]);
+                }
+                _ => {}
+            }
+        }
+        let reader_schema = AvroSchema::new(root.to_string());
+        let resolved = read_alltypes_with_reader_schema(path, reader_schema);
+
+        fn branch_token(dt: &DataType) -> String {
+            match dt {
+                DataType::Null => "null".into(),
+                DataType::Boolean => "boolean".into(),
+                DataType::Int32 => "int".into(),
+                DataType::Int64 => "long".into(),
+                DataType::Float32 => "float".into(),
+                DataType::Float64 => "double".into(),
+                DataType::Binary => "bytes".into(),
+                DataType::Utf8 => "string".into(),
+                DataType::Date32 => "date".into(),
+                DataType::Time32(arrow_schema::TimeUnit::Millisecond) => "time-millis".into(),
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond) => "time-micros".into(),
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => if tz.is_some() {
+                    "timestamp-millis"
+                } else {
+                    "local-timestamp-millis"
+                }
+                .into(),
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => if tz.is_some() {
+                    "timestamp-micros"
+                } else {
+                    "local-timestamp-micros"
+                }
+                .into(),
+                DataType::Interval(IntervalUnit::MonthDayNano) => "duration".into(),
+                DataType::FixedSizeBinary(n) => format!("fixed{n}"),
+                DataType::Dictionary(_, _) => "enum".into(),
+                DataType::Decimal128(p, s) => format!("decimal({p},{s})"),
+                DataType::Decimal256(p, s) => format!("decimal({p},{s})"),
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(p, s) => format!("decimal({p},{s})"),
+                DataType::Struct(fields) => {
+                    if fields.len() == 2 && fields[0].name() == "a" && fields[1].name() == "b" {
+                        "record:RecA".into()
+                    } else if fields.len() == 2
+                        && fields[0].name() == "x"
+                        && fields[1].name() == "y"
+                    {
+                        "record:RecB".into()
+                    } else {
+                        "record".into()
+                    }
+                }
+                DataType::List(_) => "array".into(),
+                DataType::Map(_, _) => "map".into(),
+                other => format!("{other:?}"),
+            }
+        }
+
+        fn union_tokens(u: &UnionArray) -> (Vec<i8>, HashMap<i8, String>) {
+            let fields = match u.data_type() {
+                DataType::Union(fields, _) => fields,
+                other => panic!("expected Union, got {other:?}"),
+            };
+            let mut dict: HashMap<i8, String> = HashMap::with_capacity(fields.len());
+            for (tid, f) in fields.iter() {
+                dict.insert(tid, branch_token(f.data_type()));
+            }
+            let ids: Vec<i8> = u.type_ids().iter().copied().collect();
+            (ids, dict)
+        }
+
+        fn expected_token(field_name: &str, writer_token: &str) -> String {
+            match field_name {
+                "union_prim" => match writer_token {
+                    "int" => "long".into(),
+                    "float" => "double".into(),
+                    other => other.into(),
+                },
+                "record_with_union_field.u" => match writer_token {
+                    "int" => "long".into(),
+                    other => other.into(),
+                },
+                _ => writer_token.into(),
+            }
+        }
+
+        fn get_union<'a>(
+            rb: &'a RecordBatch,
+            schema: arrow_schema::SchemaRef,
+            fname: &str,
+        ) -> &'a UnionArray {
+            let idx = schema.index_of(fname).unwrap();
+            rb.column(idx)
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .unwrap_or_else(|| panic!("{fname} should be a Union"))
+        }
+
+        fn assert_union_equivalent(field_name: &str, u_writer: &UnionArray, u_reader: &UnionArray) {
+            let (ids_w, dict_w) = union_tokens(u_writer);
+            let (ids_r, dict_r) = union_tokens(u_reader);
+            assert_eq!(
+                ids_w.len(),
+                ids_r.len(),
+                "{field_name}: row count mismatch between baseline and resolved"
+            );
+            for (i, (id_w, id_r)) in ids_w.iter().zip(ids_r.iter()).enumerate() {
+                let w_tok = dict_w.get(id_w).unwrap();
+                let want = expected_token(field_name, w_tok);
+                let got = dict_r.get(id_r).unwrap();
+                assert_eq!(
+                    got, &want,
+                    "{field_name}: row {i} resolved to wrong union branch (writer={w_tok}, expected={want}, got={got})"
+                );
+            }
+        }
+
+        for (fname, dt) in [
+            ("nullable_int_nullfirst", DataType::Int32),
+            ("nullable_string_nullsecond", DataType::Utf8),
+        ] {
+            let idx_b = baseline_schema.index_of(fname).unwrap();
+            let idx_r = resolved.schema().index_of(fname).unwrap();
+            let col_b = baseline.column(idx_b);
+            let col_r = resolved.column(idx_r);
+            assert_eq!(
+                col_b.data_type(),
+                &dt,
+                "baseline {fname} should decode as non-union with nullability"
+            );
+            assert_eq!(
+                col_b.as_ref(),
+                col_r.as_ref(),
+                "{fname}: values must be identical regardless of null-branch order"
+            );
+        }
+        let union_fields = [
+            "union_prim",
+            "union_bytes_vs_string",
+            "union_fixed_dur_decfix",
+            "union_enum_records_array_map",
+            "union_date_or_fixed4",
+            "union_time_millis_or_enum",
+            "union_time_micros_or_string",
+            "union_ts_millis_utc_or_array",
+            "union_ts_micros_local_or_bytes",
+            "union_uuid_or_fixed10",
+            "union_dec_bytes_or_dec_fixed",
+            "union_null_bytes_string",
+            "union_ts_micros_utc_or_map",
+            "union_ts_millis_local_or_string",
+            "union_bool_or_string",
+        ];
+        for fname in union_fields {
+            let u_b = get_union(&baseline, baseline_schema.clone(), fname);
+            let u_r = get_union(&resolved, resolved.schema(), fname);
+            assert_union_equivalent(fname, u_b, u_r);
+        }
+        {
+            let fname = "array_of_union";
+            let idx_b = baseline_schema.index_of(fname).unwrap();
+            let idx_r = resolved.schema().index_of(fname).unwrap();
+            let arr_b = baseline
+                .column(idx_b)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("array_of_union should be a List");
+            let arr_r = resolved
+                .column(idx_r)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .expect("array_of_union should be a List");
+            assert_eq!(
+                arr_b.value_offsets(),
+                arr_r.value_offsets(),
+                "{fname}: list offsets changed after resolution"
+            );
+            let u_b = arr_b
+                .values()
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .expect("array items should be Union");
+            let u_r = arr_r
+                .values()
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .expect("array items should be Union");
+            let (ids_b, dict_b) = union_tokens(u_b);
+            let (ids_r, dict_r) = union_tokens(u_r);
+            assert_eq!(ids_b.len(), ids_r.len(), "{fname}: values length mismatch");
+            for (i, (id_b, id_r)) in ids_b.iter().zip(ids_r.iter()).enumerate() {
+                let w_tok = dict_b.get(id_b).unwrap();
+                let got = dict_r.get(id_r).unwrap();
+                assert_eq!(
+                    got, w_tok,
+                    "{fname}: value {i} resolved to wrong branch (writer={w_tok}, got={got})"
+                );
+            }
+        }
+        {
+            let fname = "map_of_union";
+            let idx_b = baseline_schema.index_of(fname).unwrap();
+            let idx_r = resolved.schema().index_of(fname).unwrap();
+            let map_b = baseline
+                .column(idx_b)
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .expect("map_of_union should be a Map");
+            let map_r = resolved
+                .column(idx_r)
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .expect("map_of_union should be a Map");
+            assert_eq!(
+                map_b.value_offsets(),
+                map_r.value_offsets(),
+                "{fname}: map value offsets changed after resolution"
+            );
+            let ent_b = map_b.entries();
+            let ent_r = map_r.entries();
+            let val_b_any = ent_b.column(1).as_ref();
+            let val_r_any = ent_r.column(1).as_ref();
+            let b_union = val_b_any.as_any().downcast_ref::<UnionArray>();
+            let r_union = val_r_any.as_any().downcast_ref::<UnionArray>();
+            if let (Some(u_b), Some(u_r)) = (b_union, r_union) {
+                assert_union_equivalent(fname, u_b, u_r);
+            } else {
+                assert_eq!(
+                    val_b_any.data_type(),
+                    val_r_any.data_type(),
+                    "{fname}: value data types differ after resolution"
+                );
+                assert_eq!(
+                    val_b_any, val_r_any,
+                    "{fname}: value arrays differ after resolution (nullable value column case)"
+                );
+                let value_nullable = |m: &MapArray| -> bool {
+                    match m.data_type() {
+                        DataType::Map(entries_field, _sorted) => match entries_field.data_type() {
+                            DataType::Struct(fields) => {
+                                assert_eq!(fields.len(), 2, "entries struct must have 2 fields");
+                                assert_eq!(fields[0].name(), "key");
+                                assert_eq!(fields[1].name(), "value");
+                                fields[1].is_nullable()
+                            }
+                            other => panic!("Map entries field must be Struct, got {other:?}"),
+                        },
+                        other => panic!("expected Map data type, got {other:?}"),
+                    }
+                };
+                assert!(
+                    value_nullable(map_b),
+                    "{fname}: baseline Map value field should be nullable per Arrow spec"
+                );
+                assert!(
+                    value_nullable(map_r),
+                    "{fname}: resolved Map value field should be nullable per Arrow spec"
+                );
+            }
+        }
+        {
+            let fname = "record_with_union_field";
+            let idx_b = baseline_schema.index_of(fname).unwrap();
+            let idx_r = resolved.schema().index_of(fname).unwrap();
+            let rec_b = baseline
+                .column(idx_b)
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("record_with_union_field should be a Struct");
+            let rec_r = resolved
+                .column(idx_r)
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .expect("record_with_union_field should be a Struct");
+            let u_b = rec_b
+                .column_by_name("u")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .expect("field 'u' should be Union (baseline)");
+            let u_r = rec_r
+                .column_by_name("u")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .expect("field 'u' should be Union (resolved)");
+            assert_union_equivalent("record_with_union_field.u", u_b, u_r);
+        }
+    }
+
+    #[test]
+    fn test_union_fields_end_to_end_expected_arrays() {
+        fn tid_by_name(fields: &UnionFields, want: &str) -> i8 {
+            for (tid, f) in fields.iter() {
+                if f.name() == want {
+                    return tid;
+                }
+            }
+            panic!("union child '{want}' not found")
+        }
+
+        fn tid_by_dt(fields: &UnionFields, pred: impl Fn(&DataType) -> bool) -> i8 {
+            for (tid, f) in fields.iter() {
+                if pred(f.data_type()) {
+                    return tid;
+                }
+            }
+            panic!("no union child matches predicate")
+        }
+
+        fn uuid16_from_str(s: &str) -> [u8; 16] {
+            fn hex(b: u8) -> u8 {
+                match b {
+                    b'0'..=b'9' => b - b'0',
+                    b'a'..=b'f' => b - b'a' + 10,
+                    b'A'..=b'F' => b - b'A' + 10,
+                    _ => panic!("invalid hex"),
+                }
+            }
+            let mut out = [0u8; 16];
+            let bytes = s.as_bytes();
+            let (mut i, mut j) = (0, 0);
+            while i < bytes.len() {
+                if bytes[i] == b'-' {
+                    i += 1;
+                    continue;
+                }
+                let hi = hex(bytes[i]);
+                let lo = hex(bytes[i + 1]);
+                out[j] = (hi << 4) | lo;
+                j += 1;
+                i += 2;
+            }
+            assert_eq!(j, 16, "uuid must decode to 16 bytes");
+            out
+        }
+
+        fn empty_child_for(dt: &DataType) -> Arc<dyn Array> {
+            match dt {
+                DataType::Null => Arc::new(NullArray::new(0)),
+                DataType::Boolean => Arc::new(BooleanArray::from(Vec::<bool>::new())),
+                DataType::Int32 => Arc::new(Int32Array::from(Vec::<i32>::new())),
+                DataType::Int64 => Arc::new(Int64Array::from(Vec::<i64>::new())),
+                DataType::Float32 => Arc::new(arrow_array::Float32Array::from(Vec::<f32>::new())),
+                DataType::Float64 => Arc::new(arrow_array::Float64Array::from(Vec::<f64>::new())),
+                DataType::Binary => Arc::new(BinaryArray::from(Vec::<&[u8]>::new())),
+                DataType::Utf8 => Arc::new(StringArray::from(Vec::<&str>::new())),
+                DataType::Date32 => Arc::new(arrow_array::Date32Array::from(Vec::<i32>::new())),
+                DataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
+                    Arc::new(Time32MillisecondArray::from(Vec::<i32>::new()))
+                }
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
+                    Arc::new(Time64MicrosecondArray::from(Vec::<i64>::new()))
+                }
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => {
+                    let a = TimestampMillisecondArray::from(Vec::<i64>::new());
+                    Arc::new(if let Some(tz) = tz {
+                        a.with_timezone(tz.clone())
+                    } else {
+                        a
+                    })
+                }
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => {
+                    let a = TimestampMicrosecondArray::from(Vec::<i64>::new());
+                    Arc::new(if let Some(tz) = tz {
+                        a.with_timezone(tz.clone())
+                    } else {
+                        a
+                    })
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    Arc::new(arrow_array::IntervalMonthDayNanoArray::from(Vec::<
+                        IntervalMonthDayNano,
+                    >::new(
+                    )))
+                }
+                DataType::FixedSizeBinary(n) => Arc::new(FixedSizeBinaryArray::new_null(*n, 0)),
+                DataType::Dictionary(k, v) => {
+                    assert_eq!(**k, DataType::Int32, "expect int32 keys for enums");
+                    let keys = Int32Array::from(Vec::<i32>::new());
+                    let values = match v.as_ref() {
+                        DataType::Utf8 => {
+                            Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef
+                        }
+                        other => panic!("unexpected dictionary value type {other:?}"),
+                    };
+                    Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                }
+                DataType::List(field) => {
+                    let values: ArrayRef = match field.data_type() {
+                        DataType::Int32 => {
+                            Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef
+                        }
+                        DataType::Int64 => {
+                            Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef
+                        }
+                        DataType::Utf8 => {
+                            Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef
+                        }
+                        DataType::Union(_, _) => {
+                            let (uf, _) = if let DataType::Union(f, m) = field.data_type() {
+                                (f.clone(), m)
+                            } else {
+                                unreachable!()
+                            };
+                            let children: Vec<ArrayRef> = uf
+                                .iter()
+                                .map(|(_, f)| empty_child_for(f.data_type()))
+                                .collect();
+                            Arc::new(
+                                UnionArray::try_new(
+                                    uf.clone(),
+                                    ScalarBuffer::<i8>::from(Vec::<i8>::new()),
+                                    Some(ScalarBuffer::<i32>::from(Vec::<i32>::new())),
+                                    children,
+                                )
+                                .unwrap(),
+                            ) as ArrayRef
+                        }
+                        other => panic!("unsupported list item type: {other:?}"),
+                    };
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0]));
+                    Arc::new(ListArray::try_new(field.clone(), offsets, values, None).unwrap())
+                }
+                DataType::Map(entry_field, ordered) => {
+                    let DataType::Struct(childs) = entry_field.data_type() else {
+                        panic!("map entries must be struct")
+                    };
+                    let key_field = &childs[0];
+                    let val_field = &childs[1];
+                    assert_eq!(key_field.data_type(), &DataType::Utf8);
+                    let keys = StringArray::from(Vec::<&str>::new());
+                    let vals: ArrayRef = match val_field.data_type() {
+                        DataType::Float64 => {
+                            Arc::new(arrow_array::Float64Array::from(Vec::<f64>::new())) as ArrayRef
+                        }
+                        DataType::Int64 => {
+                            Arc::new(Int64Array::from(Vec::<i64>::new())) as ArrayRef
+                        }
+                        DataType::Utf8 => {
+                            Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef
+                        }
+                        DataType::Union(uf, _) => {
+                            let ch: Vec<ArrayRef> = uf
+                                .iter()
+                                .map(|(_, f)| empty_child_for(f.data_type()))
+                                .collect();
+                            Arc::new(
+                                UnionArray::try_new(
+                                    uf.clone(),
+                                    ScalarBuffer::<i8>::from(Vec::<i8>::new()),
+                                    Some(ScalarBuffer::<i32>::from(Vec::<i32>::new())),
+                                    ch,
+                                )
+                                .unwrap(),
+                            ) as ArrayRef
+                        }
+                        other => panic!("unsupported map value type: {other:?}"),
+                    };
+                    let entries = StructArray::new(
+                        Fields::from(vec![key_field.as_ref().clone(), val_field.as_ref().clone()]),
+                        vec![Arc::new(keys) as ArrayRef, vals],
+                        None,
+                    );
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0]));
+                    Arc::new(MapArray::new(
+                        entry_field.clone(),
+                        offsets,
+                        entries,
+                        None,
+                        *ordered,
+                    ))
+                }
+                other => panic!("empty_child_for: unhandled type {other:?}"),
+            }
+        }
+
+        fn mk_dense_union(
+            fields: &UnionFields,
+            type_ids: Vec<i8>,
+            offsets: Vec<i32>,
+            provide: impl Fn(&Field) -> Option<ArrayRef>,
+        ) -> ArrayRef {
+            let children: Vec<ArrayRef> = fields
+                .iter()
+                .map(|(_, f)| provide(f).unwrap_or_else(|| empty_child_for(f.data_type())))
+                .collect();
+
+            Arc::new(
+                UnionArray::try_new(
+                    fields.clone(),
+                    ScalarBuffer::<i8>::from(type_ids),
+                    Some(ScalarBuffer::<i32>::from(offsets)),
+                    children,
+                )
+                .unwrap(),
+            ) as ArrayRef
+        }
+
+        // Dates / times / timestamps from the Avro content block:
+        let date_a: i32 = 19_000;
+        let time_ms_a: i32 = 13 * 3_600_000 + 45 * 60_000 + 30_000 + 123;
+        let time_us_b: i64 = 23 * 3_600_000_000 + 59 * 60_000_000 + 59 * 1_000_000 + 999_999;
+        let ts_ms_2024_01_01: i64 = 1_704_067_200_000;
+        let ts_us_2024_01_01: i64 = ts_ms_2024_01_01 * 1000;
+        // Fixed / bytes-like values:
+        let fx8_a: [u8; 8] = *b"ABCDEFGH";
+        let fx4_abcd: [u8; 4] = *b"ABCD";
+        let fx4_misc: [u8; 4] = [0x00, 0x11, 0x22, 0x33];
+        let fx10_ascii: [u8; 10] = *b"0123456789";
+        let fx10_aa: [u8; 10] = [0xAA; 10];
+        // Duration logical values as MonthDayNano:
+        let dur_a = IntervalMonthDayNanoType::make_value(1, 2, 3_000_000_000);
+        let dur_b = IntervalMonthDayNanoType::make_value(12, 31, 999_000_000);
+        // UUID logical values (stored as 16-byte FixedSizeBinary in Arrow):
+        let uuid1 = uuid16_from_str("fe7bc30b-4ce8-4c5e-b67c-2234a2d38e66");
+        let uuid2 = uuid16_from_str("0826cc06-d2e3-4599-b4ad-af5fa6905cdb");
+        // Decimals from Avro content:
+        let dec_b_scale2_pos: i128 = 123_456; // "1234.56" bytes-decimal -> (precision=10, scale=2)
+        let dec_fix16_neg: i128 = -101; // "-1.01" fixed(16) decimal(10,2)
+        let dec_fix20_s4: i128 = 1_234_567_891_234; // "123456789.1234" fixed(20) decimal(20,4)
+        let dec_fix20_s4_neg: i128 = -123; // "-0.0123" fixed(20) decimal(20,4)
+        let path = "test/data/union_fields.avro";
+        let actual = read_file(path, 1024, false);
+        let schema = actual.schema();
+        // Helper to fetch union metadata for a column
+        let get_union = |name: &str| -> (UnionFields, UnionMode) {
+            let idx = schema.index_of(name).unwrap();
+            match schema.field(idx).data_type() {
+                DataType::Union(f, m) => (f.clone(), *m),
+                other => panic!("{name} should be a Union, got {other:?}"),
+            }
+        };
+        let mut expected_cols: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
+        // 1) ["null","int"]: Int32 (nullable)
+        expected_cols.push(Arc::new(Int32Array::from(vec![
+            None,
+            Some(42),
+            None,
+            Some(0),
+        ])));
+        // 2) ["string","null"]: Utf8 (nullable)
+        expected_cols.push(Arc::new(StringArray::from(vec![
+            Some("s1"),
+            None,
+            Some("s3"),
+            Some(""),
+        ])));
+        // 3) union_prim: ["boolean","int","long","float","double","bytes","string"]
+        {
+            let (uf, mode) = get_union("union_prim");
+            assert!(matches!(mode, UnionMode::Dense));
+            let tids = vec![
+                tid_by_name(&uf, "long"),
+                tid_by_name(&uf, "int"),
+                tid_by_name(&uf, "float"),
+                tid_by_name(&uf, "double"),
+            ];
+            let offs = vec![0, 0, 0, 0];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.name().as_str() {
+                "int" => Some(Arc::new(Int32Array::from(vec![-1])) as ArrayRef),
+                "long" => Some(Arc::new(Int64Array::from(vec![1_234_567_890_123i64])) as ArrayRef),
+                "float" => {
+                    Some(Arc::new(arrow_array::Float32Array::from(vec![1.25f32])) as ArrayRef)
+                }
+                "double" => {
+                    Some(Arc::new(arrow_array::Float64Array::from(vec![-2.5f64])) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 4) union_bytes_vs_string: ["bytes","string"]
+        {
+            let (uf, _) = get_union("union_bytes_vs_string");
+            let tids = vec![
+                tid_by_name(&uf, "bytes"),
+                tid_by_name(&uf, "string"),
+                tid_by_name(&uf, "string"),
+                tid_by_name(&uf, "bytes"),
+            ];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.name().as_str() {
+                "bytes" => Some(
+                    Arc::new(BinaryArray::from(vec![&[0x00, 0xFF, 0x7F][..], &[][..]])) as ArrayRef,
+                ),
+                "string" => Some(Arc::new(StringArray::from(vec!["hello", "world"])) as ArrayRef),
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 5) union_fixed_dur_decfix: [Fx8, Dur12, DecFix16(decimal(10,2))]
+        {
+            let (uf, _) = get_union("union_fixed_dur_decfix");
+            let tid_fx8 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(8)));
+            let tid_dur = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano)
+                )
+            });
+            let tid_dec = tid_by_dt(&uf, |dt| match dt {
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(10, 2) => true,
+                DataType::Decimal128(10, 2) | DataType::Decimal256(10, 2) => true,
+                _ => false,
+            });
+            let tids = vec![tid_fx8, tid_dur, tid_dec, tid_dur];
+            let offs = vec![0, 0, 0, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::FixedSizeBinary(8) => {
+                    let it = [Some(fx8_a)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 8).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    Some(Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
+                        dur_a, dur_b,
+                    ])) as ArrayRef)
+                }
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(10, 2) => {
+                    let a = arrow_array::Decimal64Array::from_iter_values([dec_fix16_neg as i64]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal128(10, 2) => {
+                    let a = arrow_array::Decimal128Array::from_iter_values([dec_fix16_neg]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal256(10, 2) => {
+                    let a = arrow_array::Decimal256Array::from_iter_values([i256::from_i128(
+                        dec_fix16_neg,
+                    )]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 6) union_enum_records_array_map: [enum ColorU, record RecA, record RecB, array<long>, map<string>]
+        {
+            let (uf, _) = get_union("union_enum_records_array_map");
+            let tid_enum = tid_by_dt(&uf, |dt| matches!(dt, DataType::Dictionary(_, _)));
+            let tid_reca = tid_by_dt(&uf, |dt| {
+                if let DataType::Struct(fs) = dt {
+                    fs.len() == 2 && fs[0].name() == "a" && fs[1].name() == "b"
+                } else {
+                    false
+                }
+            });
+            let tid_recb = tid_by_dt(&uf, |dt| {
+                if let DataType::Struct(fs) = dt {
+                    fs.len() == 2 && fs[0].name() == "x" && fs[1].name() == "y"
+                } else {
+                    false
+                }
+            });
+            let tid_arr = tid_by_dt(&uf, |dt| matches!(dt, DataType::List(_)));
+            let tids = vec![tid_enum, tid_reca, tid_recb, tid_arr];
+            let offs = vec![0, 0, 0, 0];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Dictionary(_, _) => {
+                    let keys = Int32Array::from(vec![0i32]); // "RED"
+                    let values =
+                        Arc::new(StringArray::from(vec!["RED", "GREEN", "BLUE"])) as ArrayRef;
+                    Some(
+                        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                            as ArrayRef,
+                    )
+                }
+                DataType::Struct(fs)
+                    if fs.len() == 2 && fs[0].name() == "a" && fs[1].name() == "b" =>
+                {
+                    let a = Int32Array::from(vec![7]);
+                    let b = StringArray::from(vec!["x"]);
+                    Some(Arc::new(StructArray::new(
+                        fs.clone(),
+                        vec![Arc::new(a), Arc::new(b)],
+                        None,
+                    )) as ArrayRef)
+                }
+                DataType::Struct(fs)
+                    if fs.len() == 2 && fs[0].name() == "x" && fs[1].name() == "y" =>
+                {
+                    let x = Int64Array::from(vec![123_456_789i64]);
+                    let y = BinaryArray::from(vec![&[0xFF, 0x00][..]]);
+                    Some(Arc::new(StructArray::new(
+                        fs.clone(),
+                        vec![Arc::new(x), Arc::new(y)],
+                        None,
+                    )) as ArrayRef)
+                }
+                DataType::List(field) => {
+                    let values = Int64Array::from(vec![1i64, 2, 3]);
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3]));
+                    Some(Arc::new(
+                        ListArray::try_new(field.clone(), offsets, Arc::new(values), None).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::Map(_, _) => None,
+                other => panic!("unexpected child {other:?}"),
+            });
+            expected_cols.push(arr);
+        }
+        // 7) union_date_or_fixed4: [date32, fixed(4)]
+        {
+            let (uf, _) = get_union("union_date_or_fixed4");
+            let tid_date = tid_by_dt(&uf, |dt| matches!(dt, DataType::Date32));
+            let tid_fx4 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(4)));
+            let tids = vec![tid_date, tid_fx4, tid_date, tid_fx4];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Date32 => {
+                    Some(Arc::new(arrow_array::Date32Array::from(vec![date_a, 0])) as ArrayRef)
+                }
+                DataType::FixedSizeBinary(4) => {
+                    let it = [Some(fx4_abcd), Some(fx4_misc)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 4).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 8) union_time_millis_or_enum: [time-millis, enum OnOff]
+        {
+            let (uf, _) = get_union("union_time_millis_or_enum");
+            let tid_ms = tid_by_dt(&uf, |dt| {
+                matches!(dt, DataType::Time32(arrow_schema::TimeUnit::Millisecond))
+            });
+            let tid_en = tid_by_dt(&uf, |dt| matches!(dt, DataType::Dictionary(_, _)));
+            let tids = vec![tid_ms, tid_en, tid_en, tid_ms];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Time32(arrow_schema::TimeUnit::Millisecond) => {
+                    Some(Arc::new(Time32MillisecondArray::from(vec![time_ms_a, 0])) as ArrayRef)
+                }
+                DataType::Dictionary(_, _) => {
+                    let keys = Int32Array::from(vec![0i32, 1]); // "ON", "OFF"
+                    let values = Arc::new(StringArray::from(vec!["ON", "OFF"])) as ArrayRef;
+                    Some(
+                        Arc::new(DictionaryArray::<Int32Type>::try_new(keys, values).unwrap())
+                            as ArrayRef,
+                    )
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 9) union_time_micros_or_string: [time-micros, string]
+        {
+            let (uf, _) = get_union("union_time_micros_or_string");
+            let tid_us = tid_by_dt(&uf, |dt| {
+                matches!(dt, DataType::Time64(arrow_schema::TimeUnit::Microsecond))
+            });
+            let tid_s = tid_by_name(&uf, "string");
+            let tids = vec![tid_s, tid_us, tid_s, tid_s];
+            let offs = vec![0, 0, 1, 2];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond) => {
+                    Some(Arc::new(Time64MicrosecondArray::from(vec![time_us_b])) as ArrayRef)
+                }
+                DataType::Utf8 => {
+                    Some(Arc::new(StringArray::from(vec!["evening", "night", ""])) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 10) union_ts_millis_utc_or_array: [timestamp-millis(TZ), array<int>]
+        {
+            let (uf, _) = get_union("union_ts_millis_utc_or_array");
+            let tid_ts = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, _)
+                )
+            });
+            let tid_arr = tid_by_dt(&uf, |dt| matches!(dt, DataType::List(_)));
+            let tids = vec![tid_ts, tid_arr, tid_arr, tid_ts];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, tz) => {
+                    let a = TimestampMillisecondArray::from(vec![
+                        ts_ms_2024_01_01,
+                        ts_ms_2024_01_01 + 86_400_000,
+                    ]);
+                    Some(Arc::new(if let Some(tz) = tz {
+                        a.with_timezone(tz.clone())
+                    } else {
+                        a
+                    }) as ArrayRef)
+                }
+                DataType::List(field) => {
+                    let values = Int32Array::from(vec![0, 1, 2, -1, 0, 1]);
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 6]));
+                    Some(Arc::new(
+                        ListArray::try_new(field.clone(), offsets, Arc::new(values), None).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 11) union_ts_micros_local_or_bytes: [local-timestamp-micros, bytes]
+        {
+            let (uf, _) = get_union("union_ts_micros_local_or_bytes");
+            let tid_lts = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
+                )
+            });
+            let tid_b = tid_by_name(&uf, "bytes");
+            let tids = vec![tid_b, tid_lts, tid_b, tid_b];
+            let offs = vec![0, 0, 1, 2];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None) => Some(Arc::new(
+                    TimestampMicrosecondArray::from(vec![ts_us_2024_01_01]),
+                )
+                    as ArrayRef),
+                DataType::Binary => Some(Arc::new(BinaryArray::from(vec![
+                    &b"\x11\x22\x33"[..],
+                    &b"\x00"[..],
+                    &b"\x10\x20\x30\x40"[..],
+                ])) as ArrayRef),
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 12) union_uuid_or_fixed10: [uuid(string)->fixed(16), fixed(10)]
+        {
+            let (uf, _) = get_union("union_uuid_or_fixed10");
+            let tid_fx16 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(16)));
+            let tid_fx10 = tid_by_dt(&uf, |dt| matches!(dt, DataType::FixedSizeBinary(10)));
+            let tids = vec![tid_fx16, tid_fx10, tid_fx16, tid_fx10];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::FixedSizeBinary(16) => {
+                    let it = [Some(uuid1), Some(uuid2)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 16).unwrap(),
+                    ) as ArrayRef)
+                }
+                DataType::FixedSizeBinary(10) => {
+                    let it = [Some(fx10_ascii), Some(fx10_aa)].into_iter();
+                    Some(Arc::new(
+                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(it, 10).unwrap(),
+                    ) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 13) union_dec_bytes_or_dec_fixed: [bytes dec(10,2), fixed(20) dec(20,4)]
+        {
+            let (uf, _) = get_union("union_dec_bytes_or_dec_fixed");
+            let tid_b10s2 = tid_by_dt(&uf, |dt| match dt {
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(10, 2) => true,
+                DataType::Decimal128(10, 2) | DataType::Decimal256(10, 2) => true,
+                _ => false,
+            });
+            let tid_f20s4 = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Decimal128(20, 4) | DataType::Decimal256(20, 4)
+                )
+            });
+            let tids = vec![tid_b10s2, tid_f20s4, tid_b10s2, tid_f20s4];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                #[cfg(feature = "small_decimals")]
+                DataType::Decimal64(10, 2) => {
+                    let a = Decimal64Array::from_iter_values([dec_b_scale2_pos as i64, 0i64]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal128(10, 2) => {
+                    let a = Decimal128Array::from_iter_values([dec_b_scale2_pos, 0]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal256(10, 2) => {
+                    let a = Decimal256Array::from_iter_values([
+                        i256::from_i128(dec_b_scale2_pos),
+                        i256::from(0),
+                    ]);
+                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal128(20, 4) => {
+                    let a = Decimal128Array::from_iter_values([dec_fix20_s4_neg, dec_fix20_s4]);
+                    Some(Arc::new(a.with_precision_and_scale(20, 4).unwrap()) as ArrayRef)
+                }
+                DataType::Decimal256(20, 4) => {
+                    let a = Decimal256Array::from_iter_values([
+                        i256::from_i128(dec_fix20_s4_neg),
+                        i256::from_i128(dec_fix20_s4),
+                    ]);
+                    Some(Arc::new(a.with_precision_and_scale(20, 4).unwrap()) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 14) union_null_bytes_string: ["null","bytes","string"]
+        {
+            let (uf, _) = get_union("union_null_bytes_string");
+            let tid_n = tid_by_name(&uf, "null");
+            let tid_b = tid_by_name(&uf, "bytes");
+            let tid_s = tid_by_name(&uf, "string");
+            let tids = vec![tid_n, tid_b, tid_s, tid_s];
+            let offs = vec![0, 0, 0, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.name().as_str() {
+                "null" => Some(Arc::new(arrow_array::NullArray::new(1)) as ArrayRef),
+                "bytes" => Some(Arc::new(BinaryArray::from(vec![&b"\x01\x02"[..]])) as ArrayRef),
+                "string" => Some(Arc::new(StringArray::from(vec!["text", "u"])) as ArrayRef),
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 15) array_of_union: array<[long,string]>
+        {
+            let idx = schema.index_of("array_of_union").unwrap();
+            let dt = schema.field(idx).data_type().clone();
+            let (item_field, _) = match &dt {
+                DataType::List(f) => (f.clone(), ()),
+                other => panic!("array_of_union must be List, got {other:?}"),
+            };
+            let (uf, _) = match item_field.data_type() {
+                DataType::Union(f, m) => (f.clone(), m),
+                other => panic!("array_of_union items must be Union, got {other:?}"),
+            };
+            let tid_l = tid_by_name(&uf, "long");
+            let tid_s = tid_by_name(&uf, "string");
+            let type_ids = vec![tid_l, tid_s, tid_l, tid_s, tid_l, tid_l, tid_s, tid_l];
+            let offsets = vec![0, 0, 1, 1, 2, 3, 2, 4];
+            let values_union =
+                mk_dense_union(&uf, type_ids, offsets, |f| match f.name().as_str() {
+                    "long" => {
+                        Some(Arc::new(Int64Array::from(vec![1i64, -5, 42, -1, 0])) as ArrayRef)
+                    }
+                    "string" => Some(Arc::new(StringArray::from(vec!["a", "", "z"])) as ArrayRef),
+                    _ => None,
+                });
+            let list_offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 3, 5, 6, 8]));
+            expected_cols.push(Arc::new(
+                ListArray::try_new(item_field.clone(), list_offsets, values_union, None).unwrap(),
+            ));
+        }
+        // 16) map_of_union: map<[null,double]>
+        {
+            let idx = schema.index_of("map_of_union").unwrap();
+            let dt = schema.field(idx).data_type().clone();
+            let (entry_field, ordered) = match &dt {
+                DataType::Map(f, ordered) => (f.clone(), *ordered),
+                other => panic!("map_of_union must be Map, got {other:?}"),
+            };
+            let DataType::Struct(entry_fields) = entry_field.data_type() else {
+                panic!("map entries must be struct")
+            };
+            let key_field = entry_fields[0].clone();
+            let val_field = entry_fields[1].clone();
+            let keys = StringArray::from(vec!["a", "b", "x", "pi"]);
+            let rounded_pi = (std::f64::consts::PI * 100_000.0).round() / 100_000.0;
+            let values: ArrayRef = match val_field.data_type() {
+                DataType::Union(uf, _) => {
+                    let tid_n = tid_by_name(uf, "null");
+                    let tid_d = tid_by_name(uf, "double");
+                    let tids = vec![tid_n, tid_d, tid_d, tid_d];
+                    let offs = vec![0, 0, 1, 2];
+                    mk_dense_union(uf, tids, offs, |f| match f.name().as_str() {
+                        "null" => Some(Arc::new(NullArray::new(1)) as ArrayRef),
+                        "double" => Some(Arc::new(arrow_array::Float64Array::from(vec![
+                            2.5f64, -0.5f64, rounded_pi,
+                        ])) as ArrayRef),
+                        _ => None,
+                    })
+                }
+                DataType::Float64 => Arc::new(arrow_array::Float64Array::from(vec![
+                    None,
+                    Some(2.5),
+                    Some(-0.5),
+                    Some(rounded_pi),
+                ])),
+                other => panic!("unexpected map value type {other:?}"),
+            };
+            let entries = StructArray::new(
+                Fields::from(vec![key_field.as_ref().clone(), val_field.as_ref().clone()]),
+                vec![Arc::new(keys) as ArrayRef, values],
+                None,
+            );
+            let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3, 3, 4]));
+            expected_cols.push(Arc::new(MapArray::new(
+                entry_field,
+                offsets,
+                entries,
+                None,
+                ordered,
+            )));
+        }
+        // 17) record_with_union_field: struct { id:int, u:[int,string] }
+        {
+            let idx = schema.index_of("record_with_union_field").unwrap();
+            let DataType::Struct(rec_fields) = schema.field(idx).data_type() else {
+                panic!("record_with_union_field should be Struct")
+            };
+            let id = Int32Array::from(vec![1, 2, 3, 4]);
+            let u_field = rec_fields.iter().find(|f| f.name() == "u").unwrap();
+            let DataType::Union(uf, _) = u_field.data_type() else {
+                panic!("u must be Union")
+            };
+            let tid_i = tid_by_name(uf, "int");
+            let tid_s = tid_by_name(uf, "string");
+            let tids = vec![tid_s, tid_i, tid_i, tid_s];
+            let offs = vec![0, 0, 1, 1];
+            let u = mk_dense_union(uf, tids, offs, |f| match f.name().as_str() {
+                "int" => Some(Arc::new(Int32Array::from(vec![99, 0])) as ArrayRef),
+                "string" => Some(Arc::new(StringArray::from(vec!["one", "four"])) as ArrayRef),
+                _ => None,
+            });
+            let rec = StructArray::new(rec_fields.clone(), vec![Arc::new(id) as ArrayRef, u], None);
+            expected_cols.push(Arc::new(rec));
+        }
+        // 18) union_ts_micros_utc_or_map: [timestamp-micros(TZ), map<long>]
+        {
+            let (uf, _) = get_union("union_ts_micros_utc_or_map");
+            let tid_ts = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some(_))
+                )
+            });
+            let tid_map = tid_by_dt(&uf, |dt| matches!(dt, DataType::Map(_, _)));
+            let tids = vec![tid_ts, tid_map, tid_ts, tid_map];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, tz) => {
+                    let a = TimestampMicrosecondArray::from(vec![ts_us_2024_01_01, 0i64]);
+                    Some(Arc::new(if let Some(tz) = tz {
+                        a.with_timezone(tz.clone())
+                    } else {
+                        a
+                    }) as ArrayRef)
+                }
+                DataType::Map(entry_field, ordered) => {
+                    let DataType::Struct(fs) = entry_field.data_type() else {
+                        panic!("map entries must be struct")
+                    };
+                    let key_field = fs[0].clone();
+                    let val_field = fs[1].clone();
+                    assert_eq!(key_field.data_type(), &DataType::Utf8);
+                    assert_eq!(val_field.data_type(), &DataType::Int64);
+                    let keys = StringArray::from(vec!["k1", "k2", "n"]);
+                    let vals = Int64Array::from(vec![1i64, 2, 0]);
+                    let entries = StructArray::new(
+                        Fields::from(vec![key_field.as_ref().clone(), val_field.as_ref().clone()]),
+                        vec![Arc::new(keys) as ArrayRef, Arc::new(vals) as ArrayRef],
+                        None,
+                    );
+                    let offsets = OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 2, 3]));
+                    Some(Arc::new(MapArray::new(
+                        entry_field.clone(),
+                        offsets,
+                        entries,
+                        None,
+                        *ordered,
+                    )) as ArrayRef)
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 19) union_ts_millis_local_or_string: [local-timestamp-millis, string]
+        {
+            let (uf, _) = get_union("union_ts_millis_local_or_string");
+            let tid_ts = tid_by_dt(&uf, |dt| {
+                matches!(
+                    dt,
+                    DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None)
+                )
+            });
+            let tid_s = tid_by_name(&uf, "string");
+            let tids = vec![tid_s, tid_ts, tid_s, tid_s];
+            let offs = vec![0, 0, 1, 2];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.data_type() {
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None) => Some(Arc::new(
+                    TimestampMillisecondArray::from(vec![ts_ms_2024_01_01]),
+                )
+                    as ArrayRef),
+                DataType::Utf8 => {
+                    Some(
+                        Arc::new(StringArray::from(vec!["local midnight", "done", ""])) as ArrayRef,
+                    )
+                }
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        // 20) union_bool_or_string: ["boolean","string"]
+        {
+            let (uf, _) = get_union("union_bool_or_string");
+            let tid_b = tid_by_name(&uf, "boolean");
+            let tid_s = tid_by_name(&uf, "string");
+            let tids = vec![tid_b, tid_s, tid_b, tid_s];
+            let offs = vec![0, 0, 1, 1];
+            let arr = mk_dense_union(&uf, tids, offs, |f| match f.name().as_str() {
+                "boolean" => Some(Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef),
+                "string" => Some(Arc::new(StringArray::from(vec!["no", "yes"])) as ArrayRef),
+                _ => None,
+            });
+            expected_cols.push(arr);
+        }
+        let expected = RecordBatch::try_new(schema.clone(), expected_cols).unwrap();
+        assert_eq!(
+            actual, expected,
+            "full end-to-end equality for union_fields.avro"
+        );
     }
 
     #[test]
@@ -1791,18 +4589,18 @@ mod test {
         let expected = RecordBatch::try_from_iter_with_nullable([(
             "foo",
             Arc::new(BinaryArray::from_iter_values(vec![
-                b"\x00".as_ref(),
-                b"\x01".as_ref(),
-                b"\x02".as_ref(),
-                b"\x03".as_ref(),
-                b"\x04".as_ref(),
-                b"\x05".as_ref(),
-                b"\x06".as_ref(),
-                b"\x07".as_ref(),
-                b"\x08".as_ref(),
-                b"\t".as_ref(),
-                b"\n".as_ref(),
-                b"\x0b".as_ref(),
+                b"\x00" as &[u8],
+                b"\x01" as &[u8],
+                b"\x02" as &[u8],
+                b"\x03" as &[u8],
+                b"\x04" as &[u8],
+                b"\x05" as &[u8],
+                b"\x06" as &[u8],
+                b"\x07" as &[u8],
+                b"\x08" as &[u8],
+                b"\t" as &[u8],
+                b"\n" as &[u8],
+                b"\x0b" as &[u8],
             ])) as Arc<dyn Array>,
             true,
         )])
@@ -1812,37 +4610,139 @@ mod test {
 
     #[test]
     fn test_decimal() {
-        let files = [
-            ("avro/fixed_length_decimal.avro", 25, 2),
-            ("avro/fixed_length_decimal_legacy.avro", 13, 2),
-            ("avro/int32_decimal.avro", 4, 2),
-            ("avro/int64_decimal.avro", 10, 2),
+        // Choose expected Arrow types depending on the `small_decimals` feature flag.
+        // With `small_decimals` enabled, Decimal32/Decimal64 are used where their
+        // precision allows; otherwise, those cases resolve to Decimal128.
+        #[cfg(feature = "small_decimals")]
+        let files: [(&str, DataType); 8] = [
+            (
+                "avro/fixed_length_decimal.avro",
+                DataType::Decimal128(25, 2),
+            ),
+            (
+                "avro/fixed_length_decimal_legacy.avro",
+                DataType::Decimal64(13, 2),
+            ),
+            ("avro/int32_decimal.avro", DataType::Decimal32(4, 2)),
+            ("avro/int64_decimal.avro", DataType::Decimal64(10, 2)),
+            (
+                "test/data/int256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed_length_decimal_legacy_32.avro",
+                DataType::Decimal32(9, 2),
+            ),
+            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
         ];
-        let decimal_values: Vec<i128> = (1..=24).map(|n| n as i128 * 100).collect();
-        for (file, precision, scale) in files {
-            let file_path = arrow_test_data(file);
+        #[cfg(not(feature = "small_decimals"))]
+        let files: [(&str, DataType); 8] = [
+            (
+                "avro/fixed_length_decimal.avro",
+                DataType::Decimal128(25, 2),
+            ),
+            (
+                "avro/fixed_length_decimal_legacy.avro",
+                DataType::Decimal128(13, 2),
+            ),
+            ("avro/int32_decimal.avro", DataType::Decimal128(4, 2)),
+            ("avro/int64_decimal.avro", DataType::Decimal128(10, 2)),
+            (
+                "test/data/int256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed256_decimal.avro",
+                DataType::Decimal256(76, 10),
+            ),
+            (
+                "test/data/fixed_length_decimal_legacy_32.avro",
+                DataType::Decimal128(9, 2),
+            ),
+            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
+        ];
+        for (file, expected_dt) in files {
+            let (precision, scale) = match expected_dt {
+                DataType::Decimal32(p, s)
+                | DataType::Decimal64(p, s)
+                | DataType::Decimal128(p, s)
+                | DataType::Decimal256(p, s) => (p, s),
+                _ => unreachable!("Unexpected decimal type in test inputs"),
+            };
+            assert!(scale >= 0, "test data uses non-negative scales only");
+            let scale_u32 = scale as u32;
+            let file_path: String = if file.starts_with("avro/") {
+                arrow_test_data(file)
+            } else {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(file)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            let pow10: i128 = 10i128.pow(scale_u32);
+            let values_i128: Vec<i128> = (1..=24).map(|n| (n as i128) * pow10).collect();
+            let build_expected = |dt: &DataType, values: &[i128]| -> ArrayRef {
+                match *dt {
+                    #[cfg(feature = "small_decimals")]
+                    DataType::Decimal32(p, s) => {
+                        let it = values.iter().map(|&v| v as i32);
+                        Arc::new(
+                            Decimal32Array::from_iter_values(it)
+                                .with_precision_and_scale(p, s)
+                                .unwrap(),
+                        )
+                    }
+                    #[cfg(feature = "small_decimals")]
+                    DataType::Decimal64(p, s) => {
+                        let it = values.iter().map(|&v| v as i64);
+                        Arc::new(
+                            Decimal64Array::from_iter_values(it)
+                                .with_precision_and_scale(p, s)
+                                .unwrap(),
+                        )
+                    }
+                    DataType::Decimal128(p, s) => {
+                        let it = values.iter().copied();
+                        Arc::new(
+                            Decimal128Array::from_iter_values(it)
+                                .with_precision_and_scale(p, s)
+                                .unwrap(),
+                        )
+                    }
+                    DataType::Decimal256(p, s) => {
+                        let it = values.iter().map(|&v| i256::from_i128(v));
+                        Arc::new(
+                            Decimal256Array::from_iter_values(it)
+                                .with_precision_and_scale(p, s)
+                                .unwrap(),
+                        )
+                    }
+                    _ => unreachable!("Unexpected decimal type in test"),
+                }
+            };
             let actual_batch = read_file(&file_path, 8, false);
-            let expected_array = Decimal128Array::from_iter_values(decimal_values.clone())
-                .with_precision_and_scale(precision, scale)
-                .unwrap();
+            let actual_nullable = actual_batch.schema().field(0).is_nullable();
+            let expected_array = build_expected(&expected_dt, &values_i128);
             let mut meta = HashMap::new();
             meta.insert("precision".to_string(), precision.to_string());
             meta.insert("scale".to_string(), scale.to_string());
-            let field_with_meta = Field::new("value", DataType::Decimal128(precision, scale), true)
-                .with_metadata(meta);
-            let expected_schema = Arc::new(Schema::new(vec![field_with_meta]));
+            let field =
+                Field::new("value", expected_dt.clone(), actual_nullable).with_metadata(meta);
+            let expected_schema = Arc::new(Schema::new(vec![field]));
             let expected_batch =
-                RecordBatch::try_new(expected_schema.clone(), vec![Arc::new(expected_array)])
-                    .expect("Failed to build expected RecordBatch");
+                RecordBatch::try_new(expected_schema.clone(), vec![expected_array]).unwrap();
             assert_eq!(
                 actual_batch, expected_batch,
-                "Decoded RecordBatch does not match the expected Decimal128 data for file {file}"
+                "Decoded RecordBatch does not match for {file}"
             );
             let actual_batch_small = read_file(&file_path, 3, false);
             assert_eq!(
-                actual_batch_small,
-                expected_batch,
-                "Decoded RecordBatch does not match the expected Decimal128 data for file {file} with batch size 3"
+                actual_batch_small, expected_batch,
+                "Decoded RecordBatch does not match for {file} with batch size 3"
             );
         }
     }

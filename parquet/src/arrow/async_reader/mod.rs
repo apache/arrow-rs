@@ -619,8 +619,7 @@ where
             metadata: self.metadata.as_ref(),
         };
 
-        let cache_options_builder =
-            CacheOptionsBuilder::new(&cache_projection, row_group_cache.clone());
+        let cache_options_builder = CacheOptionsBuilder::new(&cache_projection, &row_group_cache);
 
         let filter = self.filter.as_mut();
         let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);

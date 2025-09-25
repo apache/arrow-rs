@@ -17,19 +17,22 @@
 
 pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
 pub use self::list::VariantList;
-pub use self::metadata::VariantMetadata;
+pub use self::metadata::{VariantMetadata, EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES};
 pub use self::object::VariantObject;
+
+// Publically export types used in the API
+pub use half::f16;
+pub use uuid::Uuid;
+
 use crate::decoder::{
     self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
 };
 use crate::path::{VariantPath, VariantPathElement};
-use crate::utils::{first_byte_from_slice, slice_from_slice};
+use crate::utils::{first_byte_from_slice, fits_precision, slice_from_slice};
 use std::ops::Deref;
 
 use arrow_schema::ArrowError;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use half::f16;
-use uuid::Uuid;
 
 mod decimal;
 mod list;
@@ -805,6 +808,166 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    fn generic_convert_unsigned_primitive<T>(&self) -> Option<T>
+    where
+        T: TryFrom<i8> + TryFrom<i16> + TryFrom<i32> + TryFrom<i64> + TryFrom<i128>,
+    {
+        match *self {
+            Variant::Int8(i) => i.try_into().ok(),
+            Variant::Int16(i) => i.try_into().ok(),
+            Variant::Int32(i) => i.try_into().ok(),
+            Variant::Int64(i) => i.try_into().ok(),
+            Variant::Decimal4(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal8(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            Variant::Decimal16(d) if d.scale() == 0 => d.integer().try_into().ok(),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `u8` if possible.
+    ///
+    /// Returns `Some(u8)` for integer variants that fit in `u8`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::{Variant, VariantDecimal4};
+    ///
+    ///  // you can read an int64 variant into an u8
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u8(), Some(123u8));
+    ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal4::try_new(26, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u8(), Some(26u8));
+    ///
+    ///  // but not a variant that can't fit into the range
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u8(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal4::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u8(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u8(), None);
+    /// ```
+    pub fn as_u8(&self) -> Option<u8> {
+        self.generic_convert_unsigned_primitive::<u8>()
+    }
+
+    /// Converts this variant to an `u16` if possible.
+    ///
+    /// Returns `Some(u16)` for integer variants that fit in `u16`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::{Variant, VariantDecimal4};
+    ///
+    ///  // you can read an int64 variant into an u16
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u16(), Some(123u16));
+    ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal4::try_new(u16::MAX as i32, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u16(), Some(u16::MAX));
+    ///
+    ///  // but not a variant that can't fit into the range
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u16(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal4::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u16(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u16(), None);
+    /// ```
+    pub fn as_u16(&self) -> Option<u16> {
+        self.generic_convert_unsigned_primitive::<u16>()
+    }
+
+    /// Converts this variant to an `u32` if possible.
+    ///
+    /// Returns `Some(u32)` for integer variants that fit in `u32`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::{Variant, VariantDecimal8};
+    ///
+    ///  // you can read an int64 variant into an u32
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u32(), Some(123u32));
+    ///
+    ///  // or a Decimal4 with scale 0 into u8
+    ///  let d = VariantDecimal8::try_new(u32::MAX as i64, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u32(), Some(u32::MAX));
+    ///
+    ///  // but not a variant that can't fit into the range
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u32(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    ///  let d = VariantDecimal8::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u32(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u32(), None);
+    /// ```
+    pub fn as_u32(&self) -> Option<u32> {
+        self.generic_convert_unsigned_primitive::<u32>()
+    }
+
+    /// Converts this variant to an `u64` if possible.
+    ///
+    /// Returns `Some(u64)` for integer variants that fit in `u64`
+    /// `None` for non-integer variants or values that would overflow.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    ///  use parquet_variant::{Variant, VariantDecimal16};
+    ///
+    ///  // you can read an int64 variant into an u64
+    ///  let v1 = Variant::from(123i64);
+    ///  assert_eq!(v1.as_u64(), Some(123u64));
+    ///
+    ///  // or a Decimal16 with scale 0 into u8
+    ///  let d = VariantDecimal16::try_new(u64::MAX as i128, 0).unwrap();
+    ///  let v2 = Variant::from(d);
+    ///  assert_eq!(v2.as_u64(), Some(u64::MAX));
+    ///
+    ///  // but not a variant that can't fit into the range
+    ///  let v3 = Variant::from(-1);
+    ///  assert_eq!(v3.as_u64(), None);
+    ///
+    ///  // not a variant that decimal with scale not equal to zero
+    /// let d = VariantDecimal16::try_new(1, 2).unwrap();
+    ///  let v4 = Variant::from(d);
+    ///  assert_eq!(v4.as_u64(), None);
+    ///
+    ///  // or not a variant that cannot be cast into an integer
+    ///  let v5 = Variant::from("hello!");
+    ///  assert_eq!(v5.as_u64(), None);
+    /// ```
+    pub fn as_u64(&self) -> Option<u64> {
+        self.generic_convert_unsigned_primitive::<u64>()
+    }
+
     /// Converts this variant to tuple with a 4-byte unscaled value if possible.
     ///
     /// Returns `Some((i32, u8))` for decimal variants where the unscaled value
@@ -919,8 +1082,8 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to an `f16` if possible.
     ///
-    /// Returns `Some(f16)` for float and double variants,
-    /// `None` for non-floating-point variants.
+    /// Returns `Some(f16)` for floating point values, and integers with up to 11 bits of
+    /// precision. `None` otherwise.
     ///
     /// # Example
     ///
@@ -936,21 +1099,29 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f16(), Some(f16::from_f64(std::f64::consts::PI)));
     ///
+    /// // and from integers with no more than 11 bits of precision
+    /// let v3 = Variant::from(2047);
+    /// assert_eq!(v3.as_f16(), Some(f16::from_f32(2047.0)));
+    ///
     /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_f16(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f16(), None);
     pub fn as_f16(&self) -> Option<f16> {
         match *self {
             Variant::Float(i) => Some(f16::from_f32(i)),
             Variant::Double(i) => Some(f16::from_f64(i)),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
+            Variant::Int32(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
+            Variant::Int64(i) if fits_precision::<11>(i) => Some(f16::from_f32(i as _)),
             _ => None,
         }
     }
 
     /// Converts this variant to an `f32` if possible.
     ///
-    /// Returns `Some(f32)` for float and double variants,
-    /// `None` for non-floating-point variants.
+    /// Returns `Some(f32)` for floating point values, and integer values with up to 24 bits of
+    /// precision.  `None` otherwise.
     ///
     /// # Examples
     ///
@@ -965,23 +1136,31 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f32(), Some(std::f32::consts::PI));
     ///
+    /// // and from integers with no more than 24 bits of precision
+    /// let v3 = Variant::from(16777215i64);
+    /// assert_eq!(v3.as_f32(), Some(16777215.0));
+    ///
     /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_f32(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f32(), None);
     /// ```
     #[allow(clippy::cast_possible_truncation)]
     pub fn as_f32(&self) -> Option<f32> {
         match *self {
             Variant::Float(i) => Some(i),
             Variant::Double(i) => Some(i as f32),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i.into()),
+            Variant::Int32(i) if fits_precision::<24>(i) => Some(i as _),
+            Variant::Int64(i) if fits_precision::<24>(i) => Some(i as _),
             _ => None,
         }
     }
 
     /// Converts this variant to an `f64` if possible.
     ///
-    /// Returns `Some(f64)` for float and double variants,
-    /// `None` for non-floating-point variants.
+    /// Returns `Some(f64)` for floating point values, and integer values with up to 53 bits of
+    /// precision.  `None` otherwise.
     ///
     /// # Examples
     ///
@@ -996,14 +1175,22 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// let v2 = Variant::from(std::f64::consts::PI);
     /// assert_eq!(v2.as_f64(), Some(std::f64::consts::PI));
     ///
+    /// // and from integers with no more than 53 bits of precision
+    /// let v3 = Variant::from(9007199254740991i64);
+    /// assert_eq!(v3.as_f64(), Some(9007199254740991.0));
+    ///
     /// // but not from other variants
-    /// let v3 = Variant::from("hello!");
-    /// assert_eq!(v3.as_f64(), None);
+    /// let v4 = Variant::from("hello!");
+    /// assert_eq!(v4.as_f64(), None);
     /// ```
     pub fn as_f64(&self) -> Option<f64> {
         match *self {
             Variant::Float(i) => Some(i.into()),
             Variant::Double(i) => Some(i),
+            Variant::Int8(i) => Some(i.into()),
+            Variant::Int16(i) => Some(i.into()),
+            Variant::Int32(i) => Some(i.into()),
+            Variant::Int64(i) if fits_precision::<53>(i) => Some(i as _),
             _ => None,
         }
     }
@@ -1157,14 +1344,12 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
-    /// Return the metadata associated with this variant, if any.
-    ///
-    /// Returns `Some(&VariantMetadata)` for object and list variants,
-    pub fn metadata(&self) -> Option<&'m VariantMetadata<'_>> {
+    /// Return the metadata dictionary associated with this variant value.
+    pub fn metadata(&self) -> &VariantMetadata<'m> {
         match self {
             Variant::Object(VariantObject { metadata, .. })
-            | Variant::List(VariantList { metadata, .. }) => Some(metadata),
-            _ => None,
+            | Variant::List(VariantList { metadata, .. }) => metadata,
+            _ => &EMPTY_VARIANT_METADATA,
         }
     }
 
@@ -1307,6 +1492,12 @@ impl From<VariantDecimal8> for Variant<'_, '_> {
 impl From<VariantDecimal16> for Variant<'_, '_> {
     fn from(value: VariantDecimal16) -> Self {
         Variant::Decimal16(value)
+    }
+}
+
+impl From<half::f16> for Variant<'_, '_> {
+    fn from(value: half::f16) -> Self {
+        Variant::Float(value.into())
     }
 }
 

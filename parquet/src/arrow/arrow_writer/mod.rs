@@ -409,6 +409,7 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Create a new row group writer and return its column writers.
+    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
     pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         self.flush()?;
         let in_progress = self
@@ -418,6 +419,7 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Append the given column chunks to the file as a new row group.
+    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
     pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
         let mut row_group_writer = self.writer.next_row_group()?;
         for chunk in chunks {
@@ -425,6 +427,15 @@ impl<W: Write + Send> ArrowWriter<W> {
         }
         row_group_writer.close()?;
         Ok(())
+    }
+
+    /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
+    /// This can be useful to provide more control over how files are written.
+    pub fn into_serialized_writer(
+        mut self,
+    ) -> Result<(SerializedFileWriter<W>, ArrowRowGroupWriterFactory)> {
+        self.flush()?;
+        Ok((self.writer, self.row_group_writer_factory))
     }
 }
 
@@ -571,7 +582,7 @@ impl PageWriter for ArrowPageWriter {
             None => page,
         };
 
-        let page_header = page.to_thrift_header();
+        let page_header = page.to_thrift_header()?;
         let header = {
             let mut header = Vec::with_capacity(1024);
 
@@ -621,6 +632,9 @@ impl PageWriter for ArrowPageWriter {
 pub struct ArrowLeafColumn(ArrayLevels);
 
 /// Computes the [`ArrowLeafColumn`] for a potentially nested [`ArrayRef`]
+///
+/// This function can be used along with [`get_column_writers`] to encode
+/// individual columns in parallel. See example on [`ArrowColumnWriter`]
 pub fn compute_leaves(field: &Field, array: &ArrayRef) -> Result<Vec<ArrowLeafColumn>> {
     let levels = calculate_array_levels(array, field)?;
     Ok(levels.into_iter().map(ArrowLeafColumn).collect())
@@ -851,7 +865,8 @@ impl ArrowRowGroupWriter {
     }
 }
 
-struct ArrowRowGroupWriterFactory {
+/// Factory that creates new column writers for each row group in the Parquet file.
+pub struct ArrowRowGroupWriterFactory {
     schema: SchemaDescriptor,
     arrow_schema: SchemaRef,
     props: WriterPropertiesPtr,
@@ -906,9 +921,15 @@ impl ArrowRowGroupWriterFactory {
         let writers = get_column_writers(&self.schema, &self.props, &self.arrow_schema)?;
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
+
+    /// Create column writers for a new row group.
+    pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+        let rg_writer = self.create_row_group_writer(row_group_index)?;
+        Ok(rg_writer.writers)
+    }
 }
 
-/// Returns the [`ArrowColumnWriter`] for a given schema
+/// Returns [`ArrowColumnWriter`]s for each column in a given schema
 pub fn get_column_writers(
     parquet: &SchemaDescriptor,
     props: &WriterPropertiesPtr,
@@ -952,7 +973,7 @@ fn get_column_writers_with_encryptor(
     Ok(writers)
 }
 
-/// Gets [`ArrowColumnWriter`] instances for different data types
+/// Creates [`ArrowColumnWriter`] instances
 struct ArrowColumnWriterFactory {
     #[cfg(feature = "encryption")]
     row_group_index: usize,
@@ -1008,7 +1029,8 @@ impl ArrowColumnWriterFactory {
         Ok(Box::<ArrowPageWriter>::default())
     }
 
-    /// Gets the [`ArrowColumnWriter`] for the given `data_type`
+    /// Gets an [`ArrowColumnWriter`] for the given `data_type`, appending the
+    /// output ColumnDesc to `leaves` and the column writers to `out`
     fn get_arrow_column_writer(
         &self,
         data_type: &ArrowDataType,
@@ -1016,6 +1038,7 @@ impl ArrowColumnWriterFactory {
         leaves: &mut Iter<'_, ColumnDescPtr>,
         out: &mut Vec<ArrowColumnWriter>,
     ) -> Result<()> {
+        // Instantiate writers for normal columns
         let col = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
             let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
@@ -1026,6 +1049,7 @@ impl ArrowColumnWriterFactory {
             })
         };
 
+        // Instantiate writers for byte arrays (e.g. Utf8,  Binary, etc)
         let bytes = |desc: &ColumnDescPtr| -> Result<ArrowColumnWriter> {
             let page_writer = self.create_page_writer(desc, out.len())?;
             let chunk = page_writer.buffer.clone();
@@ -1080,7 +1104,7 @@ impl ArrowColumnWriterFactory {
             }
             _ => return Err(ParquetError::NYI(
                 format!(
-                    "Attempting to write an Arrow type {data_type:?} to parquet that is not yet implemented"
+                    "Attempting to write an Arrow type {data_type} to parquet that is not yet implemented"
                 )
             ))
         }
@@ -1482,7 +1506,6 @@ mod tests {
     use super::*;
 
     use std::fs::File;
-    use std::io::Seek;
 
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
@@ -2258,7 +2281,7 @@ mod tests {
     const SMALL_SIZE: usize = 7;
     const MEDIUM_SIZE: usize = 63;
 
-    fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> Vec<File> {
+    fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> Vec<Bytes> {
         let mut files = vec![];
         for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
             let mut props = WriterProperties::builder().set_writer_version(version);
@@ -2273,27 +2296,27 @@ mod tests {
         files
     }
 
+    // Round trip the specified record batch with the specified writer properties,
+    // to an in-memory file, and validate the arrays using the specified function.
+    // Returns the in-memory file.
     fn roundtrip_opts_with_array_validation<F>(
         expected_batch: &RecordBatch,
         props: WriterProperties,
         validate: F,
-    ) -> File
+    ) -> Bytes
     where
         F: Fn(&ArrayData, &ArrayData),
     {
-        let file = tempfile::tempfile().unwrap();
+        let mut file = vec![];
 
-        let mut writer = ArrowWriter::try_new(
-            file.try_clone().unwrap(),
-            expected_batch.schema(),
-            Some(props),
-        )
-        .expect("Unable to write file");
+        let mut writer = ArrowWriter::try_new(&mut file, expected_batch.schema(), Some(props))
+            .expect("Unable to write file");
         writer.write(expected_batch).unwrap();
         writer.close().unwrap();
 
+        let file = Bytes::from(file);
         let mut record_batch_reader =
-            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
+            ParquetRecordBatchReader::try_new(file.clone(), 1024).unwrap();
 
         let actual_batch = record_batch_reader
             .next()
@@ -2312,7 +2335,7 @@ mod tests {
         file
     }
 
-    fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperties) -> File {
+    fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperties) -> Bytes {
         roundtrip_opts_with_array_validation(expected_batch, props, |a, b| {
             a.validate_full().expect("valid expected data");
             b.validate_full().expect("valid actual data");
@@ -2340,17 +2363,17 @@ mod tests {
         }
     }
 
-    fn one_column_roundtrip(values: ArrayRef, nullable: bool) -> Vec<File> {
+    fn one_column_roundtrip(values: ArrayRef, nullable: bool) -> Vec<Bytes> {
         one_column_roundtrip_with_options(RoundTripOptions::new(values, nullable))
     }
 
-    fn one_column_roundtrip_with_schema(values: ArrayRef, schema: SchemaRef) -> Vec<File> {
+    fn one_column_roundtrip_with_schema(values: ArrayRef, schema: SchemaRef) -> Vec<Bytes> {
         let mut options = RoundTripOptions::new(values, false);
         options.schema = schema;
         one_column_roundtrip_with_options(options)
     }
 
-    fn one_column_roundtrip_with_options(options: RoundTripOptions) -> Vec<File> {
+    fn one_column_roundtrip_with_options(options: RoundTripOptions) -> Vec<Bytes> {
         let RoundTripOptions {
             values,
             schema,
@@ -2411,7 +2434,7 @@ mod tests {
         files
     }
 
-    fn values_required<A, I>(iter: I) -> Vec<File>
+    fn values_required<A, I>(iter: I) -> Vec<Bytes>
     where
         A: From<Vec<I::Item>> + Array + 'static,
         I: IntoIterator,
@@ -2421,7 +2444,7 @@ mod tests {
         one_column_roundtrip(values, false)
     }
 
-    fn values_optional<A, I>(iter: I) -> Vec<File>
+    fn values_optional<A, I>(iter: I) -> Vec<Bytes>
     where
         A: From<Vec<Option<I::Item>>> + Array + 'static,
         I: IntoIterator,
@@ -2445,7 +2468,7 @@ mod tests {
     }
 
     fn check_bloom_filter<T: AsBytes>(
-        files: Vec<File>,
+        files: Vec<Bytes>,
         file_column: String,
         positive_values: Vec<T>,
         negative_values: Vec<T>,
@@ -4177,17 +4200,13 @@ mod tests {
             .set_compression(crate::basic::Compression::UNCOMPRESSED)
             .build();
 
-        let mut file = roundtrip_opts(&batch, props);
+        let file = roundtrip_opts(&batch, props);
 
         // read file and decode page headers
         // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
-        let mut buf = vec![];
-        file.seek(std::io::SeekFrom::Start(0)).unwrap();
-        let read = file.read_to_end(&mut buf).unwrap();
-        assert!(read > 0);
 
         // decode first page header
-        let first_page = &buf[4..];
+        let first_page = &file[4..];
         let mut prot = TCompactSliceInputProtocol::new(first_page);
         let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
@@ -4211,17 +4230,13 @@ mod tests {
             .set_compression(crate::basic::Compression::UNCOMPRESSED)
             .build();
 
-        let mut file = roundtrip_opts(&batch, props);
+        let file = roundtrip_opts(&batch, props);
 
         // read file and decode page headers
         // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
-        let mut buf = vec![];
-        file.seek(std::io::SeekFrom::Start(0)).unwrap();
-        let read = file.read_to_end(&mut buf).unwrap();
-        assert!(read > 0);
 
         // decode first page header
-        let first_page = &buf[4..];
+        let first_page = &file[4..];
         let mut prot = TCompactSliceInputProtocol::new(first_page);
         let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;
@@ -4263,17 +4278,13 @@ mod tests {
             .set_compression(crate::basic::Compression::UNCOMPRESSED)
             .build();
 
-        let mut file = roundtrip_opts(&batch, props);
+        let file = roundtrip_opts(&batch, props);
 
         // read file and decode page headers
         // Note: use the thrift API as there is no Rust API to access the statistics in the page headers
-        let mut buf = vec![];
-        file.seek(std::io::SeekFrom::Start(0)).unwrap();
-        let read = file.read_to_end(&mut buf).unwrap();
-        assert!(read > 0);
 
         // decode first page header
-        let first_page = &buf[4..];
+        let first_page = &file[4..];
         let mut prot = TCompactSliceInputProtocol::new(first_page);
         let hdr = PageHeader::read_from_in_protocol(&mut prot).unwrap();
         let stats = hdr.data_page_header.unwrap().statistics;

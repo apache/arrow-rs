@@ -81,7 +81,9 @@ impl DecimalCast for i64 {
     }
 
     fn from_f64(n: f64) -> Option<Self> {
-        n.to_i64()
+        // Call implementation explicitly otherwise this resolves to `to_i64`
+        // in arrow-buffer that behaves differently.
+        num::traits::ToPrimitive::to_i64(&n)
     }
 }
 
@@ -217,8 +219,9 @@ where
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
         array.try_unary(|x| {
-            f(x).ok_or_else(|| error(x))
-                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+            f(x).ok_or_else(|| error(x)).and_then(|v| {
+                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
+            })
         })?
     })
 }
@@ -262,8 +265,9 @@ where
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
         array.try_unary(|x| {
-            f(x).ok_or_else(|| error(x))
-                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+            f(x).ok_or_else(|| error(x)).and_then(|v| {
+                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
+            })
         })?
     })
 }
@@ -484,12 +488,11 @@ where
                     parse_string_to_decimal_native::<T>(v, scale as usize)
                         .map_err(|_| {
                             ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
+                                "Cannot cast string '{v}' to value of {} type",
                                 T::DATA_TYPE,
                             ))
                         })
-                        .and_then(|v| T::validate_decimal_precision(v, precision).map(|_| v))
+                        .and_then(|v| T::validate_decimal_precision(v, precision, scale).map(|_| v))
                 })
                 .transpose()
             })
@@ -619,7 +622,7 @@ where
                             v
                         ))
                     })
-                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
