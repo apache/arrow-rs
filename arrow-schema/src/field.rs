@@ -1333,8 +1333,10 @@ mod test {
 
     #[cfg(feature = "serde")]
     fn assert_binary_serde_round_trip(field: Field) {
-        let serialized = bincode::serialize(&field).unwrap();
-        let deserialized: Field = bincode::deserialize(&serialized).unwrap();
+        let config = bincode::config::legacy();
+        let serialized = bincode::serde::encode_to_vec(&field, config).unwrap();
+        let (deserialized, _): (Field, _) =
+            bincode::serde::decode_from_slice(&serialized, config).unwrap();
         assert_eq!(field, deserialized)
     }
 
