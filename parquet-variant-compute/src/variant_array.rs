@@ -871,13 +871,13 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError>
 /// Validates whether a given arrow decimal is a valid variant decimal
 ///
 /// NOTE: By a strict reading of the "decimal table" in the [shredding spec], each decimal type
-/// should have a lower bound on precision as well as an upper bound (i.e. Decimal16 with precision
-/// 5 is invalid because Decimal4 can cover it). But the variant shredding integration tests
-/// specifically expect such cases to succeed, so we only enforce the upper bound here.
+/// should have a width-dependent lower bound on precision as well as an upper bound (i.e. Decimal16
+/// with precision 5 is invalid because Decimal4 "covers" it). But the variant shredding integration
+/// tests specifically expect such cases to succeed, so we only enforce the upper bound here.
 ///
 /// [shredding spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
 fn is_valid_variant_decimal(p: &u8, s: &i8, max_precision: u8) -> bool {
-    *p <= max_precision && (0..=*p as i8).contains(s)
+    (1..=max_precision).contains(p) && (0..=*p as i8).contains(s)
 }
 
 /// Recursively visits a data type, ensuring that it only contains data types that can legally
