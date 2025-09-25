@@ -75,115 +75,99 @@ use crate::format as parquet;
 /// [bounding-box-spec]: https://github.com/apache/parquet-format/blob/master/Geospatial.md#bounding-box
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoundingBox {
-    /// Minimum X coordinate (longitude or easting)
-    xmin: f64,
-    /// Maximum X coordinate (longitude or easting)
-    xmax: f64,
-    /// Minimum Y coordinate (latitude or northing)
-    ymin: f64,
-    /// Maximum Y coordinate (latitude or northing)
-    ymax: f64,
-    /// Minimum Z coordinate (elevation/height), if present
-    zmin: Option<f64>,
-    /// Maximum Z coordinate (elevation/height), if present
-    zmax: Option<f64>,
-    /// Minimum M coordinate (measured value), if present
-    mmin: Option<f64>,
-    /// Maximum M coordinate (measured value), if present
-    mmax: Option<f64>,
+    /// X coordinates (longitude or easting): (min, max)
+    x_range: (f64, f64),
+    /// Y coordinates (latitude or northing): (min, max)
+    y_range: (f64, f64),
+    /// Z coordinates (elevation/height): (min, max), if present
+    z_range: Option<(f64, f64)>,
+    /// M coordinates (measured value): (min, max), if present
+    m_range: Option<(f64, f64)>,
 }
 
 impl BoundingBox {
     /// Creates a new bounding box with the specified coordinates.
     pub fn new(xmin: f64, xmax: f64, ymin: f64, ymax: f64) -> Self {
         Self {
-            xmin,
-            xmax,
-            ymin,
-            ymax,
-            zmin: None,
-            zmax: None,
-            mmin: None,
-            mmax: None,
+            x_range: (xmin, xmax),
+            y_range: (ymin, ymax),
+            z_range: None,
+            m_range: None,
         }
     }
 
     /// Updates the bounding box with specified X-coordinate range.
     pub fn with_xrange(mut self, xmin: f64, xmax: f64) -> Self {
-        self.xmin = xmin;
-        self.xmax = xmax;
+        self.x_range = (xmin, xmax);
         self
     }
 
     /// Updates the bounding box with specified Y-coordinate range.
     pub fn with_yrange(mut self, ymin: f64, ymax: f64) -> Self {
-        self.ymin = ymin;
-        self.ymax = ymax;
+        self.y_range = (ymin, ymax);
         self
     }
 
     /// Creates a new bounding box with the specified Z-coordinate range.
     pub fn with_zrange(mut self, zmin: f64, zmax: f64) -> Self {
-        self.zmin = Some(zmin);
-        self.zmax = Some(zmax);
+        self.z_range = Some((zmin, zmax));
         self
     }
 
     /// Creates a new bounding box with the specified M-coordinate range.
     pub fn with_mrange(mut self, mmin: f64, mmax: f64) -> Self {
-        self.mmin = Some(mmin);
-        self.mmax = Some(mmax);
+        self.m_range = Some((mmin, mmax));
         self
     }
 
     /// Returns the minimum x-coordinate.
     pub fn get_xmin(&self) -> f64 {
-        self.xmin
+        self.x_range.0
     }
 
     /// Returns the maximum x-coordinate.
     pub fn get_xmax(&self) -> f64 {
-        self.xmax
+        self.x_range.1
     }
 
     /// Returns the minimum y-coordinate.
     pub fn get_ymin(&self) -> f64 {
-        self.ymin
+        self.y_range.0
     }
 
     /// Returns the maximum y-coordinate.
     pub fn get_ymax(&self) -> f64 {
-        self.ymax
+        self.y_range.1
     }
 
     /// Returns the minimum z-coordinate, if present.
     pub fn get_zmin(&self) -> Option<f64> {
-        self.zmin
+        self.z_range.map(|z| z.0)
     }
 
     /// Returns the maximum z-coordinate, if present.
     pub fn get_zmax(&self) -> Option<f64> {
-        self.zmax
+        self.z_range.map(|z| z.1)
     }
 
     /// Returns the minimum m-value (measure), if present.
     pub fn get_mmin(&self) -> Option<f64> {
-        self.mmin
+        self.m_range.map(|m| m.0)
     }
 
     /// Returns the maximum m-value (measure), if present.
     pub fn get_mmax(&self) -> Option<f64> {
-        self.mmax
+        self.m_range.map(|m| m.1)
     }
 
     /// Returns `true` if both zmin and zmax are present.
     pub fn is_z_valid(&self) -> bool {
-        self.zmin.is_some() && self.zmax.is_some()
+        self.z_range.is_some()
     }
 
     /// Returns `true` if both mmin and mmax are present.
     pub fn is_m_valid(&self) -> bool {
-        self.mmin.is_some() && self.mmax.is_some()
+        self.m_range.is_some()
     }
 }
 
@@ -191,14 +175,14 @@ impl From<BoundingBox> for parquet::BoundingBox {
     /// Converts our internal `BoundingBox` to the Thrift-generated format.
     fn from(b: BoundingBox) -> parquet::BoundingBox {
         parquet::BoundingBox {
-            xmin: b.get_xmin().into(),
-            ymin: b.get_ymin().into(),
-            xmax: b.get_xmax().into(),
-            ymax: b.get_ymax().into(),
-            zmin: b.get_zmin().map(|z| z.into()),
-            zmax: b.get_zmax().map(|z| z.into()),
-            mmin: b.get_mmin().map(|m| m.into()),
-            mmax: b.get_mmax().map(|m| m.into()),
+            xmin: b.x_range.0.into(),
+            xmax: b.x_range.1.into(),
+            ymin: b.y_range.0.into(),
+            ymax: b.y_range.1.into(),
+            zmin: b.z_range.map(|z| z.0.into()),
+            zmax: b.z_range.map(|z| z.1.into()),
+            mmin: b.m_range.map(|m| m.0.into()),
+            mmax: b.m_range.map(|m| m.1.into()),
         }
     }
 }
