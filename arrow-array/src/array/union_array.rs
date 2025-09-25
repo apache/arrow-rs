@@ -137,11 +137,11 @@ impl UnionArray {
     ///
     /// # Safety
     ///
-    /// The `type_ids` values should be positive and must match one of the type ids of the fields provided in `fields`.
+    /// The `type_ids` values should be non-negative and must match one of the type ids of the fields provided in `fields`.
     /// These values are used to index into the `children` arrays.
     ///
     /// The `offsets` is provided in the case of a dense union, sparse unions should use `None`.
-    /// If provided the `offsets` values should be positive and must be less than the length of the
+    /// If provided the `offsets` values should be non-negative and must be less than the length of the
     /// corresponding array.
     ///
     /// In both cases above we use signed integer types to maintain compatibility with other
@@ -230,7 +230,7 @@ impl UnionArray {
             if iter.any(|(type_id, &offset)| offset < 0 || offset >= array_lens[*type_id as usize])
             {
                 return Err(ArrowError::InvalidArgumentError(
-                    "Offsets must be positive and within the length of the Array".to_owned(),
+                    "Offsets must be non-negative and within the length of the Array".to_owned(),
                 ));
             }
         }
@@ -1877,7 +1877,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: Offsets must be positive and within the length of the Array"
+            "Invalid argument error: Offsets must be non-negative and within the length of the Array"
         );
 
         let offsets = Some(vec![0, 1].into());
