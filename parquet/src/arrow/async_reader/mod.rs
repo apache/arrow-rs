@@ -422,7 +422,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     ///
     /// We should call this function after other forms pruning, such as projection and predicate pushdown.
     pub async fn get_row_group_column_bloom_filter(
-        &self,
+        &mut self,
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<Sbbf>> {

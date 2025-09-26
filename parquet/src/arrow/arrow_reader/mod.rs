@@ -4920,7 +4920,7 @@ mod tests {
     }
 
     fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
-        let mut builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
 
         let metadata = builder.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
