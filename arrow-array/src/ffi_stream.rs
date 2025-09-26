@@ -64,7 +64,7 @@ use std::{
 };
 
 use arrow_data::ffi::FFI_ArrowArray;
-use arrow_schema::{ffi::FFI_ArrowSchema, ArrowError, Schema, SchemaRef};
+use arrow_schema::{ArrowError, Schema, SchemaRef, ffi::FFI_ArrowSchema};
 
 use crate::array::Array;
 use crate::array::StructArray;

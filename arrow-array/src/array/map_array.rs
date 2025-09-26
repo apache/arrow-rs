@@ -17,7 +17,7 @@
 
 use crate::array::{get_offsets, print_long_array};
 use crate::iterator::MapArrayIter;
-use crate::{make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
+use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};

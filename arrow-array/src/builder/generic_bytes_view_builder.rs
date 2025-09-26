@@ -22,8 +22,8 @@ use std::sync::Arc;
 use arrow_buffer::{Buffer, NullBufferBuilder, ScalarBuffer};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
-use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 
 use crate::builder::ArrayBuilder;
 use crate::types::bytes::ByteArrayNativeType;
@@ -742,10 +742,12 @@ mod tests {
             assert_eq!(fixed_builder.completed.len(), 2_usize.pow(i + 1) - 1);
 
             // Every buffer is fixed size
-            assert!(fixed_builder
-                .completed
-                .iter()
-                .all(|b| b.len() == STARTING_BLOCK_SIZE as usize));
+            assert!(
+                fixed_builder
+                    .completed
+                    .iter()
+                    .all(|b| b.len() == STARTING_BLOCK_SIZE as usize)
+            );
         }
 
         // Add one more value, and the buffer stop growing.

@@ -103,9 +103,9 @@ To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 
 use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
+use arrow_buffer::{Buffer, MutableBuffer, bit_util};
 pub use arrow_data::ffi::FFI_ArrowArray;
-use arrow_data::{layout, ArrayData};
+use arrow_data::{ArrayData, layout};
 pub use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{ArrowError, DataType, UnionMode};
 
@@ -558,7 +558,7 @@ mod tests_to_then_from_ffi {
 
     use crate::builder::UnionBuilder;
     use crate::cast::AsArray;
-    use crate::types::{Float64Type, Int32Type, Int8Type};
+    use crate::types::{Float64Type, Int8Type, Int32Type};
     use crate::*;
 
     use super::*;
@@ -1315,25 +1315,26 @@ mod tests_from_ffi {
     use std::ptr::NonNull;
     use std::sync::Arc;
 
+    #[cfg(not(feature = "force_validate"))]
+    use arrow_buffer::{ScalarBuffer, bit_util, buffer::Buffer};
     #[cfg(feature = "force_validate")]
     use arrow_buffer::{bit_util, buffer::Buffer};
-    #[cfg(not(feature = "force_validate"))]
-    use arrow_buffer::{bit_util, buffer::Buffer, ScalarBuffer};
 
-    use arrow_data::transform::MutableArrayData;
     use arrow_data::ArrayData;
+    use arrow_data::transform::MutableArrayData;
     use arrow_schema::{DataType, Field};
 
     use super::Result;
     use crate::builder::GenericByteViewBuilder;
     use crate::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType};
     use crate::{
+        ArrayRef, GenericByteViewArray, ListArray,
         array::{
             Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
             Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
         },
-        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
-        make_array, ArrayRef, GenericByteViewArray, ListArray,
+        ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi},
+        make_array,
     };
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {

@@ -222,9 +222,9 @@ mod tests {
     use super::*;
     use arrow_schema::DataType;
 
-    use crate::builder::Int32Builder;
     use crate::Array;
     use crate::Int32Array;
+    use crate::builder::Int32Builder;
 
     fn make_list_builder(
         include_null_element: bool,

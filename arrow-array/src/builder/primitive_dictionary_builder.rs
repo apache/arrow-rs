@@ -523,13 +523,13 @@ impl<K: ArrowDictionaryKeyType, P: ArrowPrimitiveType> Extend<Option<P::Native>>
 mod tests {
     use super::*;
 
-    use crate::array::{Int32Array, UInt32Array, UInt8Array};
+    use crate::array::{Int32Array, UInt8Array, UInt32Array};
     use crate::builder::Decimal128Builder;
     use crate::cast::AsArray;
     use crate::types::{
-        Date32Type, Decimal128Type, DurationNanosecondType, Float32Type, Float64Type, Int16Type,
-        Int32Type, Int64Type, Int8Type, TimestampNanosecondType, UInt16Type, UInt32Type,
-        UInt64Type, UInt8Type,
+        Date32Type, Decimal128Type, DurationNanosecondType, Float32Type, Float64Type, Int8Type,
+        Int16Type, Int32Type, Int64Type, TimestampNanosecondType, UInt8Type, UInt16Type,
+        UInt32Type, UInt64Type,
     };
 
     #[test]

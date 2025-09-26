@@ -16,7 +16,7 @@
 // under the License.
 #![allow(clippy::enum_clike_unportable_variant)]
 
-use crate::{make_array, Array, ArrayRef};
+use crate::{Array, ArrayRef, make_array};
 use arrow_buffer::bit_chunk_iterator::{BitChunkIterator, BitChunks};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, ScalarBuffer};

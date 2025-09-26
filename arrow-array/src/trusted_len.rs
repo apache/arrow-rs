@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{bit_util, ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util};
 
 /// Creates two [`Buffer`]s from an iterator of `Option`.
 /// The first buffer corresponds to a bitmap buffer, the second one

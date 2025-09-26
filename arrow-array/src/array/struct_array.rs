@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::{make_array, new_null_array, Array, ArrayRef, RecordBatch};
+use crate::{Array, ArrayRef, RecordBatch, make_array, new_null_array};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};

@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
 use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray, Scalar};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;

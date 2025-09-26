@@ -18,8 +18,8 @@
 use crate::array::{get_offsets, print_long_array};
 use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
-use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
+use crate::types::bytes::ByteArrayNativeType;
 use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait, Scalar};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
