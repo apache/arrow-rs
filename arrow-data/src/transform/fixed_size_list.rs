@@ -18,7 +18,7 @@
 use crate::ArrayData;
 use arrow_schema::DataType;
 
-use super::{Extend, _MutableArrayData};
+use super::{_MutableArrayData, Extend};
 
 pub(super) fn build_extend(array: &ArrayData) -> Extend<'_> {
     let size = match array.data_type() {
