@@ -91,11 +91,10 @@ variant_test_case!(16);
 variant_test_case!(17);
 variant_test_case!(18);
 variant_test_case!(19);
-// https://github.com/apache/arrow-rs/issues/8331
-variant_test_case!(20, "Unsupported typed_value type: Timestamp(µs, \"UTC\")");
-variant_test_case!(21, "Unsupported typed_value type: Timestamp(µs, \"UTC\")");
-variant_test_case!(22, "Unsupported typed_value type: Timestamp(µs)");
-variant_test_case!(23, "Unsupported typed_value type: Timestamp(µs)");
+variant_test_case!(20);
+variant_test_case!(21);
+variant_test_case!(22);
+variant_test_case!(23);
 // https://github.com/apache/arrow-rs/issues/8332
 variant_test_case!(24, "Unsupported typed_value type: Decimal128(9, 4)");
 variant_test_case!(25, "Unsupported typed_value type: Decimal128(9, 4)");
@@ -107,11 +106,10 @@ variant_test_case!(30);
 variant_test_case!(31);
 // https://github.com/apache/arrow-rs/issues/8334
 variant_test_case!(32, "Unsupported typed_value type: Time64(µs)");
-// https://github.com/apache/arrow-rs/issues/8331
-variant_test_case!(33, "Unsupported typed_value type: Timestamp(ns, \"UTC\")");
-variant_test_case!(34, "Unsupported typed_value type: Timestamp(ns, \"UTC\")");
-variant_test_case!(35, "Unsupported typed_value type: Timestamp(ns)");
-variant_test_case!(36, "Unsupported typed_value type: Timestamp(ns)");
+variant_test_case!(33);
+variant_test_case!(34);
+variant_test_case!(35);
+variant_test_case!(36);
 variant_test_case!(37);
 // https://github.com/apache/arrow-rs/issues/8336
 variant_test_case!(38, "Unsupported typed_value type: Struct(");
