@@ -51,8 +51,8 @@ use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
 
 use arrow_ipc::convert::try_schema_from_ipc_buffer;
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Bytes;
 use prost_types::Timestamp;
 use std::{fmt, ops::Deref};
