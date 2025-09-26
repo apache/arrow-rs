@@ -17,7 +17,7 @@
 
 use crate::data::{contains_nulls, ArrayData};
 use arrow_buffer::ArrowNativeType;
-use num::Integer;
+use num_integer::Integer;
 
 use super::utils::equal_len;
 

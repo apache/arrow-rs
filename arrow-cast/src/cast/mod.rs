@@ -65,8 +65,7 @@ use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
-use num::cast::AsPrimitive;
-use num::{NumCast, ToPrimitive};
+use num_traits::{cast::AsPrimitive, NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2216,14 +2215,14 @@ fn cast_to_decimal<D, M>(
 where
     D: DecimalType + ArrowPrimitiveType<Native = M>,
     M: ArrowNativeTypeOp + DecimalCast,
-    u8: num::traits::AsPrimitive<M>,
-    u16: num::traits::AsPrimitive<M>,
-    u32: num::traits::AsPrimitive<M>,
-    u64: num::traits::AsPrimitive<M>,
-    i8: num::traits::AsPrimitive<M>,
-    i16: num::traits::AsPrimitive<M>,
-    i32: num::traits::AsPrimitive<M>,
-    i64: num::traits::AsPrimitive<M>,
+    u8: num_traits::AsPrimitive<M>,
+    u16: num_traits::AsPrimitive<M>,
+    u32: num_traits::AsPrimitive<M>,
+    u64: num_traits::AsPrimitive<M>,
+    i8: num_traits::AsPrimitive<M>,
+    i16: num_traits::AsPrimitive<M>,
+    i32: num_traits::AsPrimitive<M>,
+    i64: num_traits::AsPrimitive<M>,
 {
     use DataType::*;
     // cast data to decimal
@@ -2351,7 +2350,7 @@ where
     R::Native: NumCast,
 {
     from.try_unary(|value| {
-        num::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
+        num_traits::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
             ArrowError::CastError(format!(
                 "Can't cast value {:?} to type {}",
                 value,
@@ -2370,7 +2369,7 @@ where
     T::Native: NumCast,
     R::Native: NumCast,
 {
-    from.unary_opt::<_, R>(num::cast::cast::<T::Native, R::Native>)
+    from.unary_opt::<_, R>(num_traits::cast::cast::<T::Native, R::Native>)
 }
 
 fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
@@ -2446,7 +2445,7 @@ fn cast_bool_to_numeric<TO>(
 ) -> Result<ArrayRef, ArrowError>
 where
     TO: ArrowPrimitiveType,
-    TO::Native: num::cast::NumCast,
+    TO::Native: num_traits::cast::NumCast,
 {
     Ok(Arc::new(bool_to_numeric_cast::<TO>(
         from.as_any().downcast_ref::<BooleanArray>().unwrap(),
@@ -2457,14 +2456,14 @@ where
 fn bool_to_numeric_cast<T>(from: &BooleanArray, _cast_options: &CastOptions) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    T::Native: num::NumCast,
+    T::Native: num_traits::NumCast,
 {
     let iter = (0..from.len()).map(|i| {
         if from.is_null(i) {
             None
         } else if from.value(i) {
             // a workaround to cast a primitive to T::Native, infallible
-            num::cast::cast(1)
+            num_traits::cast::cast(1)
         } else {
             Some(T::default_value())
         }
