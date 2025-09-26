@@ -129,23 +129,21 @@ unsafe fn set_upto_64bits(
 /// # Safety
 /// The caller must ensure `data` has `offset..(offset + 8)` range, and `count <= 8`.
 #[inline]
-unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
+unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 { unsafe {
     debug_assert!(count <= 8);
     let mut tmp: u64 = 0;
     let src = data.as_ptr().add(offset);
-    unsafe {
-        std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count);
-    }
+    std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count);
     tmp
-}
+}}
 
 /// # Safety
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
-unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
+unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) { unsafe {
     let ptr = data.as_mut_ptr().add(offset) as *mut u64;
     ptr.write_unaligned(chunk);
-}
+}}
 
 /// Similar to `write_u64_bytes`, but this method ORs the offset addressed `data` and `chunk`
 /// instead of overwriting
@@ -153,11 +151,11 @@ unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
 /// # Safety
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
-unsafe fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
+unsafe fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) { unsafe {
     let ptr = data.as_mut_ptr().add(offset);
     let chunk = chunk | (*ptr) as u64;
     (ptr as *mut u64).write_unaligned(chunk);
-}
+}}
 
 #[cfg(test)]
 mod tests {
