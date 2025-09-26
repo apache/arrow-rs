@@ -21,9 +21,8 @@
 use crate::basic::{BoundaryOrder, ColumnOrder, Compression, Encoding, PageType};
 use crate::data_type::private::ParquetValueType;
 use crate::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, KeyValue, RowGroupMetaData, SortingColumn,
+    ColumnChunkMetaData, FileMetaData, KeyValue, PageEncodingStats, RowGroupMetaData, SortingColumn,
 };
-use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::page_index::column_index::{
     ByteArrayColumnIndex, ColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
 };

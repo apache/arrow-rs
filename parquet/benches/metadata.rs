@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "arrow")]
-use parquet::file::metadata::ParquetMetaData;
 use parquet::file::metadata::ParquetMetaDataReader;
 use rand::Rng;
 use thrift::protocol::TCompactOutputProtocol;

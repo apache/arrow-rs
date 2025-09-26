@@ -1044,10 +1044,11 @@ mod tests {
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
+    use crate::file::statistics::{from_thrift_page_stats, page_stats_to_thrift};
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
-        statistics::{from_thrift, to_thrift, Statistics},
+        statistics::Statistics,
     };
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
@@ -1498,8 +1499,11 @@ mod tests {
                         encoding,
                         def_level_encoding,
                         rep_level_encoding,
-                        statistics: from_thrift(physical_type, to_thrift(statistics.as_ref()))
-                            .unwrap(),
+                        statistics: from_thrift_page_stats(
+                            physical_type,
+                            page_stats_to_thrift(statistics.as_ref()),
+                        )
+                        .unwrap(),
                     }
                 }
                 Page::DataPageV2 {
@@ -1528,8 +1532,11 @@ mod tests {
                         def_levels_byte_len,
                         rep_levels_byte_len,
                         is_compressed: compressor.is_some(),
-                        statistics: from_thrift(physical_type, to_thrift(statistics.as_ref()))
-                            .unwrap(),
+                        statistics: from_thrift_page_stats(
+                            physical_type,
+                            page_stats_to_thrift(statistics.as_ref()),
+                        )
+                        .unwrap(),
                     }
                 }
                 Page::DictionaryPage {
@@ -1620,7 +1627,10 @@ mod tests {
         assert_eq!(&left.buffer(), &right.buffer());
         assert_eq!(left.num_values(), right.num_values());
         assert_eq!(left.encoding(), right.encoding());
-        assert_eq!(to_thrift(left.statistics()), to_thrift(right.statistics()));
+        assert_eq!(
+            page_stats_to_thrift(left.statistics()),
+            page_stats_to_thrift(right.statistics())
+        );
     }
 
     /// Tests roundtrip of i32 data written using `W` and read using `R`
@@ -1887,29 +1897,22 @@ mod tests {
         let metadata = row_group_writer.close().unwrap();
         writer.close().unwrap();
 
-        let thrift = metadata.to_thrift();
-        let encoded_stats: Vec<_> = thrift
-            .columns
-            .into_iter()
-            .map(|x| x.meta_data.unwrap().statistics.unwrap())
-            .collect();
-
         // decimal
-        let s = &encoded_stats[0];
+        let s = page_stats_to_thrift(metadata.column(0).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
 
         // i32
-        let s = &encoded_stats[1];
+        let s = page_stats_to_thrift(metadata.column(1).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
 
         // u32
-        let s = &encoded_stats[2];
+        let s = page_stats_to_thrift(metadata.column(2).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), None);
         assert_eq!(s.max.as_deref(), None);
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));

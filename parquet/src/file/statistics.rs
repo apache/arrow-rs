@@ -118,156 +118,6 @@ macro_rules! statistics_enum_func {
     }};
 }
 
-// FIXME(ets): remove this when done with format changes
-/// Converts Thrift definition into `Statistics`.
-pub fn from_thrift(
-    physical_type: Type,
-    thrift_stats: Option<crate::format::Statistics>,
-) -> Result<Option<Statistics>> {
-    Ok(match thrift_stats {
-        Some(stats) => {
-            // Number of nulls recorded, when it is not available, we just mark it as 0.
-            // TODO this should be `None` if there is no information about NULLS.
-            // see https://github.com/apache/arrow-rs/pull/6216/files
-            let null_count = stats.null_count.unwrap_or(0);
-
-            if null_count < 0 {
-                return Err(ParquetError::General(format!(
-                    "Statistics null count is negative {null_count}",
-                )));
-            }
-
-            // Generic null count.
-            let null_count = Some(null_count as u64);
-            // Generic distinct count (count of distinct values occurring)
-            let distinct_count = stats.distinct_count.map(|value| value as u64);
-            // Whether or not statistics use deprecated min/max fields.
-            let old_format = stats.min_value.is_none() && stats.max_value.is_none();
-            // Generic min value as bytes.
-            let min = if old_format {
-                stats.min
-            } else {
-                stats.min_value
-            };
-            // Generic max value as bytes.
-            let max = if old_format {
-                stats.max
-            } else {
-                stats.max_value
-            };
-
-            fn check_len(min: &Option<Vec<u8>>, max: &Option<Vec<u8>>, len: usize) -> Result<()> {
-                if let Some(min) = min {
-                    if min.len() < len {
-                        return Err(ParquetError::General(
-                            "Insufficient bytes to parse min statistic".to_string(),
-                        ));
-                    }
-                }
-                if let Some(max) = max {
-                    if max.len() < len {
-                        return Err(ParquetError::General(
-                            "Insufficient bytes to parse max statistic".to_string(),
-                        ));
-                    }
-                }
-                Ok(())
-            }
-
-            match physical_type {
-                Type::BOOLEAN => check_len(&min, &max, 1),
-                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
-                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
-                Type::INT96 => check_len(&min, &max, 12),
-                _ => Ok(()),
-            }?;
-
-            // Values are encoded using PLAIN encoding definition, except that
-            // variable-length byte arrays do not include a length prefix.
-            //
-            // Instead of using actual decoder, we manually convert values.
-            let res = match physical_type {
-                Type::BOOLEAN => Statistics::boolean(
-                    min.map(|data| data[0] != 0),
-                    max.map(|data| data[0] != 0),
-                    distinct_count,
-                    null_count,
-                    old_format,
-                ),
-                Type::INT32 => Statistics::int32(
-                    min.map(|data| i32::from_le_bytes(data[..4].try_into().unwrap())),
-                    max.map(|data| i32::from_le_bytes(data[..4].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
-                ),
-                Type::INT64 => Statistics::int64(
-                    min.map(|data| i64::from_le_bytes(data[..8].try_into().unwrap())),
-                    max.map(|data| i64::from_le_bytes(data[..8].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
-                ),
-                Type::INT96 => {
-                    // INT96 statistics may not be correct, because comparison is signed
-                    let min = if let Some(data) = min {
-                        assert_eq!(data.len(), 12);
-                        Some(Int96::try_from_le_slice(&data)?)
-                    } else {
-                        None
-                    };
-                    let max = if let Some(data) = max {
-                        assert_eq!(data.len(), 12);
-                        Some(Int96::try_from_le_slice(&data)?)
-                    } else {
-                        None
-                    };
-                    Statistics::int96(min, max, distinct_count, null_count, old_format)
-                }
-                Type::FLOAT => Statistics::float(
-                    min.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    max.map(|data| f32::from_le_bytes(data[..4].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
-                ),
-                Type::DOUBLE => Statistics::double(
-                    min.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    max.map(|data| f64::from_le_bytes(data[..8].try_into().unwrap())),
-                    distinct_count,
-                    null_count,
-                    old_format,
-                ),
-                Type::BYTE_ARRAY => Statistics::ByteArray(
-                    ValueStatistics::new(
-                        min.map(ByteArray::from),
-                        max.map(ByteArray::from),
-                        distinct_count,
-                        null_count,
-                        old_format,
-                    )
-                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
-                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
-                ),
-                Type::FIXED_LEN_BYTE_ARRAY => Statistics::FixedLenByteArray(
-                    ValueStatistics::new(
-                        min.map(ByteArray::from).map(FixedLenByteArray::from),
-                        max.map(ByteArray::from).map(FixedLenByteArray::from),
-                        distinct_count,
-                        null_count,
-                        old_format,
-                    )
-                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
-                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
-                ),
-            };
-
-            Some(res)
-        }
-        None => None,
-    })
-}
-
 /// Converts Thrift definition into `Statistics`.
 pub(crate) fn from_thrift_page_stats(
     physical_type: Type,
@@ -415,56 +265,6 @@ pub(crate) fn from_thrift_page_stats(
         }
         None => None,
     })
-}
-
-// FIXME(ets): remove when done with format changes
-/// Convert Statistics into Thrift definition.
-pub fn to_thrift(stats: Option<&Statistics>) -> Option<crate::format::Statistics> {
-    let stats = stats?;
-
-    // record null count if it can fit in i64
-    let null_count = stats
-        .null_count_opt()
-        .and_then(|value| i64::try_from(value).ok());
-
-    // record distinct count if it can fit in i64
-    let distinct_count = stats
-        .distinct_count_opt()
-        .and_then(|value| i64::try_from(value).ok());
-
-    let mut thrift_stats = crate::format::Statistics {
-        max: None,
-        min: None,
-        null_count,
-        distinct_count,
-        max_value: None,
-        min_value: None,
-        is_max_value_exact: None,
-        is_min_value_exact: None,
-    };
-
-    // Get min/max if set.
-    let (min, max, min_exact, max_exact) = (
-        stats.min_bytes_opt().map(|x| x.to_vec()),
-        stats.max_bytes_opt().map(|x| x.to_vec()),
-        Some(stats.min_is_exact()),
-        Some(stats.max_is_exact()),
-    );
-    if stats.is_min_max_backwards_compatible() {
-        // Copy to deprecated min, max values for compatibility with older readers
-        thrift_stats.min.clone_from(&min);
-        thrift_stats.max.clone_from(&max);
-    }
-
-    if !stats.is_min_max_deprecated() {
-        thrift_stats.min_value = min;
-        thrift_stats.max_value = max;
-    }
-
-    thrift_stats.is_min_value_exact = min_exact;
-    thrift_stats.is_max_value_exact = max_exact;
-
-    Some(thrift_stats)
 }
 
 /// Convert Statistics into Thrift definition.
@@ -900,7 +700,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "General(\"Statistics null count is negative -10\")")]
     fn test_statistics_negative_null_count() {
-        let thrift_stats = crate::format::Statistics {
+        let thrift_stats = PageStatistics {
             max: None,
             min: None,
             null_count: Some(-10),
@@ -911,13 +711,16 @@ mod tests {
             is_min_value_exact: None,
         };
 
-        from_thrift(Type::INT32, Some(thrift_stats)).unwrap();
+        from_thrift_page_stats(Type::INT32, Some(thrift_stats)).unwrap();
     }
 
     #[test]
     fn test_statistics_thrift_none() {
-        assert_eq!(from_thrift(Type::INT32, None).unwrap(), None);
-        assert_eq!(from_thrift(Type::BYTE_ARRAY, None).unwrap(), None);
+        assert_eq!(from_thrift_page_stats(Type::INT32, None).unwrap(), None);
+        assert_eq!(
+            from_thrift_page_stats(Type::BYTE_ARRAY, None).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -1062,8 +865,11 @@ mod tests {
         // Helper method to check statistics conversion.
         fn check_stats(stats: Statistics) {
             let tpe = stats.physical_type();
-            let thrift_stats = to_thrift(Some(&stats));
-            assert_eq!(from_thrift(tpe, thrift_stats).unwrap(), Some(stats));
+            let thrift_stats = page_stats_to_thrift(Some(&stats));
+            assert_eq!(
+                from_thrift_page_stats(tpe, thrift_stats).unwrap(),
+                Some(stats)
+            );
         }
 
         check_stats(Statistics::boolean(
@@ -1199,7 +1005,7 @@ mod tests {
     fn test_count_encoding_distinct_too_large() {
         // statistics are stored using i64, so test trying to store larger values
         let statistics = make_bool_stats(Some(u64::MAX), Some(100));
-        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
         assert_eq!(thrift_stats.distinct_count, None); // can't store u64 max --> null
         assert_eq!(thrift_stats.null_count, Some(100));
     }
@@ -1208,18 +1014,24 @@ mod tests {
     fn test_count_encoding_null_too_large() {
         // statistics are stored using i64, so test trying to store larger values
         let statistics = make_bool_stats(Some(100), Some(u64::MAX));
-        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
         assert_eq!(thrift_stats.distinct_count, Some(100));
         assert_eq!(thrift_stats.null_count, None); // can' store u64 max --> null
     }
 
     #[test]
     fn test_count_decoding_null_invalid() {
-        let tstatistics = crate::format::Statistics {
+        let tstatistics = PageStatistics {
             null_count: Some(-42),
-            ..Default::default()
+            max: None,
+            min: None,
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
         };
-        let err = from_thrift(Type::BOOLEAN, Some(tstatistics)).unwrap_err();
+        let err = from_thrift_page_stats(Type::BOOLEAN, Some(tstatistics)).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Parquet error: Statistics null count is negative -42"
@@ -1232,14 +1044,14 @@ mod tests {
     fn statistics_count_test(distinct_count: Option<u64>, null_count: Option<u64>) {
         let statistics = make_bool_stats(distinct_count, null_count);
 
-        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
         assert_eq!(thrift_stats.null_count.map(|c| c as u64), null_count);
         assert_eq!(
             thrift_stats.distinct_count.map(|c| c as u64),
             distinct_count
         );
 
-        let round_tripped = from_thrift(Type::BOOLEAN, Some(thrift_stats))
+        let round_tripped = from_thrift_page_stats(Type::BOOLEAN, Some(thrift_stats))
             .unwrap()
             .unwrap();
         // TODO: remove branch when we no longer support assuming null_count==None in the thrift

@@ -74,13 +74,16 @@
 
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
-use crate::errors::ParquetError;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::reader::ChunkReader;
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use crate::parquet_thrift::{
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
+};
+use crate::thrift_struct;
 use bytes::Bytes;
 use std::io::Write;
-use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
@@ -95,42 +98,21 @@ const SALT: [u32; 8] = [
     0x5c6bfb31_u32,
 ];
 
+thrift_struct!(
 /// Bloom filter header is stored at beginning of Bloom filter data of each column
 /// and followed by its bitset.
 ///
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BloomFilterHeader {
-    /// The size of bitset in bytes *
-    pub num_bytes: i32,
-    /// The algorithm for setting bits. *
-    pub algorithm: BloomFilterAlgorithm,
-    /// The hash function used for Bloom filter. *
-    pub hash: BloomFilterHash,
-    /// The compression used in the Bloom filter *
-    pub compression: BloomFilterCompression,
+  /// The size of bitset in bytes
+  1: required i32 num_bytes;
+  /// The algorithm for setting bits.
+  2: required BloomFilterAlgorithm algorithm;
+  /// The hash function used for Bloom filter
+  3: required BloomFilterHash hash;
+  /// The compression used in the Bloom filter
+  4: required BloomFilterCompression compression;
 }
-
-impl From<crate::format::BloomFilterHeader> for BloomFilterHeader {
-    fn from(value: crate::format::BloomFilterHeader) -> Self {
-        Self {
-            num_bytes: value.num_bytes,
-            algorithm: value.algorithm.into(),
-            hash: value.hash.into(),
-            compression: value.compression.into(),
-        }
-    }
-}
-
-impl From<BloomFilterHeader> for crate::format::BloomFilterHeader {
-    fn from(value: BloomFilterHeader) -> Self {
-        Self {
-            num_bytes: value.num_bytes,
-            algorithm: value.algorithm.into(),
-            hash: value.hash.into(),
-            compression: value.compression.into(),
-        }
-    }
-}
+);
 
 /// Each block is 256 bits, broken up into eight contiguous "words", each consisting of 32 bits.
 /// Each word is thought of as an array of bits; each bit is either "set" or "not set".
@@ -235,10 +217,10 @@ pub(crate) fn read_bloom_filter_header_and_length(
     buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
     let total_length = buffer.len();
-    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
-    let header = crate::format::BloomFilterHeader::read_from_in_protocol(&mut prot)
+    let mut prot = ThriftSliceInputProtocol::new(buffer.as_ref());
+    let header = BloomFilterHeader::read_thrift(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
-    Ok((header.into(), (total_length - prot.as_slice().len()) as u64))
+    Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
 
 pub(crate) const BITSET_MIN_LENGTH: usize = 32;
@@ -302,12 +284,10 @@ impl Sbbf {
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
     pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
-        let mut protocol = TCompactOutputProtocol::new(&mut writer);
-        let header: crate::format::BloomFilterHeader = self.header().into();
-        header.write_to_out_protocol(&mut protocol).map_err(|e| {
+        let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
+        self.header().write_thrift(&mut protocol).map_err(|e| {
             ParquetError::General(format!("Could not write bloom filter header: {e}"))
         })?;
-        protocol.flush()?;
         self.write_bitset(&mut writer)?;
         Ok(())
     }
