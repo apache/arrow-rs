@@ -181,7 +181,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             #[cfg(feature = "encryption")]
             let metadata_reader = metadata_reader.with_decryption_properties(
-                options.and_then(|o| o.file_decryption_properties.as_ref()),
+                options.and_then(|o| o.file_decryption_properties.as_ref().map(Arc::clone)),
             );
 
             let parquet_metadata = metadata_reader.load_via_suffix_and_finish(self).await?;

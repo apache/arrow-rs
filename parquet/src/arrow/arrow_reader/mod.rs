@@ -387,7 +387,7 @@ pub struct ArrowReaderOptions {
     pub(crate) page_index_policy: PageIndexPolicy,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
-    pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
+    pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
 impl ArrowReaderOptions {
@@ -508,7 +508,7 @@ impl ArrowReaderOptions {
     #[cfg(feature = "encryption")]
     pub fn with_file_decryption_properties(
         self,
-        file_decryption_properties: FileDecryptionProperties,
+        file_decryption_properties: Arc<FileDecryptionProperties>,
     ) -> Self {
         Self {
             file_decryption_properties: Some(file_decryption_properties),
@@ -528,7 +528,7 @@ impl ArrowReaderOptions {
     /// This can be set via
     /// [`file_decryption_properties`][Self::with_file_decryption_properties].
     #[cfg(feature = "encryption")]
-    pub fn file_decryption_properties(&self) -> Option<&FileDecryptionProperties> {
+    pub fn file_decryption_properties(&self) -> Option<&Arc<FileDecryptionProperties>> {
         self.file_decryption_properties.as_ref()
     }
 }
@@ -572,8 +572,9 @@ impl ArrowReaderMetadata {
         let metadata =
             ParquetMetaDataReader::new().with_page_index_policy(options.page_index_policy);
         #[cfg(feature = "encryption")]
-        let metadata =
-            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+        let metadata = metadata.with_decryption_properties(
+            options.file_decryption_properties.as_ref().map(Arc::clone),
+        );
         let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
