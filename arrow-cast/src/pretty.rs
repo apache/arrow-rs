@@ -265,7 +265,7 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
     use arrow_schema::*;
 
-    use crate::display::{array_value_to_string, DurationFormat};
+    use crate::display::{DurationFormat, array_value_to_string};
 
     use super::*;
 

@@ -56,13 +56,13 @@ use std::sync::Arc;
 
 use crate::display::{ArrayFormatter, FormatOptions};
 use crate::parse::{
-    parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
-    string_to_datetime, Parser,
+    Parser, parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
+    string_to_datetime,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{i256, ArrowNativeType, OffsetBuffer};
-use arrow_data::transform::MutableArrayData;
+use arrow_buffer::{ArrowNativeType, OffsetBuffer, i256};
 use arrow_data::ArrayData;
+use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
 use num::cast::AsPrimitive;
@@ -4337,9 +4337,11 @@ mod tests {
         match casted {
             Ok(_) => panic!("expected error"),
             Err(e) => {
-                assert!(e
-                    .to_string()
-                    .contains("Cast error: Cannot cast value 'invalid' to value of Boolean type"))
+                assert!(
+                    e.to_string().contains(
+                        "Cast error: Cannot cast value 'invalid' to value of Boolean type"
+                    )
+                )
             }
         }
     }
@@ -8473,8 +8475,10 @@ mod tests {
             },
         );
         assert!(res.is_err());
-        assert!(format!("{res:?}")
-            .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2"));
+        assert!(
+            format!("{res:?}")
+                .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2")
+        );
 
         // When safe=true (default), the cast will fill nulls for lists that are
         // too short and truncate lists that are too long.
@@ -9693,16 +9697,20 @@ mod tests {
             format_options: FormatOptions::default(),
         };
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
-        assert!(casted_err
-            .to_string()
-            .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 10) type"));
+        assert!(
+            casted_err
+                .to_string()
+                .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 10) type")
+        );
 
         let str_array = StringArray::from(vec![". 0.123"]);
         let array = Arc::new(str_array) as ArrayRef;
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
-        assert!(casted_err
-            .to_string()
-            .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 10) type"));
+        assert!(
+            casted_err
+                .to_string()
+                .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 10) type")
+        );
     }
 
     fn test_cast_string_to_decimal128_overflow(overflow_array: ArrayRef) {
