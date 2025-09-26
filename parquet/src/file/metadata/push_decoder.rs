@@ -337,6 +337,17 @@ impl ParquetMetaDataPushDecoder {
         Ok(())
     }
 
+    /// Pushes a single range of data into the decoder's buffer.
+    pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) -> Result<(), ParquetError> {
+        if matches!(&self.state, DecodeState::Finished) {
+            return Err(general_err!(
+                "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
+            ));
+        }
+        self.buffers.push_range(range, buffer);
+        Ok(())
+    }
+
     /// Try to decode the metadata from the pushed data, returning the
     /// decoded metadata or an error if not enough data is available.
     pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>, ParquetError> {

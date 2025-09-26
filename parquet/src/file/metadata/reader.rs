@@ -399,7 +399,7 @@ impl ParquetMetaDataReader {
         let bytes_needed = usize::try_from(range.end - range.start)?;
         let bytes = reader.get_bytes(range.start - file_range.start, bytes_needed)?;
 
-        push_decoder.push_ranges(vec![range], vec![bytes])?;
+        push_decoder.push_range(range, bytes)?;
         let metadata = parse_index_data(&mut push_decoder)?;
         self.metadata = Some(metadata);
 
@@ -527,7 +527,7 @@ impl ParquetMetaDataReader {
 
         // Sanity check
         assert_eq!(bytes.len() as u64, range.end - range.start);
-        push_decoder.push_ranges(vec![range.clone()], vec![bytes])?;
+        push_decoder.push_range(range.clone(), bytes)?;
         let metadata = parse_index_data(&mut push_decoder)?;
         self.metadata = Some(metadata);
         Ok(())
@@ -748,7 +748,7 @@ impl ParquetMetaDataReader {
                 .with_page_index_policy(PageIndexPolicy::Skip);
 
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
-        push_decoder.push_ranges(vec![range], vec![buf])?;
+        push_decoder.push_range(range, buf)?;
         match push_decoder.try_decode()? {
             DecodeResult::Data(metadata) => Ok(metadata),
             DecodeResult::Finished => Err(general_err!(
