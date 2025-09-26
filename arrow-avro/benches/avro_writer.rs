@@ -91,7 +91,7 @@ fn make_i64_array_with_tag(n: usize, tag: u64) -> PrimitiveArray<Int64Type> {
 fn rand_ascii_string(rng: &mut StdRng, min_len: usize, max_len: usize) -> String {
     let len = rng.random_range(min_len..=max_len);
     (0..len)
-        .map(|_| (rng.random_range(b'a'..=b'z') as char))
+        .map(|_| rng.random_range(b'a'..=b'z') as char)
         .collect()
 }
 
