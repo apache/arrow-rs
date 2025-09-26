@@ -45,7 +45,7 @@ pub(super) fn extend_offsets<T: ArrowNativeType + Integer + CheckedAdd>(
 }
 
 #[inline]
-pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &MutableBuffer) -> T {
+pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &MutableBuffer) -> T { unsafe {
     // JUSTIFICATION
     //  Benefit
     //      20% performance improvement extend of variable sized arrays (see bench `mutable_array`)
@@ -55,7 +55,7 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &Mutable
     let (prefix, offsets, suffix) = offset_buffer.as_slice().align_to::<T>();
     debug_assert!(prefix.is_empty() && suffix.is_empty());
     *offsets.get_unchecked(offsets.len() - 1)
-}
+}}
 
 #[cfg(test)]
 mod tests {
