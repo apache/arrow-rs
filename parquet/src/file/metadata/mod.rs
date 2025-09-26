@@ -423,7 +423,6 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     }
 }
 
-// TODO(ets): should this move to thrift_gen?
 thrift_struct!(
 /// A key-value pair for [`FileMetaData`].
 pub struct KeyValue {
