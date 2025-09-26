@@ -46,9 +46,9 @@ pub fn get_bit(data: &[u8], i: usize) -> bool {
 /// Note this doesn't do any bound checking, for performance reason. The caller is
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
-pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool { unsafe {
-    (*data.add(i / 8) & (1 << (i % 8))) != 0
-}}
+pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool {
+    unsafe { (*data.add(i / 8) & (1 << (i % 8))) != 0 }
+}
 
 /// Sets bit at position `i` for `data` to 1
 #[inline]
@@ -63,9 +63,11 @@ pub fn set_bit(data: &mut [u8], i: usize) {
 /// Note this doesn't do any bound checking, for performance reason. The caller is
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
-pub unsafe fn set_bit_raw(data: *mut u8, i: usize) { unsafe {
-    *data.add(i / 8) |= 1 << (i % 8);
-}}
+pub unsafe fn set_bit_raw(data: *mut u8, i: usize) {
+    unsafe {
+        *data.add(i / 8) |= 1 << (i % 8);
+    }
+}
 
 /// Sets bit at position `i` for `data` to 0
 #[inline]
@@ -80,9 +82,11 @@ pub fn unset_bit(data: &mut [u8], i: usize) {
 /// Note this doesn't do any bound checking, for performance reason. The caller is
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
-pub unsafe fn unset_bit_raw(data: *mut u8, i: usize) { unsafe {
-    *data.add(i / 8) &= !(1 << (i % 8));
-}}
+pub unsafe fn unset_bit_raw(data: *mut u8, i: usize) {
+    unsafe {
+        *data.add(i / 8) &= !(1 << (i % 8));
+    }
+}
 
 /// Returns the ceil of `value`/`divisor`
 #[inline]
