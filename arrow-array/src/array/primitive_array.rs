@@ -796,7 +796,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<T::Native>> + 'a {
-        unsafe { indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index))) }
+        indexes.map(|opt_index| opt_index.map(|index| unsafe { self.value_unchecked(index) }))
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -1467,24 +1467,16 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         P: std::borrow::Borrow<Option<<T as ArrowPrimitiveType>::Native>>,
         I: IntoIterator<Item = P>,
     {
-        unsafe {
-            let iterator = iter.into_iter();
-            let (_, upper) = iterator.size_hint();
-            let len = upper.expect("trusted_len_unzip requires an upper limit");
+        let iterator = iter.into_iter();
+        let (_, upper) = iterator.size_hint();
+        let len = upper.expect("trusted_len_unzip requires an upper limit");
 
-            let (null, buffer) = trusted_len_unzip(iterator);
+        let (null, buffer) = unsafe { trusted_len_unzip(iterator) };
 
-            let data = ArrayData::new_unchecked(
-                T::DATA_TYPE,
-                len,
-                None,
-                Some(null),
-                0,
-                vec![buffer],
-                vec![],
-            );
-            PrimitiveArray::from(data)
-        }
+        let data = unsafe {
+            ArrayData::new_unchecked(T::DATA_TYPE, len, None, Some(null), 0, vec![buffer], vec![])
+        };
+        PrimitiveArray::from(data)
     }
 }
 

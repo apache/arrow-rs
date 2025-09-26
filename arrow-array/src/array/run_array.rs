@@ -642,10 +642,8 @@ where
     }
 
     unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
-        unsafe {
-            let physical_index = self.run_array.get_physical_index(logical_index);
-            self.values().value_unchecked(physical_index)
-        }
+        let physical_index = self.run_array.get_physical_index(logical_index);
+        unsafe { self.values().value_unchecked(physical_index) }
     }
 }
 

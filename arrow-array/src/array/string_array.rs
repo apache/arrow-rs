@@ -48,7 +48,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<&'a str>> {
-        unsafe { indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index))) }
+        indexes.map(|opt_index| opt_index.map(|index| unsafe { self.value_unchecked(index) }))
     }
 
     /// Fallibly creates a [`GenericStringArray`] from a [`GenericBinaryArray`] returning
