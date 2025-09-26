@@ -795,7 +795,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     ///
     /// We should call this function after other forms pruning, such as projection and predicate pushdown.
     pub fn get_row_group_column_bloom_filter(
-        &mut self,
+        &self,
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<Sbbf>> {
