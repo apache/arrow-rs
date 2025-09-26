@@ -89,9 +89,9 @@ pub type LargeListViewArray = GenericListViewArray<i64>;
 ///                                                                         │ │ 1 │ │ D │ │ 5  │
 ///     Logical       Logical               │  Validity  Offsets  Sizes       └───┘ └───┘
 ///      Values       Offset                   (nulls)                      │    Values   │    │
-///                   & Size                │                                   (Array)  
+///                   & Size                │                                   (Array)
 ///                                                                         └ ─ ─ ─ ─ ─ ─ ┘    │
-///                 (offsets[i],            │   ListViewArray                          
+///                 (offsets[i],            │   ListViewArray
 ///                  sizes[i])                                                                 │
 ///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
 /// ```
@@ -154,7 +154,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         if len != sizes.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Length of offsets buffer and sizes buffer must be equal for {}ListViewArray, got {len} and {}",
-                OffsetSize::PREFIX, sizes.len()
+                OffsetSize::PREFIX,
+                sizes.len()
             )));
         }
 
@@ -290,8 +291,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
-        let offset = self.value_offsets().get_unchecked(i).as_usize();
-        let length = self.value_sizes().get_unchecked(i).as_usize();
+        let offset = unsafe { self.value_offsets().get_unchecked(i).as_usize() };
+        let length = unsafe { self.value_sizes().get_unchecked(i).as_usize() };
         self.values.slice(offset, length)
     }
 
@@ -366,7 +367,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListViewArray<Offset
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        GenericListViewArray::value_unchecked(self, index)
+        unsafe { GenericListViewArray::value_unchecked(self, index) }
     }
 }
 

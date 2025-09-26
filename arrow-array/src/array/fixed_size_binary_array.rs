@@ -168,12 +168,14 @@ impl FixedSizeBinaryArray {
     /// Caller is responsible for ensuring that the index is within the bounds
     /// of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
-        let offset = i + self.offset();
-        let pos = self.value_offset_at(offset);
-        std::slice::from_raw_parts(
-            self.value_data.as_ptr().offset(pos as isize),
-            (self.value_offset_at(offset + 1) - pos) as usize,
-        )
+        unsafe {
+            let offset = i + self.offset();
+            let pos = self.value_offset_at(offset);
+            std::slice::from_raw_parts(
+                self.value_data.as_ptr().offset(pos as isize),
+                (self.value_offset_at(offset + 1) - pos) as usize,
+            )
+        }
     }
 
     /// Returns the offset for the element at index `i`.
@@ -654,7 +656,7 @@ impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        FixedSizeBinaryArray::value_unchecked(self, index)
+        unsafe { FixedSizeBinaryArray::value_unchecked(self, index) }
     }
 }
 
@@ -996,6 +998,9 @@ mod tests {
 
         let nulls = NullBuffer::new_null(3);
         let err = FixedSizeBinaryArray::try_new(2, buffer, Some(nulls)).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for FixedSizeBinaryArray, expected 5 got 3");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for FixedSizeBinaryArray, expected 5 got 3"
+        );
     }
 }

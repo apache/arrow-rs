@@ -947,14 +947,16 @@ where
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        let val = self.dictionary.keys.value_unchecked(index);
-        let value_idx = val.as_usize();
+        unsafe {
+            let val = self.dictionary.keys.value_unchecked(index);
+            let value_idx = val.as_usize();
 
-        // As dictionary keys are only verified for non-null indexes
-        // we must check the value is within bounds
-        match value_idx < self.values.len() {
-            true => self.values.value_unchecked(value_idx),
-            false => Default::default(),
+            // As dictionary keys are only verified for non-null indexes
+            // we must check the value is within bounds
+            match value_idx < self.values.len() {
+                true => self.values.value_unchecked(value_idx),
+                false => Default::default(),
+            }
         }
     }
 }

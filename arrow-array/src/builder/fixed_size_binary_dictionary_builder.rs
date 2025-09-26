@@ -405,9 +405,15 @@ mod tests {
     fn test_fixed_size_dictionary_builder_wrong_size() {
         let mut b = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
         let err = b.append(b"too long").unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8");
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8"
+        );
         let err = b.append("").unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0");
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0"
+        );
     }
 
     #[test]

@@ -350,7 +350,9 @@ impl From<ArrayData> for FixedSizeListArray {
         let value_length = match data.data_type() {
             DataType::FixedSizeList(_, len) => *len,
             data_type => {
-                panic!("FixedSizeListArray data should contain a FixedSizeList data type, got {data_type}")
+                panic!(
+                    "FixedSizeListArray data should contain a FixedSizeList data type, got {data_type}"
+                )
             }
         };
 
@@ -685,11 +687,17 @@ mod tests {
 
         let nulls = NullBuffer::new_null(2);
         let err = FixedSizeListArray::try_new(field, 2, values.clone(), Some(nulls)).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for FixedSizeListArray, expected 3 got 2");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for FixedSizeListArray, expected 3 got 2"
+        );
 
         let field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let err = FixedSizeListArray::try_new(field.clone(), 2, values.clone(), None).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Found unmasked nulls for non-nullable FixedSizeListArray field \"item\"");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Found unmasked nulls for non-nullable FixedSizeListArray field \"item\""
+        );
 
         // Valid as nulls in child masked by parent
         let nulls = NullBuffer::new(BooleanBuffer::new(Buffer::from([0b0000101]), 0, 3));
@@ -697,7 +705,10 @@ mod tests {
 
         let field = Arc::new(Field::new_list_field(DataType::Int64, true));
         let err = FixedSizeListArray::try_new(field, 2, values, None).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: FixedSizeListArray expected data type Int64 got Int32 for \"item\"");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: FixedSizeListArray expected data type Int64 got Int32 for \"item\""
+        );
     }
 
     #[test]

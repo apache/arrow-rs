@@ -105,13 +105,13 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
     if stream.is_null() {
         return;
     }
-    let stream = &mut *stream;
+    let stream = unsafe { &mut *stream };
 
     stream.get_schema = None;
     stream.get_next = None;
     stream.get_last_error = None;
 
-    let private_data = Box::from_raw(stream.private_data as *mut StreamPrivateData);
+    let private_data = unsafe { Box::from_raw(stream.private_data as *mut StreamPrivateData) };
     drop(private_data);
 
     stream.release = None;
@@ -188,7 +188,7 @@ impl FFI_ArrowArrayStream {
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self {
-        std::ptr::replace(raw_stream, Self::empty())
+        unsafe { std::ptr::replace(raw_stream, Self::empty()) }
     }
 
     /// Creates a new empty [FFI_ArrowArrayStream]. Used to import from the C Stream Interface.
@@ -330,7 +330,7 @@ impl ArrowArrayStreamReader {
     ///
     /// See [`FFI_ArrowArrayStream::from_raw`]
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
-        Self::try_new(FFI_ArrowArrayStream::from_raw(raw_stream))
+        Self::try_new(unsafe { FFI_ArrowArrayStream::from_raw(raw_stream) })
     }
 
     /// Get the last error from `ArrowArrayStreamReader`

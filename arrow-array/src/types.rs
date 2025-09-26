@@ -1560,7 +1560,7 @@ pub(crate) mod bytes {
 
         #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
-            std::str::from_utf8_unchecked(b)
+            unsafe { std::str::from_utf8_unchecked(b) }
         }
     }
 }

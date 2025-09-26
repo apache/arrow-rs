@@ -728,7 +728,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// caller must ensure that the passed in offset is less than the array len()
     #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> T::Native {
-        *self.values.get_unchecked(i)
+        unsafe { *self.values.get_unchecked(i) }
     }
 
     /// Returns the primitive value at index `i`.
@@ -796,7 +796,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<T::Native>> + 'a {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+        unsafe { indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index))) }
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -1230,7 +1230,7 @@ impl<T: ArrowPrimitiveType> ArrayAccessor for &PrimitiveArray<T> {
 
     #[inline]
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        PrimitiveArray::value_unchecked(self, index)
+        unsafe { PrimitiveArray::value_unchecked(self, index) }
     }
 }
 
@@ -1467,15 +1467,24 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         P: std::borrow::Borrow<Option<<T as ArrowPrimitiveType>::Native>>,
         I: IntoIterator<Item = P>,
     {
-        let iterator = iter.into_iter();
-        let (_, upper) = iterator.size_hint();
-        let len = upper.expect("trusted_len_unzip requires an upper limit");
+        unsafe {
+            let iterator = iter.into_iter();
+            let (_, upper) = iterator.size_hint();
+            let len = upper.expect("trusted_len_unzip requires an upper limit");
 
-        let (null, buffer) = trusted_len_unzip(iterator);
+            let (null, buffer) = trusted_len_unzip(iterator);
 
-        let data =
-            ArrayData::new_unchecked(T::DATA_TYPE, len, None, Some(null), 0, vec![buffer], vec![]);
-        PrimitiveArray::from(data)
+            let data = ArrayData::new_unchecked(
+                T::DATA_TYPE,
+                len,
+                None,
+                Some(null),
+                0,
+                vec![buffer],
+                vec![],
+            );
+            PrimitiveArray::from(data)
+        }
     }
 }
 
@@ -2203,7 +2212,7 @@ mod tests {
         // chrono::NaiveDatetime::from_timestamp_opt returns None while input is invalid
         let arr: PrimitiveArray<Time32SecondType> = vec![-7201, -60054].into();
         assert_eq!(
-        "PrimitiveArray<Time32(s)>\n[\n  Cast error: Failed to convert -7201 to temporal for Time32(s),\n  Cast error: Failed to convert -60054 to temporal for Time32(s),\n]",
+            "PrimitiveArray<Time32(s)>\n[\n  Cast error: Failed to convert -7201 to temporal for Time32(s),\n  Cast error: Failed to convert -60054 to temporal for Time32(s),\n]",
             // "PrimitiveArray<Time32(s)>\n[\n  null,\n  null,\n]",
             format!("{arr:?}")
         )
@@ -2855,9 +2864,10 @@ mod tests {
         ]
         .into();
         let debug_str = format!("{array:?}");
-        assert_eq!("PrimitiveArray<Time32(s)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(s),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400 to temporal for Time32(s),\n  Cast error: Failed to convert 86401 to temporal for Time32(s),\n  null,\n]",
-    debug_str
-    );
+        assert_eq!(
+            "PrimitiveArray<Time32(s)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(s),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400 to temporal for Time32(s),\n  Cast error: Failed to convert 86401 to temporal for Time32(s),\n  null,\n]",
+            debug_str
+        );
     }
 
     #[test]
@@ -2872,7 +2882,8 @@ mod tests {
         ]
         .into();
         let debug_str = format!("{array:?}");
-        assert_eq!("PrimitiveArray<Time32(ms)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(ms),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000 to temporal for Time32(ms),\n  Cast error: Failed to convert 86401000 to temporal for Time32(ms),\n  null,\n]",
+        assert_eq!(
+            "PrimitiveArray<Time32(ms)>\n[\n  Cast error: Failed to convert -1 to temporal for Time32(ms),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000 to temporal for Time32(ms),\n  Cast error: Failed to convert 86401000 to temporal for Time32(ms),\n  null,\n]",
             debug_str
         );
     }
@@ -2890,7 +2901,7 @@ mod tests {
         .into();
         let debug_str = format!("{array:?}");
         assert_eq!(
-        "PrimitiveArray<Time64(ns)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(ns),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000000 to temporal for Time64(ns),\n  Cast error: Failed to convert 86401000000000 to temporal for Time64(ns),\n  null,\n]",
+            "PrimitiveArray<Time64(ns)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(ns),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000000 to temporal for Time64(ns),\n  Cast error: Failed to convert 86401000000000 to temporal for Time64(ns),\n  null,\n]",
             debug_str
         );
     }
@@ -2907,7 +2918,10 @@ mod tests {
         ]
         .into();
         let debug_str = format!("{array:?}");
-        assert_eq!("PrimitiveArray<Time64(µs)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(µs),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000 to temporal for Time64(µs),\n  Cast error: Failed to convert 86401000000 to temporal for Time64(µs),\n  null,\n]", debug_str);
+        assert_eq!(
+            "PrimitiveArray<Time64(µs)>\n[\n  Cast error: Failed to convert -1 to temporal for Time64(µs),\n  00:00:00,\n  23:59:59,\n  Cast error: Failed to convert 86400000000 to temporal for Time64(µs),\n  Cast error: Failed to convert 86401000000 to temporal for Time64(µs),\n  null,\n]",
+            debug_str
+        );
     }
 
     #[test]

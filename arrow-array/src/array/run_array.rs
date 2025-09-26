@@ -259,7 +259,9 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         match data.data_type() {
             DataType::RunEndEncoded(_, _) => {}
             _ => {
-                panic!("Invalid data type for RunArray. The data type should be DataType::RunEndEncoded");
+                panic!(
+                    "Invalid data type for RunArray. The data type should be DataType::RunEndEncoded"
+                );
             }
         }
 
@@ -640,8 +642,10 @@ where
     }
 
     unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
-        let physical_index = self.run_array.get_physical_index(logical_index);
-        self.values().value_unchecked(physical_index)
+        unsafe {
+            let physical_index = self.run_array.get_physical_index(logical_index);
+            self.values().value_unchecked(physical_index)
+        }
     }
 }
 
