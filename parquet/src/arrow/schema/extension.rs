@@ -35,15 +35,14 @@ use arrow_schema::Field;
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
 pub(crate) fn add_extension_type(arrow_field: Field, parquet_type: &Type) -> Field {
-    let result = match parquet_type.get_basic_info().logical_type() {
+    match parquet_type.get_basic_info().logical_type() {
         #[cfg(feature = "variant_experimental")]
         Some(LogicalType::Variant) => {
             arrow_field.with_extension_type(parquet_variant_compute::VariantType)
         }
         // TODO add other LogicalTypes here
         _ => arrow_field,
-    };
-    result
+    }
 }
 
 /// Return the Parquet logical type to use for the specified Arrow field, if any.
