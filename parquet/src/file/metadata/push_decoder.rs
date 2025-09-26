@@ -17,7 +17,7 @@
 
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
-use crate::errors::ParquetError;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::parser::{parse_column_index, parse_offset_index, MetadataParser};
 use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData};
 use crate::file::page_index::index_reader::acc_range;
@@ -225,7 +225,7 @@ impl ParquetMetaDataPushDecoder {
     /// [`ParquetMetaDataPushDecoder::with_page_index_policy`] for more detail.
     ///
     /// See examples on [`ParquetMetaDataPushDecoder`].
-    pub fn try_new(file_len: u64) -> Result<Self, ParquetError> {
+    pub fn try_new(file_len: u64) -> Result<Self> {
         if file_len < 8 {
             return Err(ParquetError::General(format!(
                 "Parquet files are at least 8 bytes long, but file length is {file_len}"
@@ -242,10 +242,7 @@ impl ParquetMetaDataPushDecoder {
     }
 
     /// Begin decoding from the given footer tail.
-    pub(crate) fn try_new_with_footer_tail(
-        file_len: u64,
-        footer_tail: FooterTail,
-    ) -> Result<Self, ParquetError> {
+    pub(crate) fn try_new_with_footer_tail(file_len: u64, footer_tail: FooterTail) -> Result<Self> {
         let mut new_self = Self::try_new(file_len)?;
         new_self.state = DecodeState::ReadingMetadata(footer_tail);
         Ok(new_self)
@@ -255,10 +252,7 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// This can be used to parse and populate the page index structures
     /// after the metadata has already been decoded.
-    pub fn try_new_with_metadata(
-        file_len: u64,
-        metadata: ParquetMetaData,
-    ) -> Result<Self, ParquetError> {
+    pub fn try_new_with_metadata(file_len: u64, metadata: ParquetMetaData) -> Result<Self> {
         let mut new_self = Self::try_new(file_len)?;
         new_self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
         Ok(new_self)
@@ -323,11 +317,7 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// Speculatively pushing data can be used when  "prefetching" data. See
     /// example on [`Self`]
-    pub fn push_ranges(
-        &mut self,
-        ranges: Vec<Range<u64>>,
-        buffers: Vec<Bytes>,
-    ) -> Result<(), ParquetError> {
+    pub fn push_ranges(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) -> Result<()> {
         if matches!(&self.state, DecodeState::Finished) {
             return Err(general_err!(
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
@@ -338,7 +328,7 @@ impl ParquetMetaDataPushDecoder {
     }
 
     /// Pushes a single range of data into the decoder's buffer.
-    pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) -> Result<(), ParquetError> {
+    pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) -> Result<()> {
         if matches!(&self.state, DecodeState::Finished) {
             return Err(general_err!(
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
@@ -350,7 +340,7 @@ impl ParquetMetaDataPushDecoder {
 
     /// Try to decode the metadata from the pushed data, returning the
     /// decoded metadata or an error if not enough data is available.
-    pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>, ParquetError> {
+    pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>> {
         let file_len = self.buffers.file_len();
         let footer_len = FOOTER_SIZE as u64;
         loop {
@@ -427,7 +417,7 @@ impl ParquetMetaDataPushDecoder {
     }
 
     /// Returns the bytes for the given range from the internal buffer
-    fn get_bytes(&self, range: &Range<u64>) -> Result<Bytes, ParquetError> {
+    fn get_bytes(&self, range: &Range<u64>) -> Result<Bytes> {
         let start = range.start;
         let raw_len = range.end - range.start;
         let len: usize = raw_len.try_into().map_err(|_| {
@@ -689,7 +679,7 @@ mod tests {
     }
 
     /// Expect that the [`DecodeResult`] is a [`DecodeResult::Data`] and return the corresponding element
-    fn expect_data<T: Debug>(result: Result<DecodeResult<T>, ParquetError>) -> T {
+    fn expect_data<T: Debug>(result: Result<DecodeResult<T>>) -> T {
         match result.expect("Expected Ok(DecodeResult::Data(T))") {
             DecodeResult::Data(data) => data,
             result => panic!("Expected DecodeResult::Data, got {result:?}"),
@@ -697,16 +687,14 @@ mod tests {
     }
 
     /// Expect that the [`DecodeResult`] is a [`DecodeResult::NeedsData`] and return the corresponding ranges
-    fn expect_needs_data<T: Debug>(
-        result: Result<DecodeResult<T>, ParquetError>,
-    ) -> Vec<Range<u64>> {
+    fn expect_needs_data<T: Debug>(result: Result<DecodeResult<T>>) -> Vec<Range<u64>> {
         match result.expect("Expected Ok(DecodeResult::NeedsData{ranges})") {
             DecodeResult::NeedsData(ranges) => ranges,
             result => panic!("Expected DecodeResult::NeedsData, got {result:?}"),
         }
     }
 
-    fn expect_finished<T: Debug>(result: Result<DecodeResult<T>, ParquetError>) {
+    fn expect_finished<T: Debug>(result: Result<DecodeResult<T>>) {
         match result.expect("Expected Ok(DecodeResult::Finished)") {
             DecodeResult::Finished => {}
             result => panic!("Expected DecodeResult::Finished, got {result:?}"),
