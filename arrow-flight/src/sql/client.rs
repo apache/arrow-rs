@@ -28,7 +28,7 @@ use crate::decode::FlightRecordBatchStream;
 use crate::encode::FlightDataEncoderBuilder;
 use crate::error::FlightError;
 use crate::flight_service_client::FlightServiceClient;
-use crate::sql::gen::action_end_transaction_request::EndTransaction;
+use crate::sql::r#gen::action_end_transaction_request::EndTransaction;
 use crate::sql::server::{
     BEGIN_TRANSACTION, CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT, END_TRANSACTION,
 };
