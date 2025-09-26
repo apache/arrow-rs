@@ -1265,7 +1265,6 @@ pub(crate) struct FileMeta<'a> {
 impl<'a> WriteThrift for FileMeta<'a> {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
-    #[allow(unused_assignments)]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         self.file_metadata
             .version
@@ -1361,7 +1360,7 @@ fn write_schema<W: Write>(
                 type_length: None,
                 repetition_type: repetition,
                 name: basic_info.name(),
-                num_children: Some(fields.len() as i32),
+                num_children: Some(fields.len().try_into()?),
                 converted_type: match basic_info.converted_type() {
                     ConvertedType::NONE => None,
                     other => Some(other),
@@ -1432,10 +1431,10 @@ impl WriteThrift for RowGroupMetaData {
 //   8: optional ColumnCryptoMetaData crypto_metadata
 //   9: optional binary encrypted_column_metadata
 // }
-#[cfg(feature = "encryption")]
 impl WriteThrift for ColumnChunkMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
+    #[allow(unused_assignments)]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
         if let Some(file_path) = self.file_path() {
@@ -1445,8 +1444,18 @@ impl WriteThrift for ColumnChunkMetaData {
             .file_offset()
             .write_thrift_field(writer, 2, last_field_id)?;
 
-        // only write the ColumnMetaData if we haven't already encrypted it
-        if self.encrypted_column_metadata.is_none() {
+        #[cfg(feature = "encryption")]
+        {
+            // only write the ColumnMetaData if we haven't already encrypted it
+            if self.encrypted_column_metadata.is_none() {
+                writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
+                serialize_column_meta_data(self, writer)?;
+                last_field_id = 3;
+            }
+        }
+        #[cfg(not(feature = "encryption"))]
+        {
+            // always write the ColumnMetaData
             writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
             serialize_column_meta_data(self, writer)?;
             last_field_id = 3;
@@ -1464,48 +1473,16 @@ impl WriteThrift for ColumnChunkMetaData {
         if let Some(column_idx_len) = self.column_index_length() {
             last_field_id = column_idx_len.write_thrift_field(writer, 7, last_field_id)?;
         }
-        if let Some(crypto_metadata) = self.crypto_metadata() {
-            last_field_id = crypto_metadata.write_thrift_field(writer, 8, last_field_id)?;
-        }
-        if let Some(encrypted_meta) = self.encrypted_column_metadata.as_ref() {
-            encrypted_meta
-                .as_slice()
-                .write_thrift_field(writer, 9, last_field_id)?;
-        }
-
-        writer.write_struct_end()
-    }
-}
-
-#[cfg(not(feature = "encryption"))]
-impl WriteThrift for ColumnChunkMetaData {
-    const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        let mut last_field_id = 0i16;
-        if let Some(file_path) = self.file_path() {
-            last_field_id = file_path.write_thrift_field(writer, 1, last_field_id)?;
-        }
-        last_field_id = self
-            .file_offset()
-            .write_thrift_field(writer, 2, last_field_id)?;
-
-        // always write the ColumnMetaData
-        writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
-        serialize_column_meta_data(self, writer)?;
-        last_field_id = 3;
-
-        if let Some(offset_idx_off) = self.offset_index_offset() {
-            last_field_id = offset_idx_off.write_thrift_field(writer, 4, last_field_id)?;
-        }
-        if let Some(offset_idx_len) = self.offset_index_length() {
-            last_field_id = offset_idx_len.write_thrift_field(writer, 5, last_field_id)?;
-        }
-        if let Some(column_idx_off) = self.column_index_offset() {
-            last_field_id = column_idx_off.write_thrift_field(writer, 6, last_field_id)?;
-        }
-        if let Some(column_idx_len) = self.column_index_length() {
-            column_idx_len.write_thrift_field(writer, 7, last_field_id)?;
+        #[cfg(feature = "encryption")]
+        {
+            if let Some(crypto_metadata) = self.crypto_metadata() {
+                last_field_id = crypto_metadata.write_thrift_field(writer, 8, last_field_id)?;
+            }
+            if let Some(encrypted_meta) = self.encrypted_column_metadata.as_ref() {
+                encrypted_meta
+                    .as_slice()
+                    .write_thrift_field(writer, 9, last_field_id)?;
+            }
         }
 
         writer.write_struct_end()
