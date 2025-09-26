@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, ArrayDecoder};
 use crate::StructMode;
+use crate::reader::tape::{Tape, TapeElement};
+use crate::reader::{ArrayDecoder, make_decoder};
 use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
-use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::ArrowNativeType;
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 
@@ -43,14 +43,14 @@ impl MapArrayDecoder {
             DataType::Map(_, true) => {
                 return Err(ArrowError::NotYetImplemented(
                     "Decoding MapArray with sorted fields".to_string(),
-                ))
+                ));
             }
             DataType::Map(f, _) => match f.data_type() {
                 DataType::Struct(fields) if fields.len() == 2 => fields,
                 d => {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "MapArray must contain struct with two fields, got {d}"
-                    )))
+                    )));
                 }
             },
             _ => unreachable!(),

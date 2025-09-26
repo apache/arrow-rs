@@ -83,7 +83,7 @@ impl DecimalCast for i64 {
     fn from_f64(n: f64) -> Option<Self> {
         // Call implementation explicitly otherwise this resolves to `to_i64`
         // in arrow-buffer that behaves differently.
-        num::traits::ToPrimitive::to_i64(&n)
+        num_traits::ToPrimitive::to_i64(&n)
     }
 }
 
@@ -213,7 +213,7 @@ where
         // make sure we don't perform calculations that don't make sense w/o validation
         validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
         let g = |x: I::Native| f(x).unwrap(); // unwrapping is safe since the result is guaranteed
-                                              // to fit into the target type
+        // to fit into the target type
         array.unary(g)
     } else if cast_options.safe {
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
@@ -488,8 +488,7 @@ where
                     parse_string_to_decimal_native::<T>(v, scale as usize)
                         .map_err(|_| {
                             ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
+                                "Cannot cast string '{v}' to value of {} type",
                                 T::DATA_TYPE,
                             ))
                         })
@@ -582,7 +581,7 @@ where
         other => {
             return Err(ArrowError::ComputeError(format!(
                 "Cannot cast {other:?} to decimal",
-            )))
+            )));
         }
     };
 

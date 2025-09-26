@@ -17,7 +17,7 @@
 
 use arrow_buffer::i256;
 use criterion::*;
-use num::cast::ToPrimitive;
+use num_traits::cast::ToPrimitive;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::{hint, str::FromStr};

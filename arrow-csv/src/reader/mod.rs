@@ -128,7 +128,7 @@ mod records;
 use arrow_array::builder::{NullBuilder, PrimitiveBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::parse::{parse_decimal, string_to_datetime, Parser};
+use arrow_cast::parse::{Parser, parse_decimal, string_to_datetime};
 use arrow_schema::*;
 use chrono::{TimeZone, Utc};
 use csv::StringRecord;
@@ -1853,7 +1853,10 @@ mod tests {
         let file_name = "test/data/various_invalid_types/invalid_float.csv";
 
         let error = invalid_csv_helper(file_name);
-        assert_eq!("Parser error: Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'", error);
+        assert_eq!(
+            "Parser error: Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'",
+            error
+        );
     }
 
     #[test]
@@ -1861,7 +1864,10 @@ mod tests {
         let file_name = "test/data/various_invalid_types/invalid_int.csv";
 
         let error = invalid_csv_helper(file_name);
-        assert_eq!("Parser error: Error while parsing value '2.3' as type 'UInt64' for column 0 at line 2. Row data: '[2.3,2.2,2.22,false]'", error);
+        assert_eq!(
+            "Parser error: Error while parsing value '2.3' as type 'UInt64' for column 0 at line 2. Row data: '[2.3,2.2,2.22,false]'",
+            error
+        );
     }
 
     #[test]
@@ -1869,7 +1875,10 @@ mod tests {
         let file_name = "test/data/various_invalid_types/invalid_bool.csv";
 
         let error = invalid_csv_helper(file_name);
-        assert_eq!("Parser error: Error while parsing value 'none' as type 'Boolean' for column 3 at line 2. Row data: '[2,2.2,2.22,none]'", error);
+        assert_eq!(
+            "Parser error: Error while parsing value 'none' as type 'Boolean' for column 3 at line 2. Row data: '[2,2.2,2.22,none]'",
+            error
+        );
     }
 
     /// Infer the data type of a record
@@ -2697,7 +2706,10 @@ mod tests {
             .infer_schema(&mut read, None);
         assert!(result.is_err());
         // Include line number in the error message to help locate and fix the issue
-        assert_eq!(result.err().unwrap().to_string(), "Csv error: Encountered unequal lengths between records on CSV file. Expected 3 records, found 2 records at line 3");
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Csv error: Encountered unequal lengths between records on CSV file. Expected 3 records, found 2 records at line 3"
+        );
     }
 
     #[test]

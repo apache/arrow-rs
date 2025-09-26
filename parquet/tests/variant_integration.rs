@@ -91,23 +91,10 @@ variant_test_case!(16);
 variant_test_case!(17);
 variant_test_case!(18);
 variant_test_case!(19);
-// https://github.com/apache/arrow-rs/issues/8331
-variant_test_case!(
-    20,
-    "Unsupported typed_value type: Timestamp(Microsecond, Some(\"UTC\"))"
-);
-variant_test_case!(
-    21,
-    "Unsupported typed_value type: Timestamp(Microsecond, Some(\"UTC\"))"
-);
-variant_test_case!(
-    22,
-    "Unsupported typed_value type: Timestamp(Microsecond, None)"
-);
-variant_test_case!(
-    23,
-    "Unsupported typed_value type: Timestamp(Microsecond, None)"
-);
+variant_test_case!(20);
+variant_test_case!(21);
+variant_test_case!(22);
+variant_test_case!(23);
 // https://github.com/apache/arrow-rs/issues/8332
 variant_test_case!(24, "Unsupported typed_value type: Decimal128(9, 4)");
 variant_test_case!(25, "Unsupported typed_value type: Decimal128(9, 4)");
@@ -118,24 +105,11 @@ variant_test_case!(29, "Unsupported typed_value type: Decimal128(38, 9)");
 variant_test_case!(30);
 variant_test_case!(31);
 // https://github.com/apache/arrow-rs/issues/8334
-variant_test_case!(32, "Unsupported typed_value type: Time64(Microsecond)");
-// https://github.com/apache/arrow-rs/issues/8331
-variant_test_case!(
-    33,
-    "Unsupported typed_value type: Timestamp(Nanosecond, Some(\"UTC\"))"
-);
-variant_test_case!(
-    34,
-    "Unsupported typed_value type: Timestamp(Nanosecond, Some(\"UTC\"))"
-);
-variant_test_case!(
-    35,
-    "Unsupported typed_value type: Timestamp(Nanosecond, None)"
-);
-variant_test_case!(
-    36,
-    "Unsupported typed_value type: Timestamp(Nanosecond, None)"
-);
+variant_test_case!(32, "Unsupported typed_value type: Time64(µs)");
+variant_test_case!(33);
+variant_test_case!(34);
+variant_test_case!(35);
+variant_test_case!(36);
 variant_test_case!(37);
 // https://github.com/apache/arrow-rs/issues/8336
 variant_test_case!(38, "Unsupported typed_value type: Struct(");
@@ -144,10 +118,7 @@ variant_test_case!(39);
 variant_test_case!(40, "Unsupported typed_value type: List(");
 variant_test_case!(41, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
-variant_test_case!(
-    42,
-    "Expected an error 'Invalid variant, conflicting value and typed_value`, but got no error"
-);
+variant_test_case!(42, "Invalid variant, conflicting value and typed_value");
 // https://github.com/apache/arrow-rs/issues/8336
 variant_test_case!(43, "Unsupported typed_value type: Struct(");
 variant_test_case!(44, "Unsupported typed_value type: Struct(");
@@ -197,6 +168,7 @@ variant_test_case!(84, "Unsupported typed_value type: Struct(");
 variant_test_case!(85, "Unsupported typed_value type: List(");
 variant_test_case!(86, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
+// TODO: Once structs are supported, expect "Invalid variant, non-object value with shredded fields"
 variant_test_case!(87, "Unsupported typed_value type: Struct(");
 variant_test_case!(88, "Unsupported typed_value type: List(");
 variant_test_case!(89);
@@ -238,13 +210,11 @@ variant_test_case!(124);
 variant_test_case!(125, "Unsupported typed_value type: Struct");
 variant_test_case!(126, "Unsupported typed_value type: List(");
 // Is an error case (should be failing as the expected error message indicates)
-variant_test_case!(
-    127,
-    "Invalid variant data: InvalidArgumentError(\"Received empty bytes\")"
-);
+variant_test_case!(127, "Illegal shredded value type: UInt32");
 // Is an error case (should be failing as the expected error message indicates)
+// TODO: Once structs are supported, expect "Invalid variant, non-object value with shredded fields"
 variant_test_case!(128, "Unsupported typed_value type: Struct(");
-variant_test_case!(129, "Invalid variant data: InvalidArgumentError(");
+variant_test_case!(129);
 variant_test_case!(130, "Unsupported typed_value type: Struct(");
 variant_test_case!(131);
 variant_test_case!(132, "Unsupported typed_value type: Struct(");
@@ -252,7 +222,7 @@ variant_test_case!(133, "Unsupported typed_value type: Struct(");
 variant_test_case!(134, "Unsupported typed_value type: Struct(");
 variant_test_case!(135);
 variant_test_case!(136, "Unsupported typed_value type: List(");
-variant_test_case!(137, "Invalid variant data: InvalidArgumentError(");
+variant_test_case!(137, "Illegal shredded value type: FixedSizeBinary(4)");
 variant_test_case!(138, "Unsupported typed_value type: Struct(");
 
 /// Test case definition structure matching the format from

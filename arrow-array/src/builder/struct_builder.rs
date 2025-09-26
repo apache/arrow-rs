@@ -201,6 +201,11 @@ impl StructBuilder {
         self.field_builders.len()
     }
 
+    /// Returns the fields for the struct this builder is building.
+    pub fn fields(&self) -> &Fields {
+        &self.fields
+    }
+
     /// Appends an element (either null or non-null) to the struct. The actual elements
     /// should be appended for each child sub-array in a consistent way.
     #[inline]
@@ -690,7 +695,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(Nanosecond, Some(\\\"UTC\\\")) got Timestamp(Nanosecond, None)"
+        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(ns, \\\"UTC\\\") got Timestamp(ns)"
     )]
     fn test_struct_array_mismatch_builder() {
         let fields = vec![Field::new(

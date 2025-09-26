@@ -24,7 +24,7 @@
 
 use arrow_array::*;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
-use arrow_buffer::{buffer_bin_and_not, BooleanBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer, buffer_bin_and_not};
 use arrow_schema::ArrowError;
 
 /// Logical 'and' boolean values with Kleene logic

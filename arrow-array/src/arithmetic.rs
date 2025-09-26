@@ -18,7 +18,7 @@
 use arrow_buffer::{i256, ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::ArrowError;
 use half::f16;
-use num::complex::ComplexFloat;
+use num_complex::ComplexFloat;
 use std::cmp::Ordering;
 
 /// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,
@@ -420,13 +420,13 @@ native_type_float_op!(
     1.,
     unsafe {
         // Need to allow in clippy because
-        // current MSRV (Minimum Supported Rust Version) is `1.84.0` but this item is stable since `1.87.0`
+        // current MSRV (Minimum Supported Rust Version) is `1.85.0` but this item is stable since `1.87.0`
         #[allow(unnecessary_transmutes)]
         std::mem::transmute(-1_i32)
     },
     unsafe {
         // Need to allow in clippy because
-        // current MSRV (Minimum Supported Rust Version) is `1.84.0` but this item is stable since `1.87.0`
+        // current MSRV (Minimum Supported Rust Version) is `1.85.0` but this item is stable since `1.87.0`
         #[allow(unnecessary_transmutes)]
         std::mem::transmute(i32::MAX)
     }
@@ -437,13 +437,13 @@ native_type_float_op!(
     1.,
     unsafe {
         // Need to allow in clippy because
-        // current MSRV (Minimum Supported Rust Version) is `1.84.0` but this item is stable since `1.87.0`
+        // current MSRV (Minimum Supported Rust Version) is `1.85.0` but this item is stable since `1.87.0`
         #[allow(unnecessary_transmutes)]
         std::mem::transmute(-1_i64)
     },
     unsafe {
         // Need to allow in clippy because
-        // current MSRV (Minimum Supported Rust Version) is `1.84.0` but this item is stable since `1.87.0`
+        // current MSRV (Minimum Supported Rust Version) is `1.85.0` but this item is stable since `1.87.0`
         #[allow(unnecessary_transmutes)]
         std::mem::transmute(i64::MAX)
     }
