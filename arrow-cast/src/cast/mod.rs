@@ -65,7 +65,7 @@ use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
-use num_traits::{cast::AsPrimitive, NumCast, ToPrimitive};
+use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
