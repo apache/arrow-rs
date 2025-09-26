@@ -26,7 +26,7 @@ use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{bit_util, i256, ArrowNativeType, Buffer, MutableBuffer};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
-use num::Integer;
+use num_integer::Integer;
 use std::mem;
 
 mod boolean;

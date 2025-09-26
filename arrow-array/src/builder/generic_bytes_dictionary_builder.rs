@@ -23,7 +23,7 @@ use crate::{
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::{ArrowError, DataType};
 use hashbrown::HashTable;
-use num::NumCast;
+use num_traits::NumCast;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -197,7 +197,7 @@ where
 
         let source_keys = source.keys_builder.finish();
         let new_keys: PrimitiveArray<K> = source_keys.try_unary(|value| {
-            num::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
+            num_traits::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
                 ArrowError::CastError(format!(
                     "Can't cast dictionary keys from source type {:?} to type {:?}",
                     K2::DATA_TYPE,

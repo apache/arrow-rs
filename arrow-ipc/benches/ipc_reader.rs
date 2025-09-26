@@ -16,14 +16,14 @@
 // under the License.
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::{builder::StringBuilder, RecordBatch};
+use arrow_array::{RecordBatch, builder::StringBuilder};
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
-use arrow_ipc::reader::{read_footer_length, FileDecoder, FileReader, StreamReader};
+use arrow_ipc::reader::{FileDecoder, FileReader, StreamReader, read_footer_length};
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
-use arrow_ipc::{root_as_footer, Block, CompressionType};
+use arrow_ipc::{Block, CompressionType, root_as_footer};
 use arrow_schema::{DataType, Field, Schema};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::io::{Cursor, Write};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -240,7 +240,7 @@ impl IPCBufferDecoder {
     }
 
     unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
-        self.decoder = self.decoder.with_skip_validation(skip_validation);
+        self.decoder = unsafe { self.decoder.with_skip_validation(skip_validation) };
         self
     }
 

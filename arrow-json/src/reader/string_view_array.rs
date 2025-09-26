@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_array::Array;
 use arrow_array::builder::GenericByteViewBuilder;
 use arrow_array::types::StringViewType;
-use arrow_array::Array;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 use std::fmt::Write;
 
-use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 const TRUE: &str = "true";
 const FALSE: &str = "false";

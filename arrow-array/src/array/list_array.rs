@@ -24,7 +24,7 @@ use crate::{
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use num::Integer;
+use num_integer::Integer;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// [`StringArray`]: crate::array::StringArray
 /// [`LargeStringArray`]: crate::array::LargeStringArray
 pub trait OffsetSizeTrait:
-    ArrowNativeType + std::ops::AddAssign + Integer + num::CheckedAdd
+    ArrowNativeType + std::ops::AddAssign + Integer + num_traits::CheckedAdd
 {
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;

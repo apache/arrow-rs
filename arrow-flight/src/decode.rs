@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{trailers::LazyTrailers, utils::flight_data_to_arrow_batch, FlightData};
+use crate::{FlightData, trailers::LazyTrailers, utils::flight_data_to_arrow_batch};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_schema::{Schema, SchemaRef};
 use bytes::Bytes;
-use futures::{ready, stream::BoxStream, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready, stream::BoxStream};
 use std::{collections::HashMap, fmt::Debug, pin::Pin, sync::Arc, task::Poll};
 use tonic::metadata::MetadataMap;
 
