@@ -65,15 +65,15 @@ Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
 | ---------------- | ---------- | --------------------------------------- |
-| July 2025        | [`56.0.0`] | Major, potentially breaking API changes |
-| August 2025      | [`56.1.0`] | Minor, NO breaking API changes          |
-| September 2025   | [`56.2.0`] | Minor, NO breaking API changes          |
 | October 2025     | [`57.0.0`] | Major, potentially breaking API changes |
+| November 2025    | [`57.1.0`] | Minor, NO breaking API changes          |
+| December 2025    | [`57.2.0`] | Minor, NO breaking API changes          |
+| January 2026     | [`58.0.0`] | Major, potentially breaking API changes |
 
-[`56.0.0`]: https://github.com/apache/arrow-rs/issues/7395
-[`56.1.0`]: https://github.com/apache/arrow-rs/issues/7837
-[`56.2.0`]: https://github.com/apache/arrow-rs/issues/7836
 [`57.0.0`]: https://github.com/apache/arrow-rs/issues/7835
+[`57.1.0`]: https://github.com/apache/arrow-rs/milestone/3
+[`57.2.0`]: https://github.com/apache/arrow-rs/milestone/5
+[`58.0.0`]: https://github.com/apache/arrow-rs/milestone/6
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 

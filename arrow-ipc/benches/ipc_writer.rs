@@ -16,11 +16,11 @@
 // under the License.
 
 use arrow_array::builder::{Date32Builder, Decimal128Builder, Int32Builder};
-use arrow_array::{builder::StringBuilder, RecordBatch};
-use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
+use arrow_array::{RecordBatch, builder::StringBuilder};
 use arrow_ipc::CompressionType;
+use arrow_ipc::writer::{FileWriter, IpcWriteOptions, StreamWriter};
 use arrow_schema::{DataType, Field, Schema};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {

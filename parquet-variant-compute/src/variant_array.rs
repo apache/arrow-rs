@@ -629,47 +629,38 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 ///
 /// | value    | typed_value  | Meaning |
 /// |----------|--------------|---------|
-/// | null     | null         | The value is missing; only valid for shredded object fields |
-/// | non-null | null         | The value is present and may be any type, including `null` |
-/// | null     | non-null     | The value is present and is the shredded type |
-/// | non-null | non-null     | The value is present and is a partially shredded object |
+/// | NULL     | NULL         | The value is missing; only valid for shredded object fields |
+/// | non-NULL | NULL         | The value is present and may be any type, including [`Variant::Null`] |
+/// | NULL     | non-NULL     | The value is present and is the shredded type |
+/// | non-NULL | non-NULL     | The value is present and is a partially shredded object |
+///
+///
+/// Applying the above rules to entire columns, we obtain the following:
+///
+/// | value  | typed_value  | Meaning |
+/// |--------|-------------|---------|
+/// | --     | --          | **Missing**: The value is always missing; only valid for shredded object fields |
+/// | exists | --          | **Unshredded**: If present, the value may be any type, including [`Variant::Null`]
+/// | --     | exists      | **Perfectly shredded**: If present, the value is always the shredded type |
+/// | exists | exists      | **Imperfectly shredded**: The value might (not) be present and might (not) be the shredded type |
+///
+/// NOTE: Partial shredding is a row-wise situation that can arise under imperfect shredding (a
+/// column-wise situation): When both columns exist (imperfect shredding) and the typed_value column
+/// is a struct, then both columns can be non-NULL for the same row if value is a variant object
+/// (partial shredding).
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
 #[derive(Clone, Debug)]
-pub enum ShreddingState {
-    /// This variant has no typed_value field
-    Unshredded { value: BinaryViewArray },
-    /// This variant has a typed_value field and no value field
-    /// meaning it is the shredded type
-    Typed { typed_value: ArrayRef },
-    /// Imperfectly shredded: Shredded values reside in `typed_value` while those that failed to
-    /// shred reside in `value`. Missing field values are NULL in both columns, while NULL primitive
-    /// values have NULL `typed_value` and `Variant::Null` in `value`.
-    ///
-    /// NOTE: A partially shredded struct is a special kind of imperfect shredding, where
-    /// `typed_value` and `value` are both non-NULL. The `typed_value` is a struct containing the
-    /// subset of fields for which shredding was attempted (each field will then have its own value
-    /// and/or typed_value sub-fields that indicate how shredding actually turned out). Meanwhile,
-    /// the `value` is a variant object containing the subset of fields for which shredding was
-    /// not even attempted.
-    PartiallyShredded {
-        value: BinaryViewArray,
-        typed_value: ArrayRef,
-    },
-    /// All values are null, only metadata is present.
-    ///
-    /// This state occurs when neither `value` nor `typed_value` fields exist in the schema.
-    /// Note: By strict spec interpretation, this should only be valid for shredded object fields,
-    /// not top-level variants. However, we allow it and treat as Variant::Null for pragmatic
-    /// handling of missing data.
-    AllNull,
+pub struct ShreddingState {
+    value: Option<BinaryViewArray>,
+    typed_value: Option<ArrayRef>,
 }
 
 impl ShreddingState {
-    /// try to create a new `ShreddingState` from the given `value` and `typed_value` fields
+    /// Create a new `ShreddingState` from the given `value` and `typed_value` fields
     ///
     /// Note you can create a `ShreddingState` from a &[`StructArray`] using
-    /// `ShreddingState::try_from(&struct_array)`, for example:
+    /// `ShreddingState::from(&struct_array)`, for example:
     ///
     /// ```no_run
     /// # use arrow::array::StructArray;
@@ -678,53 +669,27 @@ impl ShreddingState {
     /// #   unimplemented!()
     /// # }
     /// let struct_array: StructArray = get_struct_array();
-    /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
+    /// let shredding_state = ShreddingState::from(&struct_array);
     /// ```
     pub fn new(value: Option<BinaryViewArray>, typed_value: Option<ArrayRef>) -> Self {
-        match (value, typed_value) {
-            (Some(value), Some(typed_value)) => Self::PartiallyShredded { value, typed_value },
-            (Some(value), None) => Self::Unshredded { value },
-            (None, Some(typed_value)) => Self::Typed { typed_value },
-            (None, None) => Self::AllNull,
-        }
+        Self { value, typed_value }
     }
 
     /// Return a reference to the value field, if present
     pub fn value_field(&self) -> Option<&BinaryViewArray> {
-        match self {
-            ShreddingState::Unshredded { value, .. } => Some(value),
-            ShreddingState::Typed { .. } => None,
-            ShreddingState::PartiallyShredded { value, .. } => Some(value),
-            ShreddingState::AllNull => None,
-        }
+        self.value.as_ref()
     }
 
     /// Return a reference to the typed_value field, if present
     pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        match self {
-            ShreddingState::Unshredded { .. } => None,
-            ShreddingState::Typed { typed_value, .. } => Some(typed_value),
-            ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
-            ShreddingState::AllNull => None,
-        }
+        self.typed_value.as_ref()
     }
 
     /// Slice all the underlying arrays
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        match self {
-            ShreddingState::Unshredded { value } => ShreddingState::Unshredded {
-                value: value.slice(offset, length),
-            },
-            ShreddingState::Typed { typed_value } => ShreddingState::Typed {
-                typed_value: typed_value.slice(offset, length),
-            },
-            ShreddingState::PartiallyShredded { value, typed_value } => {
-                ShreddingState::PartiallyShredded {
-                    value: value.slice(offset, length),
-                    typed_value: typed_value.slice(offset, length),
-                }
-            }
-            ShreddingState::AllNull => ShreddingState::AllNull,
+        Self {
+            value: self.value.as_ref().map(|v| v.slice(offset, length)),
+            typed_value: self.typed_value.as_ref().map(|tv| tv.slice(offset, length)),
         }
     }
 }
@@ -1060,7 +1025,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState::AllNull
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
 
         // Verify that value() returns Variant::Null (compensating for spec violation)
@@ -1120,7 +1088,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             ShreddingState::new(None, None),
-            ShreddingState::AllNull
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
     }
 
@@ -1137,7 +1108,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState::AllNull
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
 
         // Verify all values are null
@@ -1187,7 +1161,10 @@ mod test {
         // This should be Unshredded, not AllNull, because value field exists in schema
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState::Unshredded { .. }
+            ShreddingState {
+                value: Some(_),
+                typed_value: None
+            }
         ));
     }
 }
