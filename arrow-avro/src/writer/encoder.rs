@@ -271,21 +271,18 @@ impl<'a> FieldEncoder<'a> {
                         array.as_primitive::<IntervalDayTimeType>(),
                     )),
                 }
-                #[cfg(not(feature = "avro_custom_types"))]
-                DataType::Duration(_) => Encoder::Long(LongEncoder(array.as_primitive::<Int64Type>())),
-                #[cfg(feature = "avro_custom_types")]
                 DataType::Duration(tu) => {
                     match tu {
-                        TimeUnit::Second => Encoder::DurationSec(LongEncoder(
+                        TimeUnit::Second => Encoder::DurationSeconds(LongEncoder(
                             array.as_primitive::<DurationSecondType>(),
                         )),
-                        TimeUnit::Millisecond => Encoder::DurationMs(LongEncoder(
+                        TimeUnit::Millisecond => Encoder::DurationMillis(LongEncoder(
                             array.as_primitive::<DurationMillisecondType>(),
                         )),
-                        TimeUnit::Microsecond => Encoder::DurationUs(LongEncoder(
+                        TimeUnit::Microsecond => Encoder::DurationMicros(LongEncoder(
                             array.as_primitive::<DurationMicrosecondType>(),
                         )),
-                        TimeUnit::Nanosecond => Encoder::DurationNs(LongEncoder(
+                        TimeUnit::Nanosecond => Encoder::DurationNanos(LongEncoder(
                             array.as_primitive::<DurationNanosecondType>(),
                         )),
                     }
@@ -817,27 +814,6 @@ impl FieldPlan {
                     "Avro duration logical type requires Arrow Interval(MonthDayNano), found: {other:?}"
                 ))),
             }
-            #[cfg(feature = "avro_custom_types")]
-            c @ (Codec::DurationNanos
-            | Codec::DurationMicros
-            | Codec::DurationMillis
-            | Codec::DurationSeconds) => {
-                let (expected_tu, annotation) = match c {
-                    Codec::DurationNanos => (TimeUnit::Nanosecond, "arrow.duration-nanos"),
-                    Codec::DurationMicros => (TimeUnit::Microsecond, "arrow.duration-micros"),
-                    Codec::DurationMillis => (TimeUnit::Millisecond, "arrow.duration-millis"),
-                    Codec::DurationSeconds => (TimeUnit::Second, "arrow.duration-seconds"),
-                    _ => unreachable!(),
-                };
-
-                match arrow_field.data_type() {
-                    DataType::Duration(actual_tu) if *actual_tu == expected_tu => Ok(FieldPlan::Scalar),
-                    other => Err(ArrowError::SchemaError(format!(
-                        "Avro long with annotation {} requires Arrow Duration({:?}), found: {:?}",
-                        annotation, expected_tu, other,
-                    ))),
-                }
-            }
             _ => Ok(FieldPlan::Scalar),
         }
     }
@@ -848,10 +824,10 @@ enum Encoder<'a> {
     Int(IntEncoder<'a, Int32Type>),
     Long(LongEncoder<'a, Int64Type>),
     Timestamp(LongEncoder<'a, TimestampMicrosecondType>),
-    DurationSec(LongEncoder<'a, DurationSecondType>),
-    DurationMs(LongEncoder<'a, DurationMillisecondType>),
-    DurationUs(LongEncoder<'a, DurationMicrosecondType>),
-    DurationNs(LongEncoder<'a, DurationNanosecondType>),
+    DurationSeconds(LongEncoder<'a, DurationSecondType>),
+    DurationMillis(LongEncoder<'a, DurationMillisecondType>),
+    DurationMicros(LongEncoder<'a, DurationMicrosecondType>),
+    DurationNanos(LongEncoder<'a, DurationNanosecondType>),
     Float32(F32Encoder<'a>),
     Float64(F64Encoder<'a>),
     Binary(BinaryEncoder<'a, i32>),
@@ -890,10 +866,10 @@ impl<'a> Encoder<'a> {
             Encoder::Int(e) => e.encode(out, idx),
             Encoder::Long(e) => e.encode(out, idx),
             Encoder::Timestamp(e) => e.encode(out, idx),
-            Encoder::DurationSec(e) => e.encode(out, idx),
-            Encoder::DurationMs(e) => e.encode(out, idx),
-            Encoder::DurationUs(e) => e.encode(out, idx),
-            Encoder::DurationNs(e) => e.encode(out, idx),
+            Encoder::DurationSeconds(e) => e.encode(out, idx),
+            Encoder::DurationMicros(e) => e.encode(out, idx),
+            Encoder::DurationMillis(e) => e.encode(out, idx),
+            Encoder::DurationNanos(e) => e.encode(out, idx),
             Encoder::Float32(e) => e.encode(out, idx),
             Encoder::Float64(e) => e.encode(out, idx),
             Encoder::Binary(e) => e.encode(out, idx),
