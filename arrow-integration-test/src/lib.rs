@@ -29,8 +29,8 @@
 #![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
-use num::BigInt;
-use num::Signed;
+use num_bigint::BigInt;
+use num_traits::Signed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as SJMap, Value};
 use std::collections::HashMap;

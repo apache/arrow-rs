@@ -18,7 +18,7 @@
 use arrow_buffer::{i256, ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::ArrowError;
 use half::f16;
-use num::complex::ComplexFloat;
+use num_complex::ComplexFloat;
 use std::cmp::Ordering;
 
 /// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,

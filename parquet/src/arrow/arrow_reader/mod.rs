@@ -1168,7 +1168,7 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use half::f16;
-    use num::PrimInt;
+    use num_traits::PrimInt;
     use rand::{rng, Rng, RngCore};
     use tempfile::tempfile;
 
