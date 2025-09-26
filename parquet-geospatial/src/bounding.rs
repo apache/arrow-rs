@@ -32,14 +32,28 @@ use crate::interval::{Interval, IntervalTrait, WraparoundInterval};
 /// This bounder is designed to output statistics accumulated according
 /// to the Parquet specification such that the output can be written to
 /// Parquet statistics with minimal modification.
+///
+/// See the [IntervalTrait] for an in-depth discussion of wraparound bounding
+/// (which adds some complexity to this implementation).
 #[derive(Debug)]
 pub struct GeometryBounder {
+    /// Union of all contiguous x intervals to the left of the wraparound midpoint
     x_left: Interval,
+    /// Union of all contiguous x intervals that intersect the wraparound midpoint
     x_mid: Interval,
+    /// Union of all contiguous x intervals to the right of the wraparound midpoint
     x_right: Interval,
+    /// Union of all y intervals
     y: Interval,
+    /// Union of all z intervals
     z: Interval,
+    /// Union of all m intervals
     m: Interval,
+    /// Unique geometry type codes encountered by the bounder
+    ///
+    /// The integer codes are identical to the ISO WKB geometry type codes and
+    /// are documented as part of the Parquet specification:
+    /// https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types
     geometry_types: HashSet<i32>,
     wraparound_hint: Interval,
 }
@@ -271,6 +285,14 @@ fn visit_collection(
     Ok(())
 }
 
+/// Extract the geometry type code encountered by the bounder
+///
+/// The integer code is a ISO WKB geometry type codes is documented as part
+/// of the Parquet specification:
+/// https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types
+///
+/// This can also be derived from bytes 2-5 (possibly endian-swapped according to byte 1)
+/// of the input WKB buffer but is slightly clearer recomputed.
 fn geometry_type(geom: &impl GeometryTrait<T = f64>) -> Result<i32, ArrowError> {
     let dimension_type = match geom.dim() {
         Dimensions::Xy => 0,
@@ -310,10 +332,10 @@ fn dimension_index(dim: Dimensions, target: char) -> Option<usize> {
     }
 
     match (dim, target) {
-        (geo_traits::Dimensions::Xyz, 'z') => Some(2),
-        (geo_traits::Dimensions::Xym, 'm') => Some(2),
-        (geo_traits::Dimensions::Xyzm, 'z') => Some(2),
-        (geo_traits::Dimensions::Xyzm, 'm') => Some(3),
+        (Dimensions::Xyz, 'z') => Some(2),
+        (Dimensions::Xym, 'm') => Some(2),
+        (Dimensions::Xyzm, 'z') => Some(2),
+        (Dimensions::Xyzm, 'm') => Some(3),
         (_, _) => None,
     }
 }
