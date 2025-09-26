@@ -22,13 +22,13 @@ use crate::io::{
     OperationLog, TestParquetFile,
 };
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::errors::Result;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::future::BoxedFuture;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -370,7 +370,7 @@ struct RecordingAsyncFileReader {
 }
 
 impl AsyncFileReader for RecordingAsyncFileReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, parquet::errors::Result<Bytes>> {
         let ops = Arc::clone(&self.ops);
         let data = self
             .bytes
@@ -382,14 +382,13 @@ impl AsyncFileReader for RecordingAsyncFileReader {
             start: range.start as usize,
             end: range.end as usize,
         };
-        async move {
+        Box::pin(async move {
             ops.add_entry_for_range(&logged_range);
             Ok(data)
-        }
-        .boxed()
+        })
     }
 
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxedFuture<'_, Result<Vec<Bytes>>> {
         let ops = Arc::clone(&self.ops);
         let datas = ranges
             .iter()
@@ -408,23 +407,21 @@ impl AsyncFileReader for RecordingAsyncFileReader {
             })
             .collect::<Vec<_>>();
 
-        async move {
+        Box::pin(async move {
             ops.add_entry_for_ranges(&logged_ranges);
             Ok(datas)
-        }
-        .boxed()
+        })
     }
 
     fn get_metadata<'a>(
         &'a mut self,
         _options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+    ) -> BoxedFuture<'a, Result<Arc<ParquetMetaData>>> {
         let ops = Arc::clone(&self.ops);
         let parquet_meta_data = Arc::clone(&self.parquet_meta_data);
-        async move {
+        Box::pin(async move {
             ops.add_entry(LogEntry::GetProvidedMetadata);
             Ok(parquet_meta_data)
-        }
-        .boxed()
+        })
     }
 }

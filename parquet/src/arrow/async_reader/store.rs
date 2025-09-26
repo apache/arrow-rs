@@ -22,7 +22,7 @@ use crate::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use bytes::Bytes;
-use futures::{future::BoxFuture, FutureExt, TryFutureExt};
+use futures::{FutureExt, TryFutureExt};
 use object_store::{path::Path, ObjectStore};
 use object_store::{GetOptions, GetRange};
 use tokio::runtime::Handle;
@@ -132,9 +132,9 @@ impl ParquetObjectReader {
         }
     }
 
-    fn spawn<F, O, E>(&self, f: F) -> BoxFuture<'_, Result<O>>
+    fn spawn<F, O, E>(&self, f: F) -> BoxedFuture<'_, Result<O>>
     where
-        F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxFuture<'a, Result<O, E>>
+        F: for<'a> FnOnce(&'a Arc<dyn ObjectStore>, &'a Path) -> BoxedFuture<'a, Result<O, E>>
             + Send
             + 'static,
         O: Send + 'static,
@@ -144,48 +144,48 @@ impl ParquetObjectReader {
             Some(handle) => {
                 let path = self.path.clone();
                 let store = Arc::clone(&self.store);
-                handle
-                    .spawn(async move { f(&store, &path).await })
-                    .map_ok_or_else(
-                        |e| match e.try_into_panic() {
-                            Err(e) => Err(ParquetError::External(Box::new(e))),
-                            Ok(p) => std::panic::resume_unwind(p),
-                        },
-                        |res| res.map_err(|e| e.into()),
-                    )
-                    .boxed()
+                Box::pin(
+                    handle
+                        .spawn(async move { f(&store, &path).await })
+                        .map_ok_or_else(
+                            |e| match e.try_into_panic() {
+                                Err(e) => Err(ParquetError::External(Box::new(e))),
+                                Ok(p) => std::panic::resume_unwind(p),
+                            },
+                            |res| res.map_err(|e| e.into()),
+                        ),
+                )
             }
-            None => f(&self.store, &self.path).map_err(|e| e.into()).boxed(),
+            None => Box::pin(f(&self.store, &self.path).map_err(|e| e.into())),
         }
     }
 }
 
 impl MetadataSuffixFetch for &mut ParquetObjectReader {
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch_suffix(&mut self, suffix: usize) -> BoxedFuture<'_, Result<Bytes>> {
         let options = GetOptions {
             range: Some(GetRange::Suffix(suffix as u64)),
             ..Default::default()
         };
         self.spawn(|store, path| {
-            async move {
+            Box::pin(async move {
                 let resp = store.get_opts(path, options).await?;
                 Ok::<_, ParquetError>(resp.bytes().await?)
-            }
-            .boxed()
+            })
         })
     }
 }
 
 impl AsyncFileReader for ParquetObjectReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>> {
         self.spawn(|store, path| store.get_range(path, range))
     }
 
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>>
+    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxedFuture<'_, Result<Vec<Bytes>>>
     where
         Self: Send,
     {
-        self.spawn(|store, path| async move { store.get_ranges(path, &ranges).await }.boxed())
+        self.spawn(|store, path| Box::pin(async move { store.get_ranges(path, &ranges).await }))
     }
 
     // This method doesn't directly call `self.spawn` because all of the IO that is done down the
@@ -197,7 +197,7 @@ impl AsyncFileReader for ParquetObjectReader {
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+    ) -> BoxedFuture<'a, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let mut metadata = ParquetMetaDataReader::new()
                 .with_column_index_policy(PageIndexPolicy::from(self.preload_column_index))
@@ -354,7 +354,9 @@ mod tests {
         let current_id = std::thread::current().id();
 
         let other_id = reader
-            .spawn(|_, _| async move { Ok::<_, ParquetError>(std::thread::current().id()) }.boxed())
+            .spawn(|_, _| {
+                Box::pin(async move { Ok::<_, ParquetError>(std::thread::current().id()) })
+            })
             .await
             .unwrap();
 
