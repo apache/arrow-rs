@@ -37,7 +37,7 @@ use arrow_schema::Field;
 pub(crate) fn add_extension_type(mut arrow_field: Field, parquet_type: &Type) -> Field {
     match parquet_type.get_basic_info().logical_type() {
         #[cfg(feature = "variant_experimental")]
-        Some(LogicalType::Variant{..}) => {
+        Some(LogicalType::Variant { .. }) => {
             // try to add the Variant extension type, but if that fails (e.g. because the
             // storage type is not supported), just return the field as is
             arrow_field
@@ -60,7 +60,9 @@ pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
         return None;
     }
     match field.try_extension_type::<VariantType>() {
-        Ok(VariantType) => Some(LogicalType::Variant{ specification_version: None }),
+        Ok(VariantType) => Some(LogicalType::Variant {
+            specification_version: None,
+        }),
         // Given check above, this should not error, but if it does ignore
         Err(_e) => None,
     }
