@@ -25,9 +25,11 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, TimeUnit, TimestampMicrosecondType, TimestampNanosecondType,
+    Int64Type, Int8Type, Time64MicrosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampNanosecondType,
 };
 use arrow::error::{ArrowError, Result};
+use arrow::temporal_conversions::time64us_to_time;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt, VariantMetadata};
@@ -94,6 +96,9 @@ enum UnshredVariantRowBuilder<'a> {
     PrimitiveFloat32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float32Type>>),
     PrimitiveFloat64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float64Type>>),
     PrimitiveDate32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Date32Type>>),
+    PrimitiveTime64Microsecond(
+        UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Time64MicrosecondType>>,
+    ),
     TimestampMicrosecond(TimestampUnshredRowBuilder<'a, TimestampMicrosecondType>),
     TimestampNanosecond(TimestampUnshredRowBuilder<'a, TimestampNanosecondType>),
     PrimitiveBoolean(UnshredPrimitiveRowBuilder<'a, BooleanArray>),
@@ -116,6 +121,7 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::PrimitiveFloat32(b) => b.append_row(builder, index),
             Self::PrimitiveFloat64(b) => b.append_row(builder, index),
             Self::PrimitiveDate32(b) => b.append_row(builder, index),
+            Self::PrimitiveTime64Microsecond(b) => b.append_row(builder, index),
             Self::TimestampMicrosecond(b) => b.append_row(builder, index),
             Self::TimestampNanosecond(b) => b.append_row(builder, index),
             Self::PrimitiveBoolean(b) => b.append_row(builder, index),
@@ -162,6 +168,14 @@ fn make_unshred_variant_row_builder<'a>(
         DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
         DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
         DataType::Date32 => primitive_builder!(PrimitiveDate32, as_primitive),
+        DataType::Time64(TimeUnit::Microsecond) => {
+            primitive_builder!(PrimitiveTime64Microsecond, as_primitive)
+        }
+        DataType::Time64(time_unit) => {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Time64({time_unit}) is not a valid variant shredding type",
+            )));
+        }
         DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
             UnshredVariantRowBuilder::TimestampMicrosecond(TimestampUnshredRowBuilder::new(
                 metadata,
@@ -350,12 +364,23 @@ impl_variant_unshred!(PrimitiveArray<Date32Type>, |days_since_epoch| {
     Date32Type::to_naive_date(days_since_epoch)
 });
 
+impl_variant_unshred!(
+    PrimitiveArray<Time64MicrosecondType>,
+    |micros_since_midnight| {
+        time64us_to_time(micros_since_midnight).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Invalid Time64 microsecond value: {}",
+                micros_since_midnight
+            ))
+        })?
+    }
+);
+
 // UUID from FixedSizeBinary(16)
 // NOTE: FixedSizeBinaryArray guarantees the byte length, so we can safely unwrap
 impl_variant_unshred!(FixedSizeBinaryArray, |bytes| {
     Uuid::from_slice(bytes).unwrap()
 });
-
 
 /// Trait for timestamp types to handle conversion to DateTime<Utc>
 trait TimestampType: ArrowPrimitiveType<Native = i64> {

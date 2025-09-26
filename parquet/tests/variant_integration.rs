@@ -122,8 +122,7 @@ variant_test_case!(
 );
 variant_test_case!(30);
 variant_test_case!(31);
-// https://github.com/apache/arrow-rs/issues/8334
-variant_test_case!(32, "Unshredding not yet supported for type: Time64(µs)");
+variant_test_case!(32);
 variant_test_case!(33);
 variant_test_case!(34);
 variant_test_case!(35);
