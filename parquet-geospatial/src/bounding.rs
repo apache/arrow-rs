@@ -53,7 +53,7 @@ pub struct GeometryBounder {
     ///
     /// The integer codes are identical to the ISO WKB geometry type codes and
     /// are documented as part of the Parquet specification:
-    /// https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types
+    /// <https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types>
     geometry_types: HashSet<i32>,
     wraparound_hint: Interval,
 }
