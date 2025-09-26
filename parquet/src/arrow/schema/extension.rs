@@ -61,7 +61,9 @@ pub(crate) fn try_add_extension_type(
 }
 
 /// Returns true if [`try_add_extension_type`] would add an extension type
-/// to the specified Parquet field. (used to preallocate the metadata)
+/// to the specified Parquet field.
+///
+/// This is used to preallocate the metadata hashmap size
 pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
     let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type() else {
         return false;
