@@ -201,6 +201,11 @@ impl StructBuilder {
         self.field_builders.len()
     }
 
+    /// Returns the fields for the struct this builder is building.
+    pub fn fields(&self) -> &Fields {
+        &self.fields
+    }
+
     /// Appends an element (either null or non-null) to the struct. The actual elements
     /// should be appended for each child sub-array in a consistent way.
     #[inline]
