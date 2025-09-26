@@ -868,9 +868,9 @@ pub fn cast_with_options(
                 array.nulls().cloned(),
             )?))
         }
-        (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
-        (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
-        (_, FixedSizeList(ref to, size)) if *size == 1 => {
+        (_, List(to)) => cast_values_to_list::<i32>(array, to, cast_options),
+        (_, LargeList(to)) => cast_values_to_list::<i64>(array, to, cast_options),
+        (_, FixedSizeList(to, size)) if *size == 1 => {
             cast_values_to_fixed_size_list(array, to, *size, cast_options)
         }
         (FixedSizeList(_, size), _) if *size == 1 => {
@@ -2919,8 +2919,10 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal32(2, 2), &options);
-        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal32 of precision 2. Max is 0.99",
-                   result_unsafe.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 123456.00 is too large to store in a Decimal32 of precision 2. Max is 0.99",
+            result_unsafe.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -2953,8 +2955,10 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal64(2, 2), &options);
-        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal64 of precision 2. Max is 0.99",
-                   result_unsafe.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 123456.00 is too large to store in a Decimal64 of precision 2. Max is 0.99",
+            result_unsafe.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -2987,8 +2991,10 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal128(2, 2), &options);
-        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal128 of precision 2. Max is 0.99",
-                   result_unsafe.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 123456.00 is too large to store in a Decimal128 of precision 2. Max is 0.99",
+            result_unsafe.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3144,8 +3150,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 170141183460469231731687303715884105727",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3164,8 +3172,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 170141183460469231731687303715884105727",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3241,8 +3251,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal128(38, 7). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal128(38, 7). Overflowing on 170141183460469231731687303715884105727",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3260,8 +3272,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal256(76, 55). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal256(76, 55). Overflowing on 170141183460469231731687303715884105727",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -9732,7 +9746,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1000.00000000 is too large to store in a Decimal128 of precision 10. Max is 99.99999999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 1000.00000000 is too large to store in a Decimal128 of precision 10. Max is 99.99999999",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -9815,7 +9832,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1000.00000000 is too large to store in a Decimal256 of precision 10. Max is 99.99999999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 1000.00000000 is too large to store in a Decimal256 of precision 10. Max is 99.99999999",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -10220,7 +10240,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1234567.000 is too large to store in a Decimal128 of precision 7. Max is 9999.999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 1234567.000 is too large to store in a Decimal128 of precision 7. Max is 9999.999",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -10246,7 +10269,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1234567.000 is too large to store in a Decimal256 of precision 7. Max is 9999.999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 1234567.000 is too large to store in a Decimal256 of precision 7. Max is 9999.999",
+            err.unwrap_err().to_string()
+        );
     }
 
     /// helper function to test casting from duration to interval
@@ -11161,8 +11187,10 @@ mod tests {
             ..Default::default()
         };
         let result = cast_with_options(&array, &output_type, &options);
-        assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 1234567.89 is too large to store in a Decimal128 of precision 6. Max is 9999.99");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: 1234567.89 is too large to store in a Decimal128 of precision 6. Max is 9999.99"
+        );
     }
 
     #[test]
@@ -11207,8 +11235,10 @@ mod tests {
             ..Default::default()
         };
         let result = cast_with_options(&array, &output_type, &options);
-        assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 12345.68 is too large to store in a Decimal128 of precision 6. Max is 9999.99");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: 12345.68 is too large to store in a Decimal128 of precision 6. Max is 9999.99"
+        );
     }
 
     #[test]
@@ -11224,8 +11254,10 @@ mod tests {
             ..Default::default()
         };
         let result = cast_with_options(&array, &output_type, &options);
-        assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 1234567.890 is too large to store in a Decimal128 of precision 6. Max is 999.999");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: 1234567.890 is too large to store in a Decimal128 of precision 6. Max is 999.999"
+        );
     }
 
     #[test]
@@ -11241,8 +11273,10 @@ mod tests {
             ..Default::default()
         };
         let result = cast_with_options(&array, &output_type, &options).unwrap_err();
-        assert_eq!(result.to_string(),
-                   "Invalid argument error: 1234567.89 is too large to store in a Decimal256 of precision 6. Max is 9999.99");
+        assert_eq!(
+            result.to_string(),
+            "Invalid argument error: 1234567.89 is too large to store in a Decimal256 of precision 6. Max is 9999.99"
+        );
     }
 
     #[test]
@@ -11294,7 +11328,10 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: 1.0 is too large to store in a Decimal32 of precision 1. Max is 0.9");
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: 1.0 is too large to store in a Decimal32 of precision 1. Max is 0.9"
+        );
 
         let array = Int64Array::from(vec![-1]);
         let error = cast_with_options(
@@ -11306,6 +11343,9 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: -1.0 is too small to store in a Decimal32 of precision 1. Min is -0.9");
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: -1.0 is too small to store in a Decimal32 of precision 1. Min is -0.9"
+        );
     }
 }
