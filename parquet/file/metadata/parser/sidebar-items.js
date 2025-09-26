@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["decode_metadata","decode_metadata_with_encryption","get_file_decryptor","parse_column_index","parse_column_orders","parse_offset_index","parse_single_column_index","parse_single_offset_index"]};
