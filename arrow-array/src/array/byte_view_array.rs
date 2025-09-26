@@ -25,7 +25,7 @@ use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use core::str;
-use num::ToPrimitive;
+use num_traits::ToPrimitive;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;

@@ -890,7 +890,7 @@ impl ArrayData {
     /// entries.
     ///
     /// For an empty array, the `buffer` can also be empty.
-    fn typed_offsets<T: ArrowNativeType + num::Num>(&self) -> Result<&[T], ArrowError> {
+    fn typed_offsets<T: ArrowNativeType + num_traits::Num>(&self) -> Result<&[T], ArrowError> {
         // An empty list-like array can have 0 offsets
         if self.len == 0 && self.buffers[0].is_empty() {
             return Ok(&[]);
@@ -900,7 +900,7 @@ impl ArrayData {
     }
 
     /// Returns a reference to the data in `buffers[idx]` as a typed slice after validating
-    fn typed_buffer<T: ArrowNativeType + num::Num>(
+    fn typed_buffer<T: ArrowNativeType + num_traits::Num>(
         &self,
         idx: usize,
         len: usize,
@@ -924,7 +924,7 @@ impl ArrayData {
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
     /// offsets (of type T) into some other buffer of `values_length` bytes long
-    fn validate_offsets<T: ArrowNativeType + num::Num + std::fmt::Display>(
+    fn validate_offsets<T: ArrowNativeType + num_traits::Num + std::fmt::Display>(
         &self,
         values_length: usize,
     ) -> Result<(), ArrowError> {
@@ -974,7 +974,7 @@ impl ArrayData {
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
     /// offsets and sizes (of type T) into some other buffer of `values_length` bytes long
-    fn validate_offsets_and_sizes<T: ArrowNativeType + num::Num + std::fmt::Display>(
+    fn validate_offsets_and_sizes<T: ArrowNativeType + num_traits::Num + std::fmt::Display>(
         &self,
         values_length: usize,
     ) -> Result<(), ArrowError> {
@@ -1383,7 +1383,7 @@ impl ArrayData {
     /// function would call `validate([1,2])`, and `validate([2,4])`
     fn validate_each_offset<T, V>(&self, offset_limit: usize, validate: V) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
         V: Fn(usize, Range<usize>) -> Result<(), ArrowError>,
     {
         self.typed_offsets::<T>()?
@@ -1430,7 +1430,7 @@ impl ArrayData {
     /// into `buffers[1]` are valid utf8 sequences
     fn validate_utf8<T>(&self) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffers[1].as_slice();
         if let Ok(values_str) = std::str::from_utf8(values_buffer) {
@@ -1462,7 +1462,7 @@ impl ArrayData {
     /// between `0` and `offset_limit`
     fn validate_offsets_full<T>(&self, offset_limit: usize) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
     {
         self.validate_each_offset::<T, _>(offset_limit, |_string_index, _range| {
             // No validation applied to each value, but the iteration
@@ -1475,7 +1475,7 @@ impl ArrayData {
     /// is within the range [0, max_value], inclusive
     fn check_bounds<T>(&self, max_value: i64) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
         let required_len = self.len + self.offset;
         let buffer = &self.buffers[0];
@@ -1510,7 +1510,7 @@ impl ArrayData {
     /// Validates that each value in run_ends array is positive and strictly increasing.
     fn check_run_ends<T>(&self) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
         let values = self.typed_buffer::<T>(0, self.len)?;
         let mut prev_value: i64 = 0_i64;

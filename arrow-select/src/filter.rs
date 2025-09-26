@@ -794,7 +794,7 @@ fn filter_fixed_size_binary(
 fn filter_dict<T>(array: &DictionaryArray<T>, predicate: &FilterPredicate) -> DictionaryArray<T>
 where
     T: ArrowDictionaryKeyType,
-    T::Native: num::Num,
+    T::Native: num_traits::Num,
 {
     let builder = filter_primitive::<T>(array.keys(), predicate)
         .into_data()

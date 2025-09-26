@@ -17,8 +17,8 @@
 
 use crate::ArrayData;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
-use num::traits::AsPrimitive;
-use num::{CheckedAdd, Integer};
+use num_integer::Integer;
+use num_traits::{AsPrimitive, CheckedAdd};
 
 use super::{
     _MutableArrayData, Extend,
