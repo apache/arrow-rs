@@ -558,7 +558,6 @@ impl Field {
     ///   }
     /// }
     /// ```
-
     pub fn try_extension_type<E: ExtensionType>(&self) -> Result<E, ArrowError> {
         // Check the extension name in the metadata
         match self.extension_type_name() {
