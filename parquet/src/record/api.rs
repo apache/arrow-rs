@@ -21,8 +21,8 @@ use std::fmt;
 
 use chrono::{TimeZone, Utc};
 use half::f16;
-use num::traits::Float;
 use num_bigint::{BigInt, Sign};
+use num_traits::Float;
 
 use crate::basic::{ConvertedType, LogicalType, Type as PhysicalType};
 use crate::data_type::{ByteArray, Decimal, Int96};

@@ -17,15 +17,15 @@
 
 use std::marker::PhantomData;
 
+use arrow_array::Array;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::DecimalType;
-use arrow_array::Array;
 use arrow_cast::parse::parse_decimal;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
-use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 pub struct DecimalArrayDecoder<D: DecimalType> {
     precision: u8,

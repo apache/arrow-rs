@@ -56,17 +56,16 @@ use std::sync::Arc;
 
 use crate::display::{ArrayFormatter, FormatOptions};
 use crate::parse::{
-    parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
-    string_to_datetime, Parser,
+    Parser, parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
+    string_to_datetime,
 };
 use arrow_array::{builder::*, cast::*, temporal_conversions::*, timezone::Tz, types::*, *};
-use arrow_buffer::{i256, ArrowNativeType, OffsetBuffer};
-use arrow_data::transform::MutableArrayData;
+use arrow_buffer::{ArrowNativeType, OffsetBuffer, i256};
 use arrow_data::ArrayData;
+use arrow_data::transform::MutableArrayData;
 use arrow_schema::*;
 use arrow_select::take::take;
-use num::cast::AsPrimitive;
-use num::{NumCast, ToPrimitive};
+use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -868,9 +867,9 @@ pub fn cast_with_options(
                 array.nulls().cloned(),
             )?))
         }
-        (_, List(ref to)) => cast_values_to_list::<i32>(array, to, cast_options),
-        (_, LargeList(ref to)) => cast_values_to_list::<i64>(array, to, cast_options),
-        (_, FixedSizeList(ref to, size)) if *size == 1 => {
+        (_, List(to)) => cast_values_to_list::<i32>(array, to, cast_options),
+        (_, LargeList(to)) => cast_values_to_list::<i64>(array, to, cast_options),
+        (_, FixedSizeList(to, size)) if *size == 1 => {
             cast_values_to_fixed_size_list(array, to, *size, cast_options)
         }
         (FixedSizeList(_, size), _) if *size == 1 => {
@@ -2216,14 +2215,14 @@ fn cast_to_decimal<D, M>(
 where
     D: DecimalType + ArrowPrimitiveType<Native = M>,
     M: ArrowNativeTypeOp + DecimalCast,
-    u8: num::traits::AsPrimitive<M>,
-    u16: num::traits::AsPrimitive<M>,
-    u32: num::traits::AsPrimitive<M>,
-    u64: num::traits::AsPrimitive<M>,
-    i8: num::traits::AsPrimitive<M>,
-    i16: num::traits::AsPrimitive<M>,
-    i32: num::traits::AsPrimitive<M>,
-    i64: num::traits::AsPrimitive<M>,
+    u8: num_traits::AsPrimitive<M>,
+    u16: num_traits::AsPrimitive<M>,
+    u32: num_traits::AsPrimitive<M>,
+    u64: num_traits::AsPrimitive<M>,
+    i8: num_traits::AsPrimitive<M>,
+    i16: num_traits::AsPrimitive<M>,
+    i32: num_traits::AsPrimitive<M>,
+    i64: num_traits::AsPrimitive<M>,
 {
     use DataType::*;
     // cast data to decimal
@@ -2351,7 +2350,7 @@ where
     R::Native: NumCast,
 {
     from.try_unary(|value| {
-        num::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
+        num_traits::cast::cast::<T::Native, R::Native>(value).ok_or_else(|| {
             ArrowError::CastError(format!(
                 "Can't cast value {:?} to type {}",
                 value,
@@ -2370,7 +2369,7 @@ where
     T::Native: NumCast,
     R::Native: NumCast,
 {
-    from.unary_opt::<_, R>(num::cast::cast::<T::Native, R::Native>)
+    from.unary_opt::<_, R>(num_traits::cast::cast::<T::Native, R::Native>)
 }
 
 fn cast_numeric_to_binary<FROM: ArrowPrimitiveType, O: OffsetSizeTrait>(
@@ -2446,7 +2445,7 @@ fn cast_bool_to_numeric<TO>(
 ) -> Result<ArrayRef, ArrowError>
 where
     TO: ArrowPrimitiveType,
-    TO::Native: num::cast::NumCast,
+    TO::Native: num_traits::cast::NumCast,
 {
     Ok(Arc::new(bool_to_numeric_cast::<TO>(
         from.as_any().downcast_ref::<BooleanArray>().unwrap(),
@@ -2457,14 +2456,14 @@ where
 fn bool_to_numeric_cast<T>(from: &BooleanArray, _cast_options: &CastOptions) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
-    T::Native: num::NumCast,
+    T::Native: num_traits::NumCast,
 {
     let iter = (0..from.len()).map(|i| {
         if from.is_null(i) {
             None
         } else if from.value(i) {
             // a workaround to cast a primitive to T::Native, infallible
-            num::cast::cast(1)
+            num_traits::cast::cast(1)
         } else {
             Some(T::default_value())
         }
@@ -2919,8 +2918,10 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal32(2, 2), &options);
-        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal32 of precision 2. Max is 0.99",
-                   result_unsafe.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 123456.00 is too large to store in a Decimal32 of precision 2. Max is 0.99",
+            result_unsafe.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -2953,8 +2954,10 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal64(2, 2), &options);
-        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal64 of precision 2. Max is 0.99",
-                   result_unsafe.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 123456.00 is too large to store in a Decimal64 of precision 2. Max is 0.99",
+            result_unsafe.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -2987,8 +2990,10 @@ mod tests {
         };
 
         let result_unsafe = cast_with_options(&array, &DataType::Decimal128(2, 2), &options);
-        assert_eq!("Invalid argument error: 123456.00 is too large to store in a Decimal128 of precision 2. Max is 0.99",
-                   result_unsafe.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 123456.00 is too large to store in a Decimal128 of precision 2. Max is 0.99",
+            result_unsafe.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3144,8 +3149,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal128(38, 38). Overflowing on 170141183460469231731687303715884105727",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3164,8 +3171,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal256(76, 76). Overflowing on 170141183460469231731687303715884105727",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3241,8 +3250,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal128(38, 7). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal128(38, 7). Overflowing on 170141183460469231731687303715884105727",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -3260,8 +3271,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Cast error: Cannot cast to Decimal256(76, 55). Overflowing on 170141183460469231731687303715884105727",
-                   result.unwrap_err().to_string());
+        assert_eq!(
+            "Cast error: Cannot cast to Decimal256(76, 55). Overflowing on 170141183460469231731687303715884105727",
+            result.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -4323,9 +4336,11 @@ mod tests {
         match casted {
             Ok(_) => panic!("expected error"),
             Err(e) => {
-                assert!(e
-                    .to_string()
-                    .contains("Cast error: Cannot cast value 'invalid' to value of Boolean type"))
+                assert!(
+                    e.to_string().contains(
+                        "Cast error: Cannot cast value 'invalid' to value of Boolean type"
+                    )
+                )
             }
         }
     }
@@ -8459,8 +8474,10 @@ mod tests {
             },
         );
         assert!(res.is_err());
-        assert!(format!("{res:?}")
-            .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2"));
+        assert!(
+            format!("{res:?}")
+                .contains("Cannot cast to FixedSizeList(3): value at index 1 has length 2")
+        );
 
         // When safe=true (default), the cast will fill nulls for lists that are
         // too short and truncate lists that are too long.
@@ -9679,16 +9696,20 @@ mod tests {
             format_options: FormatOptions::default(),
         };
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
-        assert!(casted_err
-            .to_string()
-            .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 10) type"));
+        assert!(
+            casted_err
+                .to_string()
+                .contains("Cannot cast string '4.4.5' to value of Decimal128(38, 10) type")
+        );
 
         let str_array = StringArray::from(vec![". 0.123"]);
         let array = Arc::new(str_array) as ArrayRef;
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
-        assert!(casted_err
-            .to_string()
-            .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 10) type"));
+        assert!(
+            casted_err
+                .to_string()
+                .contains("Cannot cast string '. 0.123' to value of Decimal128(38, 10) type")
+        );
     }
 
     fn test_cast_string_to_decimal128_overflow(overflow_array: ArrayRef) {
@@ -9732,7 +9753,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1000.00000000 is too large to store in a Decimal128 of precision 10. Max is 99.99999999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 1000.00000000 is too large to store in a Decimal128 of precision 10. Max is 99.99999999",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -9815,7 +9839,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1000.00000000 is too large to store in a Decimal256 of precision 10. Max is 99.99999999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 1000.00000000 is too large to store in a Decimal256 of precision 10. Max is 99.99999999",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -10220,7 +10247,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1234567.000 is too large to store in a Decimal128 of precision 7. Max is 9999.999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 1234567.000 is too large to store in a Decimal128 of precision 7. Max is 9999.999",
+            err.unwrap_err().to_string()
+        );
     }
 
     #[test]
@@ -10246,7 +10276,10 @@ mod tests {
                 format_options: FormatOptions::default(),
             },
         );
-        assert_eq!("Invalid argument error: 1234567.000 is too large to store in a Decimal256 of precision 7. Max is 9999.999", err.unwrap_err().to_string());
+        assert_eq!(
+            "Invalid argument error: 1234567.000 is too large to store in a Decimal256 of precision 7. Max is 9999.999",
+            err.unwrap_err().to_string()
+        );
     }
 
     /// helper function to test casting from duration to interval
@@ -11161,8 +11194,10 @@ mod tests {
             ..Default::default()
         };
         let result = cast_with_options(&array, &output_type, &options);
-        assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 1234567.89 is too large to store in a Decimal128 of precision 6. Max is 9999.99");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: 1234567.89 is too large to store in a Decimal128 of precision 6. Max is 9999.99"
+        );
     }
 
     #[test]
@@ -11207,8 +11242,10 @@ mod tests {
             ..Default::default()
         };
         let result = cast_with_options(&array, &output_type, &options);
-        assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 12345.68 is too large to store in a Decimal128 of precision 6. Max is 9999.99");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: 12345.68 is too large to store in a Decimal128 of precision 6. Max is 9999.99"
+        );
     }
 
     #[test]
@@ -11224,8 +11261,10 @@ mod tests {
             ..Default::default()
         };
         let result = cast_with_options(&array, &output_type, &options);
-        assert_eq!(result.unwrap_err().to_string(),
-                   "Invalid argument error: 1234567.890 is too large to store in a Decimal128 of precision 6. Max is 999.999");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Invalid argument error: 1234567.890 is too large to store in a Decimal128 of precision 6. Max is 999.999"
+        );
     }
 
     #[test]
@@ -11241,8 +11280,10 @@ mod tests {
             ..Default::default()
         };
         let result = cast_with_options(&array, &output_type, &options).unwrap_err();
-        assert_eq!(result.to_string(),
-                   "Invalid argument error: 1234567.89 is too large to store in a Decimal256 of precision 6. Max is 9999.99");
+        assert_eq!(
+            result.to_string(),
+            "Invalid argument error: 1234567.89 is too large to store in a Decimal256 of precision 6. Max is 9999.99"
+        );
     }
 
     #[test]
@@ -11294,7 +11335,10 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: 1.0 is too large to store in a Decimal32 of precision 1. Max is 0.9");
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: 1.0 is too large to store in a Decimal32 of precision 1. Max is 0.9"
+        );
 
         let array = Int64Array::from(vec![-1]);
         let error = cast_with_options(
@@ -11306,6 +11350,9 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert_eq!(error.to_string(), "Invalid argument error: -1.0 is too small to store in a Decimal32 of precision 1. Min is -0.9");
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: -1.0 is too small to store in a Decimal32 of precision 1. Min is -0.9"
+        );
     }
 }

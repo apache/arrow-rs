@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 

@@ -219,6 +219,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    // FIXME(ets): remove benches of private APIs
     c.bench_function("decode thrift file metadata", |b| {
         b.iter(|| {
             parquet::thrift::bench_file_metadata(&meta_data);
@@ -239,6 +240,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     // rewrite file with page statistics. then read page headers.
+    // FIXME(ets): remove the page header benches when remodel is complete
     #[cfg(feature = "arrow")]
     let (file_bytes, metadata) = rewrite_file(data.clone());
     #[cfg(feature = "arrow")]
