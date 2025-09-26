@@ -27,6 +27,7 @@ use crate::thrift::TSerializable;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::sync::Arc;
 use thrift::protocol::TCompactOutputProtocol;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -289,13 +290,13 @@ impl EncryptionPropertiesBuilder {
 #[derive(Debug)]
 /// The encryption configuration for a single Parquet file
 pub(crate) struct FileEncryptor {
-    properties: FileEncryptionProperties,
+    properties: Arc<FileEncryptionProperties>,
     aad_file_unique: Vec<u8>,
     file_aad: Vec<u8>,
 }
 
 impl FileEncryptor {
-    pub(crate) fn new(properties: FileEncryptionProperties) -> Result<Self> {
+    pub(crate) fn new(properties: Arc<FileEncryptionProperties>) -> Result<Self> {
         // Generate unique AAD for file
         let rng = SystemRandom::new();
         let mut aad_file_unique = vec![0u8; 8];

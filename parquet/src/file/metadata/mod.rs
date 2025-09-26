@@ -1974,7 +1974,8 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2312;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2648;
+        // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
+        let base_expected_size = 2552;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2004,7 +2005,8 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2816;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3152;
+        // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
+        let bigger_expected_size = 3056;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

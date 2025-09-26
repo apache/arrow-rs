@@ -291,7 +291,7 @@ fn parse_single_offset_index(
 pub(crate) fn decode_metadata_with_encryption(
     buf: &[u8],
     encrypted_footer: bool,
-    file_decryption_properties: Option<&FileDecryptionProperties>,
+    file_decryption_properties: Option<&Arc<FileDecryptionProperties>>,
 ) -> crate::errors::Result<ParquetMetaData> {
     let mut prot = TCompactSliceInputProtocol::new(buf);
     let mut file_decryptor = None;
@@ -390,7 +390,7 @@ pub(crate) fn decode_metadata_with_encryption(
 fn get_file_decryptor(
     encryption_algorithm: EncryptionAlgorithm,
     footer_key_metadata: Option<&[u8]>,
-    file_decryption_properties: &FileDecryptionProperties,
+    file_decryption_properties: &Arc<FileDecryptionProperties>,
 ) -> crate::errors::Result<FileDecryptor> {
     match encryption_algorithm {
         EncryptionAlgorithm::AESGCMV1(algo) => {
