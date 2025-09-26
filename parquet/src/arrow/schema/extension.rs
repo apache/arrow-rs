@@ -40,7 +40,9 @@ pub(crate) fn add_extension_type(mut arrow_field: Field, parquet_type: &Type) ->
         Some(LogicalType::Variant) => {
             // try to add the Variant extension type, but if that fails (e.g. because the
             // storage type is not supported), just return the field as is
-            arrow_field.try_with_extension_type(parquet_variant_compute::VariantType).ok();
+            arrow_field
+                .try_with_extension_type(parquet_variant_compute::VariantType)
+                .ok();
             arrow_field
         }
         // TODO add other LogicalTypes here
