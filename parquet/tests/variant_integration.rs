@@ -104,6 +104,7 @@ variant_test_case!(28, "Unsupported typed_value type: Decimal128(38, 9)");
 variant_test_case!(29, "Unsupported typed_value type: Decimal128(38, 9)");
 variant_test_case!(30);
 variant_test_case!(31);
+// https://github.com/apache/arrow-rs/issues/8334
 variant_test_case!(32, "Unsupported typed_value type: Time64(µs)");
 variant_test_case!(33);
 variant_test_case!(34);
