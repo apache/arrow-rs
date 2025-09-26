@@ -73,18 +73,18 @@
 //! # use parquet::variant::{json_to_variant, VariantArray};
 //! # use parquet::arrow::ArrowWriter;
 //! # fn main() -> Result<(), parquet::errors::ParquetError> {
-//! // Create an array of JSON strings, simulating a column of JSON data
-//! let input_array: ArrayRef = Arc::new(StringArray::from(vec![
+//!  // Create an array of JSON strings, simulating a column of JSON data
+//!  let input_array: ArrayRef = Arc::new(StringArray::from(vec![
 //!   Some(r#"{"name": "Alice", "age": 30}"#),
 //!   Some(r#"{"name": "Bob", "age": 25, "address": {"city": "New York"}}"#),
 //!   None,
 //!   Some("{}"),
-//! ]));
+//!  ]));
 //!
-//! // Convert the JSON strings to a VariantArray
-//! let array: VariantArray = json_to_variant(&input_array)?;
+//!  // Convert the JSON strings to a VariantArray
+//!  let array: VariantArray = json_to_variant(&input_array)?;
 //!  // create a RecordBatch with the VariantArray
-//! let schema = Schema::new(vec![array.field("data")]);
+//!  let schema = Schema::new(vec![array.field("data")]);
 //!  let batch = RecordBatch::try_new(Arc::new(schema), vec![ArrayRef::from(array)])?;
 //!
 //!  // write the RecordBatch to a Parquet file as normal
