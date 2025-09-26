@@ -181,14 +181,12 @@ impl Buffer {
         len: usize,
         deallocation: Deallocation,
     ) -> Self {
-        unsafe {
-            let bytes = Bytes::new(ptr, len, deallocation);
-            let ptr = bytes.as_ptr();
-            Buffer {
-                ptr,
-                data: Arc::new(bytes),
-                length: len,
-            }
+        let bytes = unsafe { Bytes::new(ptr, len, deallocation) };
+        let ptr = bytes.as_ptr();
+        Buffer {
+            ptr,
+            data: Arc::new(bytes),
+            length: len,
         }
     }
 
