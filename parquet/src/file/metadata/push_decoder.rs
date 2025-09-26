@@ -376,11 +376,15 @@ impl ParquetMetaDataPushDecoder {
                         &self.get_bytes(&metadata_range)?,
                         footer_tail.is_encrypted_footer(),
                     )?;
+                    // Note: ReadingPageIndex first checks if page indexes are needed
+                    // and is a no-op if not
                     self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
                     continue;
                 }
 
                 DecodeState::ReadingPageIndex(mut metadata) => {
+                    // First determine if any page indexes are needed based on
+                    // the specified policies
                     let range = range_for_page_index(
                         &metadata,
                         self.column_index_policy,
@@ -388,7 +392,6 @@ impl ParquetMetaDataPushDecoder {
                     );
 
                     let Some(page_index_range) = range else {
-                        // no ranges means no page indexes are needed
                         self.state = DecodeState::Finished;
                         return Ok(DecodeResult::Data(*metadata));
                     };
