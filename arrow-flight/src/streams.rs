@@ -19,11 +19,11 @@
 
 use crate::error::FlightError;
 use futures::{
-    channel::oneshot::{Receiver, Sender},
     FutureExt, Stream, StreamExt,
+    channel::oneshot::{Receiver, Sender},
 };
 use std::pin::Pin;
-use std::task::{ready, Poll};
+use std::task::{Poll, ready};
 
 /// Wrapper around a fallible stream (one that returns errors) that makes it infallible.
 ///
