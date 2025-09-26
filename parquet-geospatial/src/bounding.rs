@@ -289,7 +289,7 @@ fn visit_collection(
 ///
 /// The integer code is a ISO WKB geometry type codes is documented as part
 /// of the Parquet specification:
-/// https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types
+/// <https://github.com/apache/parquet-format/blob/master/Geospatial.md#geospatial-types>
 ///
 /// This can also be derived from bytes 2-5 (possibly endian-swapped according to byte 1)
 /// of the input WKB buffer but is slightly clearer recomputed.
