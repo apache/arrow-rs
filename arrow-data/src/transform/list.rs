@@ -21,7 +21,8 @@ use super::{
 };
 use crate::ArrayData;
 use arrow_buffer::ArrowNativeType;
-use num::{CheckedAdd, Integer};
+use num_integer::Integer;
+use num_traits::CheckedAdd;
 
 pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
     array: &ArrayData,

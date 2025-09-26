@@ -30,7 +30,7 @@ use arrow_buffer::{
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
 
-use num::{One, Zero};
+use num_traits::{One, Zero};
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///

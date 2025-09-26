@@ -16,7 +16,8 @@
 // under the License.
 
 use arrow_buffer::{bit_util, ArrowNativeType, MutableBuffer};
-use num::{CheckedAdd, Integer};
+use num_integer::Integer;
+use num_traits::CheckedAdd;
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]

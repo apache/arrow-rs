@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use num::NumCast;
+use num_traits::NumCast;
 use std::marker::PhantomData;
 
 use arrow_array::builder::PrimitiveBuilder;

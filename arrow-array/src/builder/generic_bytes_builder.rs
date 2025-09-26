@@ -144,7 +144,7 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
     /// (this means that underlying null values are copied as is).
     #[inline]
     pub fn append_array(&mut self, array: &GenericByteArray<T>) -> Result<(), ArrowError> {
-        use num::CheckedAdd;
+        use num_traits::CheckedAdd;
         if array.len() == 0 {
             return Ok(());
         }
