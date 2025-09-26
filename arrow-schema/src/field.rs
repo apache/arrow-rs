@@ -491,7 +491,12 @@ impl Field {
     /// Returns an instance of the given [`ExtensionType`] of this [`Field`],
     /// if set in the [`Field::metadata`].
     ///
-    /// # Error
+    /// Note that using `try_extension_type` with an extension type that does
+    /// not match the name in the metadata will return an `ArrowError` which can
+    /// be slow due to string allocations. If you only want to check if a
+    /// [`Field`] has a specific [`ExtensionType`], see the example below.
+    ///
+    /// # Errors
     ///
     /// Returns an error if
     /// - this field does not have the name of this extension type
@@ -502,6 +507,58 @@ impl Field {
     /// - the construction of the extension type ([`ExtensionType::try_new`])
     ///   fail (for example when the [`Field::data_type`] is not supported by
     ///   the extension type ([`ExtensionType::supports_data_type`]))
+    ///
+    /// # Examples: Check and retrieve an extension type
+    /// You can use this to check if a [`Field`] has a specific
+    /// [`ExtensionType`] and retrieve it:
+    /// ```
+    /// # use arrow_schema::{DataType, Field, ArrowError};
+    /// # use arrow_schema::extension::ExtensionType;
+    /// # struct MyExtensionType;
+    /// # impl ExtensionType for MyExtensionType {
+    /// # const NAME: &'static str = "my_extension";
+    /// # type Metadata = String;
+    /// # fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> { Ok(()) }
+    /// # fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> { Ok(Self) }
+    /// # fn serialize_metadata(&self) -> Option<String> { unimplemented!() }
+    /// # fn deserialize_metadata(s: Option<&str>) -> Result<Self::Metadata, ArrowError> { unimplemented!() }
+    /// # fn metadata(&self) -> &<Self as ExtensionType>::Metadata { todo!() }
+    /// # }
+    /// # fn get_field() -> Field { Field::new("field", DataType::Null, false) }
+    /// let field = get_field();
+    /// if let Ok(extension_type) = field.try_extension_type::<MyExtensionType>() {
+    ///   // do something with extension_type
+    /// }
+    /// ```
+    ///
+    /// # Example: Checking if a field has a specific extension type first
+    ///
+    /// Since `try_extension_type` returns an error, it is more
+    /// efficient to first check if the name matches before calling
+    /// `try_extension_type`:
+    /// ```
+    /// # use arrow_schema::{DataType, Field, ArrowError};
+    /// # use arrow_schema::extension::ExtensionType;
+    /// # struct MyExtensionType;
+    /// # impl ExtensionType for MyExtensionType {
+    /// # const NAME: &'static str = "my_extension";
+    /// # type Metadata = String;
+    /// # fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> { Ok(()) }
+    /// # fn try_new(data_type: &DataType, metadata: Self::Metadata) -> Result<Self, ArrowError> { Ok(Self) }
+    /// # fn serialize_metadata(&self) -> Option<String> { unimplemented!() }
+    /// # fn deserialize_metadata(s: Option<&str>) -> Result<Self::Metadata, ArrowError> { unimplemented!() }
+    /// # fn metadata(&self) -> &<Self as ExtensionType>::Metadata { todo!() }
+    /// # }
+    /// # fn get_field() -> Field { Field::new("field", DataType::Null, false) }
+    /// let field = get_field();
+    /// // First check if the name matches before calling the potentially expensive `try_extension_type`
+    /// if field.extension_type_name() == Some(MyExtensionType::NAME) {
+    ///   if let Ok(extension_type) = field.try_extension_type::<MyExtensionType>() {
+    ///     // do something with extension_type
+    ///   }
+    /// }
+    /// ```
+
     pub fn try_extension_type<E: ExtensionType>(&self) -> Result<E, ArrowError> {
         // Check the extension name in the metadata
         match self.extension_type_name() {
