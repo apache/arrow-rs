@@ -478,15 +478,14 @@ impl ArrayData {
                     result += buffer_size;
                 }
                 BufferSpec::VariableWidth => {
-                    let buffer_len: usize;
-                    match self.data_type {
+                    let buffer_len = match self.data_type {
                         DataType::Utf8 | DataType::Binary => {
                             let offsets = self.typed_offsets::<i32>()?;
-                            buffer_len = (offsets[self.len] - offsets[0]) as usize;
+                            (offsets[self.len] - offsets[0]) as usize
                         }
                         DataType::LargeUtf8 | DataType::LargeBinary => {
                             let offsets = self.typed_offsets::<i64>()?;
-                            buffer_len = (offsets[self.len] - offsets[0]) as usize;
+                            (offsets[self.len] - offsets[0]) as usize
                         }
                         _ => {
                             return Err(ArrowError::NotYetImplemented(format!(
