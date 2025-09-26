@@ -30,6 +30,7 @@ pub trait TSerializable: Sized {
     fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()>;
 }
 
+// TODO(ets): remove the next 3 functions when the Thrift remodel is complete
 // Public function to aid benchmarking. Reads Parquet `FileMetaData` encoded in `bytes`.
 #[doc(hidden)]
 pub fn bench_file_metadata(bytes: &bytes::Bytes) {

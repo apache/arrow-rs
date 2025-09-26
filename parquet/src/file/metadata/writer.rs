@@ -431,7 +431,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     }
 
     fn convert_column_indexes(&self) -> Option<Vec<Vec<Option<ColumnIndexMetaData>>>> {
-        // FIXME(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
+        // TODO(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
         // but then converting back to ParquetColumnIndex in the end. need to unify this.
         self.metadata
             .column_index()
