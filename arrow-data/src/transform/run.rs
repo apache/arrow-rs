@@ -18,7 +18,7 @@
 use super::{ArrayData, Extend, _MutableArrayData};
 use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
 use arrow_schema::DataType;
-use num::CheckedAdd;
+use num_traits::CheckedAdd;
 
 /// Generic helper to get the last run end value from a run ends array
 fn get_last_run_end<T: ArrowNativeType>(run_ends_data: &super::MutableArrayData) -> T {

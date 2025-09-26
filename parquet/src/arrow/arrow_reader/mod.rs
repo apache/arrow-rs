@@ -795,7 +795,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     ///
     /// We should call this function after other forms pruning, such as projection and predicate pushdown.
     pub fn get_row_group_column_bloom_filter(
-        &mut self,
+        &self,
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<Sbbf>> {
@@ -1168,7 +1168,7 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use half::f16;
-    use num::PrimInt;
+    use num_traits::PrimInt;
     use rand::{rng, Rng, RngCore};
     use tempfile::tempfile;
 
@@ -3677,8 +3677,8 @@ mod tests {
                 ),
             ])),
             "Arrow: Incompatible supplied Arrow schema: data type mismatch for field nested: \
-            requested Struct(nested1_valid Utf8, nested1_invalid Int32) \
-            but found Struct(nested1_valid Utf8, nested1_invalid Int64)",
+            requested Struct(\"nested1_valid\": Utf8, \"nested1_invalid\": Int32) \
+            but found Struct(\"nested1_valid\": Utf8, \"nested1_invalid\": Int64)",
         );
     }
 
@@ -4920,7 +4920,7 @@ mod tests {
     }
 
     fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
-        let mut builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
 
         let metadata = builder.metadata();
         assert_eq!(metadata.num_row_groups(), 1);

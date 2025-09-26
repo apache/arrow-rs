@@ -43,8 +43,8 @@ use arrow_data::{ArrayData, ArrayDataBuilder, UnsafeFlag};
 use arrow_schema::*;
 
 use crate::compression::CompressionCodec;
-use crate::gen::Message::{self};
-use crate::{Block, FieldNode, MetadataVersion, CONTINUATION_MARKER};
+use crate::r#gen::Message::{self};
+use crate::{Block, CONTINUATION_MARKER, FieldNode, MetadataVersion};
 use DataType::*;
 
 /// Read a buffer based on offset and length
@@ -116,13 +116,13 @@ impl RecordBatchDecoder<'_> {
                 let buffers = [self.next_buffer()?, self.next_buffer()?];
                 self.create_primitive_array(field_node, data_type, &buffers)
             }
-            List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
+            List(list_field) | LargeList(list_field) | Map(list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?, self.next_buffer()?];
                 let values = self.create_array(list_field, variadic_counts)?;
                 self.create_list_array(list_node, data_type, &list_buffers, values)
             }
-            FixedSizeList(ref list_field, _) => {
+            FixedSizeList(list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?];
                 let values = self.create_array(list_field, variadic_counts)?;
@@ -790,7 +790,7 @@ fn get_dictionary_values(
     // values array, we need to retrieve this from the schema.
     // Get an array representing this dictionary's values.
     let dictionary_values: ArrayRef = match first_field.data_type() {
-        DataType::Dictionary(_, ref value_type) => {
+        DataType::Dictionary(_, value_type) => {
             // Make a fake schema for the dictionary batch.
             let value = value_type.as_ref().clone();
             let schema = Schema::new(vec![Field::new("", value, true)]);
@@ -979,7 +979,7 @@ impl FileDecoder {
     /// For example, some programs may wish to trust reading IPC files written
     /// by the same process that created the files.
     pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
-        self.skip_validation.set(skip_validation);
+        unsafe { self.skip_validation.set(skip_validation) };
         self
     }
 
@@ -1286,7 +1286,7 @@ impl<R: Read + Seek> FileReader<R> {
     /// Try to create a new file reader.
     ///
     /// There is no internal buffering. If buffered reads are needed you likely want to use
-    /// [`FileReader::try_new_buffered`] instead.    
+    /// [`FileReader::try_new_buffered`] instead.
     ///
     /// # Errors
     ///
@@ -1360,7 +1360,7 @@ impl<R: Read + Seek> FileReader<R> {
     ///
     /// See [`FileDecoder::with_skip_validation`]
     pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
-        self.decoder = self.decoder.with_skip_validation(skip_validation);
+        self.decoder = unsafe { self.decoder.with_skip_validation(skip_validation) };
         self
     }
 }
@@ -1673,7 +1673,7 @@ impl<R: Read> StreamReader<R> {
     ///
     /// See [`FileDecoder::with_skip_validation`]
     pub unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
-        self.skip_validation.set(skip_validation);
+        unsafe { self.skip_validation.set(skip_validation) };
         self
     }
 }
@@ -1814,7 +1814,7 @@ mod tests {
 
     use crate::convert::fb_to_schema;
     use crate::writer::{
-        unslice_run_array, write_message, DictionaryTracker, IpcDataGenerator, IpcWriteOptions,
+        DictionaryTracker, IpcDataGenerator, IpcWriteOptions, unslice_run_array, write_message,
     };
 
     use super::*;
@@ -2699,9 +2699,9 @@ mod tests {
         )])
         .unwrap();
 
-        let gen = IpcDataGenerator {};
+        let r#gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
-        let (_, encoded) = gen
+        let (_, encoded) = r#gen
             .encode(
                 &batch,
                 &mut dict_tracker,
@@ -2742,9 +2742,9 @@ mod tests {
         )])
         .unwrap();
 
-        let gen = IpcDataGenerator {};
+        let r#gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
-        let (_, encoded) = gen
+        let (_, encoded) = r#gen
             .encode(
                 &batch,
                 &mut dict_tracker,
@@ -2987,7 +2987,7 @@ mod tests {
 
         expect_ipc_validation_error(
             Arc::new(array),
-            "Invalid argument error: Offset invariant failure: offset at position 2 out of bounds: 4 > 2"
+            "Invalid argument error: Offset invariant failure: offset at position 2 out of bounds: 4 > 2",
         );
     }
 
@@ -3009,7 +3009,7 @@ mod tests {
         };
         expect_ipc_validation_error(
             Arc::new(array),
-            "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..45): invalid utf-8 sequence of 1 bytes from index 38"
+            "Invalid argument error: Invalid UTF8 sequence at string index 3 (3..45): invalid utf-8 sequence of 1 bytes from index 38",
         );
     }
 
@@ -3032,7 +3032,7 @@ mod tests {
         };
         expect_ipc_validation_error(
             Arc::new(array),
-            "Invalid argument error: Encountered non-UTF-8 data at index 3: invalid utf-8 sequence of 1 bytes from index 38"
+            "Invalid argument error: Encountered non-UTF-8 data at index 3: invalid utf-8 sequence of 1 bytes from index 38",
         );
     }
 

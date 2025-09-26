@@ -60,8 +60,9 @@ flate2 = { version = "1.1", default-features = false, optional = true }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
-num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
+num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 base64 = { version = "0.22", default-features = false, features = ["std", ], optional = true }
 clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
