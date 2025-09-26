@@ -118,13 +118,6 @@ pub(crate) struct FileCryptoMetaData {
 }
 );
 
-// expose for benchmarking
-pub(crate) fn bench_file_metadata(bytes: &bytes::Bytes) {
-    use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
-    let mut prot = ThriftSliceInputProtocol::new(bytes);
-    crate::file::metadata::thrift_gen::FileMetaData::read_thrift(&mut prot).unwrap();
-}
-
 // the following are only used internally so are private
 thrift_struct!(
 struct FileMetaData<'a> {

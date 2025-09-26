@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "arrow")]
-use parquet::file::metadata::ParquetMetaData;
 use parquet::file::metadata::ParquetMetaDataReader;
 use rand::Rng;
 use thrift::protocol::TCompactOutputProtocol;
@@ -88,13 +86,13 @@ fn encoded_meta() -> Vec<u8> {
                         encodings: vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY],
                         path_in_schema: vec![],
                         codec: CompressionCodec::UNCOMPRESSED,
-                        num_values: rng.random(),
-                        total_uncompressed_size: rng.random(),
-                        total_compressed_size: rng.random(),
+                        num_values: rng.random_range(1..1000000),
+                        total_uncompressed_size: rng.random_range(100000..100000000),
+                        total_compressed_size: rng.random_range(50000..5000000),
                         key_value_metadata: None,
-                        data_page_offset: rng.random(),
-                        index_page_offset: Some(rng.random()),
-                        dictionary_page_offset: Some(rng.random()),
+                        data_page_offset: rng.random_range(4..2000000000),
+                        index_page_offset: None,
+                        dictionary_page_offset: Some(rng.random_range(4..2000000000)),
                         statistics: Some(stats.clone()),
                         encoding_stats: Some(vec![
                             PageEncodingStats {
@@ -113,10 +111,10 @@ fn encoded_meta() -> Vec<u8> {
                         size_statistics: None,
                         geospatial_statistics: None,
                     }),
-                    offset_index_offset: Some(rng.random()),
-                    offset_index_length: Some(rng.random()),
-                    column_index_offset: Some(rng.random()),
-                    column_index_length: Some(rng.random()),
+                    offset_index_offset: Some(rng.random_range(0..2000000000)),
+                    offset_index_length: Some(rng.random_range(1..100000)),
+                    column_index_offset: Some(rng.random_range(0..2000000000)),
+                    column_index_length: Some(rng.random_range(1..100000)),
                     crypto_metadata: None,
                     encrypted_column_metadata: None,
                 })
@@ -124,11 +122,11 @@ fn encoded_meta() -> Vec<u8> {
 
             RowGroup {
                 columns,
-                total_byte_size: rng.random(),
-                num_rows: rng.random(),
+                total_byte_size: rng.random_range(1..2000000000),
+                num_rows: rng.random_range(1..10000000000),
                 sorting_columns: None,
                 file_offset: None,
-                total_compressed_size: Some(rng.random()),
+                total_compressed_size: Some(rng.random_range(1..1000000000)),
                 ordinal: Some(i as _),
             }
         })
@@ -138,7 +136,7 @@ fn encoded_meta() -> Vec<u8> {
         schema,
         row_groups,
         version: 1,
-        num_rows: rng.random(),
+        num_rows: rng.random_range(1..2000000000),
         key_value_metadata: None,
         created_by: Some("parquet-rs".into()),
         column_orders: None,
@@ -165,36 +163,6 @@ fn get_footer_bytes(data: Bytes) -> Bytes {
     data.slice(meta_start..meta_end)
 }
 
-#[cfg(feature = "arrow")]
-fn rewrite_file(bytes: Bytes) -> (Bytes, ParquetMetaData) {
-    use arrow::array::RecordBatchReader;
-    use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
-    use parquet::file::properties::{EnabledStatistics, WriterProperties};
-
-    let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
-        .expect("parquet open")
-        .build()
-        .expect("parquet open");
-    let writer_properties = WriterProperties::builder()
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .set_write_page_header_statistics(true)
-        .build();
-    let mut output = Vec::new();
-    let mut parquet_writer = ArrowWriter::try_new(
-        &mut output,
-        parquet_reader.schema(),
-        Some(writer_properties),
-    )
-    .expect("create arrow writer");
-
-    for maybe_batch in parquet_reader {
-        let batch = maybe_batch.expect("reading batch");
-        parquet_writer.write(&batch).expect("writing data");
-    }
-    let file_meta = parquet_writer.close().expect("finalizing file");
-    (output.into(), file_meta)
-}
-
 fn criterion_benchmark(c: &mut Criterion) {
     // Read file into memory to isolate filesystem performance
     let file = "../parquet-testing/data/alltypes_tiny_pages.parquet";
@@ -219,63 +187,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    // FIXME(ets): remove benches of private APIs
-    c.bench_function("decode thrift file metadata", |b| {
-        b.iter(|| {
-            parquet::thrift::bench_file_metadata(&meta_data);
-        })
-    });
-
     let buf: Bytes = black_box(encoded_meta()).into();
     c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata(&buf).unwrap();
-        })
-    });
-
-    c.bench_function("decode thrift file metadata (wide)", |b| {
-        b.iter(|| {
-            parquet::thrift::bench_file_metadata(&buf);
-        })
-    });
-
-    // rewrite file with page statistics. then read page headers.
-    // FIXME(ets): remove the page header benches when remodel is complete
-    #[cfg(feature = "arrow")]
-    let (file_bytes, metadata) = rewrite_file(data.clone());
-    #[cfg(feature = "arrow")]
-    c.bench_function("page headers", |b| {
-        b.iter(|| {
-            for rg in metadata.row_groups() {
-                for col in rg.columns() {
-                    if let Some(dict_offset) = col.dictionary_page_offset() {
-                        parquet::thrift::bench_page_header(
-                            &file_bytes.slice(dict_offset as usize..),
-                        );
-                    }
-                    parquet::thrift::bench_page_header(
-                        &file_bytes.slice(col.data_page_offset() as usize..),
-                    );
-                }
-            }
-        })
-    });
-
-    #[cfg(feature = "arrow")]
-    c.bench_function("page headers (no stats)", |b| {
-        b.iter(|| {
-            for rg in metadata.row_groups() {
-                for col in rg.columns() {
-                    if let Some(dict_offset) = col.dictionary_page_offset() {
-                        parquet::thrift::bench_page_header_no_stats(
-                            &file_bytes.slice(dict_offset as usize..),
-                        );
-                    }
-                    parquet::thrift::bench_page_header_no_stats(
-                        &file_bytes.slice(col.data_page_offset() as usize..),
-                    );
-                }
-            }
         })
     });
 }
