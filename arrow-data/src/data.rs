@@ -1998,6 +1998,7 @@ impl ArrayDataBuilder {
     ///
     /// Note: This is shorthand for
     /// ```rust
+    /// # #[expect(unsafe_op_in_unsafe_fn)]
     /// # let mut builder = arrow_data::ArrayDataBuilder::new(arrow_schema::DataType::Null);
     /// # let _ = unsafe {
     /// builder.skip_validation(true).build().unwrap()
