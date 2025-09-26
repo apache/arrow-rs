@@ -150,8 +150,8 @@ where
 /// This function should be removed after
 /// [`int_roundings`](https://github.com/rust-lang/rust/issues/88581) is stable.
 #[inline]
-pub fn ceil<T: num::Integer>(value: T, divisor: T) -> T {
-    num::Integer::div_ceil(&value, &divisor)
+pub fn ceil<T: num_integer::Integer>(value: T, divisor: T) -> T {
+    num_integer::Integer::div_ceil(&value, &divisor)
 }
 
 /// Returns the `num_bits` least-significant bits of `v`

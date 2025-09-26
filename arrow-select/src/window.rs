@@ -20,7 +20,7 @@
 use crate::concat::concat;
 use arrow_array::{make_array, new_null_array, Array, ArrayRef};
 use arrow_schema::ArrowError;
-use num::abs;
+use num_traits::abs;
 
 /// Shifts array by defined number of items (to left or right)
 /// A positive value for `offset` shifts the array to the right

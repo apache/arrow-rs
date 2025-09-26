@@ -1524,7 +1524,7 @@ mod tests {
     use arrow_buffer::{i256, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
     use arrow_schema::Fields;
     use half::f16;
-    use num::{FromPrimitive, ToPrimitive};
+    use num_traits::{FromPrimitive, ToPrimitive};
     use tempfile::tempfile;
 
     use crate::basic::Encoding;

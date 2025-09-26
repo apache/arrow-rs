@@ -25,7 +25,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
-use num::Zero;
+use num_traits::Zero;
 use std::cmp::Ordering;
 use std::sync::Arc;
 

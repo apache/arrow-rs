@@ -38,13 +38,13 @@ use arrow_array::types::{Int16Type, Int32Type, Int64Type, RunEndIndexType};
 use arrow_array::*;
 use arrow_buffer::bit_util;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
-use arrow_data::{layout, ArrayData, ArrayDataBuilder, BufferSpec};
+use arrow_data::{ArrayData, ArrayDataBuilder, BufferSpec, layout};
 use arrow_schema::*;
 
+use crate::CONTINUATION_MARKER;
 use crate::compression::CompressionCodec;
 pub use crate::compression::CompressionContext;
 use crate::convert::IpcSchemaEncoder;
-use crate::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the [`IpcDataGenerator`]
 #[derive(Debug, Clone)]
@@ -181,7 +181,7 @@ impl Default for IpcWriteOptions {
 /// let mut dictionary_tracker = DictionaryTracker::new(error_on_replacement);
 ///
 /// let mut compression_context = CompressionContext::default();
-///  
+///
 /// // encode the batch into zero or more encoded dictionaries
 /// // and the data for the actual array.
 /// let data_gen = IpcDataGenerator::default();
@@ -931,8 +931,7 @@ impl DictionaryTracker {
             return Ok(DictionaryUpdate::None);
         }
 
-        const REPLACEMENT_ERROR: &str =
-            "Dictionary replacement detected when writing IPC file format. \
+        const REPLACEMENT_ERROR: &str = "Dictionary replacement detected when writing IPC file format. \
                  Arrow IPC files only support a single dictionary for a given field \
                  across all batches.";
 
@@ -2032,10 +2031,10 @@ mod tests {
     use arrow_array::types::*;
     use arrow_buffer::ScalarBuffer;
 
+    use crate::MetadataVersion;
     use crate::convert::fb_to_schema;
     use crate::reader::*;
     use crate::root_as_footer;
-    use crate::MetadataVersion;
 
     use super::*;
 
@@ -2319,9 +2318,9 @@ mod tests {
             false,
         )]));
 
-        let gen = IpcDataGenerator::default();
+        let r#gen = IpcDataGenerator::default();
         let mut dict_tracker = DictionaryTracker::new(false);
-        gen.schema_to_bytes_with_dictionary_tracker(
+        r#gen.schema_to_bytes_with_dictionary_tracker(
             &schema,
             &mut dict_tracker,
             &IpcWriteOptions::default(),
@@ -2329,13 +2328,14 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
-        gen.encode(
-            &batch,
-            &mut dict_tracker,
-            &Default::default(),
-            &mut Default::default(),
-        )
-        .unwrap();
+        r#gen
+            .encode(
+                &batch,
+                &mut dict_tracker,
+                &Default::default(),
+                &mut Default::default(),
+            )
+            .unwrap();
 
         // The encoder will assign dict IDs itself to ensure uniqueness and ignore the dict ID in the schema
         // so we expect the dict will be keyed to 0
@@ -2367,9 +2367,9 @@ mod tests {
             false,
         )]));
 
-        let gen = IpcDataGenerator::default();
+        let r#gen = IpcDataGenerator::default();
         let mut dict_tracker = DictionaryTracker::new(false);
-        gen.schema_to_bytes_with_dictionary_tracker(
+        r#gen.schema_to_bytes_with_dictionary_tracker(
             &schema,
             &mut dict_tracker,
             &IpcWriteOptions::default(),
@@ -2377,13 +2377,14 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
-        gen.encode(
-            &batch,
-            &mut dict_tracker,
-            &Default::default(),
-            &mut Default::default(),
-        )
-        .unwrap();
+        r#gen
+            .encode(
+                &batch,
+                &mut dict_tracker,
+                &Default::default(),
+                &mut Default::default(),
+            )
+            .unwrap();
 
         assert!(dict_tracker.written.contains_key(&0));
     }
@@ -2687,13 +2688,9 @@ mod tests {
 
     #[test]
     fn test_large_slice_uint32() {
-        ensure_roundtrip(Arc::new(UInt32Array::from_iter((0..8000).map(|i| {
-            if i % 2 == 0 {
-                Some(i)
-            } else {
-                None
-            }
-        }))));
+        ensure_roundtrip(Arc::new(UInt32Array::from_iter(
+            (0..8000).map(|i| if i % 2 == 0 { Some(i) } else { None }),
+        )));
     }
 
     #[test]
@@ -3508,7 +3505,7 @@ mod tests {
             // Set metadata on both the schema and a field within it.
             let schema = Arc::new(
                 Schema::new(vec![
-                    Field::new("a", DataType::Int64, true).with_metadata(metadata.clone())
+                    Field::new("a", DataType::Int64, true).with_metadata(metadata.clone()),
                 ])
                 .with_metadata(metadata)
                 .clone(),
