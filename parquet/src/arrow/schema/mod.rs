@@ -820,7 +820,8 @@ mod tests {
     fn json_field() -> Field {
         #[cfg(feature = "arrow_canonical_extension_types")]
         {
-            Field::new("json", DataType::Utf8, true).with_extension_type(arrow_schema::extension::Json::default())
+            Field::new("json", DataType::Utf8, true)
+                .with_extension_type(arrow_schema::extension::Json::default())
         }
         #[cfg(not(feature = "arrow_canonical_extension_types"))]
         {
