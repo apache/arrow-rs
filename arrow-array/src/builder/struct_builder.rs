@@ -62,7 +62,7 @@ use std::sync::Arc;
 ///
 ///   // We can't obtain the ListBuilder<StructBuilder> with the expected generic types, because under the hood
 ///   // the StructBuilder was returned as a Box<dyn ArrayBuilder> and passed as such to the ListBuilder constructor
-///   
+///
 ///   // This panics in runtime, even though we know that the builder is a ListBuilder<StructBuilder>.
 ///   // let sb = col_struct_builder
 ///   //     .field_builder::<ListBuilder<StructBuilder>>(0)
@@ -201,6 +201,11 @@ impl StructBuilder {
         self.field_builders.len()
     }
 
+    /// Returns the fields for the struct this builder is building.
+    pub fn fields(&self) -> &Fields {
+        &self.fields
+    }
+
     /// Appends an element (either null or non-null) to the struct. The actual elements
     /// should be appended for each child sub-array in a consistent way.
     #[inline]
@@ -267,7 +272,7 @@ impl StructBuilder {
                 let schema = builder.finish();
 
                 panic!("{}", format!(
-                    "StructBuilder ({:?}) and field_builder with index {} ({:?}) are of unequal lengths: ({} != {}).",
+                    "StructBuilder ({}) and field_builder with index {} ({}) are of unequal lengths: ({} != {}).",
                     schema,
                     idx,
                     self.fields[idx].data_type(),
@@ -648,7 +653,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StructBuilder (Schema { fields: [Field { name: \"f1\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"f2\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
+        expected = "StructBuilder (Field { \"f1\": Int32 }, Field { \"f2\": Boolean }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
     )]
     fn test_struct_array_builder_unequal_field_builders_lengths() {
         let mut int_builder = Int32Builder::with_capacity(10);
@@ -690,7 +695,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(Nanosecond, Some(\\\"UTC\\\")) got Timestamp(Nanosecond, None)"
+        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(ns, \\\"UTC\\\") got Timestamp(ns)"
     )]
     fn test_struct_array_mismatch_builder() {
         let fields = vec![Field::new(

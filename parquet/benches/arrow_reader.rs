@@ -21,8 +21,8 @@ use arrow_schema::Field;
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
 use half::f16;
-use num::FromPrimitive;
 use num_bigint::BigInt;
+use num_traits::FromPrimitive;
 use parquet::arrow::array_reader::{
     make_byte_array_reader, make_byte_view_array_reader, make_fixed_len_byte_array_reader,
     ListArrayReader,

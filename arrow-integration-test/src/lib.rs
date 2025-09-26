@@ -29,8 +29,8 @@
 #![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
-use num::BigInt;
-use num::Signed;
+use num_bigint::BigInt;
+use num_traits::Signed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as SJMap, Value};
 use std::collections::HashMap;
@@ -794,13 +794,13 @@ pub fn array_from_json(
         DataType::Dictionary(key_type, value_type) => {
             #[allow(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
+                ArrowError::JsonError(format!("Unable to find dict_id for field {field}"))
             })?;
             // find dictionary
             let dictionary = dictionaries
                 .ok_or_else(|| {
                     ArrowError::JsonError(format!(
-                        "Unable to find any dictionaries for field {field:?}"
+                        "Unable to find any dictionaries for field {field}"
                     ))
                 })?
                 .get(&dict_id);
@@ -814,7 +814,7 @@ pub fn array_from_json(
                     dictionaries,
                 ),
                 None => Err(ArrowError::JsonError(format!(
-                    "Unable to find dictionary for field {field:?}"
+                    "Unable to find dictionary for field {field}"
                 ))),
             }
         }
@@ -946,7 +946,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(
-            "data type {t:?} not supported"
+            "data type {t} not supported"
         ))),
     }
 }
