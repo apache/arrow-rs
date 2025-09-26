@@ -33,27 +33,6 @@ pub trait TSerializable: Sized {
     fn write_to_out_protocol<T: TOutputProtocol>(&self, o_prot: &mut T) -> thrift::Result<()>;
 }
 
-// Public function to aid benchmarking. Reads Parquet `FileMetaData` encoded in `bytes`.
-#[doc(hidden)]
-pub fn bench_file_metadata(bytes: &bytes::Bytes) {
-    crate::file::metadata::thrift_gen::bench_file_metadata(bytes);
-}
-
-// Public function to aid benchmarking. Reads Parquet `PageHeader` encoded in `bytes`.
-#[doc(hidden)]
-pub fn bench_page_header(bytes: &bytes::Bytes) {
-    use crate::parquet_thrift::ReadThrift;
-    let mut prot = crate::parquet_thrift::ThriftReadInputProtocol::new(bytes.as_ref());
-    crate::file::metadata::thrift_gen::PageHeader::read_thrift(&mut prot).unwrap();
-}
-
-// Public function to aid benchmarking. Reads Parquet `PageHeader` encoded in `bytes`.
-#[doc(hidden)]
-pub fn bench_page_header_no_stats(bytes: &bytes::Bytes) {
-    let mut prot = crate::parquet_thrift::ThriftReadInputProtocol::new(bytes.as_ref());
-    crate::file::metadata::thrift_gen::PageHeader::read_thrift_without_stats(&mut prot).unwrap();
-}
-
 /// A more performant implementation of [`TCompactInputProtocol`] that reads a slice
 ///
 /// [`TCompactInputProtocol`]: thrift::protocol::TCompactInputProtocol
