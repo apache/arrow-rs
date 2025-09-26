@@ -34,11 +34,14 @@ use arrow_schema::Field;
 /// Some Parquet logical types, such as Variant, do not map directly to an
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
-pub(crate) fn add_extension_type(arrow_field: Field, parquet_type: &Type) -> Field {
+pub(crate) fn add_extension_type(mut arrow_field: Field, parquet_type: &Type) -> Field {
     match parquet_type.get_basic_info().logical_type() {
         #[cfg(feature = "variant_experimental")]
         Some(LogicalType::Variant) => {
-            arrow_field.with_extension_type(parquet_variant_compute::VariantType)
+            // try to add the Variant extension type, but if that fails (e.g. because the
+            // storage type is not supported), just return the field as is
+            arrow_field.try_with_extension_type(parquet_variant_compute::VariantType).ok();
+            arrow_field
         }
         // TODO add other LogicalTypes here
         _ => arrow_field,
