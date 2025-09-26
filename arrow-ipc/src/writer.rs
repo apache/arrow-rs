@@ -181,7 +181,7 @@ impl Default for IpcWriteOptions {
 /// let mut dictionary_tracker = DictionaryTracker::new(error_on_replacement);
 ///
 /// let mut compression_context = CompressionContext::default();
-///  
+///
 /// // encode the batch into zero or more encoded dictionaries
 /// // and the data for the actual array.
 /// let data_gen = IpcDataGenerator::default();
@@ -2319,9 +2319,9 @@ mod tests {
             false,
         )]));
 
-        let gen = IpcDataGenerator::default();
+        let r#gen = IpcDataGenerator::default();
         let mut dict_tracker = DictionaryTracker::new(false);
-        gen.schema_to_bytes_with_dictionary_tracker(
+        r#gen.schema_to_bytes_with_dictionary_tracker(
             &schema,
             &mut dict_tracker,
             &IpcWriteOptions::default(),
@@ -2329,13 +2329,14 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
-        gen.encode(
-            &batch,
-            &mut dict_tracker,
-            &Default::default(),
-            &mut Default::default(),
-        )
-        .unwrap();
+        r#gen
+            .encode(
+                &batch,
+                &mut dict_tracker,
+                &Default::default(),
+                &mut Default::default(),
+            )
+            .unwrap();
 
         // The encoder will assign dict IDs itself to ensure uniqueness and ignore the dict ID in the schema
         // so we expect the dict will be keyed to 0
@@ -2367,9 +2368,9 @@ mod tests {
             false,
         )]));
 
-        let gen = IpcDataGenerator::default();
+        let r#gen = IpcDataGenerator::default();
         let mut dict_tracker = DictionaryTracker::new(false);
-        gen.schema_to_bytes_with_dictionary_tracker(
+        r#gen.schema_to_bytes_with_dictionary_tracker(
             &schema,
             &mut dict_tracker,
             &IpcWriteOptions::default(),
@@ -2377,13 +2378,14 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
-        gen.encode(
-            &batch,
-            &mut dict_tracker,
-            &Default::default(),
-            &mut Default::default(),
-        )
-        .unwrap();
+        r#gen
+            .encode(
+                &batch,
+                &mut dict_tracker,
+                &Default::default(),
+                &mut Default::default(),
+            )
+            .unwrap();
 
         assert!(dict_tracker.written.contains_key(&0));
     }

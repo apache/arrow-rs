@@ -240,7 +240,7 @@ impl IPCBufferDecoder {
     }
 
     unsafe fn with_skip_validation(mut self, skip_validation: bool) -> Self {
-        self.decoder = self.decoder.with_skip_validation(skip_validation);
+        self.decoder = unsafe { self.decoder.with_skip_validation(skip_validation) };
         self
     }
 
