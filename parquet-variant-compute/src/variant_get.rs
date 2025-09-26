@@ -296,15 +296,14 @@ impl<'a> GetOptions<'a> {
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array,
-        Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-        StringArray, StructArray
-    };
     use super::{variant_get, GetOptions};
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::VariantArray;
+    use arrow::array::{
+        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray,
+    };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
