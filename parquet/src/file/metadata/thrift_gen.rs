@@ -38,7 +38,9 @@ use crate::{
         read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
         ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
     },
-    schema::types::{parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor},
+    schema::types::{
+        num_nodes, parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor, TypePtr,
+    },
     thrift_struct, thrift_union,
     util::bit_util::FromBytes,
 };
@@ -68,12 +70,12 @@ pub(crate) struct SchemaElement<'a> {
 );
 
 thrift_struct!(
-pub(crate) struct AesGcmV1<'a> {
+pub(crate) struct AesGcmV1 {
   /// AAD prefix
-  1: optional binary<'a> aad_prefix
+  1: optional binary aad_prefix
 
   /// Unique file identifier part of AAD suffix
-  2: optional binary<'a> aad_file_unique
+  2: optional binary aad_file_unique
 
   /// In files encrypted with AAD prefix without storing it,
   /// readers must supply the prefix
@@ -82,12 +84,12 @@ pub(crate) struct AesGcmV1<'a> {
 );
 
 thrift_struct!(
-pub(crate) struct AesGcmCtrV1<'a> {
+pub(crate) struct AesGcmCtrV1 {
   /// AAD prefix
-  1: optional binary<'a> aad_prefix
+  1: optional binary aad_prefix
 
   /// Unique file identifier part of AAD suffix
-  2: optional binary<'a> aad_file_unique
+  2: optional binary aad_file_unique
 
   /// In files encrypted with AAD prefix without storing it,
   /// readers must supply the prefix
@@ -96,24 +98,24 @@ pub(crate) struct AesGcmCtrV1<'a> {
 );
 
 thrift_union!(
-union EncryptionAlgorithm<'a> {
-  1: (AesGcmV1<'a>) AES_GCM_V1
-  2: (AesGcmCtrV1<'a>) AES_GCM_CTR_V1
+union EncryptionAlgorithm {
+  1: (AesGcmV1) AES_GCM_V1
+  2: (AesGcmCtrV1) AES_GCM_CTR_V1
 }
 );
 
 #[cfg(feature = "encryption")]
 thrift_struct!(
 /// Crypto metadata for files with encrypted footer
-pub(crate) struct FileCryptoMetaData<'a> {
+pub(crate) struct FileCryptoMetaData {
   /// Encryption algorithm. This field is only used for files
   /// with encrypted footer. Files with plaintext footer store algorithm id
   /// inside footer (FileMetaData structure).
-  1: required EncryptionAlgorithm<'a> encryption_algorithm
+  1: required EncryptionAlgorithm encryption_algorithm
 
   /** Retrieval metadata of key used for encryption of footer,
    *  and (possibly) columns **/
-  2: optional binary<'a> key_metadata
+  2: optional binary key_metadata
 }
 );
 
@@ -135,8 +137,8 @@ struct FileMetaData<'a> {
   5: optional list<KeyValue> key_value_metadata
   6: optional string created_by
   7: optional list<ColumnOrder> column_orders;
-  8: optional EncryptionAlgorithm<'a> encryption_algorithm
-  9: optional binary<'a> footer_signing_key_metadata
+  8: optional EncryptionAlgorithm encryption_algorithm
+  9: optional binary footer_signing_key_metadata
 }
 );
 
@@ -337,8 +339,6 @@ fn convert_column(
     let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
     let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
 
-    // FIXME: need column crypto
-
     let result = ColumnChunkMetaData {
         column_descr,
         encodings,
@@ -364,6 +364,8 @@ fn convert_column(
         definition_level_histogram,
         #[cfg(feature = "encryption")]
         column_crypto_metadata: column.crypto_metadata,
+        #[cfg(feature = "encryption")]
+        encrypted_column_metadata: None,
     };
     Ok(result)
 }
@@ -632,7 +634,7 @@ pub(crate) fn parquet_metadata_with_encryption(
             }
             let decryptor = get_file_decryptor(
                 t_file_crypto_metadata.encryption_algorithm,
-                t_file_crypto_metadata.key_metadata,
+                t_file_crypto_metadata.key_metadata.as_ref(),
                 file_decryption_properties,
             )?;
             let footer_decryptor = decryptor.get_footer_decryptor();
@@ -672,7 +674,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         // File has a plaintext footer but encryption algorithm is set
         let file_decryptor_value = get_file_decryptor(
             algo,
-            file_meta.footer_signing_key_metadata,
+            file_meta.footer_signing_key_metadata.as_ref(),
             file_decryption_properties,
         )?;
         if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
@@ -733,7 +735,7 @@ pub(crate) fn parquet_metadata_with_encryption(
 #[cfg(feature = "encryption")]
 pub(super) fn get_file_decryptor(
     encryption_algorithm: EncryptionAlgorithm,
-    footer_key_metadata: Option<&[u8]>,
+    footer_key_metadata: Option<&Vec<u8>>,
     file_decryption_properties: &FileDecryptionProperties,
 ) -> Result<FileDecryptor> {
     match encryption_algorithm {
@@ -750,7 +752,7 @@ pub(super) fn get_file_decryptor(
 
             FileDecryptor::new(
                 file_decryption_properties,
-                footer_key_metadata,
+                footer_key_metadata.map(|v| v.as_slice()),
                 aad_file_unique,
                 aad_prefix,
             )
@@ -1155,6 +1157,335 @@ impl PageHeader {
             dictionary_page_header,
             data_page_header_v2,
         })
+    }
+}
+
+/////////////////////////////////////////////////
+// helper functions for writing file meta data
+
+// serialize the bits of the column chunk needed for a thrift ColumnMetaData
+// struct ColumnMetaData {
+//   1: required Type type
+//   2: required list<Encoding> encodings
+//   3: required list<string> path_in_schema
+//   4: required CompressionCodec codec
+//   5: required i64 num_values
+//   6: required i64 total_uncompressed_size
+//   7: required i64 total_compressed_size
+//   8: optional list<KeyValue> key_value_metadata
+//   9: required i64 data_page_offset
+//   10: optional i64 index_page_offset
+//   11: optional i64 dictionary_page_offset
+//   12: optional Statistics statistics;
+//   13: optional list<PageEncodingStats> encoding_stats;
+//   14: optional i64 bloom_filter_offset;
+//   15: optional i32 bloom_filter_length;
+//   16: optional SizeStatistics size_statistics;
+//   17: optional GeospatialStatistics geospatial_statistics;
+// }
+pub(crate) fn serialize_column_meta_data<W: Write>(
+    column_chunk: &ColumnChunkMetaData,
+    w: &mut ThriftCompactOutputProtocol<W>,
+) -> Result<()> {
+    use crate::file::statistics::page_stats_to_thrift;
+
+    column_chunk.column_type().write_thrift_field(w, 1, 0)?;
+    column_chunk.encodings.write_thrift_field(w, 2, 1)?;
+    let path = column_chunk.column_descr.path().parts();
+    let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
+    path.write_thrift_field(w, 3, 2)?;
+    column_chunk.compression.write_thrift_field(w, 4, 3)?;
+    column_chunk.num_values.write_thrift_field(w, 5, 4)?;
+    column_chunk
+        .total_uncompressed_size
+        .write_thrift_field(w, 6, 5)?;
+    column_chunk
+        .total_compressed_size
+        .write_thrift_field(w, 7, 6)?;
+    // no key_value_metadata here
+    let mut last_field_id = column_chunk.data_page_offset.write_thrift_field(w, 9, 7)?;
+    if let Some(index_page_offset) = column_chunk.index_page_offset {
+        last_field_id = index_page_offset.write_thrift_field(w, 10, last_field_id)?;
+    }
+    if let Some(dictionary_page_offset) = column_chunk.dictionary_page_offset {
+        last_field_id = dictionary_page_offset.write_thrift_field(w, 11, last_field_id)?;
+    }
+    // PageStatistics is the same as thrift Statistics, but writable
+    let stats = page_stats_to_thrift(column_chunk.statistics());
+    if let Some(stats) = stats {
+        last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
+    }
+    if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
+        last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
+    }
+    if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
+        last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
+    }
+    if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
+        last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
+    }
+
+    // SizeStatistics
+    let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
+        || column_chunk.repetition_level_histogram.is_some()
+        || column_chunk.definition_level_histogram.is_some()
+    {
+        let repetition_level_histogram = column_chunk
+            .repetition_level_histogram()
+            .map(|hist| hist.clone().into_inner());
+
+        let definition_level_histogram = column_chunk
+            .definition_level_histogram()
+            .map(|hist| hist.clone().into_inner());
+
+        Some(SizeStatistics {
+            unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
+            repetition_level_histogram,
+            definition_level_histogram,
+        })
+    } else {
+        None
+    };
+    if let Some(size_stats) = size_stats {
+        size_stats.write_thrift_field(w, 16, last_field_id)?;
+    }
+
+    // TODO: field 17 geo spatial stats here
+    w.write_struct_end()
+}
+
+// temp struct used for writing
+pub(crate) struct FileMeta<'a> {
+    pub(crate) file_metadata: &'a crate::file::metadata::FileMetaData,
+    pub(crate) row_groups: &'a Vec<RowGroupMetaData>,
+    pub(crate) encryption_algorithm: Option<EncryptionAlgorithm>,
+    pub(crate) footer_signing_key_metadata: Option<Vec<u8>>,
+}
+
+impl<'a> WriteThrift for FileMeta<'a> {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        self.file_metadata
+            .version
+            .write_thrift_field(writer, 1, 0)?;
+
+        // field 2 is schema. do depth-first traversal of tree, converting to SchemaElement and
+        // writing along the way.
+        let root = self.file_metadata.schema_descr().root_schema_ptr();
+        let schema_len = num_nodes(&root);
+        writer.write_field_begin(FieldType::List, 2, 1)?;
+        writer.write_list_begin(ElementType::Struct, schema_len)?;
+        // recursively write Type nodes as SchemaElements
+        write_schema(&root, writer)?;
+
+        self.file_metadata
+            .num_rows
+            .write_thrift_field(writer, 3, 2)?;
+
+        // this will call RowGroupMetaData::write_thrift
+        let mut last_field_id = self.row_groups.write_thrift_field(writer, 4, 3)?;
+
+        if let Some(kv_metadata) = self.file_metadata.key_value_metadata() {
+            last_field_id = kv_metadata.write_thrift_field(writer, 5, last_field_id)?;
+        }
+        if let Some(created_by) = self.file_metadata.created_by() {
+            last_field_id = created_by.write_thrift_field(writer, 6, last_field_id)?;
+        }
+        if let Some(column_orders) = self.file_metadata.column_orders() {
+            last_field_id = column_orders.write_thrift_field(writer, 7, last_field_id)?;
+        }
+        if let Some(algo) = self.encryption_algorithm.as_ref() {
+            last_field_id = algo.write_thrift_field(writer, 8, last_field_id)?;
+        }
+        if let Some(key) = self.footer_signing_key_metadata.as_ref() {
+            key.as_slice()
+                .write_thrift_field(writer, 9, last_field_id)?;
+        }
+
+        writer.write_struct_end()
+    }
+}
+
+fn write_schema<W: Write>(
+    node: &TypePtr,
+    writer: &mut ThriftCompactOutputProtocol<W>,
+) -> Result<()> {
+    match node.as_ref() {
+        crate::schema::types::Type::PrimitiveType {
+            basic_info,
+            physical_type,
+            type_length,
+            scale,
+            precision,
+        } => {
+            let element = SchemaElement {
+                type_: Some(*physical_type),
+                type_length: if *type_length >= 0 {
+                    Some(*type_length)
+                } else {
+                    None
+                },
+                repetition_type: Some(basic_info.repetition()),
+                name: basic_info.name(),
+                num_children: None,
+                converted_type: match basic_info.converted_type() {
+                    ConvertedType::NONE => None,
+                    other => Some(other),
+                },
+                scale: if *scale >= 0 { Some(*scale) } else { None },
+                precision: if *precision >= 0 {
+                    Some(*precision)
+                } else {
+                    None
+                },
+                field_id: if basic_info.has_id() {
+                    Some(basic_info.id())
+                } else {
+                    None
+                },
+                logical_type: basic_info.logical_type(),
+            };
+            element.write_thrift(writer)
+        }
+        crate::schema::types::Type::GroupType { basic_info, fields } => {
+            let repetition = if basic_info.has_repetition() {
+                Some(basic_info.repetition())
+            } else {
+                None
+            };
+
+            let element = SchemaElement {
+                type_: None,
+                type_length: None,
+                repetition_type: repetition,
+                name: basic_info.name(),
+                num_children: Some(fields.len().try_into()?),
+                converted_type: match basic_info.converted_type() {
+                    ConvertedType::NONE => None,
+                    other => Some(other),
+                },
+                scale: None,
+                precision: None,
+                field_id: if basic_info.has_id() {
+                    Some(basic_info.id())
+                } else {
+                    None
+                },
+                logical_type: basic_info.logical_type(),
+            };
+
+            element.write_thrift(writer)?;
+
+            // Add child elements for a group
+            for field in fields {
+                write_schema(field, writer)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+// struct RowGroup {
+//   1: required list<ColumnChunk> columns
+//   2: required i64 total_byte_size
+//   3: required i64 num_rows
+//   4: optional list<SortingColumn> sorting_columns
+//   5: optional i64 file_offset
+//   6: optional i64 total_compressed_size
+//   7: optional i16 ordinal
+// }
+impl WriteThrift for RowGroupMetaData {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        // this will call ColumnChunkMetaData::write_thrift
+        self.columns.write_thrift_field(writer, 1, 0)?;
+        self.total_byte_size.write_thrift_field(writer, 2, 1)?;
+        let mut last_field_id = self.num_rows.write_thrift_field(writer, 3, 2)?;
+        if let Some(sorting_columns) = self.sorting_columns() {
+            last_field_id = sorting_columns.write_thrift_field(writer, 4, last_field_id)?;
+        }
+        if let Some(file_offset) = self.file_offset() {
+            last_field_id = file_offset.write_thrift_field(writer, 5, last_field_id)?;
+        }
+        // this is optional, but we'll always write it
+        last_field_id = self
+            .compressed_size()
+            .write_thrift_field(writer, 6, last_field_id)?;
+        if let Some(ordinal) = self.ordinal() {
+            ordinal.write_thrift_field(writer, 7, last_field_id)?;
+        }
+        writer.write_struct_end()
+    }
+}
+
+// struct ColumnChunk {
+//   1: optional string file_path
+//   2: required i64 file_offset = 0
+//   3: optional ColumnMetaData meta_data
+//   4: optional i64 offset_index_offset
+//   5: optional i32 offset_index_length
+//   6: optional i64 column_index_offset
+//   7: optional i32 column_index_length
+//   8: optional ColumnCryptoMetaData crypto_metadata
+//   9: optional binary encrypted_column_metadata
+// }
+impl WriteThrift for ColumnChunkMetaData {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    #[allow(unused_assignments)]
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let mut last_field_id = 0i16;
+        if let Some(file_path) = self.file_path() {
+            last_field_id = file_path.write_thrift_field(writer, 1, last_field_id)?;
+        }
+        last_field_id = self
+            .file_offset()
+            .write_thrift_field(writer, 2, last_field_id)?;
+
+        #[cfg(feature = "encryption")]
+        {
+            // only write the ColumnMetaData if we haven't already encrypted it
+            if self.encrypted_column_metadata.is_none() {
+                writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
+                serialize_column_meta_data(self, writer)?;
+                last_field_id = 3;
+            }
+        }
+        #[cfg(not(feature = "encryption"))]
+        {
+            // always write the ColumnMetaData
+            writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
+            serialize_column_meta_data(self, writer)?;
+            last_field_id = 3;
+        }
+
+        if let Some(offset_idx_off) = self.offset_index_offset() {
+            last_field_id = offset_idx_off.write_thrift_field(writer, 4, last_field_id)?;
+        }
+        if let Some(offset_idx_len) = self.offset_index_length() {
+            last_field_id = offset_idx_len.write_thrift_field(writer, 5, last_field_id)?;
+        }
+        if let Some(column_idx_off) = self.column_index_offset() {
+            last_field_id = column_idx_off.write_thrift_field(writer, 6, last_field_id)?;
+        }
+        if let Some(column_idx_len) = self.column_index_length() {
+            last_field_id = column_idx_len.write_thrift_field(writer, 7, last_field_id)?;
+        }
+        #[cfg(feature = "encryption")]
+        {
+            if let Some(crypto_metadata) = self.crypto_metadata() {
+                last_field_id = crypto_metadata.write_thrift_field(writer, 8, last_field_id)?;
+            }
+            if let Some(encrypted_meta) = self.encrypted_column_metadata.as_ref() {
+                encrypted_meta
+                    .as_slice()
+                    .write_thrift_field(writer, 9, last_field_id)?;
+            }
+        }
+
+        writer.write_struct_end()
     }
 }
 

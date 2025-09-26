@@ -848,6 +848,8 @@ pub struct ColumnChunkMetaData {
     definition_level_histogram: Option<LevelHistogram>,
     #[cfg(feature = "encryption")]
     column_crypto_metadata: Option<ColumnCryptoMetaData>,
+    #[cfg(feature = "encryption")]
+    encrypted_column_metadata: Option<Vec<u8>>,
 }
 
 /// Histograms for repetition and definition levels.
@@ -1232,6 +1234,8 @@ impl ColumnChunkMetaData {
             definition_level_histogram,
             #[cfg(feature = "encryption")]
             column_crypto_metadata,
+            #[cfg(feature = "encryption")]
+            encrypted_column_metadata: None,
         };
         Ok(result)
     }
@@ -1370,6 +1374,8 @@ impl ColumnChunkMetaDataBuilder {
             definition_level_histogram: None,
             #[cfg(feature = "encryption")]
             column_crypto_metadata: None,
+            #[cfg(feature = "encryption")]
+            encrypted_column_metadata: None,
         })
     }
 
@@ -2067,7 +2073,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2280;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2616;
+        let base_expected_size = 2712;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2107,7 +2113,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2704;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3040;
+        let bigger_expected_size = 3136;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

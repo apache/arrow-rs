@@ -94,6 +94,12 @@ impl HeapSize for RowGroupMetaData {
 
 impl HeapSize for ColumnChunkMetaData {
     fn heap_size(&self) -> usize {
+        #[cfg(feature = "encryption")]
+        let encryption_heap_size =
+            self.column_crypto_metadata.heap_size() + self.encrypted_column_metadata.heap_size();
+        #[cfg(not(feature = "encryption"))]
+        let encryption_heap_size = 0;
+
         // don't count column_descr here because it is already counted in
         // FileMetaData
         self.encodings.heap_size()
@@ -104,6 +110,7 @@ impl HeapSize for ColumnChunkMetaData {
             + self.unencoded_byte_array_data_bytes.heap_size()
             + self.repetition_level_histogram.heap_size()
             + self.definition_level_histogram.heap_size()
+            + encryption_heap_size
     }
 }
 

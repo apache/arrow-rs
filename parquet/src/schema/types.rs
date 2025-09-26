@@ -1114,6 +1114,24 @@ impl SchemaDescriptor {
     }
 }
 
+// walk tree and count nodes
+pub(crate) fn num_nodes(tp: &TypePtr) -> usize {
+    let mut n_nodes = 1usize; // count root
+    for f in tp.get_fields().iter() {
+        count_nodes(f, &mut n_nodes);
+    }
+    n_nodes
+}
+
+pub(crate) fn count_nodes(tp: &TypePtr, n_nodes: &mut usize) {
+    *n_nodes += 1;
+    if let Type::GroupType { ref fields, .. } = tp.as_ref() {
+        for f in fields {
+            count_nodes(f, n_nodes);
+        }
+    }
+}
+
 // do a quick walk of the tree to get proper sizing for SchemaDescriptor arrays
 fn num_leaves(tp: &TypePtr) -> usize {
     let mut n_leaves = 0usize;
