@@ -21,7 +21,7 @@
 use crate::bit_iterator::BitSliceIterator;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{
-    bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
+    ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer, bit_util, i256,
 };
 use arrow_schema::{ArrowError, DataType, UnionMode};
 use std::mem;
@@ -281,7 +281,7 @@ impl ArrayData {
     ) -> Self {
         let mut skip_validation = UnsafeFlag::new();
         // SAFETY: caller responsible for ensuring data is valid
-        skip_validation.set(true);
+        unsafe { skip_validation.set(true) };
 
         ArrayDataBuilder {
             data_type,
@@ -476,21 +476,20 @@ impl ArrayData {
                     result += buffer_size;
                 }
                 BufferSpec::VariableWidth => {
-                    let buffer_len: usize;
-                    match self.data_type {
+                    let buffer_len = match self.data_type {
                         DataType::Utf8 | DataType::Binary => {
                             let offsets = self.typed_offsets::<i32>()?;
-                            buffer_len = (offsets[self.len] - offsets[0] ) as usize;
+                            (offsets[self.len] - offsets[0]) as usize
                         }
                         DataType::LargeUtf8 | DataType::LargeBinary => {
                             let offsets = self.typed_offsets::<i64>()?;
-                            buffer_len = (offsets[self.len] - offsets[0]) as usize;
+                            (offsets[self.len] - offsets[0]) as usize
                         }
                         _ => {
                             return Err(ArrowError::NotYetImplemented(format!(
-                            "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
-                            self.data_type
-                            )))
+                                "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
+                                self.data_type
+                            )));
                         }
                     };
                     result += buffer_len;
@@ -554,7 +553,7 @@ impl ArrayData {
         if let DataType::Struct(_) = self.data_type() {
             // Slice into children
             let new_offset = self.offset + offset;
-            let new_data = ArrayData {
+            ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
                 offset: new_offset,
@@ -566,9 +565,7 @@ impl ArrayData {
                     .map(|data| data.slice(offset, length))
                     .collect(),
                 nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
-            };
-
-            new_data
+            }
         } else {
             let mut new_data = self.clone();
 
@@ -784,7 +781,10 @@ impl ArrayData {
                     if buffer.len() < min_buffer_size {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Need at least {} bytes in buffers[{}] in array of type {:?}, but got {}",
-                            min_buffer_size, i, self.data_type, buffer.len()
+                            min_buffer_size,
+                            i,
+                            self.data_type,
+                            buffer.len()
                         )));
                     }
 
@@ -792,7 +792,8 @@ impl ArrayData {
                     if align_offset != 0 {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Misaligned buffers[{i}] in array of type {:?}, offset from expected alignment of {alignment} by {}",
-                            self.data_type, align_offset.min(alignment - align_offset)
+                            self.data_type,
+                            align_offset.min(alignment - align_offset)
                         )));
                     }
                 }
@@ -806,7 +807,10 @@ impl ArrayData {
                     if buffer.len() < min_buffer_size {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Need at least {} bytes for bitmap in buffers[{}] in array of type {:?}, but got {}",
-                            min_buffer_size, i, self.data_type, buffer.len()
+                            min_buffer_size,
+                            i,
+                            self.data_type,
+                            buffer.len()
                         )));
                     }
                 }
@@ -1058,7 +1062,11 @@ impl ArrayData {
                     if field_data.len < self.len {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "{} child array #{} for field {} has length smaller than expected for struct array ({} < {})",
-                            self.data_type, i, field.name(), field_data.len, self.len
+                            self.data_type,
+                            i,
+                            field.name(),
+                            field_data.len,
+                            self.len
                         )));
                     }
                 }
@@ -1090,7 +1098,9 @@ impl ArrayData {
                     if mode == &UnionMode::Sparse && field_data.len < (self.len + self.offset) {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Sparse union child array #{} has length smaller than expected for union array ({} < {})",
-                            i, field_data.len, self.len + self.offset
+                            i,
+                            field_data.len,
+                            self.len + self.offset
                         )));
                     }
                 }
@@ -1282,7 +1292,7 @@ impl ArrayData {
                         "non-nullable child of type {} contains nulls not present in parent {}",
                         child.data_type, self.data_type
                     ))),
-                }
+                };
             }
         };
 
@@ -1988,6 +1998,7 @@ impl ArrayDataBuilder {
     ///
     /// Note: This is shorthand for
     /// ```rust
+    /// # #[expect(unsafe_op_in_unsafe_fn)]
     /// # let mut builder = arrow_data::ArrayDataBuilder::new(arrow_schema::DataType::Null);
     /// # let _ = unsafe {
     /// builder.skip_validation(true).build().unwrap()
@@ -1999,7 +2010,7 @@ impl ArrayDataBuilder {
     /// The same caveats as [`ArrayData::new_unchecked`]
     /// apply.
     pub unsafe fn build_unchecked(self) -> ArrayData {
-        self.skip_validation(true).build().unwrap()
+        unsafe { self.skip_validation(true) }.build().unwrap()
     }
 
     /// Creates an `ArrayData`, consuming `self`
@@ -2098,7 +2109,9 @@ impl ArrayDataBuilder {
     /// If validation is skipped, the buffers must form a valid Arrow array,
     /// otherwise undefined behavior will result
     pub unsafe fn skip_validation(mut self, skip_validation: bool) -> Self {
-        self.skip_validation.set(skip_validation);
+        unsafe {
+            self.skip_validation.set(skip_validation);
+        }
         self
     }
 }
