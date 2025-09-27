@@ -382,7 +382,7 @@ impl_variant_unshred!(FixedSizeBinaryArray, |bytes| {
     Uuid::from_slice(bytes).unwrap()
 });
 
-/// Trait for timestamp types to handle conversion to DateTime<Utc>
+/// Trait for timestamp types to handle conversion to `DateTime<Utc>`
 trait TimestampType: ArrowPrimitiveType<Native = i64> {
     fn to_datetime_utc(value: i64) -> Result<DateTime<Utc>>;
 }
