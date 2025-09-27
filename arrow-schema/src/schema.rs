@@ -546,12 +546,37 @@ impl Hash for Schema {
     }
 }
 
+impl AsRef<Schema> for Schema {
+    fn as_ref(&self) -> &Schema {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::datatype::DataType;
     use crate::{TimeUnit, UnionMode};
 
     use super::*;
+
+    #[test]
+    #[expect(clippy::needless_borrows_for_generic_args)] // intentional to exercise various references
+    fn test_schema_as_ref() {
+        fn accept_ref(_: impl AsRef<Schema>) {}
+
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ]);
+
+        accept_ref(schema.clone());
+        accept_ref(&schema.clone());
+        accept_ref(&&schema.clone());
+        accept_ref(Arc::new(schema.clone()));
+        accept_ref(&Arc::new(schema.clone()));
+        accept_ref(&&Arc::new(schema.clone()));
+    }
 
     #[test]
     #[cfg(feature = "serde")]
