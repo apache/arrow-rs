@@ -657,6 +657,18 @@ pub struct ShreddingState {
 }
 
 impl ShreddingState {
+    /// Helper function for extracting the equivalent of a ShreddingState, but borrowing the fields
+    /// instead of cloning them.
+    pub fn extract_fields_from(
+        array: &StructArray,
+    ) -> (Option<&BinaryViewArray>, Option<&ArrayRef>) {
+        let value = array
+            .column_by_name("value")
+            .and_then(|col| col.as_binary_view_opt());
+        let typed_value = array.column_by_name("typed_value");
+        (value, typed_value)
+    }
+
     /// Create a new `ShreddingState` from the given `value` and `typed_value` fields
     ///
     /// Note you can create a `ShreddingState` from a &[`StructArray`] using
@@ -696,12 +708,8 @@ impl ShreddingState {
 
 impl From<&StructArray> for ShreddingState {
     fn from(inner_struct: &StructArray) -> Self {
-        let value = inner_struct
-            .column_by_name("value")
-            .and_then(|col| col.as_binary_view_opt().cloned());
-        let typed_value = inner_struct.column_by_name("typed_value").cloned();
-
-        ShreddingState::new(value, typed_value)
+        let (value, typed_value) = ShreddingState::extract_fields_from(inner_struct);
+        ShreddingState::new(value.cloned(), typed_value.cloned())
     }
 }
 
