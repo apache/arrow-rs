@@ -1174,7 +1174,7 @@ impl ColumnChunkMetaData {
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
         let geo_statistics =
-            geo_statistics::from_thrift(col_metadata.geospatial_statistics)?.map(Box::new);
+            geo_statistics::from_thrift(col_metadata.geospatial_statistics).map(Box::new);
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()

@@ -20,7 +20,6 @@
 //! This module provides functionality for working with geospatial statistics in Parquet files.
 //! It includes support for bounding boxes and geospatial statistics in column chunk metadata.
 
-use crate::errors::Result;
 use crate::format::GeospatialStatistics as TGeospatialStatistics;
 use crate::geospatial::bounding_box::BoundingBox;
 
@@ -62,19 +61,12 @@ impl GeospatialStatistics {
 }
 
 /// Converts a Thrift-generated geospatial statistics object to the internal representation.
-pub fn from_thrift(
-    geo_statistics: Option<TGeospatialStatistics>,
-) -> Result<Option<GeospatialStatistics>> {
-    Ok(match geo_statistics {
-        Some(geo_stats) => {
-            let bbox = geo_stats.bbox.map(|bbox| bbox.into());
-            // If vector is empty, then set it to None
-            let geospatial_types: Option<Vec<i32>> =
-                geo_stats.geospatial_types.filter(|v| !v.is_empty());
-            Some(GeospatialStatistics::new(bbox, geospatial_types))
-        }
-        None => None,
-    })
+pub fn from_thrift(geo_statistics: Option<TGeospatialStatistics>) -> Option<GeospatialStatistics> {
+    let geo_stats = geo_statistics?;
+    let bbox = geo_stats.bbox.map(|bbox| bbox.into());
+    // If vector is empty, then set it to None
+    let geospatial_types: Option<Vec<i32>> = geo_stats.geospatial_types.filter(|v| !v.is_empty());
+    Some(GeospatialStatistics::new(bbox, geospatial_types))
 }
 
 /// Converts our internal geospatial statistics to the Thrift-generated format.
@@ -92,9 +84,9 @@ mod tests {
     /// Tests the conversion from Thrift format when no statistics are provided.
     #[test]
     fn test_from_thrift() {
-        assert_eq!(from_thrift(None).unwrap(), None);
+        assert_eq!(from_thrift(None), None);
         assert_eq!(
-            from_thrift(Some(TGeospatialStatistics::new(None, None))).unwrap(),
+            from_thrift(Some(TGeospatialStatistics::new(None, None))),
             Some(GeospatialStatistics::default())
         );
     }
@@ -106,7 +98,7 @@ mod tests {
         let geospatial_types = vec![1, 2, 3];
         let stats = GeospatialStatistics::new(Some(bbox), Some(geospatial_types));
         let thrift_stats = to_thrift(Some(&stats));
-        assert_eq!(from_thrift(thrift_stats).unwrap(), Some(stats));
+        assert_eq!(from_thrift(thrift_stats), Some(stats));
     }
 
     #[test]
