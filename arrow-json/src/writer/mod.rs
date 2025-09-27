@@ -279,6 +279,36 @@ impl WriterBuilder {
         self
     }
 
+    /// Set the JSON file's date format
+    pub fn with_date_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_date_format(format);
+        self
+    }
+
+    /// Set the JSON file's datetime format
+    pub fn with_datetime_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_datetime_format(format);
+        self
+    }
+
+    /// Set the JSON file's time format
+    pub fn with_time_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_time_format(format);
+        self
+    }
+
+    /// Set the JSON file's timestamp format
+    pub fn with_timestamp_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_timestamp_format(format);
+        self
+    }
+
+    /// Set the JSON file's timestamp tz format
+    pub fn with_timestamp_tz_format(mut self, tz_format: String) -> Self {
+        self.0 = self.0.with_timestamp_tz_format(tz_format);
+        self
+    }
+
     /// Create a new `Writer` with specified `JsonFormat` and builder options.
     pub fn build<W, F>(self, writer: W) -> Writer<W, F>
     where
@@ -723,6 +753,21 @@ mod tests {
         assert_json_eq(
             &buf,
             r#"{"micros":"2018-11-13T17:11:10.011375","millis":"2018-11-13T17:11:10.011","name":"a","nanos":"2018-11-13T17:11:10.011375885","secs":"2018-11-13T17:11:10"}
+{"name":"b"}
+"#,
+        );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_timestamp_format("%m-%d-%Y".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"nanos":"11-13-2018","micros":"11-13-2018","millis":"11-13-2018","secs":"11-13-2018","name":"a"}
 {"name":"b"}
 "#,
         );
