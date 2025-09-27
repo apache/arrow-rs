@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder};
+use arrow::array::{
+    Array, ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveArray, PrimitiveBuilder,
+};
 use arrow::compute::CastOptions;
 use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
 use arrow::error::{ArrowError, Result};
@@ -30,6 +32,7 @@ use std::sync::Arc;
 /// `VariantToArrowRowBuilder` (below) and `VariantToShreddedPrimitiveVariantRowBuilder` (in
 /// `shred_variant.rs`).
 pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
+    Boolean(VariantToBooleanArrowRowBuilder<'a>),
     Int8(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int8Type>),
     Int16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int16Type>),
     Int32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int32Type>),
@@ -41,6 +44,7 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Float16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
     Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
     Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
+    Boolean(VariantToBooleanArrowRowBuilder<'a>),
 }
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -59,6 +63,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
     pub fn append_null(&mut self) -> Result<()> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
+            Boolean(b) => b.append_null(),
             Int8(b) => b.append_null(),
             Int16(b) => b.append_null(),
             Int32(b) => b.append_null(),
@@ -70,6 +75,8 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.append_null(),
             Float32(b) => b.append_null(),
             Float64(b) => b.append_null(),
+            TimestampMicro(b) => b.append_null(),
+            TimestampNano(b) => b.append_null(),
         }
     }
 
@@ -87,12 +94,14 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.append_value(value),
             Float32(b) => b.append_value(value),
             Float64(b) => b.append_value(value),
+            Boolean(b) => b.append_value(value),
         }
     }
 
     pub fn finish(self) -> Result<ArrayRef> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
+            Boolean(b) => b.finish(),
             Int8(b) => b.finish(),
             Int16(b) => b.finish(),
             Int32(b) => b.finish(),
@@ -104,6 +113,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.finish(),
             Float32(b) => b.finish(),
             Float64(b) => b.finish(),
+            Boolean(b) => b.finish(),
         }
     }
 }
@@ -146,6 +156,7 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
     use PrimitiveVariantToArrowRowBuilder::*;
 
     let builder = match data_type {
+        DataType::Boolean => Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity)),
         DataType::Int8 => Int8(VariantToPrimitiveArrowRowBuilder::new(
             cast_options,
             capacity,
@@ -190,6 +201,7 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             cast_options,
             capacity,
         )),
+        DataType::Boolean => Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity)),
         _ if data_type.is_primitive() => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Primitive data_type {data_type:?} not yet implemented"
@@ -294,6 +306,49 @@ fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
         "arrow_array::types::Float64Type" => "Float64",
         "arrow_array::types::Float16Type" => "Float16",
         _ => "Unknown",
+    }
+}
+
+/// Builder for converting variant values to boolean values
+/// Boolean is not primitive types in Arrow, so we need a separate builder
+pub(crate) struct VariantToBooleanArrowRowBuilder<'a> {
+    builder: arrow::array::BooleanBuilder,
+    cast_options: &'a CastOptions<'a>,
+}
+
+impl<'a> VariantToBooleanArrowRowBuilder<'a> {
+    fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
+        Self {
+            builder: arrow::array::BooleanBuilder::with_capacity(capacity),
+            cast_options,
+        }
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        if let Some(v) = value.as_boolean() {
+            self.builder.append_value(v);
+            Ok(true)
+        } else {
+            if !self.cast_options.safe {
+                // Unsafe casting: return error on conversion failure
+                return Err(ArrowError::CastError(format!(
+                    "Failed to extract boolean from variant {:?} at path VariantPath([])",
+                    value
+                )));
+            }
+            // Safe casting: append null on conversion failure
+            self.builder.append_null();
+            Ok(false)
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(Arc::new(self.builder.finish()))
     }
 }
 
