@@ -43,6 +43,86 @@ use crate::encryption::{
 #[cfg(feature = "encryption")]
 use crate::format::EncryptionAlgorithm;
 
+/// Helper struct for metadata parsing
+///
+/// This structure parses thrift-encoded bytes into the correct Rust structs,
+/// such as [`ParquetMetaData`], handling decryption if necessary.
+//
+// Note this structure is used to minimize the number of
+// places need to add `#[cfg(feature = "encryption")]` checks.
+pub(crate) use inner::MetadataParser;
+
+#[cfg(feature = "encryption")]
+mod inner {
+    use super::*;
+    use crate::encryption::decrypt::FileDecryptionProperties;
+    use crate::errors::Result;
+
+    /// API for decoding metadata that may be encrypted
+    #[derive(Debug, Default)]
+    pub(crate) struct MetadataParser {
+        // the credentials and keys needed to decrypt metadata
+        file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+    }
+
+    impl MetadataParser {
+        pub(crate) fn new() -> Self {
+            MetadataParser::default()
+        }
+
+        pub(crate) fn with_file_decryption_properties(
+            mut self,
+            file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+        ) -> Self {
+            self.file_decryption_properties = file_decryption_properties;
+            self
+        }
+
+        pub(crate) fn decode_metadata(
+            &self,
+            buf: &[u8],
+            encrypted_footer: bool,
+        ) -> Result<ParquetMetaData> {
+            decode_metadata_with_encryption(
+                buf,
+                encrypted_footer,
+                self.file_decryption_properties.as_deref(),
+            )
+        }
+    }
+}
+
+#[cfg(not(feature = "encryption"))]
+mod inner {
+    use super::*;
+    use crate::errors::Result;
+    /// parallel implementation when encryption feature is not enabled
+    ///
+    /// This has the same API as the encryption-enabled version
+    #[derive(Debug, Default)]
+    pub(crate) struct MetadataParser;
+
+    impl MetadataParser {
+        pub(crate) fn new() -> Self {
+            MetadataParser
+        }
+
+        pub(crate) fn decode_metadata(
+            &self,
+            buf: &[u8],
+            encrypted_footer: bool,
+        ) -> Result<ParquetMetaData> {
+            if encrypted_footer {
+                Err(general_err!(
+                    "Parquet file has an encrypted footer but the encryption feature is disabled"
+                ))
+            } else {
+                decode_metadata(buf)
+            }
+        }
+    }
+}
+
 /// Decodes [`ParquetMetaData`] from the provided bytes.
 ///
 /// Typically this is used to decode the metadata from the end of a parquet
@@ -79,7 +159,7 @@ pub(crate) fn decode_metadata(buf: &[u8]) -> crate::errors::Result<ParquetMetaDa
 
 /// Parses column orders from Thrift definition.
 /// If no column orders are defined, returns `None`.
-pub(crate) fn parse_column_orders(
+fn parse_column_orders(
     t_column_orders: Option<Vec<crate::format::ColumnOrder>>,
     schema_descr: &SchemaDescriptor,
 ) -> crate::errors::Result<Option<Vec<ColumnOrder>>> {
@@ -288,7 +368,7 @@ fn parse_single_offset_index(
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
 #[cfg(feature = "encryption")]
-pub(crate) fn decode_metadata_with_encryption(
+fn decode_metadata_with_encryption(
     buf: &[u8],
     encrypted_footer: bool,
     file_decryption_properties: Option<&FileDecryptionProperties>,
