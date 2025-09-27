@@ -1445,8 +1445,8 @@ impl ColumnChunkMetaDataBuilder {
     }
 
     /// Sets geospatial statistics for this column chunk.
-    pub fn set_geo_statistics(mut self, value: geo_statistics::GeospatialStatistics) -> Self {
-        self.0.geo_statistics = Some(Box::new(value));
+    pub fn set_geo_statistics(mut self, value: Box<geo_statistics::GeospatialStatistics>) -> Self {
+        self.0.geo_statistics = Some(value);
         self
     }
 
