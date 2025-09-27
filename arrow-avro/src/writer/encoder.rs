@@ -21,7 +21,8 @@ use crate::codec::{AvroDataType, AvroField, Codec};
 use crate::schema::{Fingerprint, Nullability, Prefix};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowPrimitiveType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalDayTimeType,
+    ArrowPrimitiveType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Float32Type, Float64Type, Int32Type, Int64Type, IntervalDayTimeType,
     IntervalMonthDayNanoType, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{
@@ -270,10 +271,21 @@ impl<'a> FieldEncoder<'a> {
                         array.as_primitive::<IntervalDayTimeType>(),
                     )),
                 }
-                DataType::Duration(_) => {
-                    return Err(ArrowError::NotYetImplemented(
-                        "Avro writer: Arrow Duration(TimeUnit) has no standard Avro mapping; cast to Interval(MonthDayNano) to use Avro 'duration'".into(),
-                    ));
+                DataType::Duration(tu) => {
+                    match tu {
+                        TimeUnit::Second => Encoder::DurationSeconds(LongEncoder(
+                            array.as_primitive::<DurationSecondType>(),
+                        )),
+                        TimeUnit::Millisecond => Encoder::DurationMillis(LongEncoder(
+                            array.as_primitive::<DurationMillisecondType>(),
+                        )),
+                        TimeUnit::Microsecond => Encoder::DurationMicros(LongEncoder(
+                            array.as_primitive::<DurationMicrosecondType>(),
+                        )),
+                        TimeUnit::Nanosecond => Encoder::DurationNanos(LongEncoder(
+                            array.as_primitive::<DurationNanosecondType>(),
+                        )),
+                    }
                 }
                 other => {
                     return Err(ArrowError::NotYetImplemented(format!(
@@ -812,6 +824,10 @@ enum Encoder<'a> {
     Int(IntEncoder<'a, Int32Type>),
     Long(LongEncoder<'a, Int64Type>),
     Timestamp(LongEncoder<'a, TimestampMicrosecondType>),
+    DurationSeconds(LongEncoder<'a, DurationSecondType>),
+    DurationMillis(LongEncoder<'a, DurationMillisecondType>),
+    DurationMicros(LongEncoder<'a, DurationMicrosecondType>),
+    DurationNanos(LongEncoder<'a, DurationNanosecondType>),
     Float32(F32Encoder<'a>),
     Float64(F64Encoder<'a>),
     Binary(BinaryEncoder<'a, i32>),
@@ -850,6 +866,10 @@ impl<'a> Encoder<'a> {
             Encoder::Int(e) => e.encode(out, idx),
             Encoder::Long(e) => e.encode(out, idx),
             Encoder::Timestamp(e) => e.encode(out, idx),
+            Encoder::DurationSeconds(e) => e.encode(out, idx),
+            Encoder::DurationMicros(e) => e.encode(out, idx),
+            Encoder::DurationMillis(e) => e.encode(out, idx),
+            Encoder::DurationNanos(e) => e.encode(out, idx),
             Encoder::Float32(e) => e.encode(out, idx),
             Encoder::Float64(e) => e.encode(out, idx),
             Encoder::Binary(e) => e.encode(out, idx),
@@ -1880,6 +1900,54 @@ mod tests {
         expected_b.extend_from_slice(&[0]);
         let got_b = encode_all(&bools, &FieldPlan::Scalar, None);
         assert_bytes_eq(&got_b, &expected_b);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn duration_encoding_seconds() {
+        let arr: PrimitiveArray<DurationSecondType> = vec![0i64, -1, 2].into();
+        let mut expected = Vec::new();
+        for v in [0i64, -1, 2] {
+            expected.extend_from_slice(&avro_long_bytes(v));
+        }
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn duration_encoding_milliseconds() {
+        let arr: PrimitiveArray<DurationMillisecondType> = vec![1i64, 0, -2].into();
+        let mut expected = Vec::new();
+        for v in [1i64, 0, -2] {
+            expected.extend_from_slice(&avro_long_bytes(v));
+        }
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn duration_encoding_microseconds() {
+        let arr: PrimitiveArray<DurationMicrosecondType> = vec![5i64, -6, 7].into();
+        let mut expected = Vec::new();
+        for v in [5i64, -6, 7] {
+            expected.extend_from_slice(&avro_long_bytes(v));
+        }
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn duration_encoding_nanoseconds() {
+        let arr: PrimitiveArray<DurationNanosecondType> = vec![8i64, 9, -10].into();
+        let mut expected = Vec::new();
+        for v in [8i64, 9, -10] {
+            expected.extend_from_slice(&avro_long_bytes(v));
+        }
+        let got = encode_all(&arr, &FieldPlan::Scalar, None);
+        assert_bytes_eq(&got, &expected);
     }
 
     #[test]

@@ -208,6 +208,13 @@
 //! - [`compression`]: codecs used for OCF blocks (i.e., Deflate, Snappy, Zstandard).
 //! - [`codec`]: internal Avro↔Arrow type conversion and row decode/encode plans.
 //!
+//! ### Features
+//!
+//! - `md5`: enables dependency `md5` for md5 fingerprint hashing
+//! - `sha256`: enables dependency `sha2` for sha256 fingerprint hashing
+//! - `small_decimals`: enables support for small decimal types
+//! - `avro_custom_types`: Enables custom logic that interprets an annotated Avro long with logicalType values of `arrow.duration-nanos`, `arrow.duration-micros`, `arrow.duration-millis`, or `arrow.duration-seconds` as a more descriptive Arrow Duration(TimeUnit) type.
+//!
 //! [Apache Arrow]: https://arrow.apache.org/
 //! [Apache Avro]: https://avro.apache.org/
 

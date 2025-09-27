@@ -1303,13 +1303,18 @@ mod test {
         ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     };
     use arrow_array::cast::AsArray;
+    use arrow_array::types::{
+        DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+        DurationSecondType, Int64Type,
+    };
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
     use arrow_buffer::{
         i256, Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer,
     };
     use arrow_schema::{
-        ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, UnionFields, UnionMode,
+        ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit, UnionFields,
+        UnionMode,
     };
     use bytes::{Buf, BufMut, Bytes};
     use futures::executor::block_on;
@@ -4745,6 +4750,108 @@ mod test {
                 "Decoded RecordBatch does not match for {file} with batch size 3"
             );
         }
+    }
+
+    #[test]
+    fn test_read_duration_logical_types_feature_toggle() -> Result<(), ArrowError> {
+        let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test/data/duration_logical_types.avro")
+            .to_string_lossy()
+            .into_owned();
+
+        let actual_batch = read_file(&file_path, 4, false);
+
+        let expected_batch = {
+            #[cfg(feature = "avro_custom_types")]
+            {
+                println!("Testing with 'avro_custom_types' feature ENABLED");
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new(
+                        "duration_time_nanos",
+                        DataType::Duration(TimeUnit::Nanosecond),
+                        false,
+                    ),
+                    Field::new(
+                        "duration_time_micros",
+                        DataType::Duration(TimeUnit::Microsecond),
+                        false,
+                    ),
+                    Field::new(
+                        "duration_time_millis",
+                        DataType::Duration(TimeUnit::Millisecond),
+                        false,
+                    ),
+                    Field::new(
+                        "duration_time_seconds",
+                        DataType::Duration(TimeUnit::Second),
+                        false,
+                    ),
+                ]));
+
+                let nanos = Arc::new(PrimitiveArray::<DurationNanosecondType>::from(vec![
+                    10, 20, 30, 40,
+                ])) as ArrayRef;
+                let micros = Arc::new(PrimitiveArray::<DurationMicrosecondType>::from(vec![
+                    100, 200, 300, 400,
+                ])) as ArrayRef;
+                let millis = Arc::new(PrimitiveArray::<DurationMillisecondType>::from(vec![
+                    1000, 2000, 3000, 4000,
+                ])) as ArrayRef;
+                let seconds = Arc::new(PrimitiveArray::<DurationSecondType>::from(vec![1, 2, 3, 4]))
+                    as ArrayRef;
+
+                RecordBatch::try_new(schema, vec![nanos, micros, millis, seconds])?
+            }
+            #[cfg(not(feature = "avro_custom_types"))]
+            {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("duration_time_nanos", DataType::Int64, false).with_metadata(
+                        [(
+                            "logicalType".to_string(),
+                            "arrow.duration-nanos".to_string(),
+                        )]
+                        .into(),
+                    ),
+                    Field::new("duration_time_micros", DataType::Int64, false).with_metadata(
+                        [(
+                            "logicalType".to_string(),
+                            "arrow.duration-micros".to_string(),
+                        )]
+                        .into(),
+                    ),
+                    Field::new("duration_time_millis", DataType::Int64, false).with_metadata(
+                        [(
+                            "logicalType".to_string(),
+                            "arrow.duration-millis".to_string(),
+                        )]
+                        .into(),
+                    ),
+                    Field::new("duration_time_seconds", DataType::Int64, false).with_metadata(
+                        [(
+                            "logicalType".to_string(),
+                            "arrow.duration-seconds".to_string(),
+                        )]
+                        .into(),
+                    ),
+                ]));
+
+                let nanos =
+                    Arc::new(PrimitiveArray::<Int64Type>::from(vec![10, 20, 30, 40])) as ArrayRef;
+                let micros = Arc::new(PrimitiveArray::<Int64Type>::from(vec![100, 200, 300, 400]))
+                    as ArrayRef;
+                let millis = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
+                    1000, 2000, 3000, 4000,
+                ])) as ArrayRef;
+                let seconds =
+                    Arc::new(PrimitiveArray::<Int64Type>::from(vec![1, 2, 3, 4])) as ArrayRef;
+
+                RecordBatch::try_new(schema, vec![nanos, micros, millis, seconds])?
+            }
+        };
+
+        assert_eq!(actual_batch, expected_batch);
+
+        Ok(())
     }
 
     #[test]
