@@ -174,16 +174,16 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
             DataType::Float32 => PrimitiveFloat32(PrimitiveArrowToVariantBuilder::new(array)),
             DataType::Float64 => PrimitiveFloat64(PrimitiveArrowToVariantBuilder::new(array)),
             DataType::Decimal32(_, scale) => {
-                Decimal32(Decimal32ArrowToVariantBuilder::new(array, *scale))
+                Decimal32(Decimal32ArrowToVariantBuilder::new(array, options, *scale))
             }
             DataType::Decimal64(_, scale) => {
-                Decimal64(Decimal64ArrowToVariantBuilder::new(array, *scale))
+                Decimal64(Decimal64ArrowToVariantBuilder::new(array, options, *scale))
             }
             DataType::Decimal128(_, scale) => {
-                Decimal128(Decimal128ArrowToVariantBuilder::new(array, *scale))
+                Decimal128(Decimal128ArrowToVariantBuilder::new(array, options, *scale))
             }
             DataType::Decimal256(_, scale) => {
-                Decimal256(Decimal256ArrowToVariantBuilder::new(array, *scale))
+                Decimal256(Decimal256ArrowToVariantBuilder::new(array, options, *scale))
             }
             DataType::Timestamp(time_unit, time_zone) => {
                 match time_unit {
@@ -232,7 +232,7 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
             DataType::Duration(_) | DataType::Interval(_) => {
                 return Err(ArrowError::InvalidArgumentError(
                     "Casting duration/interval types to Variant is not supported. \
-                 The Variant format does not define duration/interval types."
+                    The Variant format does not define duration/interval types."
                         .to_string(),
                 ))
             }
@@ -373,7 +373,9 @@ macro_rules! define_row_builder {
                                         "Failed to convert value at index {index}: conversion failed",
                                     )));
                                 } else {
-                                    builder.append_null();
+                                    // Overflow is encoded as Variant::Null,
+                                    // distinct from None indicating a missing value
+                                    builder.append_value(Variant::Null);
                                     return Ok(());
                                 }
                             };
@@ -400,39 +402,51 @@ define_row_builder!(
 
 define_row_builder!(
     struct Decimal32ArrowToVariantBuilder<'a> {
+        options: &'a CastOptions,
         scale: i8,
     },
     |array| -> arrow::array::Decimal32Array { array.as_primitive() },
-    |value| decimal_to_variant_decimal!(value, scale, i32, VariantDecimal4)
+    |value| -> Option<_> {
+        decimal_to_variant_decimal!(value, scale, i32, VariantDecimal4).map(Variant::from)
+    }
 );
 
 define_row_builder!(
     struct Decimal64ArrowToVariantBuilder<'a> {
+        options: &'a CastOptions,
         scale: i8,
     },
     |array| -> arrow::array::Decimal64Array { array.as_primitive() },
-    |value| decimal_to_variant_decimal!(value, scale, i64, VariantDecimal8)
+    |value| -> Option<_> {
+        decimal_to_variant_decimal!(value, scale, i64, VariantDecimal8).map(Variant::from)
+    }
 );
 
 define_row_builder!(
     struct Decimal128ArrowToVariantBuilder<'a> {
+        options: &'a CastOptions,
         scale: i8,
     },
     |array| -> arrow::array::Decimal128Array { array.as_primitive() },
-    |value| decimal_to_variant_decimal!(value, scale, i128, VariantDecimal16)
+    |value| -> Option<_> {
+        decimal_to_variant_decimal!(value, scale, i128, VariantDecimal16).map(Variant::from)
+    }
 );
 
 define_row_builder!(
     struct Decimal256ArrowToVariantBuilder<'a> {
+        options: &'a CastOptions,
         scale: i8,
     },
     |array| -> arrow::array::Decimal256Array { array.as_primitive() },
-    |value| {
+    |value| -> Option<_> {
         // Decimal256 needs special handling - convert to i128 if possible
-        match value.to_i128() {
-            Some(i128_val) => decimal_to_variant_decimal!(i128_val, scale, i128, VariantDecimal16),
-            None => Variant::Null, // Value too large for i128
-        }
+        value
+            .to_i128()
+            .and_then(|i128_val| {
+                decimal_to_variant_decimal!(i128_val, scale, i128, VariantDecimal16)
+            })
+            .map(Variant::from)
     }
 );
 
@@ -910,7 +924,14 @@ mod tests {
 
     /// Builds a VariantArray from an Arrow array using the row builder.
     fn execute_row_builder_test(array: &dyn Array) -> VariantArray {
-        let options = CastOptions::default();
+        execute_row_builder_test_with_options(array, CastOptions::default())
+    }
+
+    /// Variant of `execute_row_builder_test` that allows specifying options
+    fn execute_row_builder_test_with_options(
+        array: &dyn Array,
+        options: CastOptions,
+    ) -> VariantArray {
         let mut row_builder =
             make_arrow_to_variant_row_builder(array.data_type(), array, &options).unwrap();
 
@@ -929,7 +950,16 @@ mod tests {
     /// Generic helper function to test row builders with basic assertion patterns.
     /// Uses execute_row_builder_test and adds simple value comparison assertions.
     fn test_row_builder_basic(array: &dyn Array, expected_values: Vec<Option<Variant>>) {
-        let variant_array = execute_row_builder_test(array);
+        test_row_builder_basic_with_options(array, expected_values, CastOptions::default());
+    }
+
+    /// Variant of `test_row_builder_basic` that allows specifying options
+    fn test_row_builder_basic_with_options(
+        array: &dyn Array,
+        expected_values: Vec<Option<Variant>>,
+        options: CastOptions,
+    ) {
+        let variant_array = execute_row_builder_test_with_options(array, options);
 
         // The repetitive assertion pattern
         for (i, expected) in expected_values.iter().enumerate() {
@@ -1657,12 +1687,13 @@ mod tests {
             .with_precision_and_scale(76, 3)
             .unwrap();
 
-        test_row_builder_basic(
+        test_row_builder_basic_with_options(
             &decimal_array,
             vec![
-                Some(Variant::Null), // Overflow value becomes Null
+                Some(Variant::Null), // Overflow value becomes Variant::Null
                 Some(Variant::from(VariantDecimal16::try_new(123, 3).unwrap())),
             ],
+            CastOptions { strict: false },
         );
     }
 
