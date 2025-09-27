@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{i256, IntervalDayTime, IntervalMonthDayNano};
+use crate::{IntervalDayTime, IntervalMonthDayNano, i256};
 use half::f16;
 
 mod private {

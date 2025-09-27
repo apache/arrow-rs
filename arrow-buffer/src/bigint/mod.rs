@@ -18,7 +18,7 @@
 use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
 use num_bigint::BigInt;
-use num_traits::{cast::AsPrimitive, FromPrimitive, ToPrimitive};
+use num_traits::{FromPrimitive, ToPrimitive, cast::AsPrimitive};
 use std::cmp::Ordering;
 use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
@@ -232,11 +232,7 @@ impl i256 {
     pub fn from_f64(v: f64) -> Option<Self> {
         BigInt::from_f64(v).and_then(|i| {
             let (integer, overflow) = i256::from_bigint_with_overflow(i);
-            if overflow {
-                None
-            } else {
-                Some(integer)
-            }
+            if overflow { None } else { Some(integer) }
         })
     }
 
@@ -868,7 +864,7 @@ impl ToPrimitive for i256 {
 mod tests {
     use super::*;
     use num_traits::Signed;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_signed_cmp() {
